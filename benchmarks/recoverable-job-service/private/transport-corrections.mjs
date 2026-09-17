@@ -1,0 +1,13 @@
+import {readFile,writeFile} from 'node:fs/promises';
+const p='benchmarks/recoverable-job-service/private/broker.mjs';let s=await readFile(p,'utf8');
+s=s.replace('this.active=new Set();','this.active=new Set();this.inspecting=new Set();this.frameCount=0;this.outputBytes=0;');
+s=s.replace("queue:[],buffer:[],next:","queue:[],buffer:[],producer:[],next:");
+s=s.replace("j.offset[stream]+=chunk.length;j.pipes[stream].produced+=chunk.length;j.buffer.push({key,bytes:[...chunk]});","if(j.next.stdout+j.next.stderr>128||++this.frameCount>512||j.offset.stdout+j.offset.stderr+chunk.length>262144||(this.outputBytes+=chunk.length)>8388608)throw new HarnessError('fixture exceeded joint output profile');j.offset[stream]+=chunk.length;j.producer.push({key,bytes:[...chunk]});");
+const before="refill(j){let retained=j.queue.reduce((n,f)=>n+f.bytes.length,0);while(j.buffer.length&&retained+j.buffer[0].bytes.length<=LIMITS.retention){const f=j.buffer.shift();j.queue.push(f);retained+=f.bytes.length;}}";
+const after="refill(j){let retained=j.queue.reduce((n,f)=>n+f.bytes.length,0);while((j.buffer.length||j.producer.length)){const source=j.buffer.length?j.buffer:j.producer;if(retained+source[0].bytes.length>LIMITS.retention)break;const f=source.shift();if(source===j.producer)j.pipes[f.key.stream].produced+=f.bytes.length;j.queue.push(f);retained+=f.bytes.length;}let buffered=j.buffer.reduce((n,f)=>n+f.bytes.length,0);while(j.producer.length&&buffered+j.producer[0].bytes.length<=LIMITS.pipe){const f=j.producer.shift();j.buffer.push(f);buffered+=f.bytes.length;j.pipes[f.key.stream].produced+=f.bytes.length;}}";
+if(!s.includes(before))throw Error('refill');s=s.replace(before,after);
+s=s.replace("j.queue.length===0&&j.buffer.length===0","j.queue.length===0&&j.buffer.length===0&&j.producer.length===0");
+s=s.replace("!j.barrierBlocked){","!j.barrierBlocked&&j.producer.length===0){");
+s=s.replace("call(method,args={}){const work=this.dispatch(method,args);this.active.add(work);work.then(()=>this.active.delete(work),()=>this.active.delete(work));return work;}","call(method,args={}){const key=method==='driver.inspect'?args.jobId+'/'+args.epoch:null;if(key&&this.inspecting.has(key))return Promise.reject(new CandidateError('exclusive inventory overlap'));if(key)this.inspecting.add(key);const work=this.dispatch(method,args);this.active.add(work);const done=()=>{this.active.delete(work);if(key)this.inspecting.delete(key);};work.then(done,done);return work;}");
+await writeFile(p,s);
+const q='benchmarks/recoverable-job-service/private/scenarios.mjs';let t=await readFile(q,'utf8');t=t.replace('length:20000','length:12000');await writeFile(q,t);

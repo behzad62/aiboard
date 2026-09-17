@@ -1,0 +1,253 @@
+{
+  "control": "control-witness",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "D01"
+    ],
+    "variantIds": [
+      "D01/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "D01/primary",
+          "caseCommitment": "a6ff0fc5642554e31060d20dff75e1e407e4eca921a768dd63b19a3c63256883",
+          "fixtureCommitment": "4a2f58b26d7f8d1b1a778417be364a74c54c2837fa58f873bbf4f9069e5c03b6",
+          "fixtureAllocations": 8,
+          "authenticationCommitment": "dcc9ef837aa2b47be5bc1733449e1f5dfbb0e339d68d2369de3710f7010774e5"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "7cc5a392e2e4b85f9853e4e1b8bca1b4feeb41f32611043724606b493922020e",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "D01/primary"
+      ],
+      "scheduleHash": "1e5381af140440a7abfb9bff5a20f04177eadddc6120e6a2dc637c6c38ba8609",
+      "configurationHash": "1671feb879b2d2b0b7de707d75957287e0ff1bcf62d42323b7529ddc9f8cac95"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "D01",
+        "group": "D",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/D01/1671feb879b2d2b0b7de707d75957287e0ff1bcf62d42323b7529ddc9f8cac95",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "D01/primary",
+              "caseCommitment": "a6ff0fc5642554e31060d20dff75e1e407e4eca921a768dd63b19a3c63256883",
+              "fixtureCommitment": "4a2f58b26d7f8d1b1a778417be364a74c54c2837fa58f873bbf4f9069e5c03b6",
+              "fixtureAllocations": 8,
+              "authenticationCommitment": "dcc9ef837aa2b47be5bc1733449e1f5dfbb0e339d68d2369de3710f7010774e5"
+            },
+            "id": "D01/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: workload-only-control",
+            "safetyFailures": [
+              {
+                "code": "workload-only-control",
+                "jobId": "aa18fc5b349126b15f2aebb963aa356a",
+                "detail": "Destructive control targeted the witness.",
+                "familyId": "D01",
+                "variantId": "D01/primary"
+              }
+            ],
+            "operations": 310,
+            "promiseJobs": 1431
+          }
+        ],
+        "assertions": [
+          {
+            "label": "D01/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D01/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "D01/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D01/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "D01/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "D01/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D01/primary: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "D01/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "D01/primary: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: workload-only-control",
+        "operations": 310,
+        "promiseJobs": 1431
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "workload-only-control",
+        "jobId": "aa18fc5b349126b15f2aebb963aa356a",
+        "detail": "Destructive control targeted the witness.",
+        "familyId": "D01",
+        "variantId": "D01/primary"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "D01",
+      "variantId": "D01/primary",
+      "execution": {
+        "variant": {
+          "id": "D01/primary",
+          "family": "D01",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/D01/qualification-v1",
+        "schedule": {
+          "partition": 2823,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

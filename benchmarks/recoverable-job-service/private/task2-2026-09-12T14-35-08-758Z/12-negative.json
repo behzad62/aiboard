@@ -1,0 +1,686 @@
+{
+  "control": "skip-barrier-tail",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B10",
+      "D05"
+    ],
+    "variantIds": [
+      "B10/primary",
+      "D05/primary",
+      "D05/delayed-stdout",
+      "D05/delayed-stderr"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B10/primary",
+          "caseCommitment": "e0eaba50ed8dae9dc4cf6c5001b527219f3f05399891381bc5359878dcca01d4",
+          "fixtureCommitment": "df265519d672f69723c33ab4cabc64e5c91a20cd40011f1649190dd83c33d7da",
+          "fixtureAllocations": 9,
+          "authenticationCommitment": "1cee46d33ee7764b433fa23ca4f22aa2d407d92766d065728fb106791cd78684"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "D05/primary",
+          "caseCommitment": "a17600920408ad15990d64ed1ddd7296fcde21b6988695d454587c564cabb5c0",
+          "fixtureCommitment": "896f09a1e7186965f9944da1a8c9f44ad38ffa1c96f3fa53329c467daf7d368e",
+          "fixtureAllocations": 9,
+          "authenticationCommitment": "7caf4e128c0ea23d73ebe3d305254b76e3718f04923e3a8b3ad08f4fa23d2640"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "D05/delayed-stdout",
+          "caseCommitment": "f0c5fcd2841c804e2a0a2b47f75a96fc343ace00875e5fea21eb6ae802f99ab7",
+          "fixtureCommitment": "137e5df8f97b05ae83a3972606af773d2d286511efe8f5617494fc7eaf699de9",
+          "fixtureAllocations": 9,
+          "authenticationCommitment": "ee6878a572374791531f99bf8a3975738e4b90fdd756b2afc73ced1a2c08f21f"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "D05/delayed-stderr",
+          "caseCommitment": "2bd64918f499b68344cd1883b495740fab598c9d8c366891e7c9bc6f5e5a408c",
+          "fixtureCommitment": "a4c61a29fcc2830a1f21d13cdf577093800ddbed0b6cf7e6b64fd1a769b8b0ba",
+          "fixtureAllocations": 9,
+          "authenticationCommitment": "7bb8cdacf02bcaaece54e62661347269c5f3a6b44fe177cfb7984967dac6c863"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "e664032141b040c14859fa94776ec6828365f8c2c9f0f3180c2bffcf042e82ff",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B10/primary",
+        "D05/primary",
+        "D05/delayed-stdout",
+        "D05/delayed-stderr"
+      ],
+      "scheduleHash": "500d3bf3b1f5992b53e0c1638514bd228d2729d7047b0edade4a3b8f0d10123c",
+      "configurationHash": "a244cbaad659c1aea53b178775f5afa74a5abe1bac479c07318e92aa1eb764be"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B10",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B10/a244cbaad659c1aea53b178775f5afa74a5abe1bac479c07318e92aa1eb764be",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B10/primary",
+              "caseCommitment": "e0eaba50ed8dae9dc4cf6c5001b527219f3f05399891381bc5359878dcca01d4",
+              "fixtureCommitment": "df265519d672f69723c33ab4cabc64e5c91a20cd40011f1649190dd83c33d7da",
+              "fixtureAllocations": 9,
+              "authenticationCommitment": "1cee46d33ee7764b433fa23ca4f22aa2d407d92766d065728fb106791cd78684"
+            },
+            "id": "B10/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 312,
+            "promiseJobs": 1444
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "B10/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B10/primary: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+        "operations": 312,
+        "promiseJobs": 1444
+      },
+      {
+        "id": "D05",
+        "group": "D",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/D05/a244cbaad659c1aea53b178775f5afa74a5abe1bac479c07318e92aa1eb764be",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "D05/primary",
+              "caseCommitment": "a17600920408ad15990d64ed1ddd7296fcde21b6988695d454587c564cabb5c0",
+              "fixtureCommitment": "896f09a1e7186965f9944da1a8c9f44ad38ffa1c96f3fa53329c467daf7d368e",
+              "fixtureAllocations": 9,
+              "authenticationCommitment": "7caf4e128c0ea23d73ebe3d305254b76e3718f04923e3a8b3ad08f4fa23d2640"
+            },
+            "id": "D05/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 276,
+            "promiseJobs": 1274
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "D05/delayed-stdout",
+              "caseCommitment": "f0c5fcd2841c804e2a0a2b47f75a96fc343ace00875e5fea21eb6ae802f99ab7",
+              "fixtureCommitment": "137e5df8f97b05ae83a3972606af773d2d286511efe8f5617494fc7eaf699de9",
+              "fixtureAllocations": 9,
+              "authenticationCommitment": "ee6878a572374791531f99bf8a3975738e4b90fdd756b2afc73ced1a2c08f21f"
+            },
+            "id": "D05/delayed-stdout",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 276,
+            "promiseJobs": 1274
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "D05/delayed-stderr",
+              "caseCommitment": "2bd64918f499b68344cd1883b495740fab598c9d8c366891e7c9bc6f5e5a408c",
+              "fixtureCommitment": "a4c61a29fcc2830a1f21d13cdf577093800ddbed0b6cf7e6b64fd1a769b8b0ba",
+              "fixtureAllocations": 9,
+              "authenticationCommitment": "7bb8cdacf02bcaaece54e62661347269c5f3a6b44fe177cfb7984967dac6c863"
+            },
+            "id": "D05/delayed-stderr",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 276,
+            "promiseJobs": 1274
+          }
+        ],
+        "assertions": [
+          {
+            "label": "D05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "D05/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: start must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "D05/delayed-stdout: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: start must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "D05/delayed-stderr: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "D05/primary: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; D05/delayed-stdout: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; D05/delayed-stderr: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+        "operations": 828,
+        "promiseJobs": 3822
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B10",
+      "variantId": "B10/primary",
+      "execution": {
+        "variant": {
+          "id": "B10/primary",
+          "family": "B10",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B10/qualification-v1",
+        "schedule": {
+          "partition": 3419,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "D05",
+      "variantId": "D05/primary",
+      "execution": {
+        "variant": {
+          "id": "D05/primary",
+          "family": "D05",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/D05/qualification-v1",
+        "schedule": {
+          "partition": 2207,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "D05",
+      "variantId": "D05/delayed-stdout",
+      "execution": {
+        "variant": {
+          "id": "D05/delayed-stdout",
+          "family": "D05",
+          "kind": "barrier-tail",
+          "args": {
+            "stream": "stdout"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/D05/qualification-v1",
+        "schedule": {
+          "partition": 3648,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "D05",
+      "variantId": "D05/delayed-stderr",
+      "execution": {
+        "variant": {
+          "id": "D05/delayed-stderr",
+          "family": "D05",
+          "kind": "barrier-tail",
+          "args": {
+            "stream": "stderr"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/D05/qualification-v1",
+        "schedule": {
+          "partition": 3031,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

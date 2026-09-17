@@ -1,0 +1,94 @@
+{
+  "name": "trace-lazy-roots-E02",
+  "variantId": "E02/primary",
+  "sourceHash": "6721011cdaeaa9ce543c2cc51069d2a8dd7f736b89977ec226cf7b726410a29d",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must refuse",
+      "passed": true
+    },
+    {
+      "label": "construction failure presence retained",
+      "passed": true
+    },
+    {
+      "label": "mandatory pre-launch fault follows actual prescribed acquisitions",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "recover must progress",
+      "passed": true
+    },
+    {
+      "label": "all acquired setup owners close without launching",
+      "passed": true
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "driver.start.before",
+      "index": 176,
+      "during": [
+        "start"
+      ]
+    }
+  ],
+  "operations": 352,
+  "promiseJobs": 1631,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "blocked",
+      "error": null,
+      "blockers": [
+        "backend"
+      ],
+      "state": null
+    },
+    {
+      "method": "recover",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": "open"
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 0,
+    "driver.attach": 1,
+    "driver.detach": 1,
+    "driver.release": 2,
+    "artifact.create": 1,
+    "artifact.write": 0
+  },
+  "transportReturns": [],
+  "acceptedAudits": 0,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

@@ -4,7 +4,11 @@ import { CheckCircle2, Download, RefreshCw, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { BenchRunnerHealth } from "@/lib/client/bench-runner";
+import {
+  getTrustedBenchRunnerReadiness,
+  type BenchRunnerHealth,
+} from "@/lib/client/bench-runner";
+import type { WorkBenchCase } from "@/lib/benchmark/workbench/types";
 
 export function WorkBenchRunnerStatus({
   idPrefix,
@@ -15,6 +19,7 @@ export function WorkBenchRunnerStatus({
   onUrlChange,
   onTokenChange,
   onCheck,
+  workBenchCase,
 }: {
   idPrefix: string;
   url: string;
@@ -24,6 +29,7 @@ export function WorkBenchRunnerStatus({
   onUrlChange: (value: string) => void;
   onTokenChange: (value: string) => void;
   onCheck: () => void;
+  workBenchCase?: WorkBenchCase;
 }) {
   const runnerUrlId = `${idPrefix}-runner-url`;
   const runnerTokenId = `${idPrefix}-runner-token`;
@@ -41,6 +47,19 @@ export function WorkBenchRunnerStatus({
         "Managed Runner V2 unavailable. Restart bench-runner with --runner-v2-dir C:\\path\\to\\aiboard-runner-v2.";
   const BenchStatusIcon = health?.ok ? CheckCircle2 : health ? XCircle : RefreshCw;
   const ManagedStatusIcon = managedReady ? CheckCircle2 : health ? XCircle : RefreshCw;
+  const trustedReadiness = workBenchCase?.trustedPolicy
+    ? getTrustedBenchRunnerReadiness(health, workBenchCase)
+    : null;
+  const TrustedStatusIcon = trustedReadiness?.ready
+    ? CheckCircle2
+    : health
+      ? XCircle
+      : RefreshCw;
+  const trustedStatusText = !health
+    ? "Recoverable Job Service runtime not checked"
+    : trustedReadiness?.ready
+      ? `Recoverable Job Service runtime ready (${health.rjs?.profile ?? "profile unavailable"})`
+      : trustedReadiness?.error;
 
   return (
     <div className="@container rounded-md border p-3">
@@ -105,6 +124,14 @@ export function WorkBenchRunnerStatus({
           <ManagedStatusIcon className={managedReady ? "h-4 w-4 text-emerald-600" : health ? "h-4 w-4 text-destructive" : "h-4 w-4"} />
           <span className="min-w-0 break-words">{managedStatusText}</span>
         </div>
+        {trustedReadiness ? (
+          <div className="flex items-center gap-2">
+            <TrustedStatusIcon className={trustedReadiness.ready ? "h-4 w-4 text-emerald-600" : health ? "h-4 w-4 text-destructive" : "h-4 w-4"} />
+            <span className="min-w-0 break-words">
+              {trustedStatusText}
+            </span>
+          </div>
+        ) : null}
       </div>
     </div>
   );

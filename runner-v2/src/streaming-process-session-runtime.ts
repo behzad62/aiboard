@@ -1180,7 +1180,12 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
     adoptedEffectRuns.set(attempt.attemptId, { ownerId: run.ownerId, fencingToken: run.fencingToken, promise: effect });
     try {
       const outcome = await effect;
-      if (outcome.status === "blocked") throw runnerSessionError("cleanup_blocked", "Adopted streaming session cleanup failed.");
+      if (outcome.status === "blocked") {
+        throw runnerSessionError(
+          "cleanup_blocked",
+          `Adopted streaming session cleanup failed (${outcome.code}).`,
+        );
+      }
       requireVerified();
     } finally {
       if (adoptedEffectRuns.get(attempt.attemptId)?.promise === effect) adoptedEffectRuns.delete(attempt.attemptId);

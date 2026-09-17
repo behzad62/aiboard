@@ -7,6 +7,7 @@ import { throwIfCertifiedRunAborted } from "@/lib/benchmark/certified/model-call
 import {
   createWorkBenchLogArtifact,
   createWorkBenchPatchArtifact,
+  createWorkBenchPublicContractArtifact,
   createWorkBenchRetainedStateArtifact,
   createWorkBenchVerifierArtifact,
 } from "./artifacts";
@@ -57,6 +58,7 @@ export async function executeWorkBenchVerifierOnly(
       verifierResultFile: input.case.verifier.resultFile,
       allowedCommands: input.case.allowedCommands,
       files: input.case.fixtureFiles,
+      trustedPolicy: input.case.trustedPolicy,
     }, input.signal);
     attemptId = preparedAttempt.attemptId || input.attemptId;
     throwIfCertifiedRunAborted(input.signal);
@@ -162,8 +164,12 @@ export async function executeWorkBenchVerifierOnly(
       }, input.signal);
       parsedVerifierResult = parseVerifierResult(
         verifierRun.stdoutPreview,
-        verifierRun.resultJson
+        verifierRun.resultJson,
+        input.case.id
       );
+      if (input.case.trustedPolicy?.kind === "recoverable-job-service") {
+        assertTrustedVerifierEnvelope(verifierRun, parsedVerifierResult);
+      }
       throwIfCertifiedRunAborted(input.signal);
     } catch (error) {
       throwIfCertifiedRunAborted(input.signal);
@@ -172,8 +178,12 @@ export async function executeWorkBenchVerifierOnly(
         startedAt,
         startedMs,
         harnessProfile,
-        status: "invalid_case",
-        code: "verifier_failed",
+        status: input.case.trustedPolicy?.kind === "recoverable-job-service"
+          ? "invalid_harness"
+          : "invalid_case",
+        code: input.case.trustedPolicy?.kind === "recoverable-job-service"
+          ? "trusted_verifier_failed"
+          : "verifier_failed",
         message: errorMessage(error),
         buildResult,
       });
@@ -223,6 +233,16 @@ export async function executeWorkBenchVerifierOnly(
         result: verifierArtifactContent(parsedVerifierResult.rawJson),
         createdAt: completedAt,
       }),
+      ...(input.case.trustedPolicy?.kind === "recoverable-job-service"
+        ? [
+            createWorkBenchPublicContractArtifact({
+              id: `${attemptId}:rjs-public-contract`,
+              attemptId,
+              case: input.case,
+              createdAt: completedAt,
+            }),
+          ]
+        : []),
       ...(diff.diff
         ? [
             createWorkBenchPatchArtifact({
@@ -248,7 +268,13 @@ export async function executeWorkBenchVerifierOnly(
       mode: "certified",
       track: "workbench",
       harnessProfile,
-      status: parsedVerifierResult.passed ? "passed" : "failed_verifier",
+      status:
+        parsedVerifierResult.failureClass === "invalid_environment" ||
+        parsedVerifierResult.failureClass === "invalid_harness"
+          ? parsedVerifierResult.failureClass
+          : parsedVerifierResult.passed
+            ? "passed"
+            : "failed_verifier",
       startedAt,
       completedAt,
       verifiedQuality: score.verifiedQuality,
@@ -278,6 +304,30 @@ export async function executeWorkBenchVerifierOnly(
     ) {
       await cleanupBenchRun(input.runner, { attemptId }).catch(() => undefined);
     }
+  }
+}
+
+function assertTrustedVerifierEnvelope(
+  verifierRun: WorkBenchRunVerifierResult,
+  parsed: ParsedWorkBenchVerifierResult
+): void {
+  const expectedExitCode =
+    parsed.failureClass === "invalid_harness" ||
+    parsed.failureClass === "invalid_environment"
+      ? 2
+      : parsed.passed
+        ? 0
+        : 1;
+  if (verifierRun.exitCode !== expectedExitCode) {
+    throw new Error(
+      `Recoverable Job Service verifier exit code ${verifierRun.exitCode} contradicts diagnostics (expected ${expectedExitCode}).`
+    );
+  }
+  if (verifierRun.passed !== parsed.passed) {
+    throw new Error("Recoverable Job Service verifier transport passed flag contradicts diagnostics.");
+  }
+  if (verifierRun.score !== parsed.score) {
+    throw new Error("Recoverable Job Service verifier transport score contradicts diagnostics.");
   }
 }
 
@@ -324,10 +374,20 @@ export function createFailedWorkBenchAttempt(
         createdAt: completedAt,
       })
     : null;
+  const publicContractArtifact =
+    input.case.trustedPolicy?.kind === "recoverable-job-service"
+      ? createWorkBenchPublicContractArtifact({
+          id: `${attemptId}:rjs-public-contract`,
+          attemptId,
+          case: input.case,
+          createdAt: completedAt,
+        })
+      : null;
   const failureArtifactIds = [
     ...(context.buildResult?.artifactIds ?? []),
     logArtifact.id,
     ...(retainedArtifact ? [retainedArtifact.id] : []),
+    ...(publicContractArtifact ? [publicContractArtifact.id] : []),
   ].filter((id, index, values) => values.indexOf(id) === index);
   const verifierResult: BenchmarkVerifierResult = {
     id: `${attemptId}:verifier`,
@@ -412,7 +472,11 @@ export function createFailedWorkBenchAttempt(
     verifierResult,
     parsedVerifierResult: parseVerifierResult("", verifierResult.resultJson),
     score,
-    artifacts: [logArtifact, ...(retainedArtifact ? [retainedArtifact] : [])],
+    artifacts: [
+      logArtifact,
+      ...(retainedArtifact ? [retainedArtifact] : []),
+      ...(publicContractArtifact ? [publicContractArtifact] : []),
+    ],
   };
 }
 

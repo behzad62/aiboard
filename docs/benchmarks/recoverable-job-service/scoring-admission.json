@@ -1,0 +1,709 @@
+{
+  "version": "design-fairness-audit-2026-09-08",
+  "purpose": "Readiness record only; an executable producer exists; its amended-profile qualification, independent correct-control admission and end-to-end UI gates remain pending.",
+  "policy": "No deduction without a complete unambiguous public contract and qualified evaluator.",
+  "globalGates": {
+    "compileReadyPublicInterfaces": false,
+    "completeAdapterResponsibilityManifest": false,
+    "exactPublicSchemasAndFaultModel": false,
+    "numericLimitsAndOutcomePolicy": false,
+    "executablePublicExamplesPerFamily": false,
+    "blindInstructionSufficiencyReview": false,
+    "qualifiedReferenceAndFaultControls": false,
+    "frozenScoreEnvironmentAndBudgetManifest": false
+  },
+  "admittedFamilies": 0,
+  "families": [
+    {
+      "id": "A01",
+      "requirement": "A1",
+      "publicContract": "acceptance-contract.md#a01",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A02",
+      "requirement": "A1",
+      "publicContract": "acceptance-contract.md#a02",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A03",
+      "requirement": "A1",
+      "publicContract": "acceptance-contract.md#a03",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A04",
+      "requirement": "A1–A2",
+      "publicContract": "acceptance-contract.md#a04",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A05",
+      "requirement": "A2",
+      "publicContract": "acceptance-contract.md#a05",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A06",
+      "requirement": "A2",
+      "publicContract": "acceptance-contract.md#a06",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A07",
+      "requirement": "A2",
+      "publicContract": "acceptance-contract.md#a07",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A08",
+      "requirement": "A3",
+      "publicContract": "acceptance-contract.md#a08",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A09",
+      "requirement": "A3",
+      "publicContract": "acceptance-contract.md#a09",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A10",
+      "requirement": "A3",
+      "publicContract": "acceptance-contract.md#a10",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A11",
+      "requirement": "A4",
+      "publicContract": "acceptance-contract.md#a11",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A12",
+      "requirement": "A4",
+      "publicContract": "acceptance-contract.md#a12",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A13",
+      "requirement": "A4",
+      "publicContract": "acceptance-contract.md#a13",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A14",
+      "requirement": "A2–A3",
+      "publicContract": "acceptance-contract.md#a14",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "A15",
+      "requirement": "A1–A3",
+      "publicContract": "acceptance-contract.md#a15",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B01",
+      "requirement": "B1",
+      "publicContract": "acceptance-contract.md#b01",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B02",
+      "requirement": "B2",
+      "publicContract": "acceptance-contract.md#b02",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B03",
+      "requirement": "B2",
+      "publicContract": "acceptance-contract.md#b03",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B04",
+      "requirement": "B3",
+      "publicContract": "acceptance-contract.md#b04",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B05",
+      "requirement": "B3",
+      "publicContract": "acceptance-contract.md#b05",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B06",
+      "requirement": "B3",
+      "publicContract": "acceptance-contract.md#b06",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B07",
+      "requirement": "B2–B3",
+      "publicContract": "acceptance-contract.md#b07",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B08",
+      "requirement": "B2",
+      "publicContract": "acceptance-contract.md#b08",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B09",
+      "requirement": "B2",
+      "publicContract": "acceptance-contract.md#b09",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B10",
+      "requirement": "B4",
+      "publicContract": "acceptance-contract.md#b10",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B11",
+      "requirement": "B4",
+      "publicContract": "acceptance-contract.md#b11",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B12",
+      "requirement": "B4",
+      "publicContract": "acceptance-contract.md#b12",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B13",
+      "requirement": "B5",
+      "publicContract": "acceptance-contract.md#b13",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B14",
+      "requirement": "B1–B5",
+      "publicContract": "acceptance-contract.md#b14",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B15",
+      "requirement": "B1–B5",
+      "publicContract": "acceptance-contract.md#b15",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B16",
+      "requirement": "B5",
+      "publicContract": "acceptance-contract.md#b16",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "B17",
+      "requirement": "B2–B4, C5",
+      "publicContract": "acceptance-contract.md#b17",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C01",
+      "requirement": "C1–C2",
+      "publicContract": "acceptance-contract.md#c01",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C02",
+      "requirement": "C2",
+      "publicContract": "acceptance-contract.md#c02",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C03",
+      "requirement": "C1–C2",
+      "publicContract": "acceptance-contract.md#c03",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C04",
+      "requirement": "C1–C2",
+      "publicContract": "acceptance-contract.md#c04",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C05",
+      "requirement": "C2",
+      "publicContract": "acceptance-contract.md#c05",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C06",
+      "requirement": "C1",
+      "publicContract": "acceptance-contract.md#c06",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C07",
+      "requirement": "C1",
+      "publicContract": "acceptance-contract.md#c07",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C08",
+      "requirement": "C3",
+      "publicContract": "acceptance-contract.md#c08",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C09",
+      "requirement": "C2",
+      "publicContract": "acceptance-contract.md#c09",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C10",
+      "requirement": "C2",
+      "publicContract": "acceptance-contract.md#c10",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C11",
+      "requirement": "C2",
+      "publicContract": "acceptance-contract.md#c11",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C12",
+      "requirement": "C2–C4",
+      "publicContract": "acceptance-contract.md#c12",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C13",
+      "requirement": "C4",
+      "publicContract": "acceptance-contract.md#c13",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C14",
+      "requirement": "C4",
+      "publicContract": "acceptance-contract.md#c14",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C15",
+      "requirement": "C4",
+      "publicContract": "acceptance-contract.md#c15",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C16",
+      "requirement": "C4",
+      "publicContract": "acceptance-contract.md#c16",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C17",
+      "requirement": "C4",
+      "publicContract": "acceptance-contract.md#c17",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C18",
+      "requirement": "C4, E4",
+      "publicContract": "acceptance-contract.md#c18",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "C19",
+      "requirement": "C4–C5",
+      "publicContract": "acceptance-contract.md#c19",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D01",
+      "requirement": "D1",
+      "publicContract": "acceptance-contract.md#d01",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D02",
+      "requirement": "D1",
+      "publicContract": "acceptance-contract.md#d02",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D03",
+      "requirement": "D2",
+      "publicContract": "acceptance-contract.md#d03",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D04",
+      "requirement": "D2",
+      "publicContract": "acceptance-contract.md#d04",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D05",
+      "requirement": "D3",
+      "publicContract": "acceptance-contract.md#d05",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D06",
+      "requirement": "D3",
+      "publicContract": "acceptance-contract.md#d06",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D07",
+      "requirement": "D5",
+      "publicContract": "acceptance-contract.md#d07",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D08",
+      "requirement": "D1, D4",
+      "publicContract": "acceptance-contract.md#d08",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "D09",
+      "requirement": "D3, B3",
+      "publicContract": "acceptance-contract.md#d09",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E01",
+      "requirement": "E1–E2",
+      "publicContract": "acceptance-contract.md#e01",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E02",
+      "requirement": "B1, E1–E2",
+      "publicContract": "acceptance-contract.md#e02",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E03",
+      "requirement": "B1, C3, E1",
+      "publicContract": "acceptance-contract.md#e03",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E04",
+      "requirement": "B4, D3, E1",
+      "publicContract": "acceptance-contract.md#e04",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E05",
+      "requirement": "E2",
+      "publicContract": "acceptance-contract.md#e05",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E06",
+      "requirement": "E2–E3",
+      "publicContract": "acceptance-contract.md#e06",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E07",
+      "requirement": "E1–E3",
+      "publicContract": "acceptance-contract.md#e07",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E08",
+      "requirement": "E3",
+      "publicContract": "acceptance-contract.md#e08",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    },
+    {
+      "id": "E09",
+      "requirement": "E4",
+      "publicContract": "acceptance-contract.md#e09",
+      "publicBehaviorListed": true,
+      "instructionSufficiency": "pending",
+      "status": "not_admitted",
+      "affectsScore": false,
+      "reason": "Public behavior is listed, but complete interface/profile and evaluator admission gates are not satisfied."
+    }
+  ],
+  "currentExecutionStatus": "Executable producer implemented for earlier profile; rjs-contract-2.0.0 producer qualification, independent correct-control admission and end-to-end UI validation remain pending."
+}

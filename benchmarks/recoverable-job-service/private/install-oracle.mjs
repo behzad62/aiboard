@@ -1,0 +1,6 @@
+import {readFile,writeFile} from 'node:fs/promises';
+let p='benchmarks/recoverable-job-service/private/broker.mjs',s=await readFile(p,'utf8');
+s=s.replace("this.trace.push({type:'audit',...row});","this.trace.push({...row,type:'audit',auditType:a.type});");
+s=s.replace("const after=await this.boundary(method+'.after',args);return clone(after??value);","const after=await this.boundary(method+'.after',args);if(['driver.inspect','driver.readChannel'].includes(method))this.trace.push({type:'return',method,args:clone(args),value:clone(after??value),at:this.time});return clone(after??value);");
+await writeFile(p,s);
+p='benchmarks/recoverable-job-service/private/evaluator.mjs';s=await readFile(p,'utf8');s=s.replace("import {CandidateError,HarnessError}","import {inspectSafety} from './oracle.mjs';\nimport {CandidateError,HarnessError}");s=s.replace("const families=[];let invalid=null;","const families=[],safetyFailures=[];let invalid=null;");s=s.replace("await scenarios[id](s);if", "await scenarios[id](s);const safety=inspectSafety(s.b);safetyFailures.push(...safety.map(f=>({...f,familyId:id})));s.check(safety.length===0,'trusted causal safety oracle: '+safety.map(f=>f.code).join(', '));if");s=s.replace('safetyFailures:[],','safetyFailures,');await writeFile(p,s);

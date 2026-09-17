@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {createReplayInput,replayInputFromRecord,evaluateBounded} from '../benchmarks/recoverable-job-service/private/runtime.mjs';
+const source=await readFile('benchmarks/recoverable-job-service/private/reference.js','utf8'),input=createReplayInput();
+let record;const result=await evaluateBounded(source,{variantIds:['A01/primary'],replayInput:input,onReplayRecord:r=>record=r});
+assert.ok(Array.isArray(record.executedInputs),'private final record retains actual executed input tape');
+assert.equal(record.executedInputs.length,1);assert.ok(record.executedInputs[0].events.some(e=>e.type==='request'));
+assert.ok(record.executedInputs[0].events.some(e=>e.type==='grant'&&e.grant.token));
+assert.deepEqual(replayInputFromRecord(record),input);assert.ok(!JSON.stringify(result).includes('executedInputs'));
+const changed=structuredClone(record);changed.executedInputs[0].events[0].id='0'.repeat(32);assert.throws(()=>replayInputFromRecord(changed),/commitment/);
+console.log('Private executed input tape, authentication bytes, strict record validation and diagnostic boundary pass.');

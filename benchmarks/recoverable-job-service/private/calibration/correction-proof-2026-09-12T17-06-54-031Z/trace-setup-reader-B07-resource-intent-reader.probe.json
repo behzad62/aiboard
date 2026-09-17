@@ -1,0 +1,104 @@
+{
+  "name": "trace-setup-reader-B07-resource-intent-reader",
+  "variantId": "B07/resource-intent-reader",
+  "sourceHash": "0f9af49f2f4679e1a0aee684b2820e3b63e7aace80319225bb5b76a1bbdf0963",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful driver.attach.before",
+      "passed": true
+    },
+    {
+      "label": "actual public setup intent identifies lifecycle job",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "stop must progress",
+      "passed": true
+    },
+    {
+      "label": "released public job",
+      "passed": true
+    },
+    {
+      "label": "witness released after settlement",
+      "passed": true
+    },
+    {
+      "label": "all six durable facts",
+      "passed": true
+    },
+    {
+      "label": "crash keeps completed release effects exact",
+      "passed": true
+    },
+    {
+      "label": "crash keeps immutable final evidence",
+      "passed": true
+    },
+    {
+      "label": "recovered cleanup retires an actual authenticated attachment",
+      "passed": true
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "driver.attach.before",
+      "index": 252,
+      "during": [
+        "start"
+      ]
+    }
+  ],
+  "operations": 401,
+  "promiseJobs": 1845,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": null,
+      "error": "Error: guest terminated",
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": "released"
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 1,
+    "driver.detach": 1,
+    "driver.release": 2,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "transportReturns": [],
+  "acceptedAudits": 0,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

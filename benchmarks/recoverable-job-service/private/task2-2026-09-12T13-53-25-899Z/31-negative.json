@@ -1,0 +1,261 @@
+{
+  "control": "steal-live-claim",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "D07"
+    ],
+    "variantIds": [
+      "D07/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "D07/primary",
+          "caseCommitment": "3f4df3926f5e276e23b367e32b2ec9bca18e09c7a24db9368f66f1912d0db91a",
+          "fixtureCommitment": "674816a53db5eb0c98cd112d79ba84281e92ec76c77cf2b4fc7181af078f41f3",
+          "fixtureAllocations": 12,
+          "authenticationCommitment": "c8a8f24c99abf2f9e9875e83aefc3c9f3db8e5ff790cc8acb71a5b3bfc37ff03"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "c0f27feb0f46f59a8ed2be36589e0916c2b5eb9f18357d276c9fdad763f40a43",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "D07/primary"
+      ],
+      "scheduleHash": "26749607e0b3c2c5425ee87c588f07424b0397a7971bc5ae10cbe3e49ebfd3b9",
+      "configurationHash": "d2c9bc62a0f446cb761e570c3759a3fac7613591a6626414b934474b78db8358"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "D07",
+        "group": "D",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/D07/d2c9bc62a0f446cb761e570c3759a3fac7613591a6626414b934474b78db8358",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "D07/primary",
+              "caseCommitment": "3f4df3926f5e276e23b367e32b2ec9bca18e09c7a24db9368f66f1912d0db91a",
+              "fixtureCommitment": "674816a53db5eb0c98cd112d79ba84281e92ec76c77cf2b4fc7181af078f41f3",
+              "fixtureAllocations": 12,
+              "authenticationCommitment": "c8a8f24c99abf2f9e9875e83aefc3c9f3db8e5ff790cc8acb71a5b3bfc37ff03"
+            },
+            "id": "D07/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "claim must progress",
+                "passed": true
+              },
+              {
+                "label": "actual agent holder recorded independently of job",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "claim must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "claim must refuse",
+            "safetyFailures": [],
+            "operations": 238,
+            "promiseJobs": 1097
+          }
+        ],
+        "assertions": [
+          {
+            "label": "D07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: claim must progress",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: actual agent holder recorded independently of job",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D07/primary: claim must refuse",
+            "passed": false
+          },
+          {
+            "label": "D07/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "D07/primary: claim must refuse",
+        "operations": 238,
+        "promiseJobs": 1097
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "D07",
+      "variantId": "D07/primary",
+      "execution": {
+        "variant": {
+          "id": "D07/primary",
+          "family": "D07",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/D07/qualification-v1",
+        "schedule": {
+          "partition": 3313,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

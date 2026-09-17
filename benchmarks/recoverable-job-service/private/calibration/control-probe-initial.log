@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "status": "constructed complete reference-derived controls; not qualified",
+  "referenceSha256": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "scorerIdentity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f8f1f824577efab1719a750b22df833daf62c13fb9bf29b28bf9363cf94fa7f8"
+  },
+  "controls": [
+    {
+      "id": "representation",
+      "label": "Reference-derived representation calibration control",
+      "choices": [
+        "different private key namespaces",
+        "opaque stored record envelopes",
+        "different physical retained/scratch root layout",
+        "different actual artifact names represented in public evidence"
+      ],
+      "sha256": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445",
+      "bytes": 56979,
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\complete-controls\\representation.js"
+    },
+    {
+      "id": "algorithm",
+      "label": "Reference-derived algorithm calibration control",
+      "choices": [
+        "atomic durable intent/issuance marker with receipt-based nonapplication reconciliation",
+        "maintained paged ownership index and coherent head-version reads",
+        "setup reader and eager lawful source-prefix adoption",
+        "deterministic descending-ID reclamation order"
+      ],
+      "sha256": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+      "bytes": 58544,
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\complete-controls\\algorithm.js"
+    },
+    {
+      "id": "truthful-outcome",
+      "label": "Reference-derived truthful-outcome calibration control",
+      "choices": [
+        "integrity at actual range-validation branches",
+        "deadline-first admission only when the actual request is expired",
+        "pending source ACK with its stored exact obligation",
+        "unknown client delivery with its durable exact ID",
+        "truthful aggregate recovery views when every remaining job has an unresolved source/client obligation"
+      ],
+      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf",
+      "bytes": 56230,
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\complete-controls\\truthful-outcome.js"
+    }
+  ],
+  "scope": "Three full control sources; no substitute for the unchanged full302 runs and actual lawful/forbidden probes."
+}
+{"id":"representation","sha256":"a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445","status":"valid","selected":20,"pass":20,"skipped":0,"failed":[],"safety":[]}
+{"id":"algorithm","sha256":"0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac","status":"valid","selected":20,"pass":20,"skipped":0,"failed":[],"safety":[]}
+{"id":"truthful-outcome","sha256":"e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf","status":"valid","selected":20,"pass":20,"skipped":0,"failed":[],"safety":[]}
+{
+  "evidence": "benchmarks\\recoverable-job-service\\private\\calibration\\control-probe-2026-09-12T17-29-48-136Z"
+}

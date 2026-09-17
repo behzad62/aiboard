@@ -1,0 +1,154 @@
+[
+  {
+    "path": "benchmarks/recoverable-job-service/private/broker.mjs",
+    "sha256": "11af66282a3691b736b8cc6caa1dbe6318df9722700a3629c82ab6b7dc7772bb"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/control-expectations.json",
+    "sha256": "8c1b377d13a805f96f23c07bbb088a3a4897a847cb4a6321f4f56d3a25b6efab"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/controls.mjs",
+    "sha256": "9504419e636fa6d17bc2288355d72a508f7adb19ae65580393c34371cac62bc6"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/dependency-provenance.json",
+    "sha256": "325baf99112f9f3ba1c66ef89792ed98714299f57fcb4f770c6a75db176ebca8"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/evaluation-worker.mjs",
+    "sha256": "5e9ebad2bb96a09f315a92eb6e0eb607d14b1be0a9e2d1b5b223cbb0cb05feb2"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/evaluator.mjs",
+    "sha256": "3ed189420f1fb2fab23aae10eadcc4e8a885070c1a7c3404a26723545df84dc0"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/guest.mjs",
+    "sha256": "f7249b4f5eb6414b9d21cddf92554cb6773c1f408b4c57666a9d019ee94c395d"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/identity.mjs",
+    "sha256": "2500c0dbac3dd02cd01d8bbce2422624f386f99678f0ec75bde9393c6bbdbb00"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/oracle.mjs",
+    "sha256": "3d719ac851d1101daea8c735508e4b59d9a0b4e440c66ab79b667cd7d4e8f7aa"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/provenance.mjs",
+    "sha256": "e0fe2efb447c02384c702052d3b747b703d98ff4a74fbdcd84db7839525018e6"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/public-evaluator.mjs",
+    "sha256": "73b57ecc40e7651eb3aae6ce5a298deff74d061666d56fb8fdf5e6f7011810d6"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/qualification-map.mjs",
+    "sha256": "5a48dd133f1859a3afcff184cc576f9782d00d0bc7af8123818fe97463650723"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/qualification-provenance.mjs",
+    "sha256": "f608e6d354384a5c48b829ba720af08f78e250568b33a0c447e50ea410318745"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/quickjs-memory-shim.mjs",
+    "sha256": "c5368271a44fd8f84dcddabfdb7395017a2a264add28be73bdab7f046a91044c"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/reference.js",
+    "sha256": "3858ad3aa139b373fe1df3ef960c57b9a95e60347402b052076bf45b2c2ffbdf"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/response-schema.mjs",
+    "sha256": "8d0953ed1400a704a6cde5605fb4ae5fd2e50a1876353e49dcac2176373f35e9"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/runtime.mjs",
+    "sha256": "1cb4c69591533b79e77ca6da1b25ace33bf3f41a5217232bafceaec828e38655"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/scenarios.mjs",
+    "sha256": "bc29c9b361f1ed2790e4b60f8c1c1ea639ea6ba0f9b02ba5191e6b0613daa232"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/variants.mjs",
+    "sha256": "f86bb5df3e262f3758d5c24f2426d5fdad92416f3f616f37808baba03bb8c5b6"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/verify-template.mjs",
+    "sha256": "4259669add5040f8b93634cc766f265c535f1ed3dca6a1dea03a32b7575916d6"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/private/wire-schema.mjs",
+    "sha256": "a693ee301037a0d1e07e4a826c2a325f64bf2974f486a3abf18d68d25717e906"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/public/acceptance-contract.md",
+    "sha256": "3b307f3ee1bc0f0c45af7440f345ea2292f82722bee349daf926c7b5e8566695"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/public/contract.d.ts",
+    "sha256": "9eabd0a2fe23a62203f09603e40d46b41230bf4530f95088fd88bf77d9ca17c1"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/public/examples.mjs",
+    "sha256": "b62ef06ce8ee7325b4e7a150579f4b5fd03c231574968346185e1d290eb41cf2"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/public/families.json",
+    "sha256": "a3d823c21806ad41bb29b84184767b73143182ef24878a588101e504c665cf98"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/public/problem.md",
+    "sha256": "e1f4fa66e2f37011343a4414685131466ed9ab5ea896818268118715d566f680"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/public/public-test.mjs",
+    "sha256": "3e7f6d28d1368b5d5e9d5744d7bc0081b73c70fa5a6d0b9406b15f79e8573210"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/public/runtime-contract.md",
+    "sha256": "3e7ec3ad2511f69fbd08d534571ae45717c07bc914d2be100c7885bb37e650bb"
+  },
+  {
+    "path": "benchmarks/recoverable-job-service/public/service.js",
+    "sha256": "7e658609d364081ba027113468ecb88ab2d17fce2276705ba5e99699cd0e5d27"
+  },
+  {
+    "path": "lib/benchmark/workbench/recoverable-job-service/assets.generated.ts",
+    "sha256": "9cbb9904c0e265ce4ae0a939b5684a89edc630a7d654a48ca00c29423ef8a594"
+  },
+  {
+    "path": "lib/benchmark/workbench/recoverable-job-service/diagnostics.ts",
+    "sha256": "1cff14eb2666bdfd5d15e46a394517d51a862b8edc8fd471fa418139dbd4266b"
+  },
+  {
+    "path": "lib/benchmark/workbench/recoverable-job-service/fixture.ts",
+    "sha256": "c0ba6d6b74445f859597ba8210037833b1faef37b40ceb0c321cfc0983af0ebd"
+  },
+  {
+    "path": "package-lock.json",
+    "sha256": "8eb81b40a02d14a3f821eda388c61e62dfd6145dd3210e1d96d8894efe6d5da7"
+  },
+  {
+    "path": "package.json",
+    "sha256": "736166eab06f546419f1065d8d6dd2571c6ce02a12d4a599cc8b85e15532967c"
+  },
+  {
+    "path": "scripts/test-recoverable-job-service-fix3.mts",
+    "sha256": "6cd34c78b2b3ecfa21abc9383abc6d0e9bb6a72086228e512b44f037d27f5938"
+  },
+  {
+    "path": "scripts/test-recoverable-job-service-fix5.mts",
+    "sha256": "c2c795d20360f583a5b50bee4aef2d5d6935a366a2aecba14d12eea0e41d3596"
+  },
+  {
+    "path": "scripts/test-recoverable-job-service-freshness.mts",
+    "sha256": "6b5725c16ad05a4226f668383fae1854923bc05973989dc5c768b404216b7b25"
+  },
+  {
+    "path": "scripts/test-recoverable-job-service.mts",
+    "sha256": "1adbab40c56e04a0836c5a3411192a9def7e99a23b88c6b71317800a5801264c"
+  }
+]

@@ -13,6 +13,11 @@ import { wilsonInterval, type DecisionRow } from "@/lib/benchmark/certified/deci
 import { benchmarkVariantLabel } from "@/lib/benchmark/model-effort";
 import { sanitizeBenchmarkDisplayText } from "@/lib/benchmark/configuration-display";
 import { VariantRosterBadges } from "./VariantRosterBadges";
+import { RecoverableJobServiceSummary } from "@/components/benchmark/certified/RecoverableJobServiceSummary";
+import {
+  getBenchmarkArtifacts,
+  getBenchmarkVerifierResults,
+} from "@/lib/client/store";
 
 export function ModelEvidenceProfile({
   id,
@@ -29,6 +34,17 @@ export function ModelEvidenceProfile({
   const titleId = `${id}-title`;
   const failureMessages = certifiedFailureMessages(row);
   const failedAttempts = failedAttemptCount(row);
+  const historicalWorkBenchAttemptId = row.latestAttemptsByTrack.workbench?.id;
+  const historicalVerifier = historicalWorkBenchAttemptId
+    ? getBenchmarkVerifierResults().find(
+        (candidate) => candidate.attemptId === historicalWorkBenchAttemptId
+      )
+    : null;
+  const historicalArtifacts = historicalWorkBenchAttemptId
+    ? getBenchmarkArtifacts().filter(
+        (artifact) => artifact.attemptId === historicalWorkBenchAttemptId
+      )
+    : [];
 
   useEffect(() => {
     const profile = profileRef.current;
@@ -187,6 +203,17 @@ export function ModelEvidenceProfile({
             </p>
           )}
         </section>
+
+        {historicalWorkBenchAttemptId ? (
+          <section>
+            <h4 className="mb-2 text-sm font-semibold">Latest WorkBench attempt in this snapshot</h4>
+            <RecoverableJobServiceSummary
+              attemptId={historicalWorkBenchAttemptId}
+              verifier={historicalVerifier}
+              artifacts={historicalArtifacts}
+            />
+          </section>
+        ) : null}
 
         <p className="border-t pt-3 text-xs leading-relaxed text-muted-foreground">
           {row.preliminary

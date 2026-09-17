@@ -539,7 +539,8 @@ check(
 );
 check(
   "certified WorkBench readiness requires the managed Runner V2 capability",
-  certifiedRunPanelSource.includes("workBenchRunnerHealth?.runnerV2?.ready"),
+  certifiedRunPanelSource.includes("getTrustedBenchRunnerReadiness") &&
+    certifiedRunPanelSource.includes("selectedWorkBenchReadiness.ready"),
   certifiedRunPanelSource
 );
 check(

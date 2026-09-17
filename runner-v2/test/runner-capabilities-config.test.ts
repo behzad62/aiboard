@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import test from "node:test";
 
 import {
+  capabilitiesConfigCanonicalTargetIsInsideProject,
   loadRunnerCapabilitiesConfig,
+  resolveRunnerCapabilitiesConfigPath,
   RunnerCapabilitiesConfigError,
 } from "../src/runner-capabilities-config.js";
 
@@ -136,7 +138,7 @@ test("capability configuration rejects unknown fields, duplicate identities, rel
   }
 });
 
-test("capability configuration loads a regular file whose directory prefix canonicalizes", async () => {
+test("capability configuration rejects a regular file reached through a user-created parent alias", async () => {
   const fixture = configFixture("prefix-alias");
   const aliasRoot = join(dirname(fixture.root), `${basename(fixture.root)}-alias`);
   try {
@@ -148,14 +150,75 @@ test("capability configuration loads a regular file whose directory prefix canon
       normalizePath(realpathSync(aliased)),
       "the fixture must exercise a non-canonical directory prefix",
     );
-    const loaded = await loadRunnerCapabilitiesConfig(aliased);
-    assert.deepEqual(loaded.extensions, []);
-    assert.deepEqual(loaded.languageServers, []);
+    await assert.rejects(
+      loadRunnerCapabilitiesConfig(aliased),
+      isConfigError("symbolic_config"),
+    );
   } finally {
     rmSync(aliasRoot, { recursive: true, force: true });
     fixture.close();
   }
 });
+
+test("capability configuration loads a regular file when only host-native path aliases differ", async () => {
+  const fixture = configFixture("host-alias");
+  try {
+    fixture.write({ version: 1, extensions: [], languageServers: [] });
+    const canonical = realpathSync(fixture.path);
+    if (normalizePath(fixture.path) === normalizePath(canonical)) return;
+    const loaded = await loadRunnerCapabilitiesConfig(fixture.path);
+    assert.deepEqual(loaded.extensions, []);
+    assert.equal(normalizePath(await resolveRunnerCapabilitiesConfigPath(fixture.path)), normalizePath(canonical));
+  } finally {
+    fixture.close();
+  }
+});
+
+test("capability configuration confinement uses the canonical target, not the lexical alias", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-capabilities-confine-"));
+  const project = join(root, "project");
+  const outside = join(root, "outside");
+  mkdirSync(project);
+  mkdirSync(outside);
+  const insideConfig = join(project, "runner-capabilities.json");
+  const outsideConfig = join(outside, "runner-capabilities.json");
+  writeFileSync(insideConfig, JSON.stringify({ version: 1, extensions: [], languageServers: [] }));
+  writeFileSync(outsideConfig, JSON.stringify({ version: 1, extensions: [], languageServers: [] }));
+  const aliasRoot = join(outside, "alias");
+  try {
+    symlinkSync(project, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+    const lexical = join(aliasRoot, "runner-capabilities.json");
+    assert.equal(isLexicallyInside(project, lexical), false, "the lexical alias must appear outside the project");
+    assert.equal(isLexicallyInside(project, realpathSync(lexical)), true, "the canonical target must be inside the project");
+    await assert.rejects(
+      loadRunnerCapabilitiesConfig(lexical),
+      isConfigError("symbolic_config"),
+    );
+    await assert.rejects(
+      capabilitiesConfigCanonicalTargetIsInsideProject(project, lexical),
+      isConfigError("symbolic_config"),
+    );
+    assert.equal(await capabilitiesConfigCanonicalTargetIsInsideProject(project, insideConfig), true);
+    assert.equal(await capabilitiesConfigCanonicalTargetIsInsideProject(project, outsideConfig), false);
+
+    const canonicalProject = realpathSync(project);
+    if (normalizePath(project) !== normalizePath(canonicalProject)) {
+      const hostAliasedInside = join(project, "runner-capabilities.json");
+      assert.equal(
+        await capabilitiesConfigCanonicalTargetIsInsideProject(canonicalProject, hostAliasedInside),
+        true,
+        "a trusted OS path alias that lands inside the project must still be confined",
+      );
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function isLexicallyInside(parent: string, candidate: string): boolean {
+  const traversal = relative(parent, candidate);
+  return traversal === "" || (!traversal.startsWith("..") && !isAbsolute(traversal));
+}
 
 function normalizePath(path: string): string {
   const normalized = resolve(path);

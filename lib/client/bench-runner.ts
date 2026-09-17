@@ -2,7 +2,9 @@ import type {
   WorkBenchRunCommandResult,
   WorkBenchRunVerifierResult,
   WorkBenchRunnerConfig,
+  WorkBenchCase,
 } from "@/lib/benchmark/workbench/types";
+import type { WorkBenchTrustedPolicy } from "@/lib/benchmark/workbench/types";
 
 export const DEFAULT_BENCH_RUNNER_URL = "http://127.0.0.1:8797";
 
@@ -19,6 +21,15 @@ export interface BenchRunnerHealth {
     ready: boolean;
     source?: string;
     nodeVersion?: string;
+    error?: string;
+  };
+  rjs?: {
+    ready: boolean;
+    nodeVersion?: string;
+    quickjsVersion?: string;
+    contractHash?: string;
+    suiteHash?: string;
+    profile?: string;
     error?: string;
   };
 }
@@ -51,6 +62,73 @@ export interface PrepareBenchCaseInput {
   verifierResultFile?: string;
   allowedCommands?: string[];
   files?: Record<string, string>;
+  trustedPolicy?: WorkBenchTrustedPolicy;
+}
+
+export function getTrustedBenchRunnerReadiness(
+  health: BenchRunnerHealth | null,
+  workBenchCase?: WorkBenchCase | null
+): { ready: boolean; error?: string } {
+  if (!health?.ok) {
+    return { ready: false, error: health?.error ?? "Bench Runner is not ready." };
+  }
+  if (!health.runnerV2?.ready) {
+    return {
+      ready: false,
+      error:
+        health.runnerV2?.error ??
+        "Managed Runner V2 is unavailable; configure --runner-v2-dir.",
+    };
+  }
+  const policy = workBenchCase?.trustedPolicy;
+  if (!policy) return { ready: true };
+
+  const trusted = health.rjs;
+  if (!trusted?.ready) {
+    return {
+      ready: false,
+      error: trusted?.error ?? "Recoverable Job Service trusted runtime is unavailable.",
+    };
+  }
+  if (
+    trusted.nodeVersion !== policy.requiredNodeVersion ||
+    health.runnerV2.nodeVersion !== policy.requiredNodeVersion
+  ) {
+    return {
+      ready: false,
+      error: `Recoverable Job Service requires Node ${policy.requiredNodeVersion} in both runners.`,
+    };
+  }
+  if (trusted.quickjsVersion !== policy.requiredQuickJsVersion) {
+    return {
+      ready: false,
+      error: `Recoverable Job Service requires QuickJS ${policy.requiredQuickJsVersion}.`,
+    };
+  }
+  if (trusted.contractHash !== policy.contractHash) {
+    return { ready: false, error: "Recoverable Job Service contract identity does not match the selected case." };
+  }
+  if (trusted.suiteHash !== policy.suiteHash) {
+    return { ready: false, error: "Recoverable Job Service suite identity does not match the selected case." };
+  }
+  const expectedProfile = readFixtureProfile(workBenchCase.fixtureFiles?.["case-meta.json"]);
+  if (!expectedProfile || trusted.profile !== expectedProfile) {
+    return { ready: false, error: "Recoverable Job Service profile identity does not match the selected case." };
+  }
+  return { ready: true };
+}
+
+function readFixtureProfile(caseMetadata: string | undefined): string | null {
+  if (typeof caseMetadata !== "string") return null;
+  try {
+    const value = JSON.parse(caseMetadata) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value) &&
+      typeof (value as { profile?: unknown }).profile === "string"
+      ? (value as { profile: string }).profile
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface PrepareBenchCaseResult {

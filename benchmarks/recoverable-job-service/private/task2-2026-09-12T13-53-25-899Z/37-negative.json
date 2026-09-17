@@ -1,0 +1,253 @@
+{
+  "control": "forget-inspection-on-timeout",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A10"
+    ],
+    "variantIds": [
+      "A10/timeout-observer-replacement"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "A10/timeout-observer-replacement",
+          "caseCommitment": "5edb6f46a94383d8c680ce41cc112f3d55862e0b2fe3c61a57c9c478ea3e0c69",
+          "fixtureCommitment": "eb85336bdaa432a335eeae02073a33be51983ad6e04fdacefa51fbb2f384fdb6",
+          "fixtureAllocations": 11,
+          "authenticationCommitment": "30ea33072c208f92f37da6c43f597367bbd7925974dc4eae8655b5cab54da415"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "b62603d671faac56550b9106e8c9fc570230d18556488273830da8a00755defd",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A10/timeout-observer-replacement"
+      ],
+      "scheduleHash": "ccc4fed8f73ccaf1d3f73023c1f81e1f7df83a19ae08634222435a4114499fc9",
+      "configurationHash": "894c5eeeb7d73b3875dca79db236e9758fb042b4e8e282fada96d2e369d65d96"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A10",
+        "group": "A",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/A10/894c5eeeb7d73b3875dca79db236e9758fb042b4e8e282fada96d2e369d65d96",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "A10/timeout-observer-replacement",
+              "caseCommitment": "5edb6f46a94383d8c680ce41cc112f3d55862e0b2fe3c61a57c9c478ea3e0c69",
+              "fixtureCommitment": "eb85336bdaa432a335eeae02073a33be51983ad6e04fdacefa51fbb2f384fdb6",
+              "fixtureAllocations": 11,
+              "authenticationCommitment": "30ea33072c208f92f37da6c43f597367bbd7925974dc4eae8655b5cab54da415"
+            },
+            "id": "A10/timeout-observer-replacement",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.inspect.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "raw inspection remains exclusively owned after timeout",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "raw inspection remains exclusively owned after timeout",
+            "safetyFailures": [],
+            "operations": 382,
+            "promiseJobs": 1594
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A10/timeout-observer-replacement: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A10/timeout-observer-replacement: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A10/timeout-observer-replacement: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A10/timeout-observer-replacement: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A10/timeout-observer-replacement: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A10/timeout-observer-replacement: candidate reached lawful driver.inspect.before",
+            "passed": true
+          },
+          {
+            "label": "A10/timeout-observer-replacement: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A10/timeout-observer-replacement: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A10/timeout-observer-replacement: raw inspection remains exclusively owned after timeout",
+            "passed": false
+          },
+          {
+            "label": "A10/timeout-observer-replacement: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "A10/timeout-observer-replacement: raw inspection remains exclusively owned after timeout",
+        "operations": 382,
+        "promiseJobs": 1594
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "A10",
+      "variantId": "A10/timeout-observer-replacement",
+      "execution": {
+        "variant": {
+          "id": "A10/timeout-observer-replacement",
+          "family": "A10",
+          "kind": "inspection-late",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A10/qualification-v1",
+        "schedule": {
+          "partition": 2959,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

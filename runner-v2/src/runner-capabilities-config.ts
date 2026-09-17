@@ -1,5 +1,5 @@
-import { lstat, readFile, realpath } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { lstat, readFile, realpath, stat } from "node:fs/promises";
+import { dirname, isAbsolute, parse, relative, resolve } from "node:path";
 
 import {
   parseLanguageProviderDescriptor,
@@ -97,9 +97,9 @@ export function emptyRunnerCapabilitiesConfig(): RunnerCapabilitiesConfig {
   return { extensions: [], languageServers: [] };
 }
 
-export async function loadRunnerCapabilitiesConfig(
+export async function resolveRunnerCapabilitiesConfigPath(
   pathValue: string,
-): Promise<RunnerCapabilitiesConfig> {
+): Promise<string> {
   if (typeof pathValue !== "string" || !isAbsolute(pathValue) || pathValue.includes("\0")) {
     throw new RunnerCapabilitiesConfigError(
       "invalid_config_path",
@@ -107,20 +107,9 @@ export async function loadRunnerCapabilitiesConfig(
     );
   }
   const requested = resolve(pathValue);
-  let canonicalParent;
-  try {
-    canonicalParent = resolve(await realpath(dirname(requested)));
-  } catch (error) {
-    throw new RunnerCapabilitiesConfigError(
-      "config_unavailable",
-      "Runner capabilities configuration does not exist.",
-      { cause: error },
-    );
-  }
-  const candidate = join(canonicalParent, basename(requested));
   let metadata;
   try {
-    metadata = await lstat(candidate);
+    metadata = await lstat(requested);
   } catch (error) {
     throw new RunnerCapabilitiesConfigError(
       "config_unavailable",
@@ -140,13 +129,46 @@ export async function loadRunnerCapabilitiesConfig(
       "Runner capabilities configuration must be a regular file.",
     );
   }
-  const actual = resolve(await realpath(candidate));
-  if (normalizePath(actual) !== normalizePath(candidate)) {
+  const actual = resolve(await realpath(requested));
+  if (normalizePath(actual) !== normalizePath(requested)) {
+    if (await pathHasUntrustedSymbolicParent(requested)) {
+      throw new RunnerCapabilitiesConfigError(
+        "symbolic_config",
+        "Runner capabilities configuration resolves through a symbolic path.",
+      );
+    }
+    const actualMetadata = await stat(actual);
+    if (actualMetadata.dev !== metadata.dev || actualMetadata.ino !== metadata.ino) {
+      throw new RunnerCapabilitiesConfigError(
+        "symbolic_config",
+        "Runner capabilities configuration resolves through a symbolic path.",
+      );
+    }
+  }
+  return actual;
+}
+
+export async function capabilitiesConfigCanonicalTargetIsInsideProject(
+  projectPath: string,
+  configPath: string,
+): Promise<boolean> {
+  if (typeof projectPath !== "string" || !isAbsolute(projectPath) || projectPath.includes("\0")) {
     throw new RunnerCapabilitiesConfigError(
-      "symbolic_config",
-      "Runner capabilities configuration resolves through a symbolic path.",
+      "invalid_config_path",
+      "Runner capabilities configuration project path must be absolute.",
     );
   }
+  const requested = resolve(configPath);
+  const canonicalConfig = await resolveRunnerCapabilitiesConfigPath(requested);
+  const canonicalProject = resolve(await realpath(projectPath));
+  return isResolvedPathInside(resolve(projectPath), requested)
+    || isResolvedPathInside(canonicalProject, canonicalConfig);
+}
+
+export async function loadRunnerCapabilitiesConfig(
+  pathValue: string,
+): Promise<RunnerCapabilitiesConfig> {
+  const actual = await resolveRunnerCapabilitiesConfigPath(pathValue);
   const source = await readFile(actual);
   if (source.byteLength > MAX_CONFIG_BYTES) {
     throw new RunnerCapabilitiesConfigError(
@@ -374,6 +396,33 @@ function invalidIsolationProvider(message: string): RunnerCapabilitiesConfigErro
 function normalizePath(path: string): string {
   const resolved = resolve(path);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isResolvedPathInside(parent: string, candidate: string): boolean {
+  const traversal = relative(parent, candidate);
+  return traversal === "" || (!traversal.startsWith("..") && !isAbsolute(traversal));
+}
+
+async function pathHasUntrustedSymbolicParent(requested: string): Promise<boolean> {
+  let current = dirname(requested);
+  const root = parse(current).root || current;
+  for (;;) {
+    let parentMetadata;
+    try {
+      parentMetadata = await lstat(current);
+    } catch {
+      return true;
+    }
+    if (parentMetadata.isSymbolicLink() && !isTrustedOsAliasPrefix(current)) return true;
+    if (current === root || dirname(current) === current) return false;
+    current = dirname(current);
+  }
+}
+
+function isTrustedOsAliasPrefix(pathValue: string): boolean {
+  if (process.platform !== "darwin") return false;
+  const normalized = resolve(pathValue);
+  return normalized === "/var" || normalized === "/tmp" || normalized === "/etc";
 }
 
 function boundedError(error: unknown): string {

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "derivationVersion": "rjs-input-hmac-sha256-v1",
+  "root": "d97c8c5d6a52ed875ae86ec7f1be6898323169e37a5640605d753d54239b6715",
+  "commitment": "f64c5b995dabb55719f96550a0f7c43be61158c1569262f5b77280e488cfd4c1"
+}

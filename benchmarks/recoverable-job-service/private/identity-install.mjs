@@ -1,0 +1,3 @@
+import {readFile,writeFile} from 'node:fs/promises';
+let p='benchmarks/recoverable-job-service/private/evaluator.mjs',s=await readFile(p,'utf8');s=s.replace("import {readFile}","import {scoreInputHashes} from './identity.mjs';\nimport {readFile}");s=s.replace("const result={schemaVersion:1,","const result={...await scoreInputHashes(),schemaVersion:1,");await writeFile(p,s);
+p='benchmarks/recoverable-job-service/private/runtime.mjs';s=await readFile(p,'utf8');s+=`\nexport async function runPublicExamples(source,families){return evaluateBounded(source,{families,seed:'public-example-1'});}\n`;await writeFile(p,s);

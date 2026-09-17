@@ -1,0 +1,744 @@
+{
+  "schemaVersion": 1,
+  "method": "rjs-simplification-audit-1",
+  "status": "finite witness mapping frozen; execution and independent acceptance pending",
+  "scorerIdentity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f8f1f824577efab1719a750b22df833daf62c13fb9bf29b28bf9363cf94fa7f8"
+  },
+  "ledger": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-corrected.json",
+    "sha256": "111f38f67c2f933cd35de9609544747a2a6b54175b522e8810eed6d195f38d7a"
+  },
+  "controlManifest": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/manifest.json",
+    "sha256": "f9f13787ad479002eaf327ada000c7f2f47f9691680a41cfbf44caeef8a4ae34"
+  },
+  "controls": [
+    {
+      "id": "representation",
+      "label": "Reference-derived representation calibration control",
+      "choices": [
+        "different private key namespaces",
+        "opaque stored record envelopes",
+        "different physical retained/scratch root layout",
+        "different actual artifact names represented in public evidence"
+      ],
+      "sha256": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445",
+      "bytes": 56979,
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\complete-controls\\representation.js"
+    },
+    {
+      "id": "algorithm",
+      "label": "Reference-derived algorithm calibration control",
+      "choices": [
+        "atomic durable intent/issuance marker with receipt-based nonapplication reconciliation",
+        "maintained paged ownership index and coherent head-version reads",
+        "setup reader and eager lawful source-prefix adoption",
+        "deterministic descending-ID reclamation order"
+      ],
+      "sha256": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+      "bytes": 58544,
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\complete-controls\\algorithm.js"
+    },
+    {
+      "id": "truthful-outcome",
+      "label": "Reference-derived truthful-outcome calibration control",
+      "choices": [
+        "integrity at actual range-validation branches",
+        "deadline-first admission only when the actual request is expired",
+        "pending source ACK with its stored exact obligation",
+        "unknown client delivery with its durable exact ID",
+        "truthful aggregate recovery views when every remaining job has an unresolved source/client obligation"
+      ],
+      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf",
+      "bytes": 56230,
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\complete-controls\\truthful-outcome.js"
+    }
+  ],
+  "classCount": 8,
+  "classes": [
+    {
+      "id": "P01-zero-prefix",
+      "variants": [
+        "B17/primary",
+        "B17/source-zero",
+        "B17/source-both",
+        "B17/source-pristine-early",
+        "B17/source-tail",
+        "B17/source-fresh-restart"
+      ],
+      "choices": "never-created/pristine/adopted; zero origin; authenticated nonzero prefix; retained/buffered suffix",
+      "neighbor": "nonzero prefix/loss without exact current authenticated proof",
+      "control": "algorithm",
+      "supplements": [
+        "actual prefix adoption during successful start versus later cleanup",
+        "zero-origin, never-created, pristine and preserved adopted source proof",
+        "healthy retained/buffered suffix has exact bytes and counters"
+      ],
+      "predicates": [
+        {
+          "variantId": "B17/primary",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "restore must refuse"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B17/source-zero",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "misreport-source-prefix",
+            "expectedAssertion": "source accounting stdout preserves exact prefix and actual suffix"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B17/source-both",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "misreport-source-prefix",
+            "expectedAssertion": "source accounting stdout preserves exact prefix and actual suffix"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B17/source-pristine-early",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "misreport-source-prefix",
+            "expectedAssertion": "source accounting stdout preserves exact prefix and actual suffix"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B17/source-tail",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "misreport-source-prefix",
+            "expectedAssertion": "source accounting stdout preserves exact prefix and actual suffix"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B17/source-fresh-restart",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "misreport-source-prefix",
+            "expectedAssertion": "source accounting stdout preserves exact prefix and actual suffix"
+          },
+          "restoredSource": "algorithm"
+        }
+      ],
+      "executionStatus": "pending final executable probe evidence"
+    },
+    {
+      "id": "P02-source-freshness",
+      "variants": [
+        "B17/source-changed-ack",
+        "B17/source-changed-output",
+        "B17/source-proof-stale",
+        "B17/source-observation-response-unknown"
+      ],
+      "choices": "current/superseded attachment; delayed source ACK begin/completion; new explicit request with new observation",
+      "neighbor": "adopt superseded/stale proof or repeat unresolved attachment",
+      "control": "algorithm",
+      "supplements": [
+        "held stale source publication and new explicit observation retry"
+      ],
+      "trustedHelperEvidence": [
+        {
+          "path": "scripts/test-recoverable-job-service-reader-attachment.mts",
+          "fact": "current versus superseded attachment and observation receipt; old replay does not reinstall; zero source/client/ACK effects",
+          "sha256": "5230599e82740a534b72bf34e0a5162f12e0f4dd797c2ad0bb02964585813bbd"
+        },
+        {
+          "path": "scripts/test-recoverable-job-service-delayed-source-ack.mts",
+          "fact": "real delayed ACK begin/completion advances revision without ABA; stale publication refuses busy",
+          "sha256": "a9694863823c05b9bc105db2ace9c9648d038cb6435fc96fa36a545149f21f5d"
+        }
+      ],
+      "predicates": [
+        {
+          "variantId": "B17/source-changed-ack",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "misreport-source-prefix",
+            "expectedAssertion": "source accounting stdout preserves exact prefix and actual suffix"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B17/source-changed-output",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "misreport-source-prefix",
+            "expectedAssertion": "source accounting stdout preserves exact prefix and actual suffix"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B17/source-proof-stale",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "misreport-source-prefix",
+            "expectedAssertion": "source accounting stdout preserves exact prefix and actual suffix"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B17/source-observation-response-unknown",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "lost source response retains unknown operation"
+          },
+          "restoredSource": "algorithm"
+        }
+      ],
+      "executionStatus": "pending final executable probe evidence"
+    },
+    {
+      "id": "P03-source-obligations",
+      "variants": [
+        "B17/source-pending-ack-stdout",
+        "B17/source-unknown-ack-stderr",
+        "B17/source-consumer-unknown"
+      ],
+      "choices": "exact pending/unknown source and client IDs; truthful aggregate recover with per-job obligations",
+      "neighbor": "release/close with unresolved exact intent",
+      "control": "truthful-outcome",
+      "supplements": [
+        "pending exact source ACK returns pending after its obligation is durable",
+        "unknown source/client retains exact operation ID",
+        "before close, actual recover may return a truthful aggregate view with unresolved per-job obligations; close still refuses"
+      ],
+      "predicates": [
+        {
+          "variantId": "B17/source-pending-ack-stdout",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "source ACK obligation retains exact state and ID"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "B17/source-unknown-ack-stderr",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "source ACK obligation retains exact state and ID"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "B17/source-consumer-unknown",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "stop must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        }
+      ],
+      "executionStatus": "pending final executable probe evidence"
+    },
+    {
+      "id": "P04-setup-attachment",
+      "variants": [
+        "B06/primary",
+        "B01/recover-driver.attach.before",
+        "B06/deadline-driver.attach.before",
+        "B07/issued-driver.attach.before",
+        "B07/resource-intent-reader",
+        "B10/primary"
+      ],
+      "choices": "reader during setup; acquisition installs none; required reader in later cleanup",
+      "neighbor": "new attachment during expired/insufficient-reserve stop",
+      "control": "algorithm",
+      "supplements": [
+        "deferred versus setup reader effect, exact reconciliation receipt and detach",
+        "expired/reserve actual forbidden attachment controls from the scoped correction freeze"
+      ],
+      "reusedEvidence": [
+        "benchmarks/recoverable-job-service/private/calibration/correction-proof-2026-09-12T17-06-54-031Z/summary.json",
+        "benchmarks/recoverable-job-service/private/calibration/correction-proof-2026-09-12T17-14-13-149Z/summary.json"
+      ],
+      "predicates": [
+        {
+          "variantId": "B06/primary",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "stop must refuse"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B01/recover-driver.attach.before",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "omit-failure-diagnostic",
+            "expectedAssertion": "rejection has explicit failure presence"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B06/deadline-driver.attach.before",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "stop must refuse"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B07/issued-driver.attach.before",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "discard-reconciliation-receipts",
+            "expectedAssertion": "stop must progress"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B07/resource-intent-reader",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "discard-reconciliation-receipts",
+            "expectedAssertion": "stop must progress"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "B10/primary",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "skip-barrier-tail",
+            "expectedAssertion": "stop must progress"
+          },
+          "restoredSource": "algorithm"
+        }
+      ],
+      "executionStatus": "pending final executable probe evidence"
+    },
+    {
+      "id": "P05-frame-category",
+      "variants": [
+        "A04/primary",
+        "A04/sequence-unsafe",
+        "A07/primary",
+        "A07/invalid-stream",
+        "A07/invalid-digest",
+        "A07/invalid-artifactId",
+        "A07/invalid-channelId",
+        "A07/invalid-seq",
+        "A07/invalid-offset"
+      ],
+      "choices": "real integrity versus gap only for continuity/range error",
+      "neighbor": "backend/input or gap for non-range corruption; successful admission",
+      "control": "truthful-outcome",
+      "supplements": [
+        "real range failure chooses integrity; reference chooses gap",
+        "actual non-range corruption leaves seq/offset/length unchanged",
+        "wrong backend/input/gap neighbors rejected through Scenario.refuse"
+      ],
+      "reusedEvidence": [
+        "benchmarks/recoverable-job-service/private/calibration/correction-proof-2026-09-12T17-06-54-031Z/summary.json"
+      ],
+      "predicates": [
+        {
+          "variantId": "A04/primary",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "restore must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A04/sequence-unsafe",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "restore must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A07/primary",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "poll must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A07/invalid-stream",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "poll must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A07/invalid-digest",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "poll must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A07/invalid-artifactId",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "poll must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A07/invalid-channelId",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "poll must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A07/invalid-seq",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "poll must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A07/invalid-offset",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "poll must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        }
+      ],
+      "executionStatus": "pending final executable probe evidence"
+    },
+    {
+      "id": "P06-authority-deadline",
+      "variants": [
+        "A01/primary",
+        "A01/takeover-before",
+        "A01/takeover-after",
+        "B06/primary"
+      ],
+      "choices": "current/successor authority and simultaneous-invalid deadline precedence",
+      "neighbor": "cleanup for changed authority; effect/success after expired entry",
+      "control": "truthful-outcome",
+      "supplements": [
+        "after real takeover plus expired request, reference observes stale and alternate first observes deadline; zero effects/publication",
+        "wrong cleanup category for changed authority rejected"
+      ],
+      "predicates": [
+        {
+          "variantId": "A01/primary",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "stop must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A01/takeover-before",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "stop must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "A01/takeover-after",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "stop must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        },
+        {
+          "variantId": "B06/primary",
+          "positiveSources": [
+            "reference",
+            "truthful-outcome"
+          ],
+          "material": {
+            "selector": "optimistic-reconciliation",
+            "expectedAssertion": "stop must refuse"
+          },
+          "restoredSource": "truthful-outcome"
+        }
+      ],
+      "executionStatus": "pending final executable probe evidence"
+    },
+    {
+      "id": "P07-owned-accounting",
+      "variants": [
+        "B14/primary"
+      ],
+      "choices": "all 1100 owned jobs; maintained index versus paged scan; snapshot continuation",
+      "neighbor": "drop later owned records or close before all accounted",
+      "control": "algorithm",
+      "largeCount": 1100,
+      "heavyWindow": true,
+      "supplements": [
+        "full 1100-job capacity on maintained index with exact all-owned snapshot/revision accounting",
+        "first-page-only index neighbor fails actual B14 all-owned predicate; restored control passes",
+        "raw broker 64-row immutable cursor contract unchanged"
+      ],
+      "predicates": [
+        {
+          "variantId": "B14/primary",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "truncate-scan",
+            "expectedAssertion": "snapshot reaches every owned setup beyond pages"
+          },
+          "restoredSource": "algorithm"
+        }
+      ],
+      "executionStatus": "pending final executable probe evidence"
+    },
+    {
+      "id": "P08-reclamation",
+      "variants": [
+        "C18/primary",
+        "E08/primary",
+        "C17/primary",
+        "C18/root-birth",
+        "C18/root-retained"
+      ],
+      "choices": "three adopted roots, absent root, non-reference order, first-error partial result",
+      "neighbor": "delete retained/foreign/aliased root or misreport remaining after failure",
+      "control": "algorithm",
+      "supplements": [
+        "E08 has three actual adopted roots; descending root order and first actual removal then falsy failure",
+        "C18 exercises actual absent root idempotence",
+        "after E08, an actual retry accounts for the now-absent root and removes only remaining scratch roots",
+        "protected retained/foreign/aliased roots and lying partial-result neighbor rejected"
+      ],
+      "predicates": [
+        {
+          "variantId": "C18/primary",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "skip-reclamation",
+            "expectedAssertion": "existing aliased adopted root remains protected"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "E08/primary",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "ignore-removal-failure",
+            "expectedAssertion": "first removal committed, remaining exact, original failure retained"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "C17/primary",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "delete-retained-evidence",
+            "expectedAssertion": "readEvidence must progress"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "C18/root-birth",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "trust-scratch-handle",
+            "expectedAssertion": "ownScratch must refuse"
+          },
+          "restoredSource": "algorithm"
+        },
+        {
+          "variantId": "C18/root-retained",
+          "positiveSources": [
+            "reference",
+            "algorithm"
+          ],
+          "material": {
+            "selector": "trust-scratch-handle",
+            "expectedAssertion": "ownScratch must refuse"
+          },
+          "restoredSource": "algorithm"
+        }
+      ],
+      "executionStatus": "pending final executable probe evidence"
+    }
+  ],
+  "fullQualification": {
+    "reference": {
+      "positive": 302,
+      "material": 302,
+      "restored": 302,
+      "groups": 61
+    },
+    "completeControls": [
+      {
+        "id": "representation",
+        "positive": 302
+      },
+      {
+        "id": "algorithm",
+        "positive": 302
+      },
+      {
+        "id": "truthful-outcome",
+        "positive": 302
+      }
+    ],
+    "publicRecipes": 78,
+    "capacity": 1100
+  },
+  "alternateMaterialScope": {
+    "rule": "Execute every named probe-row material and restored contrast on its changed complete control. Reuse the full unchanged reference material qualification for the remaining rows only where its predicate/fault semantics commute with the documented control transformation; source review must approve each mapping.",
+    "representationExtraVariants": [
+      "C01/primary",
+      "C03/primary",
+      "C04/primary",
+      "C06/primary",
+      "C09/restore-store.commit.before",
+      "C09/restore-store.commit.after",
+      "C17/primary",
+      "C18/primary",
+      "E08/primary"
+    ],
+    "representationRationale": "Namespace/envelope mapping is bijective for private keys/values and preserves CAS revisions/audits; verify concrete artifact-name/layout, missing-byte, metadata-budget and protected-root predicates additionally.",
+    "algorithmRationale": "Every mapped row exercises the actual staged marker/index/setup reader/reclamation seam; truncate-scan preserves its selector but deliberately limits the maintained index to one page.",
+    "outcomeRationale": "Alternatives are chosen at their actual validation/admission/obligation branches with matching durable facts. No arbitrary successful or tag-only response is a positive control."
+  },
+  "isolation": "The independent public-only candidate remains excluded; controls are reference-derived private qualification inputs, not participant submissions."
+}

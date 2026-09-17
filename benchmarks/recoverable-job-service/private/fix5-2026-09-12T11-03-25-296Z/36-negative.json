@@ -1,0 +1,221 @@
+{
+  "control": "reuse-start-identity",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "E09"
+    ],
+    "variantIds": [
+      "E09/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "844adca427eb1a32d3d6cb64a4b8beb20277df6894e56bfb1ae68c785e9f8844",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "E09/primary"
+      ],
+      "scheduleHash": "c6d23c6223b7283b10ce6f78a754e45d7b37bda3cd2175c7faa5b4364924ddcf",
+      "configurationHash": "a02a356dde3eb6a4c8450a43eb3c400c98861ba2e3841f52060e0ff899fae834"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "E09",
+        "group": "E",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/E09/a02a356dde3eb6a4c8450a43eb3c400c98861ba2e3841f52060e0ff899fae834",
+        "variants": [
+          {
+            "id": "E09/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "concurrent starts have distinct ownership identities",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "concurrent starts have distinct ownership identities",
+            "safetyFailures": [],
+            "operations": 201,
+            "promiseJobs": 945
+          }
+        ],
+        "assertions": [
+          {
+            "label": "E09/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E09/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E09/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E09/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E09/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E09/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E09/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E09/primary: concurrent starts have distinct ownership identities",
+            "passed": false
+          },
+          {
+            "label": "E09/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "E09/primary: concurrent starts have distinct ownership identities",
+        "operations": 201,
+        "promiseJobs": 945
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "E09",
+      "variantId": "E09/primary",
+      "execution": {
+        "variant": {
+          "id": "E09/primary",
+          "family": "E09",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E09/qualification-v1",
+        "schedule": {
+          "partition": 3432,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

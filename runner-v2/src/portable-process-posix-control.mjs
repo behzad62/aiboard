@@ -69,13 +69,14 @@ export function parsePosixGroupMembers(output, groupId) {
   for (const line of output.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const match = /^(\d+)\s+(\d+)$/.exec(trimmed);
+    const match = /^(-?\d+)\s+(-?\d+)$/.exec(trimmed);
     if (!match) return undefined;
     const pid = Number(match[1]);
     const pgid = Number(match[2]);
-    // Kernel threads report pgid 0. Skipping them keeps host `ps -e` snapshots
-    // usable; a truly malformed row still fails closed.
-    if (!positivePid(pid) || !positivePid(pgid)) continue;
+    // Linux kernel threads report a positive PID with pgid 0. Only that row
+    // is skipped; pid 0 or any other non-positive identity fails closed.
+    if (positivePid(pid) && pgid === 0) continue;
+    if (!positivePid(pid) || !positivePid(pgid)) return undefined;
     if (pgid === groupId) members.push(pid);
   }
   return members;
@@ -91,6 +92,41 @@ export function reattestOwnedPosixAnchor(workloadGroup, inspect = inspectPosixPr
   const members = listMembers(workloadGroup.groupId);
   if (!Array.isArray(members) || !members.every(positivePid) || !members.includes(workloadGroup.leaderPid))
     return { state: "outcome_unknown" };
+  return { state: "ready", members: [...members] };
+}
+
+export function reattestOwnedPosixDescendants(
+  workloadGroup,
+  recordedMembers,
+  inspect = inspectPosixProcessIdentity,
+  listMembers = listOwnedPosixGroupMembers,
+) {
+  if (!validWorkloadGroup(workloadGroup) || !(recordedMembers instanceof Map) || recordedMembers.size < 1)
+    return { state: "identity_mismatch" };
+  for (const [pid, birth] of recordedMembers) {
+    if (!positivePid(pid) || typeof birth !== "string" || birth.length === 0) return { state: "identity_mismatch" };
+  }
+  const members = listMembers(workloadGroup.groupId);
+  if (!Array.isArray(members) || !members.every(positivePid)) return { state: "outcome_unknown" };
+  if (members.length === 0) return { state: "empty" };
+  let proven = 0;
+  let liveListed = 0;
+  for (const pid of members) {
+    const inspection = inspect(pid);
+    if (inspection?.state === "unknown") return { state: "outcome_unknown" };
+    // A PID can leave the group between `ps` and inspect. That is emptiness,
+    // not proof that a recycled group now occupies the numeric PGID.
+    if (inspection?.state === "absent") continue;
+    liveListed += 1;
+    const recordedBirth = recordedMembers.get(pid);
+    if (typeof recordedBirth !== "string" || recordedBirth.length === 0) continue;
+    if (inspection?.state !== "present" || !inspection.value || inspection.value.pid !== pid ||
+        inspection.value.groupId !== workloadGroup.groupId || inspection.value.birth !== recordedBirth)
+      return { state: "identity_mismatch" };
+    proven += 1;
+  }
+  if (liveListed < 1) return { state: "empty" };
+  if (proven < 1) return { state: "identity_mismatch" };
   return { state: "ready", members: [...members] };
 }
 

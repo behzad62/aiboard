@@ -38,6 +38,7 @@ import type { CertifiedTrackView } from "./CertifiedBenchmarkOverview";
 import {
   checkBenchRunner,
   DEFAULT_BENCH_RUNNER_URL,
+  getTrustedBenchRunnerReadiness,
   type BenchRunnerHealth,
 } from "@/lib/client/bench-runner";
 import { getEnabledModels } from "@/lib/client/providers";
@@ -280,6 +281,10 @@ export function CertifiedRunPanel({
     }
   }, [selectedTrack, workBenchRoleMode, harnessProfile]);
 
+  const selectedWorkBenchReadiness = getTrustedBenchRunnerReadiness(
+    workBenchRunnerHealth,
+    selectedWorkBenchPack?.cases[0]?.case
+  );
   const runGate = getCertifiedRunGate({
     suiteId,
     running: busy,
@@ -294,12 +299,8 @@ export function CertifiedRunPanel({
       : undefined,
     workBenchRunnerReady:
       selectedTrack !== "workbench" ||
-      Boolean(
-        workBenchRunnerUrl.trim() &&
-          workBenchRunnerToken.trim() &&
-          workBenchRunnerHealth?.ok &&
-          workBenchRunnerHealth?.runnerV2?.ready
-      ),
+      Boolean(workBenchRunnerUrl.trim() && workBenchRunnerToken.trim()) &&
+      selectedWorkBenchReadiness.ready,
     certification,
   });
   const canRun = runGate.canRun;
@@ -307,8 +308,7 @@ export function CertifiedRunPanel({
   const workBenchRunnerReady = Boolean(
     workBenchRunnerUrl.trim() &&
       workBenchRunnerToken.trim() &&
-      workBenchRunnerHealth?.ok &&
-      workBenchRunnerHealth?.runnerV2?.ready
+      getTrustedBenchRunnerReadiness(workBenchRunnerHealth).ready
   );
   const focusedPreset =
     BENCHMARK_PRESETS.find((preset) => preset.id === focusedPresetId) ??
@@ -800,12 +800,14 @@ export function CertifiedRunPanel({
         token: workBenchRunnerToken.trim(),
       });
       setWorkBenchRunnerHealth(health);
+      const readiness = getTrustedBenchRunnerReadiness(
+        health,
+        selectedWorkBenchPack?.cases[0]?.case
+      );
       setMessage(
-        health.ok && health.runnerV2?.ready
+        readiness.ready
           ? "Bench Runner and managed Runner V2 are ready."
-          : health.ok
-            ? health.runnerV2?.error ?? "Bench Runner connected, but managed Runner V2 is unavailable."
-          : health.error ?? "Bench runner check failed."
+          : readiness.error ?? "Bench runner check failed."
       );
     } finally {
       setCheckingWorkBenchRunner(false);

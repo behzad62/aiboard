@@ -28,6 +28,7 @@ import {
 import { assertSupportedNodeVersion } from "./node-version.js";
 import { SqlitePermissionStore } from "./permission-store.js";
 import {
+  capabilitiesConfigCanonicalTargetIsInsideProject,
   emptyRunnerCapabilitiesConfig,
   loadRunnerCapabilitiesConfig,
   type RunnerCapabilitiesConfig,
@@ -77,17 +78,20 @@ async function main(): Promise<void> {
         "invalid_state_directory: Runner state must be outside the project directory."
       );
     }
-    if (
-      options.capabilitiesConfigPath &&
-      isInside(options.projectPath, options.capabilitiesConfigPath)
-    ) {
-      throw new Error(
-        "invalid_capabilities_config: Runner capabilities configuration must be outside the project directory."
-      );
+    let capabilitiesConfig = emptyRunnerCapabilitiesConfig();
+    if (options.capabilitiesConfigPath) {
+      if (
+        await capabilitiesConfigCanonicalTargetIsInsideProject(
+          options.projectPath,
+          options.capabilitiesConfigPath,
+        )
+      ) {
+        throw new Error(
+          "invalid_capabilities_config: Runner capabilities configuration must be outside the project directory."
+        );
+      }
+      capabilitiesConfig = await loadRunnerCapabilitiesConfig(options.capabilitiesConfigPath);
     }
-    const capabilitiesConfig = options.capabilitiesConfigPath
-      ? await loadRunnerCapabilitiesConfig(options.capabilitiesConfigPath)
-      : emptyRunnerCapabilitiesConfig();
     await mkdir(options.stateDirectory, { recursive: true });
     await assertDirectory(options.stateDirectory, "state");
 

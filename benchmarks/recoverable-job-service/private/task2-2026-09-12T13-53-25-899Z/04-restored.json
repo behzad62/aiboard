@@ -1,0 +1,532 @@
+{
+  "control": "global-consumer-lock",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A08"
+    ],
+    "variantIds": [
+      "A08/primary",
+      "A08/nested-consumer-progress"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "A08/primary",
+          "caseCommitment": "11e5bc6b123ec7fc3395ddeecf07b1385b97f3f6cd22433bd4df923dd1f6bc56",
+          "fixtureCommitment": "3b7073f2e04a2f3edb5d971ea8cca79a8591a29c63738ef1ac526c838b2a2be9",
+          "fixtureAllocations": 16,
+          "authenticationCommitment": "dcbe2c3192236a42d2d0e22585ac60d13e1ed0d29a69fe323ecf319385517c2b"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "A08/nested-consumer-progress",
+          "caseCommitment": "cd81368d728b03ff7509c4f35e62833ee2a9bd1496cb393711b7cb3dc628f04c",
+          "fixtureCommitment": "0b96cd28028e04d6bef181d1dd83edcda82e6d9bd8a4ac8fe8827c4fba0cfb84",
+          "fixtureAllocations": 15,
+          "authenticationCommitment": "f6a1b6eb94af92d6969ad5259a444e3b4c0aaae10336a3198729f35f59dd9a94"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A08/primary",
+        "A08/nested-consumer-progress"
+      ],
+      "scheduleHash": "e08202e4b36b6777f6121130f76062bf2610b1dcb055903fb1e8b9f7f4f1ac50",
+      "configurationHash": "68e077cdd4510db60c014c2fc22acc0012f837d32c143affba71a88a17f4bfd5"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A08",
+        "group": "A",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/A08/68e077cdd4510db60c014c2fc22acc0012f837d32c143affba71a88a17f4bfd5",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "A08/primary",
+              "caseCommitment": "11e5bc6b123ec7fc3395ddeecf07b1385b97f3f6cd22433bd4df923dd1f6bc56",
+              "fixtureCommitment": "3b7073f2e04a2f3edb5d971ea8cca79a8591a29c63738ef1ac526c838b2a2be9",
+              "fixtureAllocations": 16,
+              "authenticationCommitment": "dcbe2c3192236a42d2d0e22585ac60d13e1ed0d29a69fe323ecf319385517c2b"
+            },
+            "id": "A08/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful consumer.consume.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "independent intake progresses through consumer wait",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consumer settles after independent progress",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 481,
+            "promiseJobs": 2220
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "A08/nested-consumer-progress",
+              "caseCommitment": "cd81368d728b03ff7509c4f35e62833ee2a9bd1496cb393711b7cb3dc628f04c",
+              "fixtureCommitment": "0b96cd28028e04d6bef181d1dd83edcda82e6d9bd8a4ac8fe8827c4fba0cfb84",
+              "fixtureAllocations": 15,
+              "authenticationCommitment": "f6a1b6eb94af92d6969ad5259a444e3b4c0aaae10336a3198729f35f59dd9a94"
+            },
+            "id": "A08/nested-consumer-progress",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "nested independent request progresses",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 481,
+            "promiseJobs": 2220
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: candidate reached lawful consumer.consume.before",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: independent intake progresses through consumer wait",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: consumer settles after independent progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: nested independent request progresses",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 962,
+        "promiseJobs": 4440
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.2,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "A08",
+      "variantId": "A08/primary",
+      "execution": {
+        "variant": {
+          "id": "A08/primary",
+          "family": "A08",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A08/qualification-v1",
+        "schedule": {
+          "partition": 2130,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "A08",
+      "variantId": "A08/nested-consumer-progress",
+      "execution": {
+        "variant": {
+          "id": "A08/nested-consumer-progress",
+          "family": "A08",
+          "kind": "consumer-nested",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A08/qualification-v1",
+        "schedule": {
+          "partition": 2368,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

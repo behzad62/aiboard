@@ -1,0 +1,48 @@
+{
+  "verifiedAt": "2026-09-08T05:37:06.428Z",
+  "checks": [
+    "69 public/private/admission family IDs agree",
+    "all referenced public requirement IDs and anchors exist",
+    "all local document links resolve",
+    "public problem and acceptance contract contain no app internals",
+    "JSON parses and documents have no trailing whitespace",
+    "all 69 families explicitly not admitted; zero may affect scores in the proposed admission policy"
+  ],
+  "candidateFamilies": 69,
+  "evaluatorFamilies": 9,
+  "admittedFamilies": 0,
+  "sourceDocuments": 37,
+  "reviewDocuments": 20,
+  "executableTestsRun": 0,
+  "qualification": "Document consistency audit only. Semantic blind review, complete public adapter/profile contracts and executable evaluator qualification remain pending. No scoring enforcement implementation exists.",
+  "files": [
+    {
+      "path": "docs/superpowers/specs/2026-09-08-recoverable-job-service-benchmark-design.md",
+      "sha256": "4dfb0f2f362b978136243815d398bd4f2b25fa329e7925a8b8b44fa7b7357de2"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/problem.md",
+      "sha256": "3894b309cc7ea56ed70c4b4be995318db8580020c1e7a562be4232b3a6850ab8"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/acceptance-contract.md",
+      "sha256": "c7210f626095cbe6755862774feb35d673807c36d58756193e8551fc92f8e52f"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/evaluation-cases.md",
+      "sha256": "a36e9d8dcb22eb5547d46217f7548a025a131439df1bf369e7ef58b68e97db37"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/source-map.json",
+      "sha256": "bbdf495d85a9323ca4626461660f6bd0daaeb8884531bf9b815d33385664bfad"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/scoring-admission.json",
+      "sha256": "61457a20231c9212b74e4189124b9feb47dba7ebd368204ac50ed1a20748bc0e"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/instruction-audit.md",
+      "sha256": "2cc41f8d40f8110f65d91cc40a24e99141b28cd9145a9778a8b0f71d8654c781"
+    }
+  ]
+}

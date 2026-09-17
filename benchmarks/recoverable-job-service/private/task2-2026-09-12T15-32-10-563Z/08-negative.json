@@ -1,0 +1,245 @@
+{
+  "control": "live-dispatch-iterator",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A13"
+    ],
+    "variantIds": [
+      "A13/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "A13/primary",
+          "caseCommitment": "b141523f82a619e6e64ce24ab04ef513d36f3d65589aeab7b8b44c93b1727f34",
+          "fixtureCommitment": "42dd3e65cd469d58c081fb20055fb968fb132d7d446167b70c44bf996d09da26",
+          "fixtureAllocations": 9,
+          "authenticationCommitment": "46001bf10031c0b604b50a6a0a78a0a54f3a511a56f097be9a1bffdfceb7f527"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "684d8141954e40d8acf79eb496340f70db43f18f6a6f87a21f11c0dd3fa6d1f7",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A13/primary"
+      ],
+      "scheduleHash": "d5317f29695a061b028a4c8a4358a2f1b5e6338edebf7e8a3e33451ddc475db3",
+      "configurationHash": "168f6ab0040ad9d70a45cae565300d255405c759441a06969c68428b980a38f9"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A13",
+        "group": "A",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/A13/168f6ab0040ad9d70a45cae565300d255405c759441a06969c68428b980a38f9",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "A13/primary",
+              "caseCommitment": "b141523f82a619e6e64ce24ab04ef513d36f3d65589aeab7b8b44c93b1727f34",
+              "fixtureCommitment": "42dd3e65cd469d58c081fb20055fb968fb132d7d446167b70c44bf996d09da26",
+              "fixtureAllocations": 9,
+              "authenticationCommitment": "46001bf10031c0b604b50a6a0a78a0a54f3a511a56f097be9a1bffdfceb7f527"
+            },
+            "id": "A13/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must refuse",
+                "passed": true
+              },
+              {
+                "label": "error resubscription never joins current dispatch",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "error resubscription never joins current dispatch",
+            "safetyFailures": [],
+            "operations": 219,
+            "promiseJobs": 1032
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A13/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A13/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A13/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A13/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A13/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A13/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A13/primary: poll must refuse",
+            "passed": true
+          },
+          {
+            "label": "A13/primary: error resubscription never joins current dispatch",
+            "passed": false
+          },
+          {
+            "label": "A13/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "A13/primary: error resubscription never joins current dispatch",
+        "operations": 219,
+        "promiseJobs": 1032
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "A13",
+      "variantId": "A13/primary",
+      "execution": {
+        "variant": {
+          "id": "A13/primary",
+          "family": "A13",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A13/qualification-v1",
+        "schedule": {
+          "partition": 2331,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

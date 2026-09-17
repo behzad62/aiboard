@@ -1,0 +1,285 @@
+{
+  "control": "wrong-loss-category",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C07"
+    ],
+    "variantIds": [
+      "C07/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "0d47e7f04f088362c08b016810e64b110c3d9ddd242efaeeb940e3e12dec14ca",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C07/primary"
+      ],
+      "scheduleHash": "e4bd40671cb31330af1cf72beca9684f9859cd3eb53ffd0da128f56ce80dd851",
+      "configurationHash": "c31b868474a8c8962b3b5b85c1217e7db6ddd1c87ac849a64de4c03926795461"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C07",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C07/c31b868474a8c8962b3b5b85c1217e7db6ddd1c87ac849a64de4c03926795461",
+        "variants": [
+          {
+            "id": "C07/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "diagnostic I/O loss has exact category and range",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "diagnostic I/O loss has exact category and range; safety: loss-permission",
+            "safetyFailures": [
+              {
+                "code": "loss-permission",
+                "jobId": "72eebfb125cded65f23bba30f613e313",
+                "detail": "Categorical loss lacks exact diagnostic refusal.",
+                "familyId": "C07",
+                "variantId": "C07/primary"
+              }
+            ],
+            "operations": 489,
+            "promiseJobs": 2279
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: diagnostic I/O loss has exact category and range",
+            "passed": false
+          },
+          {
+            "label": "C07/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "C07/primary: diagnostic I/O loss has exact category and range; safety: loss-permission",
+        "operations": 489,
+        "promiseJobs": 2279
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "loss-permission",
+        "jobId": "72eebfb125cded65f23bba30f613e313",
+        "detail": "Categorical loss lacks exact diagnostic refusal.",
+        "familyId": "C07",
+        "variantId": "C07/primary"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "C07",
+      "variantId": "C07/primary",
+      "execution": {
+        "variant": {
+          "id": "C07/primary",
+          "family": "C07",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C07/qualification-v1",
+        "schedule": {
+          "partition": 2143,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

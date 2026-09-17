@@ -1,0 +1,7 @@
+{
+  "command": "node --import tsx scripts/test-recoverable-job-service-delayed-source-ack.mts",
+  "startedAt": "2026-09-12T17:50:46.1480294Z",
+  "endedAt": "2026-09-12T17:50:46.6221637Z",
+  "exitCode": 0,
+  "log": "benchmarks/recoverable-job-service/private/calibration/delayed-source-ack-20260912.log"
+}

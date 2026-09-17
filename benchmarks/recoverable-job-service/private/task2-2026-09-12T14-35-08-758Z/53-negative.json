@@ -1,0 +1,279 @@
+{
+  "control": "redeliver-unknown-client",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C08"
+    ],
+    "variantIds": [
+      "C08/consuming-unknown"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "C08/consuming-unknown",
+          "caseCommitment": "d8ce9b4cdaec792ac50460da5cb409cc2d9068a4ec30b07bc9d9b9f556b7f53c",
+          "fixtureCommitment": "a8fa7508f5cfddd4a64672cf09aca36adce605c06005b70777876dfa6b52c085",
+          "fixtureAllocations": 12,
+          "authenticationCommitment": "6eba6e9ec16a2a7a67322962d5274c4c6fabc10ad88debfb455a9a11f0f4d132"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "b3cc465ec6e2b5261520ebfd5888f38261544c9d455d8ce017d294a7304e52da",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C08/consuming-unknown"
+      ],
+      "scheduleHash": "ef8aa2035664f90efe98bdd7e4a856daa73b6bc73cf81e17b1cbc6f6ebcc3ec9",
+      "configurationHash": "db9c96995877c2e7796530bcaf37c231d21bf2bb42609e8047f3bbc11c05f070"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C08",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C08/db9c96995877c2e7796530bcaf37c231d21bf2bb42609e8047f3bbc11c05f070",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "C08/consuming-unknown",
+              "caseCommitment": "d8ce9b4cdaec792ac50460da5cb409cc2d9068a4ec30b07bc9d9b9f556b7f53c",
+              "fixtureCommitment": "a8fa7508f5cfddd4a64672cf09aca36adce605c06005b70777876dfa6b52c085",
+              "fixtureAllocations": 12,
+              "authenticationCommitment": "6eba6e9ec16a2a7a67322962d5274c4c6fabc10ad88debfb455a9a11f0f4d132"
+            },
+            "id": "C08/consuming-unknown",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "consume must refuse",
+            "safetyFailures": [],
+            "operations": 303,
+            "promiseJobs": 1369
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C08/consuming-unknown: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: consume must refuse",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-unknown: consume must refuse",
+            "passed": false
+          },
+          {
+            "label": "C08/consuming-unknown: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "C08/consuming-unknown: consume must refuse",
+        "operations": 303,
+        "promiseJobs": 1369
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C08",
+      "variantId": "C08/consuming-unknown",
+      "execution": {
+        "variant": {
+          "id": "C08/consuming-unknown",
+          "family": "C08",
+          "kind": "consumer-replay",
+          "args": {
+            "stage": "consuming-unknown"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C08/qualification-v1",
+        "schedule": {
+          "partition": 2520,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

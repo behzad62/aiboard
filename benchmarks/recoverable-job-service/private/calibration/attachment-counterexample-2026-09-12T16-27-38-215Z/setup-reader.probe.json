@@ -1,0 +1,60 @@
+{
+  "variantId": "B07/issued-driver.attach.before",
+  "failure": "candidate reached lawful driver.attach.before",
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful driver.attach.before",
+      "passed": false
+    }
+  ],
+  "operations": 408,
+  "promiseJobs": 1902,
+  "attachments": 1,
+  "detachments": 1,
+  "releases": 2,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "ok",
+      "state": "released"
+    }
+  ],
+  "heldBoundaries": 1,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

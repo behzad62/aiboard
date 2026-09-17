@@ -1,0 +1,414 @@
+{
+  "control": "omit-retained-failures",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "E07"
+    ],
+    "variantIds": [
+      "E07/failed-close",
+      "E07/callback-failure"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "d4649ab2ffcb2c5252a2d98f709db90dac7df2aab660855278f89f9f92f33353",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "E07/failed-close",
+        "E07/callback-failure"
+      ],
+      "scheduleHash": "fc587f144a25a48169a4d057f00a94936249198624641cdb038ae075d8cd660f",
+      "configurationHash": "9ce30274a937b912681e86152007696c179db942f82e4ff5802b1dbe8356d394"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "E07",
+        "group": "E",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/E07/9ce30274a937b912681e86152007696c179db942f82e4ff5802b1dbe8356d394",
+        "variants": [
+          {
+            "id": "E07/failed-close",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "close must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "failed close retains job diagnostics",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "failed close retains job diagnostics",
+            "safetyFailures": [],
+            "operations": 375,
+            "promiseJobs": 1764
+          },
+          {
+            "id": "E07/callback-failure",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "callback failure persists after reopen",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "callback failure persists after reopen",
+            "safetyFailures": [],
+            "operations": 412,
+            "promiseJobs": 1938
+          }
+        ],
+        "assertions": [
+          {
+            "label": "E07/failed-close: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: close must refuse",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/failed-close: failed close retains job diagnostics",
+            "passed": false
+          },
+          {
+            "label": "E07/failed-close: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: released public job",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/callback-failure: callback failure persists after reopen",
+            "passed": false
+          },
+          {
+            "label": "E07/callback-failure: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "E07/failed-close: failed close retains job diagnostics; E07/callback-failure: callback failure persists after reopen",
+        "operations": 787,
+        "promiseJobs": 3702
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "E07",
+      "variantId": "E07/failed-close",
+      "execution": {
+        "variant": {
+          "id": "E07/failed-close",
+          "family": "E07",
+          "kind": "durability",
+          "args": {
+            "kind": "failed-close"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E07/qualification-v1",
+        "schedule": {
+          "partition": 2150,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E07",
+      "variantId": "E07/callback-failure",
+      "execution": {
+        "variant": {
+          "id": "E07/callback-failure",
+          "family": "E07",
+          "kind": "durability",
+          "args": {
+            "kind": "callback-failure"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E07/qualification-v1",
+        "schedule": {
+          "partition": 4035,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

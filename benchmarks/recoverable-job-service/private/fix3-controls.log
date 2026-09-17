@@ -1,0 +1,159 @@
+A01/takeover-before KILLED A01/takeover-before: stop must refuse
+A01/takeover-after KILLED A01/takeover-after: stop must refuse
+A04/epoch-future KILLED A04/epoch-future: restore must refuse
+A04/owner-foreign KILLED A04/owner-foreign: restore must refuse
+A04/sequence-unsafe KILLED A04/sequence-unsafe: restore must refuse
+A06/crash-ack-intent KILLED A06/crash-ack-intent: crash boundary conserves exact one retirement; safety: ack-proof
+A06/crash-acked KILLED A06/crash-acked: crash boundary conserves exact one retirement; safety: ack-proof
+A07/invalid-stream KILLED A07/invalid-stream: poll must refuse
+A07/invalid-seq KILLED A07/invalid-seq: poll must refuse
+A07/invalid-offset KILLED A07/invalid-offset: poll must refuse
+A07/invalid-length KILLED A07/invalid-length: poll must refuse
+A07/invalid-digest KILLED A07/invalid-digest: poll must refuse
+A07/invalid-artifactId KILLED A07/invalid-artifactId: poll must refuse
+A07/invalid-channelId KILLED A07/invalid-channelId: poll must refuse
+A08/nested-consumer-progress KILLED A08/nested-consumer-progress: candidate wall timeout
+A10/timeout-observer-replacement KILLED A10/timeout-observer-replacement: raw inspection remains exclusively owned after timeout
+A14/inflight-driver.publishAck.after KILLED A14/inflight-driver.publishAck.after: in-flight prerequisite cannot certify terminal release; safety: resource-still-owned, terminal-conjunction, resource-still-owned, terminal-conjunction
+A14/inflight-consumer.consume.after KILLED A14/inflight-consumer.consume.after: in-flight prerequisite cannot certify terminal release; safety: resource-still-owned, terminal-conjunction
+A15/final-read-epoch KILLED A15/final-read-epoch: stop must refuse
+A15/final-read-deadline KILLED A15/final-read-deadline: stop must refuse
+B01/recover-driver.inspect.before KILLED B01/recover-driver.inspect.before: rejection has explicit failure presence
+B01/recover-driver.readChannel.before KILLED B01/recover-driver.readChannel.before: rejection has explicit failure presence
+B01/recover-driver.detach.before KILLED B01/recover-driver.detach.before: rejection has explicit failure presence
+B01/recover-driver.release.after KILLED B01/recover-driver.release.after: rejection has explicit failure presence
+B01/recover-driver.attach.before KILLED B01/recover-driver.attach.before: rejection has explicit failure presence
+B02/proof-channel KILLED B02/proof-channel: acquired resource has exact physical retirement; safety: resource-release-proof, resource-still-owned
+B02/proof-process KILLED B02/proof-process: witness released after settlement; safety: resource-release-proof, resource-still-owned
+B02/proof-isolation KILLED B02/proof-isolation: acquired resource has exact physical retirement; safety: resource-release-proof, resource-still-owned
+B03/receipt-future-time KILLED B03/receipt-future-time: restore must refuse
+B03/receipt-future-epoch KILLED B03/receipt-future-epoch: restore must refuse
+B03/receipt-foreign-owner KILLED B03/receipt-foreign-owner: restore must refuse
+B04/rejection-driver.release.before-false KILLED B04/rejection-driver.release.before-false: rejection has explicit failure presence
+B04/rejection-driver.release.before-0 KILLED B04/rejection-driver.release.before-0: rejection has explicit failure presence
+B04/rejection-driver.release.before-null KILLED B04/rejection-driver.release.before-null: rejection has explicit failure presence
+B04/rejection-driver.release.before-undefined KILLED B04/rejection-driver.release.before-undefined: rejection has explicit failure presence
+B04/rejection-driver.release.after-false KILLED B04/rejection-driver.release.after-false: rejection has explicit failure presence
+B04/rejection-driver.release.after-0 KILLED B04/rejection-driver.release.after-0: rejection has explicit failure presence
+B04/rejection-driver.release.after-null KILLED B04/rejection-driver.release.after-null: rejection has explicit failure presence
+B04/rejection-driver.release.after-undefined KILLED B04/rejection-driver.release.after-undefined: rejection has explicit failure presence
+B06/deadline-driver.attach.before KILLED B06/deadline-driver.attach.before: stop must refuse
+B06/deadline-driver.release.before KILLED B06/deadline-driver.release.before: stop must refuse
+B06/deadline-store.commit.before KILLED B06/deadline-store.commit.before: stop must refuse
+B07/acquire-intent-isolation KILLED B07/acquire-intent-isolation: setup crash recovery settles owned setup
+B07/acquire-intent-process KILLED B07/acquire-intent-process: setup crash recovery settles owned setup
+B07/acquire-intent-channel KILLED B07/acquire-intent-channel: setup crash recovery settles owned setup
+B07/acquire-intent-workload KILLED B07/acquire-intent-workload: setup crash recovery settles owned setup
+B07/fact-quiescent KILLED B07/fact-quiescent: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup"}],"failures":[]}
+B07/fact-output KILLED B07/fact-output: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup"}],"failures":[]}
+B07/fact-evidence KILLED B07/fact-evidence: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup"}],"failures":[]}
+B07/fact-channel KILLED B07/fact-channel: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup"}],"failures":[]}
+B07/fact-process KILLED B07/fact-process: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup"}],"failures":[]}
+B07/fact-isolation KILLED B07/fact-isolation: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup"}],"failures":[]}
+B07/issued-driver.attach.before KILLED B07/issued-driver.attach.before: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B07/issued-driver.detach.before KILLED B07/issued-driver.detach.before: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B07/issued-driver.release.before KILLED B07/issued-driver.release.before: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B08/release-missing-receipt KILLED B08/release-missing-receipt: stop must refuse
+B01/recover-unknown-issued KILLED B01/recover-unknown-issued: stop must refuse
+B07/resource-intent-reader KILLED B07/resource-intent-reader: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B07/resource-intent-release-request KILLED B07/resource-intent-release-request: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B07/resource-intent-graceful FAIL All mandatory variants passed.
+B07/resource-intent-force KILLED B07/resource-intent-force: candidate wall timeout
+B07/resource-intent-barrier KILLED B07/resource-intent-barrier: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B07/resource-intent-detach KILLED B07/resource-intent-detach: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B07/resource-intent-process KILLED B07/resource-intent-process: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B07/resource-intent-isolation KILLED B07/resource-intent-isolation: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]}
+B12/new-suffix KILLED B12/new-suffix: stop must refuse
+B12/corrupt-artifact KILLED B12/corrupt-artifact: stop must refuse
+B12/changed-checkpoint KILLED B12/changed-checkpoint: restore must refuse
+B12/blocked-barrier KILLED B12/blocked-barrier: restore must refuse
+B15/missing KILLED B15/missing: handoff must refuse
+B15/foreign KILLED B15/foreign: handoff must refuse
+B15/unfinished KILLED B15/unfinished: stop must refuse
+B17/missing-created KILLED B17/missing-created: restore must refuse
+B17/sequence-unsafe KILLED B17/sequence-unsafe: restore must refuse
+B17/evidence-digest KILLED B17/evidence-digest: restore must refuse
+C03/artifact-missing KILLED C03/artifact-missing: readEvidence must refuse
+C03/artifact-foreign KILLED C03/artifact-foreign: restore must refuse
+C03/evidence-gap KILLED C03/evidence-gap: restore must refuse
+C05/version KILLED C05/version: restore must refuse
+C05/negative-position KILLED C05/negative-position: restore must refuse
+C05/loss-invalid KILLED C05/loss-invalid: restore must refuse
+C05/frame-extra KILLED C05/frame-extra: restore must refuse
+C05/receipt-extra KILLED C05/receipt-extra: restore must refuse
+C05/payload-extra KILLED C05/payload-extra: restore must refuse
+C05/future-created KILLED C05/future-created: restore must refuse
+C05/final-mismatch KILLED C05/final-mismatch: restore must refuse
+C05/retired-prefix KILLED C05/retired-prefix: restore must refuse
+C05/consumed-total KILLED C05/consumed-total: restore must refuse
+C05/allowed-extension KILLED C05/allowed-extension: restore must progress: {"kind":"blocked","blockers":[{"code":"integrity"}],"failures":[]}
+C06/authority-loss-after-evidence-write KILLED C06/authority-loss-after-evidence-write: poll must refuse
+C07/protocol-corruption KILLED C07/protocol-corruption: poll must refuse
+C07/checkpoint-cas KILLED C07/checkpoint-cas: poll must refuse
+C08/accepted KILLED C08/accepted: Observed public behavior and durable consequences.; safety: evidence-before-acceptance
+C08/consuming-not-applied KILLED C08/consuming-not-applied: exact delivery replay has one external effect; safety: intent-before-consume
+C08/consuming-unknown KILLED C08/consuming-unknown: consume must refuse
+C08/acked KILLED C08/acked: exact delivery replay has one external effect; safety: intent-before-consume
+C09/restore-store.commit.before KILLED C09/restore-store.commit.before: candidate reached lawful store.commit.before; safety: evidence-before-acceptance
+C09/restore-store.commit.after KILLED C09/restore-store.commit.after: candidate reached lawful store.commit.after; safety: evidence-before-acceptance
+C10/restore-stale-head KILLED C10/restore-stale-head: restore must refuse
+C12/handoff-self KILLED C12/handoff-self: handoff must refuse
+C12/handoff-cycle KILLED C12/handoff-cycle: handoff must refuse
+C12/handoff-destination-reused KILLED C12/handoff-destination-reused: handoff must refuse
+C12/handoff-final-source KILLED C12/handoff-final-source: handoff must refuse
+C12/handoff-foreign KILLED C12/handoff-foreign: handoff must refuse
+C12/handoff-missing KILLED C12/handoff-missing: handoff must refuse
+C13/final-mismatch KILLED C13/final-mismatch: restore must refuse
+C13/evidence-digest KILLED C13/evidence-digest: restore must refuse
+C15/unfinalized KILLED C15/unfinalized: restore must refuse
+C15/pending-consumption KILLED C15/pending-consumption: restore must refuse
+C15/foreign-evidence KILLED C15/foreign-evidence: restore must refuse
+C16/terminal-transfer-store.commit.before KILLED C16/terminal-transfer-store.commit.before: released published
+C16/terminal-transfer-store.commit.after KILLED C16/terminal-transfer-store.commit.after: released published
+C18/root-birth KILLED C18/root-birth: ownScratch must refuse
+C18/root-path KILLED C18/root-path: ownScratch must refuse
+C18/root-retained KILLED C18/root-retained: ownScratch must refuse
+C18/root-foreignEntries KILLED C18/root-foreignEntries: ownScratch must refuse
+C19/final-reuse-epoch KILLED C19/final-reuse-epoch: stop must refuse
+C19/final-reuse-deadline KILLED C19/final-reuse-deadline: stop must refuse
+C19/final-reuse-head KILLED C19/final-reuse-head: immutable final head change is refused
+D02/anchor-missing KILLED D02/anchor-missing: stop must refuse
+D02/anchor-birth KILLED D02/anchor-birth: stop must refuse
+D03/release-epoch KILLED D03/release-epoch: replaceRelease must refuse
+D03/release-witness KILLED D03/release-witness: replaceRelease must refuse
+D03/release-replaced KILLED D03/release-replaced: replaceRelease must refuse
+D04/natural-nonzero-1 KILLED D04/natural-nonzero-1: stop must refuse
+D04/natural-nonzero-137 KILLED D04/natural-nonzero-137: stop must refuse
+D05/delayed-stdout KILLED D05/delayed-stdout: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup","jobId":"<opaque>"}],"failures":[]}
+D05/delayed-stderr KILLED D05/delayed-stderr: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup","jobId":"<opaque>"}],"failures":[]}
+D08/legacy-evidence-final-immutable KILLED D08/legacy-evidence-final-immutable: restore must refuse
+E03/crash-consumer.consume.after KILLED E03/crash-consumer.consume.after: crashed consumption is not duplicated; safety: intent-before-consume
+E03/crash-driver.publishAck.after KILLED E03/crash-driver.publishAck.after: acknowledge must progress: {"kind":"blocked","blockers":[{"code":"integrity"}],"failures":[]}; safety: intent-before-consume, intent-before-consume
+E06/falsy-driver.acquire.before-0 KILLED E06/falsy-driver.acquire.before-0: rejection has explicit failure presence
+E06/falsy-driver.acquire.before-false KILLED E06/falsy-driver.acquire.before-false: rejection has explicit failure presence
+E06/falsy-driver.acquire.before-null KILLED E06/falsy-driver.acquire.before-null: rejection has explicit failure presence
+E06/falsy-driver.acquire.before-undefined KILLED E06/falsy-driver.acquire.before-undefined: rejection has explicit failure presence
+E06/falsy-driver.inspect.before-0 KILLED E06/falsy-driver.inspect.before-0: rejection has explicit failure presence
+E06/falsy-driver.inspect.before-false KILLED E06/falsy-driver.inspect.before-false: rejection has explicit failure presence
+E06/falsy-driver.inspect.before-null KILLED E06/falsy-driver.inspect.before-null: rejection has explicit failure presence
+E06/falsy-driver.inspect.before-undefined KILLED E06/falsy-driver.inspect.before-undefined: rejection has explicit failure presence
+E06/falsy-driver.detach.before-0 KILLED E06/falsy-driver.detach.before-0: rejection has explicit failure presence
+E06/falsy-driver.detach.before-false KILLED E06/falsy-driver.detach.before-false: rejection has explicit failure presence
+E06/falsy-driver.detach.before-null KILLED E06/falsy-driver.detach.before-null: rejection has explicit failure presence
+E06/falsy-driver.detach.before-undefined KILLED E06/falsy-driver.detach.before-undefined: rejection has explicit failure presence
+E06/falsy-driver.release.after-0 KILLED E06/falsy-driver.release.after-0: rejection has explicit failure presence
+E06/falsy-driver.release.after-false KILLED E06/falsy-driver.release.after-false: rejection has explicit failure presence
+E06/falsy-driver.release.after-null KILLED E06/falsy-driver.release.after-null: rejection has explicit failure presence
+E06/falsy-driver.release.after-undefined KILLED E06/falsy-driver.release.after-undefined: rejection has explicit failure presence
+E06/falsy-artifact.read.before-0 KILLED E06/falsy-artifact.read.before-0: rejection has explicit failure presence
+E06/falsy-artifact.read.before-false KILLED E06/falsy-artifact.read.before-false: rejection has explicit failure presence
+E06/falsy-artifact.read.before-null KILLED E06/falsy-artifact.read.before-null: rejection has explicit failure presence
+E06/falsy-artifact.read.before-undefined KILLED E06/falsy-artifact.read.before-undefined: rejection has explicit failure presence
+E07/expired-replay KILLED E07/expired-replay: expired completed request replays durable result
+E07/changed-arguments KILLED E07/changed-arguments: createBatch must refuse
+E07/cross-type KILLED E07/cross-type: close must refuse
+E07/service-closed KILLED E07/service-closed: createBatch must refuse
+E07/failed-close KILLED E07/failed-close: failed close retains job diagnostics
+E07/obligations KILLED E07/obligations: exact ambiguous effect remains inspectable
+E07/callback-failure KILLED E07/callback-failure: callback failure persists after reopen
+158 controls, 1 failed

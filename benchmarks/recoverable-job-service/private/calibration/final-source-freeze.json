@@ -1,0 +1,2240 @@
+{
+  "schemaVersion": 1,
+  "status": "Final source/public/probe freeze; mandatory runtime qualification and independent CAL01-05 acceptance pending",
+  "frozenAt": "2026-09-12T18:09:19.152Z",
+  "identity": {
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
+  },
+  "versions": {
+    "contract": "rjs-contract-2.0.1",
+    "suite": "rjs-suite-2.0.1"
+  },
+  "method": "rjs-simplification-audit-1",
+  "metadata": {
+    "schemaVersion": 1,
+    "method": "rjs-simplification-audit-1",
+    "status": "pending",
+    "admission": "pending",
+    "evidenceManifest": null,
+    "authority": "Independent calibration review and controller acceptance of CAL01–05; UI and integration release gates remain separate."
+  },
+  "node": "24.18.0",
+  "quickjs": "0.32.0",
+  "configured": {
+    "limits": {
+      "heap": 134217728,
+      "document": 65536,
+      "transaction": 262144,
+      "storage": 16777216,
+      "message": 8388608,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "wallMs": 60000,
+      "scan": 64,
+      "payload": 65536,
+      "metadata": 32768,
+      "retention": 8192,
+      "pipe": 4096,
+      "maxJobs": 1100,
+      "maxBatches": 4,
+      "maxRunning": 16
+    },
+    "production": {
+      "mode": "production",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A01/primary",
+        "A02/primary",
+        "A03/primary",
+        "A04/primary",
+        "A05/primary",
+        "A06/primary",
+        "A07/primary",
+        "A08/primary",
+        "A09/primary",
+        "A10/primary",
+        "A11/primary",
+        "A12/primary",
+        "A13/primary",
+        "A14/primary",
+        "A15/primary",
+        "B01/primary",
+        "B02/primary",
+        "B03/primary",
+        "B04/primary",
+        "B05/primary",
+        "B06/primary",
+        "B07/primary",
+        "B08/primary",
+        "B09/primary",
+        "B10/primary",
+        "B11/primary",
+        "B12/primary",
+        "B13/primary",
+        "B14/primary",
+        "B15/primary",
+        "B16/primary",
+        "B17/primary",
+        "C01/primary",
+        "C02/primary",
+        "C03/primary",
+        "C04/primary",
+        "C05/primary",
+        "C06/primary",
+        "C07/primary",
+        "C08/primary",
+        "C09/primary",
+        "C10/primary",
+        "C11/primary",
+        "C12/primary",
+        "C13/primary",
+        "C14/primary",
+        "C15/primary",
+        "C16/primary",
+        "C17/primary",
+        "C18/primary",
+        "C19/primary",
+        "D01/primary",
+        "D02/primary",
+        "D03/primary",
+        "D04/primary",
+        "D05/primary",
+        "D06/primary",
+        "D07/primary",
+        "D08/primary",
+        "D09/primary",
+        "E01/primary",
+        "E02/primary",
+        "E03/primary",
+        "E04/primary",
+        "E05/primary",
+        "E06/primary",
+        "E07/primary",
+        "E08/primary",
+        "E09/primary",
+        "A01/takeover-before",
+        "A01/takeover-after",
+        "A04/epoch-future",
+        "A04/owner-foreign",
+        "A04/sequence-unsafe",
+        "A06/crash-ack-intent",
+        "A06/crash-acked",
+        "A07/invalid-stream",
+        "A07/invalid-seq",
+        "A07/invalid-offset",
+        "A07/invalid-length",
+        "A07/invalid-digest",
+        "A07/invalid-artifactId",
+        "A07/invalid-channelId",
+        "A08/nested-consumer-progress",
+        "A10/timeout-observer-replacement",
+        "A14/inflight-driver.publishAck.after",
+        "A14/inflight-consumer.consume.after",
+        "A15/final-read-epoch",
+        "A15/final-read-deadline",
+        "B01/recover-driver.inspect.before",
+        "B01/recover-driver.readChannel.before",
+        "B01/recover-driver.detach.before",
+        "B01/recover-driver.release.after",
+        "B01/recover-driver.attach.before",
+        "B02/proof-channel",
+        "B02/proof-process",
+        "B02/proof-isolation",
+        "B03/receipt-future-time",
+        "B03/receipt-future-epoch",
+        "B03/receipt-foreign-owner",
+        "B04/rejection-driver.release.before-false",
+        "B04/rejection-driver.release.before-0",
+        "B04/rejection-driver.release.before-null",
+        "B04/rejection-driver.release.before-undefined",
+        "B04/rejection-driver.release.after-false",
+        "B04/rejection-driver.release.after-0",
+        "B04/rejection-driver.release.after-null",
+        "B04/rejection-driver.release.after-undefined",
+        "B06/deadline-driver.attach.before",
+        "B06/deadline-driver.release.before",
+        "B06/deadline-store.commit.before",
+        "B07/acquire-intent-isolation",
+        "B07/acquire-intent-process",
+        "B07/acquire-intent-channel",
+        "B07/acquire-intent-workload",
+        "B07/fact-quiescent",
+        "B07/fact-output",
+        "B07/fact-evidence",
+        "B07/fact-channel",
+        "B07/fact-process",
+        "B07/fact-isolation",
+        "B07/issued-driver.attach.before",
+        "B07/issued-driver.detach.before",
+        "B07/issued-driver.release.before",
+        "B08/release-missing-receipt",
+        "B01/recover-unknown-issued",
+        "B07/resource-intent-reader",
+        "B07/resource-intent-release-request",
+        "B07/resource-intent-graceful",
+        "B07/resource-intent-force",
+        "B07/resource-intent-barrier",
+        "B07/resource-intent-detach",
+        "B07/resource-intent-process",
+        "B07/resource-intent-isolation",
+        "B12/new-suffix",
+        "B12/corrupt-artifact",
+        "B12/changed-checkpoint",
+        "B12/blocked-barrier",
+        "B15/missing",
+        "B15/foreign",
+        "B15/unfinished",
+        "B17/missing-created",
+        "B17/sequence-unsafe",
+        "B17/evidence-digest",
+        "C03/artifact-missing",
+        "C03/artifact-foreign",
+        "C03/evidence-gap",
+        "C05/version",
+        "C05/negative-position",
+        "C05/loss-invalid",
+        "C05/frame-extra",
+        "C05/receipt-extra",
+        "C05/payload-extra",
+        "C05/future-created",
+        "C05/final-mismatch",
+        "C05/retired-prefix",
+        "C05/consumed-total",
+        "C05/allowed-extension",
+        "C06/authority-loss-after-evidence-write",
+        "C07/protocol-corruption",
+        "C07/checkpoint-cas",
+        "C08/accepted",
+        "C08/consuming-not-applied",
+        "C08/consuming-unknown",
+        "C08/acked",
+        "C09/restore-store.commit.before",
+        "C09/restore-store.commit.after",
+        "C10/restore-stale-head",
+        "C12/handoff-self",
+        "C12/handoff-cycle",
+        "C12/handoff-destination-reused",
+        "C12/handoff-final-source",
+        "C12/handoff-foreign",
+        "C12/handoff-missing",
+        "C13/final-mismatch",
+        "C13/evidence-digest",
+        "C15/unfinalized",
+        "C15/pending-consumption",
+        "C15/foreign-evidence",
+        "C16/terminal-transfer-store.commit.before",
+        "C16/terminal-transfer-store.commit.after",
+        "C18/root-birth",
+        "C18/root-path",
+        "C18/root-retained",
+        "C18/root-foreignEntries",
+        "C19/final-reuse-epoch",
+        "C19/final-reuse-deadline",
+        "C19/final-reuse-head",
+        "D02/anchor-missing",
+        "D02/anchor-birth",
+        "D03/release-epoch",
+        "D03/release-witness",
+        "D03/release-replaced",
+        "D04/natural-nonzero-1",
+        "D04/natural-nonzero-137",
+        "D05/delayed-stdout",
+        "D05/delayed-stderr",
+        "D08/legacy-evidence-final-immutable",
+        "E03/crash-consumer.consume.after",
+        "E03/crash-driver.publishAck.after",
+        "E06/falsy-driver.acquire.before-0",
+        "E06/falsy-driver.acquire.before-false",
+        "E06/falsy-driver.acquire.before-null",
+        "E06/falsy-driver.acquire.before-undefined",
+        "E06/falsy-driver.inspect.before-0",
+        "E06/falsy-driver.inspect.before-false",
+        "E06/falsy-driver.inspect.before-null",
+        "E06/falsy-driver.inspect.before-undefined",
+        "E06/falsy-driver.detach.before-0",
+        "E06/falsy-driver.detach.before-false",
+        "E06/falsy-driver.detach.before-null",
+        "E06/falsy-driver.detach.before-undefined",
+        "E06/falsy-driver.release.after-0",
+        "E06/falsy-driver.release.after-false",
+        "E06/falsy-driver.release.after-null",
+        "E06/falsy-driver.release.after-undefined",
+        "E06/falsy-artifact.read.before-0",
+        "E06/falsy-artifact.read.before-false",
+        "E06/falsy-artifact.read.before-null",
+        "E06/falsy-artifact.read.before-undefined",
+        "E07/expired-replay",
+        "E07/changed-arguments",
+        "E07/cross-type",
+        "E07/service-closed",
+        "E07/failed-close",
+        "E07/obligations",
+        "E07/callback-failure",
+        "B17/source-zero",
+        "B17/source-stdout",
+        "B17/source-stderr",
+        "B17/source-both",
+        "B17/source-tail",
+        "B17/source-pristine-early",
+        "B17/source-fresh-restart",
+        "B17/source-replay",
+        "B17/source-partial-cleanup",
+        "B17/source-capacity",
+        "B17/source-held-attach-before",
+        "B17/source-held-attach-after",
+        "B17/source-held-observation-before",
+        "B17/source-held-observation-after",
+        "B17/source-observation-effects-zero",
+        "B17/source-observation-effects-stdout",
+        "B17/source-observation-effects-stderr",
+        "B17/source-observation-effects-both",
+        "B17/source-lost-receipt-known",
+        "B17/source-observation-response-available",
+        "B17/source-lost-receipt-unknown",
+        "B17/source-observation-response-unknown",
+        "B17/source-pending-ack-stdout",
+        "B17/source-pending-ack-stderr",
+        "B17/source-unknown-ack-stdout",
+        "B17/source-unknown-ack-stderr",
+        "B17/source-consumer-unknown",
+        "B17/source-proof-missing",
+        "B17/source-proof-invalid-token",
+        "B17/source-proof-foreign-job",
+        "B17/source-proof-foreign-channel",
+        "B17/source-proof-foreign-reader",
+        "B17/source-proof-foreign-scope",
+        "B17/source-proof-foreign-owner",
+        "B17/source-proof-future-epoch",
+        "B17/source-proof-negative",
+        "B17/source-proof-fractional",
+        "B17/source-proof-unsafe",
+        "B17/source-proof-impossible",
+        "B17/source-proof-false-zero",
+        "B17/source-proof-cross-stream",
+        "B17/source-proof-future-time",
+        "B17/source-proof-at-proof-deadline",
+        "B17/source-proof-expired",
+        "B17/source-proof-stale",
+        "B17/source-proof-missing-prefix",
+        "B17/source-proof-wrong-range",
+        "B17/source-proof-legacy-reason",
+        "B17/source-proof-production",
+        "B17/source-proof-window",
+        "B17/source-before-deadline-observation",
+        "B17/source-before-deadline-publication",
+        "B17/source-at-deadline-observation",
+        "B17/source-at-deadline-publication",
+        "B17/source-after-deadline-observation",
+        "B17/source-after-deadline-publication",
+        "B17/source-takeover-attachment",
+        "B17/source-takeover-observation",
+        "B17/source-takeover-publication",
+        "B17/source-changed-output",
+        "B17/source-changed-ack",
+        "B17/source-missing-old",
+        "B17/source-format-valid",
+        "B17/source-format-allowed-extension",
+        "B17/source-format-top-extra",
+        "B17/source-format-receipt-extra",
+        "B17/source-format-source-prefix-total",
+        "B17/source-format-source-proof-missing",
+        "B17/source-format-source-proof-range",
+        "B17/source-format-source-proof-pending",
+        "B17/source-format-retired-baseline",
+        "B17/source-format-double-prefix",
+        "B17/source-format-format2",
+        "B17/source-legacy-evidence",
+        "B17/source-legacy-terminal-identity"
+      ],
+      "scheduleHash": "0f89e5b53c878a74eb5a622fad39d13c597bc6c6b35a973bad98799176fe9a1c",
+      "configurationHash": "e0cb9f231563d03470fe241c91b4f63fad18bba5807d8e15f0f9fad858b93dc6"
+    },
+    "separateSelectedCapacity": 1100
+  },
+  "producer": {
+    "path": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-integration-assertion-source-freeze-reviewed.json",
+    "bytes": 26308,
+    "sha256": "80357ec3ab38a59738a74113fe4e2890c5ee53291f1be1868b6c96d0863c4f9e"
+  },
+  "producerFiles": [
+    {
+      "path": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-producer-interfaces.md",
+      "bytes": 12911,
+      "sha256": "e1819a117501074bd18c572eea410d04523105a68a6b0a2b717b02e1d4562636",
+      "originalSha256": "e1819a117501074bd18c572eea410d04523105a68a6b0a2b717b02e1d4562636",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/broker.mjs",
+      "bytes": 31842,
+      "sha256": "f412795e89c10e1b116f72ba3b5e9b2538fe8c60dd2978d9f8439299d57c27bd",
+      "originalSha256": "f412795e89c10e1b116f72ba3b5e9b2538fe8c60dd2978d9f8439299d57c27bd",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/control-expectations.json",
+      "bytes": 43467,
+      "sha256": "e6128d59d74abafd1986831516d09f99d539e8c478a67f752ab066ab97e72dbf",
+      "originalSha256": "15f2e6b1f113262f33e2402f4df1d120ad4799f08458ecc937f824713048213c",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/controls.mjs",
+      "bytes": 21100,
+      "sha256": "657982bff3b4540e650a2c631d68e8c81a57b8fd4c3c4e1f8dc4888660fe70d1",
+      "originalSha256": "657982bff3b4540e650a2c631d68e8c81a57b8fd4c3c4e1f8dc4888660fe70d1",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/dependency-provenance.json",
+      "bytes": 3214,
+      "sha256": "325baf99112f9f3ba1c66ef89792ed98714299f57fcb4f770c6a75db176ebca8",
+      "originalSha256": "325baf99112f9f3ba1c66ef89792ed98714299f57fcb4f770c6a75db176ebca8",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/evaluation-worker.mjs",
+      "bytes": 793,
+      "sha256": "78fe5c62151abba5d4bf894aec15b04bd9adf3835292c4a6522950588a1875f1",
+      "originalSha256": "78fe5c62151abba5d4bf894aec15b04bd9adf3835292c4a6522950588a1875f1",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/evaluator.mjs",
+      "bytes": 6008,
+      "sha256": "7103e9fc2cc754270c6e358b6f5ddc5b94d4dc3b02b58462faf05e8c48d9457c",
+      "originalSha256": "a77bb3336f818dd4cb7fec76b66d856785bef4b69075aacd8a1acc58df09da62",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/generate-assets.mjs",
+      "bytes": 2289,
+      "sha256": "830d146b579c36218d36640b903f7482e5279566afde97e23c87ca2b1b33379e",
+      "originalSha256": "3f5dc968162cd3b5701256fea6c2c8a1bef321d579001344148dfa9f50012a44",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/guest.mjs",
+      "bytes": 5659,
+      "sha256": "f7249b4f5eb6414b9d21cddf92554cb6773c1f408b4c57666a9d019ee94c395d",
+      "originalSha256": "f7249b4f5eb6414b9d21cddf92554cb6773c1f408b4c57666a9d019ee94c395d",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/identity.mjs",
+      "bytes": 1334,
+      "sha256": "9656d205d01d2206700f49234f13c7d02853904afc236ec26f6c4f4727046ace",
+      "originalSha256": "9656d205d01d2206700f49234f13c7d02853904afc236ec26f6c4f4727046ace",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/material-failure.mjs",
+      "bytes": 840,
+      "sha256": "9ceb0711afbd6cd9ae24e4e2ae5385a0e197993aaad0ab0e2e54226676ff698c",
+      "originalSha256": "9ceb0711afbd6cd9ae24e4e2ae5385a0e197993aaad0ab0e2e54226676ff698c",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/oracle.mjs",
+      "bytes": 12964,
+      "sha256": "c46429aa6d82f582ee0d19260d28d02e701e64f8afac8df75b52c515bac196c3",
+      "originalSha256": "c46429aa6d82f582ee0d19260d28d02e701e64f8afac8df75b52c515bac196c3",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/provenance.mjs",
+      "bytes": 2250,
+      "sha256": "e0fe2efb447c02384c702052d3b747b703d98ff4a74fbdcd84db7839525018e6",
+      "originalSha256": "e0fe2efb447c02384c702052d3b747b703d98ff4a74fbdcd84db7839525018e6",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/public-controls.mjs",
+      "bytes": 5622,
+      "sha256": "33ee864bbd27732810b54b50adb5ba47790b521c1031f45182188d6debeeb3c8",
+      "originalSha256": "33ee864bbd27732810b54b50adb5ba47790b521c1031f45182188d6debeeb3c8",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/public-evaluator.mjs",
+      "bytes": 2657,
+      "sha256": "3435e5bccc01abfaa2fd64fb466e5efad8f3e52257c40d724f347d59586653d8",
+      "originalSha256": "3435e5bccc01abfaa2fd64fb466e5efad8f3e52257c40d724f347d59586653d8",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/qualification-map.mjs",
+      "bytes": 2792,
+      "sha256": "3e4ce15d5d40c863fa1f51d5ba545d2f6e6b339f3d758e0ac5993538636d8bef",
+      "originalSha256": "3e4ce15d5d40c863fa1f51d5ba545d2f6e6b339f3d758e0ac5993538636d8bef",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/qualification-provenance.mjs",
+      "bytes": 2009,
+      "sha256": "f608e6d354384a5c48b829ba720af08f78e250568b33a0c447e50ea410318745",
+      "originalSha256": "f608e6d354384a5c48b829ba720af08f78e250568b33a0c447e50ea410318745",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/quickjs-memory-shim.mjs",
+      "bytes": 1600,
+      "sha256": "c5368271a44fd8f84dcddabfdb7395017a2a264add28be73bdab7f046a91044c",
+      "originalSha256": "c5368271a44fd8f84dcddabfdb7395017a2a264add28be73bdab7f046a91044c",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/reference-source-bootstrap.txt",
+      "bytes": 5561,
+      "sha256": "a2a60f89d39b03f32319ca2becdd6f4413d5fff6a26805e743039c1d7e11f1b9",
+      "originalSha256": "a2a60f89d39b03f32319ca2becdd6f4413d5fff6a26805e743039c1d7e11f1b9",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/reference.js",
+      "bytes": 55440,
+      "sha256": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+      "originalSha256": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/replay-comparison.mjs",
+      "bytes": 2221,
+      "sha256": "f030afd78b426c9c5dadf6260d6a9f375269665b3e20a5aa87686b432087bdf8",
+      "originalSha256": "f030afd78b426c9c5dadf6260d6a9f375269665b3e20a5aa87686b432087bdf8",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/replay.mjs",
+      "bytes": 5424,
+      "sha256": "a45063d57238b859981e1be42bf2459b474922a7c40818c1bdc488a127bcfddd",
+      "originalSha256": "a45063d57238b859981e1be42bf2459b474922a7c40818c1bdc488a127bcfddd",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/response-schema.mjs",
+      "bytes": 5559,
+      "sha256": "16032aeafb319955f1699d1aa922e1806d94723a90e417b8809b8b8f070acc85",
+      "originalSha256": "16032aeafb319955f1699d1aa922e1806d94723a90e417b8809b8b8f070acc85",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/runtime.mjs",
+      "bytes": 7702,
+      "sha256": "6c46fdbfde043109b14e795efcf5e3ff0c82bb7598cdae378942bf291609030e",
+      "originalSha256": "6c46fdbfde043109b14e795efcf5e3ff0c82bb7598cdae378942bf291609030e",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/scenarios.mjs",
+      "bytes": 40792,
+      "sha256": "8a7e5e477ec0e8fe6ebff99f774e4496f8dc391fdf36d31704cbefbbd7248530",
+      "originalSha256": "616b97c201f6f869947739ec513e33b3ffb8859a2d639284c5755f79a5c3902a",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/source-adapter.mjs",
+      "bytes": 12244,
+      "sha256": "26bd81c6aa5c69995ecf02cb7f7a9c0283e7cb933153107ccbd43a82417ac32d",
+      "originalSha256": "26bd81c6aa5c69995ecf02cb7f7a9c0283e7cb933153107ccbd43a82417ac32d",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/source-cases.mjs",
+      "bytes": 16404,
+      "sha256": "98b1a9d378cd64e1edfc5d4113f1880acb0408ed82ab2f3cbacce26e1d357ffd",
+      "originalSha256": "98b1a9d378cd64e1edfc5d4113f1880acb0408ed82ab2f3cbacce26e1d357ffd",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/source-controls.mjs",
+      "bytes": 2487,
+      "sha256": "788a2f4ad1de4ff3547d63f5df674651b790f94876eb2b85cbf6d5da796e1e90",
+      "originalSha256": "788a2f4ad1de4ff3547d63f5df674651b790f94876eb2b85cbf6d5da796e1e90",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/variants.mjs",
+      "bytes": 29011,
+      "sha256": "d9fcbcc03a32b9c6ed1cb9fd46b38c8ebe814d0b5829fccb02ae16cee05c814e",
+      "originalSha256": "39faee5d07005ced190fa26940585c68a54ae072ed6a4e24f2a960bea5272512",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/verify-template.mjs",
+      "bytes": 487,
+      "sha256": "4259669add5040f8b93634cc766f265c535f1ed3dca6a1dea03a32b7575916d6",
+      "originalSha256": "4259669add5040f8b93634cc766f265c535f1ed3dca6a1dea03a32b7575916d6",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/wire-schema.mjs",
+      "bytes": 5975,
+      "sha256": "a75c9ce389572834e0138be1e3a955ff5dc882a993358a63dff27d6631f088b8",
+      "originalSha256": "a75c9ce389572834e0138be1e3a955ff5dc882a993358a63dff27d6631f088b8",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd",
+      "originalSha256": "ddff896f411e77fce4b011dcb7478cfa0471c4ff0945e65eec00575eef8593a6",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/contract.d.ts",
+      "bytes": 11715,
+      "sha256": "c1ddda835a051d84f262414b8a23f84f6118ef996c5d9337abcb6c1502a587a6",
+      "originalSha256": "c1ddda835a051d84f262414b8a23f84f6118ef996c5d9337abcb6c1502a587a6",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/examples.mjs",
+      "bytes": 9233,
+      "sha256": "775a8dd29120c0ecdc641de8803e846e62817864751738a09387cbdd1b9c8cee",
+      "originalSha256": "775a8dd29120c0ecdc641de8803e846e62817864751738a09387cbdd1b9c8cee",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/families.json",
+      "bytes": 25611,
+      "sha256": "9d436863744e16230490a1a674b0c907e0bd70e7a6493a98cd0bee51f2e4d46d",
+      "originalSha256": "9d436863744e16230490a1a674b0c907e0bd70e7a6493a98cd0bee51f2e4d46d",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/problem.md",
+      "bytes": 14078,
+      "sha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c",
+      "originalSha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/public-test.mjs",
+      "bytes": 631,
+      "sha256": "3e7f6d28d1368b5d5e9d5744d7bc0081b73c70fa5a6d0b9406b15f79e8573210",
+      "originalSha256": "3e7f6d28d1368b5d5e9d5744d7bc0081b73c70fa5a6d0b9406b15f79e8573210",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8",
+      "originalSha256": "f3f7d967837d65261c6521695fce959e423ae68a7271dcd33f2e8667213f76f5",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/service.js",
+      "bytes": 456,
+      "sha256": "7e658609d364081ba027113468ecb88ab2d17fce2276705ba5e99699cd0e5d27",
+      "originalSha256": "7e658609d364081ba027113468ecb88ab2d17fce2276705ba5e99699cd0e5d27",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b",
+      "originalSha256": "f3e81dabd7de9c1ef7ed00f9c1aa48b9af91d74ac7daabfff7337176c8de271d",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-examples.mjs",
+      "bytes": 7436,
+      "sha256": "88e25b3be27fbbdc82125066b8fe332cd81a98ae00545e3f9c8d11fc186847a0",
+      "originalSha256": "88e25b3be27fbbdc82125066b8fe332cd81a98ae00545e3f9c8d11fc186847a0",
+      "changed": false
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-variants.json",
+      "bytes": 24030,
+      "sha256": "67f639c80540aac17b1252ff7a592c6b52679fae360d6a9157f825ed3e1c1279",
+      "originalSha256": "67f639c80540aac17b1252ff7a592c6b52679fae360d6a9157f825ed3e1c1279",
+      "changed": false
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd",
+      "originalSha256": "ddff896f411e77fce4b011dcb7478cfa0471c4ff0945e65eec00575eef8593a6",
+      "changed": true
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/problem.md",
+      "bytes": 14078,
+      "sha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c",
+      "originalSha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c",
+      "changed": false
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8",
+      "originalSha256": "f3f7d967837d65261c6521695fce959e423ae68a7271dcd33f2e8667213f76f5",
+      "changed": true
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b",
+      "originalSha256": "f3e81dabd7de9c1ef7ed00f9c1aa48b9af91d74ac7daabfff7337176c8de271d",
+      "changed": true
+    },
+    {
+      "path": "lib/benchmark/workbench/recoverable-job-service/assets.generated.ts",
+      "bytes": 247595,
+      "sha256": "4ab1ba33d5ca1dbe65ef3c7579d8ad4a5933f00c0be7bb20f5fb026ddd1bf6da",
+      "originalSha256": "0a8a3750b32e631db5e7c82afd017869d1974156c20f1a95b7a58a4f145282b7",
+      "changed": true
+    },
+    {
+      "path": "lib/benchmark/workbench/recoverable-job-service/diagnostics.ts",
+      "bytes": 10537,
+      "sha256": "ac12f0f20b3cf60b4b9c2e3a8855ec038c16fde2f06bf7d8b1417c0831d13a19",
+      "originalSha256": "ac12f0f20b3cf60b4b9c2e3a8855ec038c16fde2f06bf7d8b1417c0831d13a19",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-bootstrap-public.mts",
+      "bytes": 1429,
+      "sha256": "80114be77320b2fedf6caf7da17421d855d94d50572c6590a485860713e6741d",
+      "originalSha256": "80114be77320b2fedf6caf7da17421d855d94d50572c6590a485860713e6741d",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-bootstrap-schema.mts",
+      "bytes": 2169,
+      "sha256": "e4cc9cafef6f13e1d0db1f80312163781a86534a4babaee280084390b2c9545f",
+      "originalSha256": "e4cc9cafef6f13e1d0db1f80312163781a86534a4babaee280084390b2c9545f",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-capacity.mts",
+      "bytes": 858,
+      "sha256": "d940160c9649694d5ff982a7650707d583a00586a17fd3b7ff8739bc5cfff28f",
+      "originalSha256": "d940160c9649694d5ff982a7650707d583a00586a17fd3b7ff8739bc5cfff28f",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-delayed-source-ack.mts",
+      "bytes": 2063,
+      "sha256": "a9694863823c05b9bc105db2ace9c9648d038cb6435fc96fa36a545149f21f5d",
+      "originalSha256": "a9694863823c05b9bc105db2ace9c9648d038cb6435fc96fa36a545149f21f5d",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-fix3.mts",
+      "bytes": 9868,
+      "sha256": "6cd34c78b2b3ecfa21abc9383abc6d0e9bb6a72086228e512b44f037d27f5938",
+      "originalSha256": "6cd34c78b2b3ecfa21abc9383abc6d0e9bb6a72086228e512b44f037d27f5938",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-fix5.mts",
+      "bytes": 9019,
+      "sha256": "38fc574164fe21d4a462e9b5919866a961cacafdfb98c92254f0fbb0f4423556",
+      "originalSha256": "38fc574164fe21d4a462e9b5919866a961cacafdfb98c92254f0fbb0f4423556",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-freshness.mts",
+      "bytes": 2206,
+      "sha256": "023d2f3ecab5853a0ab862bb5f0eddc99aee5a6289786e06a9d1ad8fcb226ca6",
+      "originalSha256": "023d2f3ecab5853a0ab862bb5f0eddc99aee5a6289786e06a9d1ad8fcb226ca6",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-isolation.mts",
+      "bytes": 5294,
+      "sha256": "39beb963b15a81791789f1c8c0b3d4e2848bbc2174785335fde6571b93ba8ba3",
+      "originalSha256": "39beb963b15a81791789f1c8c0b3d4e2848bbc2174785335fde6571b93ba8ba3",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-memory-growth.mts",
+      "bytes": 2128,
+      "sha256": "e5c6ff2b94f2269fd99b628fa7d9e55e9fdf5c09322e5a074423f39a36c73681",
+      "originalSha256": "e5c6ff2b94f2269fd99b628fa7d9e55e9fdf5c09322e5a074423f39a36c73681",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-preservation.mts",
+      "bytes": 1319,
+      "sha256": "c95f76a880f3d03d7477c8005cfcd41fdcbf5ff872378282273ef3d2c0922303",
+      "originalSha256": "c95f76a880f3d03d7477c8005cfcd41fdcbf5ff872378282273ef3d2c0922303",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-public-controls.mts",
+      "bytes": 1018,
+      "sha256": "544cb0551e51f0571513812d83b42df8c4fd4a53112163530da3d26efccc0da8",
+      "originalSha256": "544cb0551e51f0571513812d83b42df8c4fd4a53112163530da3d26efccc0da8",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-raw-source-a07.mts",
+      "bytes": 1521,
+      "sha256": "559f00f4920a9b7ed89ad379e5c8214d4d8ea9fc58db8243f9f2400efbb3ca7a",
+      "originalSha256": "559f00f4920a9b7ed89ad379e5c8214d4d8ea9fc58db8243f9f2400efbb3ca7a",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-raw-source-identity.mts",
+      "bytes": 1899,
+      "sha256": "266fcad6243b124f86d85d15341cbce0a42337cccd3f771ce9ba215ff15ac65d",
+      "originalSha256": "266fcad6243b124f86d85d15341cbce0a42337cccd3f771ce9ba215ff15ac65d",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-reader-attachment.mts",
+      "bytes": 6553,
+      "sha256": "5230599e82740a534b72bf34e0a5162f12e0f4dd797c2ad0bb02964585813bbd",
+      "originalSha256": "5230599e82740a534b72bf34e0a5162f12e0f4dd797c2ad0bb02964585813bbd",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-replay-process.mts",
+      "bytes": 3728,
+      "sha256": "715e8c042df970dabe3a95bd7a16f24c12c1d171f87cbc2c2ae19f9485cecafc",
+      "originalSha256": "715e8c042df970dabe3a95bd7a16f24c12c1d171f87cbc2c2ae19f9485cecafc",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-replay-runtime.mts",
+      "bytes": 1497,
+      "sha256": "c3f4953c46d8bedc27130e6d5ceb727f13309a96053823ad0c0ae060df131a63",
+      "originalSha256": "c3f4953c46d8bedc27130e6d5ceb727f13309a96053823ad0c0ae060df131a63",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-replay-tape.mts",
+      "bytes": 1170,
+      "sha256": "3c25350a53b49c07a3b147378d01193525842d97d27d2a95fc11a5f0410a9971",
+      "originalSha256": "3c25350a53b49c07a3b147378d01193525842d97d27d2a95fc11a5f0410a9971",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-replay.mts",
+      "bytes": 2030,
+      "sha256": "53623c5267bd58efb642f0961867271ea63271f9fec47ef0355c69e14474d29f",
+      "originalSha256": "53623c5267bd58efb642f0961867271ea63271f9fec47ef0355c69e14474d29f",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-adapter.mts",
+      "bytes": 2979,
+      "sha256": "d8c4c34eca4970d5ff620d2e98372dd1dcd750b35c097ca872ac10953f6b0e13",
+      "originalSha256": "d8c4c34eca4970d5ff620d2e98372dd1dcd750b35c097ca872ac10953f6b0e13",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-adoption-timing.mts",
+      "bytes": 1522,
+      "sha256": "9e6badb2bff76a4895b4602581e38f6c0605d7e0f263ca8b126328cb93ef16f5",
+      "originalSha256": "9e6badb2bff76a4895b4602581e38f6c0605d7e0f263ca8b126328cb93ef16f5",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-material.mts",
+      "bytes": 2040,
+      "sha256": "bf7879f8f0f57b1bc74bf326555e233aea0ea873b9344d335e891eb6a30648d2",
+      "originalSha256": "bf7879f8f0f57b1bc74bf326555e233aea0ea873b9344d335e891eb6a30648d2",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-oracle.mts",
+      "bytes": 1167,
+      "sha256": "d6a65df5719bed83f285c5ebe28f588b9b38aaf82dd72f0b35ddaf3c383c9c59",
+      "originalSha256": "d6a65df5719bed83f285c5ebe28f588b9b38aaf82dd72f0b35ddaf3c383c9c59",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-recipe-timing.mts",
+      "bytes": 1269,
+      "sha256": "046fed55dc7965340604fcbd8f8991e376bb9758e9bae023f0475175bccc2b10",
+      "originalSha256": "046fed55dc7965340604fcbd8f8991e376bb9758e9bae023f0475175bccc2b10",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-variants.mts",
+      "bytes": 1047,
+      "sha256": "a86513ce2ef5deaa4e24f3c9d485044be227613c4c362fca37c5e82dcda3ecfe",
+      "originalSha256": "a86513ce2ef5deaa4e24f3c9d485044be227613c4c362fca37c5e82dcda3ecfe",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave3-affected.mts",
+      "bytes": 2286,
+      "sha256": "8e5da15f73584e45cf8e10b94512232d937c51036fff30e9aa240b731339e480",
+      "originalSha256": "8e5da15f73584e45cf8e10b94512232d937c51036fff30e9aa240b731339e480",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave3-d02.mts",
+      "bytes": 2258,
+      "sha256": "85e6a831b54348e7dec6110b242d643928f28830d511d4b70ce264a9710243f0",
+      "originalSha256": "85e6a831b54348e7dec6110b242d643928f28830d511d4b70ce264a9710243f0",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave3-domains.mts",
+      "bytes": 2958,
+      "sha256": "68a65c52c0da2809df2bbab65cde9d11ce00f06cfcdaf1c4667984036de1e4ca",
+      "originalSha256": "68a65c52c0da2809df2bbab65cde9d11ce00f06cfcdaf1c4667984036de1e4ca",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave3-lifecycle.mts",
+      "bytes": 1453,
+      "sha256": "d444ce7ecd2ede2385eb73cdb9f38ad61cc6fe3a7d091db66ae11236bf428658",
+      "originalSha256": "d444ce7ecd2ede2385eb73cdb9f38ad61cc6fe3a7d091db66ae11236bf428658",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave4-b14.mts",
+      "bytes": 7545,
+      "sha256": "a9c02f1e1079963afea486bec2bd0b1c305a3619391bb3450689dca8dad79441",
+      "originalSha256": "a9c02f1e1079963afea486bec2bd0b1c305a3619391bb3450689dca8dad79441",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave4-scan.mts",
+      "bytes": 8664,
+      "sha256": "2d4acdbb583fb8f59e39a67d97d36af0aa56a270a27bb38820da34308a58eb1e",
+      "originalSha256": "2d4acdbb583fb8f59e39a67d97d36af0aa56a270a27bb38820da34308a58eb1e",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service.mts",
+      "bytes": 17220,
+      "sha256": "e5a462bce8fbc04af9e91df4586d22bd797c45077a6e5843b1f536cb9d50dc10",
+      "originalSha256": "e5a462bce8fbc04af9e91df4586d22bd797c45077a6e5843b1f536cb9d50dc10",
+      "changed": false
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-integration-assertions.mts",
+      "bytes": 3659,
+      "sha256": "5015b8f7756ae0da5171120ef43ffbc418ac28bf7c154eeb53024dba440f3e81",
+      "originalSha256": "5015b8f7756ae0da5171120ef43ffbc418ac28bf7c154eeb53024dba440f3e81",
+      "changed": false
+    }
+  ],
+  "changedProducerFiles": [
+    {
+      "path": "benchmarks/recoverable-job-service/private/control-expectations.json",
+      "bytes": 43467,
+      "sha256": "e6128d59d74abafd1986831516d09f99d539e8c478a67f752ab066ab97e72dbf",
+      "originalSha256": "15f2e6b1f113262f33e2402f4df1d120ad4799f08458ecc937f824713048213c",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/evaluator.mjs",
+      "bytes": 6008,
+      "sha256": "7103e9fc2cc754270c6e358b6f5ddc5b94d4dc3b02b58462faf05e8c48d9457c",
+      "originalSha256": "a77bb3336f818dd4cb7fec76b66d856785bef4b69075aacd8a1acc58df09da62",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/generate-assets.mjs",
+      "bytes": 2289,
+      "sha256": "830d146b579c36218d36640b903f7482e5279566afde97e23c87ca2b1b33379e",
+      "originalSha256": "3f5dc968162cd3b5701256fea6c2c8a1bef321d579001344148dfa9f50012a44",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/scenarios.mjs",
+      "bytes": 40792,
+      "sha256": "8a7e5e477ec0e8fe6ebff99f774e4496f8dc391fdf36d31704cbefbbd7248530",
+      "originalSha256": "616b97c201f6f869947739ec513e33b3ffb8859a2d639284c5755f79a5c3902a",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/variants.mjs",
+      "bytes": 29011,
+      "sha256": "d9fcbcc03a32b9c6ed1cb9fd46b38c8ebe814d0b5829fccb02ae16cee05c814e",
+      "originalSha256": "39faee5d07005ced190fa26940585c68a54ae072ed6a4e24f2a960bea5272512",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd",
+      "originalSha256": "ddff896f411e77fce4b011dcb7478cfa0471c4ff0945e65eec00575eef8593a6",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8",
+      "originalSha256": "f3f7d967837d65261c6521695fce959e423ae68a7271dcd33f2e8667213f76f5",
+      "changed": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b",
+      "originalSha256": "f3e81dabd7de9c1ef7ed00f9c1aa48b9af91d74ac7daabfff7337176c8de271d",
+      "changed": true
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd",
+      "originalSha256": "ddff896f411e77fce4b011dcb7478cfa0471c4ff0945e65eec00575eef8593a6",
+      "changed": true
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8",
+      "originalSha256": "f3f7d967837d65261c6521695fce959e423ae68a7271dcd33f2e8667213f76f5",
+      "changed": true
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b",
+      "originalSha256": "f3e81dabd7de9c1ef7ed00f9c1aa48b9af91d74ac7daabfff7337176c8de271d",
+      "changed": true
+    },
+    {
+      "path": "lib/benchmark/workbench/recoverable-job-service/assets.generated.ts",
+      "bytes": 247595,
+      "sha256": "4ab1ba33d5ca1dbe65ef3c7579d8ad4a5933f00c0be7bb20f5fb026ddd1bf6da",
+      "originalSha256": "0a8a3750b32e631db5e7c82afd017869d1974156c20f1a95b7a58a4f145282b7",
+      "changed": true
+    }
+  ],
+  "acceptedScopedReviews": [
+    {
+      "path": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/calibration-correction-review.md",
+      "bytes": 17437,
+      "sha256": "157548ae361b1881f7bd2a8d9c543905d7303e7a5a8eb43f5b06e009b6d21ac0"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/calibration-c09-digest-fix-review.md",
+      "bytes": 8847,
+      "sha256": "af207b7a7877b5cfe325f49ac51c936e2e476896bff808a9a93e58b8538a765b"
+    }
+  ],
+  "preservedScopedFreezes": [
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/audit-source-freeze.json",
+      "bytes": 41490,
+      "sha256": "a3c3e39b8388dab324590b682f3771960c7e0a28053781d4504641cd50a89ea2"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json",
+      "bytes": 99202,
+      "sha256": "5f56619ba8d8695c52aa28da7ba674a103193bb478cedb83ef4c240c6afe708e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/c09-digest-fix-source-freeze.json",
+      "bytes": 48764,
+      "sha256": "f87d2639adaee741beaef0796e89b81f6b05739265939c5f6227df363b5718eb"
+    }
+  ],
+  "versionRefresh": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/before-final-version/manifest.json",
+    "bytes": 1800,
+    "sha256": "571d558a5aa914abe7e717ae7d19a6e48577b057e002caa63ad9cacee7aff11c"
+  },
+  "ledger": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-final.json",
+    "bytes": 5079269,
+    "sha256": "c3f4b9c4038edecb4313e3e2c2bd2d9d1fb1a86e78481aa7df2534db43573d84"
+  },
+  "probePlan": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/probe-plan-final.json",
+    "bytes": 26834,
+    "sha256": "1905fe76a5262e420fb5a06bcbbca9faaaae8b12bff0e8e8c9543ec50c0c9694"
+  },
+  "controlManifest": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/manifest.json",
+    "bytes": 2486,
+    "sha256": "bfbaa8e7cdcc1582962ae7a864dc866e7ce3490b1c8ba9051ae4eeb6e5733eab"
+  },
+  "helperEvidence": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/source-helper-evidence.json",
+    "bytes": 3473,
+    "sha256": "2bab55cb5eafe5e95be20c2b2b35fdf1052f7365265763f80d8908357ee288ee"
+  },
+  "exactPublicAllowlist": [
+    {
+      "path": "benchmarks/recoverable-job-service/public/contract.d.ts",
+      "bytes": 11715,
+      "sha256": "c1ddda835a051d84f262414b8a23f84f6118ef996c5d9337abcb6c1502a587a6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/problem.md",
+      "bytes": 14078,
+      "sha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/families.json",
+      "bytes": 25611,
+      "sha256": "9d436863744e16230490a1a674b0c907e0bd70e7a6493a98cd0bee51f2e4d46d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/service.js",
+      "bytes": 456,
+      "sha256": "7e658609d364081ba027113468ecb88ab2d17fce2276705ba5e99699cd0e5d27"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/examples.mjs",
+      "bytes": 9233,
+      "sha256": "775a8dd29120c0ecdc641de8803e846e62817864751738a09387cbdd1b9c8cee"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/public-test.mjs",
+      "bytes": 631,
+      "sha256": "3e7f6d28d1368b5d5e9d5744d7bc0081b73c70fa5a6d0b9406b15f79e8573210"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-variants.json",
+      "bytes": 24030,
+      "sha256": "67f639c80540aac17b1252ff7a592c6b52679fae360d6a9157f825ed3e1c1279"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-examples.mjs",
+      "bytes": 7436,
+      "sha256": "88e25b3be27fbbdc82125066b8fe332cd81a98ae00545e3f9c8d11fc186847a0"
+    }
+  ],
+  "trustedSuitePaths": [
+    "private/replay.mjs",
+    "private/source-adapter.mjs",
+    "private/source-cases.mjs",
+    "private/public-controls.mjs",
+    "private/quickjs-memory-shim.mjs",
+    "private/wire-schema.mjs",
+    "private/variants.mjs",
+    "private/provenance.mjs",
+    "private/dependency-provenance.json",
+    "private/public-evaluator.mjs",
+    "private/broker.mjs",
+    "private/guest.mjs",
+    "private/oracle.mjs",
+    "private/scenarios.mjs",
+    "private/evaluator.mjs",
+    "private/runtime.mjs",
+    "private/evaluation-worker.mjs",
+    "private/response-schema.mjs",
+    "private/identity.mjs",
+    "private/verify-template.mjs"
+  ],
+  "sources": [
+    {
+      "path": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-producer-interfaces.md",
+      "bytes": 12911,
+      "sha256": "e1819a117501074bd18c572eea410d04523105a68a6b0a2b717b02e1d4562636"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/broker.mjs",
+      "bytes": 31842,
+      "sha256": "f412795e89c10e1b116f72ba3b5e9b2538fe8c60dd2978d9f8439299d57c27bd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/algorithm.js",
+      "bytes": 58544,
+      "sha256": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/manifest.json",
+      "bytes": 2486,
+      "sha256": "bfbaa8e7cdcc1582962ae7a864dc866e7ce3490b1c8ba9051ae4eeb6e5733eab"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/representation.js",
+      "bytes": 56979,
+      "sha256": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/truthful-outcome.js",
+      "bytes": 56230,
+      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/controls.mjs",
+      "bytes": 10810,
+      "sha256": "b75d1ec4cdc0068d636f62d5481d360677bdf883860ae2e94220d38fe43b72d0"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/forbidden-neighbors.mjs",
+      "bytes": 1448,
+      "sha256": "b754490355b7d311431370648c87c8d11e009c61c0755be975c3acfee366393e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-final.json",
+      "bytes": 5079269,
+      "sha256": "c3f4b9c4038edecb4313e3e2c2bd2d9d1fb1a86e78481aa7df2534db43573d84"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/probe-plan-final.json",
+      "bytes": 26834,
+      "sha256": "1905fe76a5262e420fb5a06bcbbca9faaaae8b12bff0e8e8c9543ec50c0c9694"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/probe-runtime.mjs",
+      "bytes": 3539,
+      "sha256": "ab5bc3e6240b81e001461215a9e9d5c25d543cb2d0aa6141d272b4395143c143"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/qualification-metadata.json",
+      "bytes": 284,
+      "sha256": "0d982d68aed0855feb649cda0958693714537bbf78fb0ab80a2646311bd23b83"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/source-helper-evidence.json",
+      "bytes": 3473,
+      "sha256": "2bab55cb5eafe5e95be20c2b2b35fdf1052f7365265763f80d8908357ee288ee"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/control-expectations.json",
+      "bytes": 43467,
+      "sha256": "e6128d59d74abafd1986831516d09f99d539e8c478a67f752ab066ab97e72dbf"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/controls.mjs",
+      "bytes": 21100,
+      "sha256": "657982bff3b4540e650a2c631d68e8c81a57b8fd4c3c4e1f8dc4888660fe70d1"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/dependency-provenance.json",
+      "bytes": 3214,
+      "sha256": "325baf99112f9f3ba1c66ef89792ed98714299f57fcb4f770c6a75db176ebca8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/evaluation-worker.mjs",
+      "bytes": 793,
+      "sha256": "78fe5c62151abba5d4bf894aec15b04bd9adf3835292c4a6522950588a1875f1"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/evaluator.mjs",
+      "bytes": 6008,
+      "sha256": "7103e9fc2cc754270c6e358b6f5ddc5b94d4dc3b02b58462faf05e8c48d9457c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/generate-assets.mjs",
+      "bytes": 2289,
+      "sha256": "830d146b579c36218d36640b903f7482e5279566afde97e23c87ca2b1b33379e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/guest.mjs",
+      "bytes": 5659,
+      "sha256": "f7249b4f5eb6414b9d21cddf92554cb6773c1f408b4c57666a9d019ee94c395d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/identity.mjs",
+      "bytes": 1334,
+      "sha256": "9656d205d01d2206700f49234f13c7d02853904afc236ec26f6c4f4727046ace"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/material-failure.mjs",
+      "bytes": 840,
+      "sha256": "9ceb0711afbd6cd9ae24e4e2ae5385a0e197993aaad0ab0e2e54226676ff698c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/oracle.mjs",
+      "bytes": 12964,
+      "sha256": "c46429aa6d82f582ee0d19260d28d02e701e64f8afac8df75b52c515bac196c3"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/provenance.mjs",
+      "bytes": 2250,
+      "sha256": "e0fe2efb447c02384c702052d3b747b703d98ff4a74fbdcd84db7839525018e6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/public-controls.mjs",
+      "bytes": 5622,
+      "sha256": "33ee864bbd27732810b54b50adb5ba47790b521c1031f45182188d6debeeb3c8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/public-evaluator.mjs",
+      "bytes": 2657,
+      "sha256": "3435e5bccc01abfaa2fd64fb466e5efad8f3e52257c40d724f347d59586653d8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/qualification-map.mjs",
+      "bytes": 2792,
+      "sha256": "3e4ce15d5d40c863fa1f51d5ba545d2f6e6b339f3d758e0ac5993538636d8bef"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/qualification-provenance.mjs",
+      "bytes": 2009,
+      "sha256": "f608e6d354384a5c48b829ba720af08f78e250568b33a0c447e50ea410318745"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/quickjs-memory-shim.mjs",
+      "bytes": 1600,
+      "sha256": "c5368271a44fd8f84dcddabfdb7395017a2a264add28be73bdab7f046a91044c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/reference-source-bootstrap.txt",
+      "bytes": 5561,
+      "sha256": "a2a60f89d39b03f32319ca2becdd6f4413d5fff6a26805e743039c1d7e11f1b9"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/reference.js",
+      "bytes": 55440,
+      "sha256": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/replay-comparison.mjs",
+      "bytes": 2221,
+      "sha256": "f030afd78b426c9c5dadf6260d6a9f375269665b3e20a5aa87686b432087bdf8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/replay.mjs",
+      "bytes": 5424,
+      "sha256": "a45063d57238b859981e1be42bf2459b474922a7c40818c1bdc488a127bcfddd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/response-schema.mjs",
+      "bytes": 5559,
+      "sha256": "16032aeafb319955f1699d1aa922e1806d94723a90e417b8809b8b8f070acc85"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/runtime.mjs",
+      "bytes": 7702,
+      "sha256": "6c46fdbfde043109b14e795efcf5e3ff0c82bb7598cdae378942bf291609030e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/scenarios.mjs",
+      "bytes": 40792,
+      "sha256": "8a7e5e477ec0e8fe6ebff99f774e4496f8dc391fdf36d31704cbefbbd7248530"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/source-adapter.mjs",
+      "bytes": 12244,
+      "sha256": "26bd81c6aa5c69995ecf02cb7f7a9c0283e7cb933153107ccbd43a82417ac32d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/source-cases.mjs",
+      "bytes": 16404,
+      "sha256": "98b1a9d378cd64e1edfc5d4113f1880acb0408ed82ab2f3cbacce26e1d357ffd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/source-controls.mjs",
+      "bytes": 2487,
+      "sha256": "788a2f4ad1de4ff3547d63f5df674651b790f94876eb2b85cbf6d5da796e1e90"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/variants.mjs",
+      "bytes": 29011,
+      "sha256": "d9fcbcc03a32b9c6ed1cb9fd46b38c8ebe814d0b5829fccb02ae16cee05c814e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/verify-template.mjs",
+      "bytes": 487,
+      "sha256": "4259669add5040f8b93634cc766f265c535f1ed3dca6a1dea03a32b7575916d6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/wire-schema.mjs",
+      "bytes": 5975,
+      "sha256": "a75c9ce389572834e0138be1e3a955ff5dc882a993358a63dff27d6631f088b8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/contract.d.ts",
+      "bytes": 11715,
+      "sha256": "c1ddda835a051d84f262414b8a23f84f6118ef996c5d9337abcb6c1502a587a6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/examples.mjs",
+      "bytes": 9233,
+      "sha256": "775a8dd29120c0ecdc641de8803e846e62817864751738a09387cbdd1b9c8cee"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/families.json",
+      "bytes": 25611,
+      "sha256": "9d436863744e16230490a1a674b0c907e0bd70e7a6493a98cd0bee51f2e4d46d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/problem.md",
+      "bytes": 14078,
+      "sha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/public-test.mjs",
+      "bytes": 631,
+      "sha256": "3e7f6d28d1368b5d5e9d5744d7bc0081b73c70fa5a6d0b9406b15f79e8573210"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/service.js",
+      "bytes": 456,
+      "sha256": "7e658609d364081ba027113468ecb88ab2d17fce2276705ba5e99699cd0e5d27"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-examples.mjs",
+      "bytes": 7436,
+      "sha256": "88e25b3be27fbbdc82125066b8fe332cd81a98ae00545e3f9c8d11fc186847a0"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-variants.json",
+      "bytes": 24030,
+      "sha256": "67f639c80540aac17b1252ff7a592c6b52679fae360d6a9157f825ed3e1c1279"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/problem.md",
+      "bytes": 14078,
+      "sha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b"
+    },
+    {
+      "path": "lib/benchmark/workbench/recoverable-job-service/assets.generated.ts",
+      "bytes": 247595,
+      "sha256": "4ab1ba33d5ca1dbe65ef3c7579d8ad4a5933f00c0be7bb20f5fb026ddd1bf6da"
+    },
+    {
+      "path": "lib/benchmark/workbench/recoverable-job-service/diagnostics.ts",
+      "bytes": 10537,
+      "sha256": "ac12f0f20b3cf60b4b9c2e3a8855ec038c16fde2f06bf7d8b1417c0831d13a19"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-bootstrap-public.mts",
+      "bytes": 1429,
+      "sha256": "80114be77320b2fedf6caf7da17421d855d94d50572c6590a485860713e6741d"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-bootstrap-schema.mts",
+      "bytes": 2169,
+      "sha256": "e4cc9cafef6f13e1d0db1f80312163781a86534a4babaee280084390b2c9545f"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-attachment.mts",
+      "bytes": 6471,
+      "sha256": "a73c1feb6d78107b28fd3b801bf9a30400320f4affbf96687b09f980e31467e4"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-boundaries.mts",
+      "bytes": 4420,
+      "sha256": "3101bd66c225fcfdc174f7359b4f0d24220ea0a3bcd382d82fcc1186d9eea488"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-boundary-traces.mts",
+      "bytes": 4202,
+      "sha256": "3bcf16d72c2c09f6bccb405a821d94c2b35dc71b30a45251009b56675a04d663"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-c09-digest.mts",
+      "bytes": 9466,
+      "sha256": "6e9ec697de02c5c7bd1373b17008c0f27691f742cae35d7f87111d75f54b7a3b"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-controls.mts",
+      "bytes": 3759,
+      "sha256": "4ce9d3ab5df45780169164e2cbbf4ff2341415d839107ba0c657b349c839c46c"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-correction.mts",
+      "bytes": 15368,
+      "sha256": "43f16c71fff5e2b9ca7ebe30a69a4a50d33394c01ee7978d9bd515b5c650f20c"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-freeze-c09.mts",
+      "bytes": 12810,
+      "sha256": "532cacf3c9dc24e6a3b47f157b20cf1721d580191803ba59f41c65ee33aa11f6"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-freeze-correction.mts",
+      "bytes": 20440,
+      "sha256": "3144e10d4cf2fb4527612f5bc6d2349bddefd9bab14c548ac69ddd29102e49c7"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-freeze-final.mts",
+      "bytes": 6659,
+      "sha256": "162dc3e65b025d9e924a259b4dc1aa752a79bf6cd6722bc67788366abfe992dd"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-ledger.mts",
+      "bytes": 28162,
+      "sha256": "e6f5ad33d0c2975d91e43842bc50eca1e55dc73c2c7e0389ca8e72bbdcb6fb49"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-preservation-diagnostic.mts",
+      "bytes": 4314,
+      "sha256": "19d056ad204c3cce37a076c7c0334c43d8f2ab8a5e428bfa739b0cdca4ca2c69"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-preserve-correction.mts",
+      "bytes": 3531,
+      "sha256": "3d4de414e60eb37bfe0fe61a86ff22dcd83368ffa23323b8d5b0faf78b82b55d"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-probe-plan.mts",
+      "bytes": 9685,
+      "sha256": "a16d54c3fd69f30e82d4e356c4da4b85dcbf8b8dfbe62cc2bebd79a2766634c5"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-probes.mts",
+      "bytes": 14250,
+      "sha256": "a2d1e6ba90d7cfc0172019ba6eeed95feccaa416ea86fa45eb181ba2702b987f"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-public.mts",
+      "bytes": 2052,
+      "sha256": "b1d568316cd15d3482d4aa912f1e912fc6a382710a6e5fcc90bf2f2203599ddb"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-qualify.mts",
+      "bytes": 5605,
+      "sha256": "75927d9006566c6d744b913e527efffa2df854fa9cfa60f86df9193cdb46deaf"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-representation.mts",
+      "bytes": 6756,
+      "sha256": "ea76f7c1f4245ad146b7ffc6d78918ab0d6ab84a5c579683abc6652f31c7e32a"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-version.mts",
+      "bytes": 4343,
+      "sha256": "c5aca60f27296baa50b24dc25432d26a927f3530bec273be9ab4e56f737be1af"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-capacity.mts",
+      "bytes": 858,
+      "sha256": "d940160c9649694d5ff982a7650707d583a00586a17fd3b7ff8739bc5cfff28f"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-delayed-source-ack.mts",
+      "bytes": 2063,
+      "sha256": "a9694863823c05b9bc105db2ace9c9648d038cb6435fc96fa36a545149f21f5d"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-fix3.mts",
+      "bytes": 9868,
+      "sha256": "6cd34c78b2b3ecfa21abc9383abc6d0e9bb6a72086228e512b44f037d27f5938"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-fix5.mts",
+      "bytes": 9019,
+      "sha256": "38fc574164fe21d4a462e9b5919866a961cacafdfb98c92254f0fbb0f4423556"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-freshness.mts",
+      "bytes": 2206,
+      "sha256": "023d2f3ecab5853a0ab862bb5f0eddc99aee5a6289786e06a9d1ad8fcb226ca6"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-integration-assertions.mts",
+      "bytes": 3659,
+      "sha256": "5015b8f7756ae0da5171120ef43ffbc418ac28bf7c154eeb53024dba440f3e81"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-isolation.mts",
+      "bytes": 5294,
+      "sha256": "39beb963b15a81791789f1c8c0b3d4e2848bbc2174785335fde6571b93ba8ba3"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-memory-growth.mts",
+      "bytes": 2128,
+      "sha256": "e5c6ff2b94f2269fd99b628fa7d9e55e9fdf5c09322e5a074423f39a36c73681"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-preservation.mts",
+      "bytes": 1319,
+      "sha256": "c95f76a880f3d03d7477c8005cfcd41fdcbf5ff872378282273ef3d2c0922303"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-public-controls.mts",
+      "bytes": 1018,
+      "sha256": "544cb0551e51f0571513812d83b42df8c4fd4a53112163530da3d26efccc0da8"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-raw-source-a07.mts",
+      "bytes": 1521,
+      "sha256": "559f00f4920a9b7ed89ad379e5c8214d4d8ea9fc58db8243f9f2400efbb3ca7a"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-raw-source-identity.mts",
+      "bytes": 1899,
+      "sha256": "266fcad6243b124f86d85d15341cbce0a42337cccd3f771ce9ba215ff15ac65d"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-reader-attachment.mts",
+      "bytes": 6553,
+      "sha256": "5230599e82740a534b72bf34e0a5162f12e0f4dd797c2ad0bb02964585813bbd"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-replay-process.mts",
+      "bytes": 3728,
+      "sha256": "715e8c042df970dabe3a95bd7a16f24c12c1d171f87cbc2c2ae19f9485cecafc"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-replay-runtime.mts",
+      "bytes": 1497,
+      "sha256": "c3f4953c46d8bedc27130e6d5ceb727f13309a96053823ad0c0ae060df131a63"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-replay-tape.mts",
+      "bytes": 1170,
+      "sha256": "3c25350a53b49c07a3b147378d01193525842d97d27d2a95fc11a5f0410a9971"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-replay.mts",
+      "bytes": 2030,
+      "sha256": "53623c5267bd58efb642f0961867271ea63271f9fec47ef0355c69e14474d29f"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-adapter.mts",
+      "bytes": 2979,
+      "sha256": "d8c4c34eca4970d5ff620d2e98372dd1dcd750b35c097ca872ac10953f6b0e13"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-adoption-timing.mts",
+      "bytes": 1522,
+      "sha256": "9e6badb2bff76a4895b4602581e38f6c0605d7e0f263ca8b126328cb93ef16f5"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-material.mts",
+      "bytes": 2040,
+      "sha256": "bf7879f8f0f57b1bc74bf326555e233aea0ea873b9344d335e891eb6a30648d2"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-oracle.mts",
+      "bytes": 1167,
+      "sha256": "d6a65df5719bed83f285c5ebe28f588b9b38aaf82dd72f0b35ddaf3c383c9c59"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-recipe-timing.mts",
+      "bytes": 1269,
+      "sha256": "046fed55dc7965340604fcbd8f8991e376bb9758e9bae023f0475175bccc2b10"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-source-variants.mts",
+      "bytes": 1047,
+      "sha256": "a86513ce2ef5deaa4e24f3c9d485044be227613c4c362fca37c5e82dcda3ecfe"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave3-affected.mts",
+      "bytes": 2286,
+      "sha256": "8e5da15f73584e45cf8e10b94512232d937c51036fff30e9aa240b731339e480"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave3-d02.mts",
+      "bytes": 2258,
+      "sha256": "85e6a831b54348e7dec6110b242d643928f28830d511d4b70ce264a9710243f0"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave3-domains.mts",
+      "bytes": 2958,
+      "sha256": "68a65c52c0da2809df2bbab65cde9d11ce00f06cfcdaf1c4667984036de1e4ca"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave3-lifecycle.mts",
+      "bytes": 1453,
+      "sha256": "d444ce7ecd2ede2385eb73cdb9f38ad61cc6fe3a7d091db66ae11236bf428658"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave4-b14.mts",
+      "bytes": 7545,
+      "sha256": "a9c02f1e1079963afea486bec2bd0b1c305a3619391bb3450689dca8dad79441"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-wave4-scan.mts",
+      "bytes": 8664,
+      "sha256": "2d4acdbb583fb8f59e39a67d97d36af0aa56a270a27bb38820da34308a58eb1e"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service.mts",
+      "bytes": 17220,
+      "sha256": "e5a462bce8fbc04af9e91df4586d22bd797c45077a6e5843b1f536cb9d50dc10"
+    }
+  ],
+  "snapshots": [
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/.superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-producer-interfaces.md",
+      "bytes": 12911,
+      "sha256": "e1819a117501074bd18c572eea410d04523105a68a6b0a2b717b02e1d4562636"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/broker.mjs",
+      "bytes": 31842,
+      "sha256": "f412795e89c10e1b116f72ba3b5e9b2538fe8c60dd2978d9f8439299d57c27bd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/complete-controls/algorithm.js",
+      "bytes": 58544,
+      "sha256": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/complete-controls/manifest.json",
+      "bytes": 2486,
+      "sha256": "bfbaa8e7cdcc1582962ae7a864dc866e7ce3490b1c8ba9051ae4eeb6e5733eab"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/complete-controls/representation.js",
+      "bytes": 56979,
+      "sha256": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/complete-controls/truthful-outcome.js",
+      "bytes": 56230,
+      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/controls.mjs",
+      "bytes": 10810,
+      "sha256": "b75d1ec4cdc0068d636f62d5481d360677bdf883860ae2e94220d38fe43b72d0"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/forbidden-neighbors.mjs",
+      "bytes": 1448,
+      "sha256": "b754490355b7d311431370648c87c8d11e009c61c0755be975c3acfee366393e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-final.json",
+      "bytes": 5079269,
+      "sha256": "c3f4b9c4038edecb4313e3e2c2bd2d9d1fb1a86e78481aa7df2534db43573d84"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/probe-plan-final.json",
+      "bytes": 26834,
+      "sha256": "1905fe76a5262e420fb5a06bcbbca9faaaae8b12bff0e8e8c9543ec50c0c9694"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/probe-runtime.mjs",
+      "bytes": 3539,
+      "sha256": "ab5bc3e6240b81e001461215a9e9d5c25d543cb2d0aa6141d272b4395143c143"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/qualification-metadata.json",
+      "bytes": 284,
+      "sha256": "0d982d68aed0855feb649cda0958693714537bbf78fb0ab80a2646311bd23b83"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/source-helper-evidence.json",
+      "bytes": 3473,
+      "sha256": "2bab55cb5eafe5e95be20c2b2b35fdf1052f7365265763f80d8908357ee288ee"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/control-expectations.json",
+      "bytes": 43467,
+      "sha256": "e6128d59d74abafd1986831516d09f99d539e8c478a67f752ab066ab97e72dbf"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/controls.mjs",
+      "bytes": 21100,
+      "sha256": "657982bff3b4540e650a2c631d68e8c81a57b8fd4c3c4e1f8dc4888660fe70d1"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/dependency-provenance.json",
+      "bytes": 3214,
+      "sha256": "325baf99112f9f3ba1c66ef89792ed98714299f57fcb4f770c6a75db176ebca8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/evaluation-worker.mjs",
+      "bytes": 793,
+      "sha256": "78fe5c62151abba5d4bf894aec15b04bd9adf3835292c4a6522950588a1875f1"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/evaluator.mjs",
+      "bytes": 6008,
+      "sha256": "7103e9fc2cc754270c6e358b6f5ddc5b94d4dc3b02b58462faf05e8c48d9457c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/generate-assets.mjs",
+      "bytes": 2289,
+      "sha256": "830d146b579c36218d36640b903f7482e5279566afde97e23c87ca2b1b33379e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/guest.mjs",
+      "bytes": 5659,
+      "sha256": "f7249b4f5eb6414b9d21cddf92554cb6773c1f408b4c57666a9d019ee94c395d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/identity.mjs",
+      "bytes": 1334,
+      "sha256": "9656d205d01d2206700f49234f13c7d02853904afc236ec26f6c4f4727046ace"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/material-failure.mjs",
+      "bytes": 840,
+      "sha256": "9ceb0711afbd6cd9ae24e4e2ae5385a0e197993aaad0ab0e2e54226676ff698c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/oracle.mjs",
+      "bytes": 12964,
+      "sha256": "c46429aa6d82f582ee0d19260d28d02e701e64f8afac8df75b52c515bac196c3"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/provenance.mjs",
+      "bytes": 2250,
+      "sha256": "e0fe2efb447c02384c702052d3b747b703d98ff4a74fbdcd84db7839525018e6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/public-controls.mjs",
+      "bytes": 5622,
+      "sha256": "33ee864bbd27732810b54b50adb5ba47790b521c1031f45182188d6debeeb3c8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/public-evaluator.mjs",
+      "bytes": 2657,
+      "sha256": "3435e5bccc01abfaa2fd64fb466e5efad8f3e52257c40d724f347d59586653d8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/qualification-map.mjs",
+      "bytes": 2792,
+      "sha256": "3e4ce15d5d40c863fa1f51d5ba545d2f6e6b339f3d758e0ac5993538636d8bef"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/qualification-provenance.mjs",
+      "bytes": 2009,
+      "sha256": "f608e6d354384a5c48b829ba720af08f78e250568b33a0c447e50ea410318745"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/quickjs-memory-shim.mjs",
+      "bytes": 1600,
+      "sha256": "c5368271a44fd8f84dcddabfdb7395017a2a264add28be73bdab7f046a91044c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/reference-source-bootstrap.txt",
+      "bytes": 5561,
+      "sha256": "a2a60f89d39b03f32319ca2becdd6f4413d5fff6a26805e743039c1d7e11f1b9"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/reference.js",
+      "bytes": 55440,
+      "sha256": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/replay-comparison.mjs",
+      "bytes": 2221,
+      "sha256": "f030afd78b426c9c5dadf6260d6a9f375269665b3e20a5aa87686b432087bdf8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/replay.mjs",
+      "bytes": 5424,
+      "sha256": "a45063d57238b859981e1be42bf2459b474922a7c40818c1bdc488a127bcfddd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/response-schema.mjs",
+      "bytes": 5559,
+      "sha256": "16032aeafb319955f1699d1aa922e1806d94723a90e417b8809b8b8f070acc85"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/runtime.mjs",
+      "bytes": 7702,
+      "sha256": "6c46fdbfde043109b14e795efcf5e3ff0c82bb7598cdae378942bf291609030e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/scenarios.mjs",
+      "bytes": 40792,
+      "sha256": "8a7e5e477ec0e8fe6ebff99f774e4496f8dc391fdf36d31704cbefbbd7248530"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/source-adapter.mjs",
+      "bytes": 12244,
+      "sha256": "26bd81c6aa5c69995ecf02cb7f7a9c0283e7cb933153107ccbd43a82417ac32d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/source-cases.mjs",
+      "bytes": 16404,
+      "sha256": "98b1a9d378cd64e1edfc5d4113f1880acb0408ed82ab2f3cbacce26e1d357ffd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/source-controls.mjs",
+      "bytes": 2487,
+      "sha256": "788a2f4ad1de4ff3547d63f5df674651b790f94876eb2b85cbf6d5da796e1e90"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/variants.mjs",
+      "bytes": 29011,
+      "sha256": "d9fcbcc03a32b9c6ed1cb9fd46b38c8ebe814d0b5829fccb02ae16cee05c814e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/verify-template.mjs",
+      "bytes": 487,
+      "sha256": "4259669add5040f8b93634cc766f265c535f1ed3dca6a1dea03a32b7575916d6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/wire-schema.mjs",
+      "bytes": 5975,
+      "sha256": "a75c9ce389572834e0138be1e3a955ff5dc882a993358a63dff27d6631f088b8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/contract.d.ts",
+      "bytes": 11715,
+      "sha256": "c1ddda835a051d84f262414b8a23f84f6118ef996c5d9337abcb6c1502a587a6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/examples.mjs",
+      "bytes": 9233,
+      "sha256": "775a8dd29120c0ecdc641de8803e846e62817864751738a09387cbdd1b9c8cee"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/families.json",
+      "bytes": 25611,
+      "sha256": "9d436863744e16230490a1a674b0c907e0bd70e7a6493a98cd0bee51f2e4d46d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/problem.md",
+      "bytes": 14078,
+      "sha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/public-test.mjs",
+      "bytes": 631,
+      "sha256": "3e7f6d28d1368b5d5e9d5744d7bc0081b73c70fa5a6d0b9406b15f79e8573210"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/service.js",
+      "bytes": 456,
+      "sha256": "7e658609d364081ba027113468ecb88ab2d17fce2276705ba5e99699cd0e5d27"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/source-examples.mjs",
+      "bytes": 7436,
+      "sha256": "88e25b3be27fbbdc82125066b8fe332cd81a98ae00545e3f9c8d11fc186847a0"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/public/source-variants.json",
+      "bytes": 24030,
+      "sha256": "67f639c80540aac17b1252ff7a592c6b52679fae360d6a9157f825ed3e1c1279"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/docs/benchmarks/recoverable-job-service/acceptance-contract.md",
+      "bytes": 29025,
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/docs/benchmarks/recoverable-job-service/problem.md",
+      "bytes": 14078,
+      "sha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/docs/benchmarks/recoverable-job-service/runtime-contract.md",
+      "bytes": 38764,
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/docs/benchmarks/recoverable-job-service/source-bootstrap.md",
+      "bytes": 42639,
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/lib/benchmark/workbench/recoverable-job-service/assets.generated.ts",
+      "bytes": 247595,
+      "sha256": "4ab1ba33d5ca1dbe65ef3c7579d8ad4a5933f00c0be7bb20f5fb026ddd1bf6da"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/lib/benchmark/workbench/recoverable-job-service/diagnostics.ts",
+      "bytes": 10537,
+      "sha256": "ac12f0f20b3cf60b4b9c2e3a8855ec038c16fde2f06bf7d8b1417c0831d13a19"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-bootstrap-public.mts",
+      "bytes": 1429,
+      "sha256": "80114be77320b2fedf6caf7da17421d855d94d50572c6590a485860713e6741d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-bootstrap-schema.mts",
+      "bytes": 2169,
+      "sha256": "e4cc9cafef6f13e1d0db1f80312163781a86534a4babaee280084390b2c9545f"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-attachment.mts",
+      "bytes": 6471,
+      "sha256": "a73c1feb6d78107b28fd3b801bf9a30400320f4affbf96687b09f980e31467e4"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-boundaries.mts",
+      "bytes": 4420,
+      "sha256": "3101bd66c225fcfdc174f7359b4f0d24220ea0a3bcd382d82fcc1186d9eea488"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-boundary-traces.mts",
+      "bytes": 4202,
+      "sha256": "3bcf16d72c2c09f6bccb405a821d94c2b35dc71b30a45251009b56675a04d663"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-c09-digest.mts",
+      "bytes": 9466,
+      "sha256": "6e9ec697de02c5c7bd1373b17008c0f27691f742cae35d7f87111d75f54b7a3b"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-controls.mts",
+      "bytes": 3759,
+      "sha256": "4ce9d3ab5df45780169164e2cbbf4ff2341415d839107ba0c657b349c839c46c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-correction.mts",
+      "bytes": 15368,
+      "sha256": "43f16c71fff5e2b9ca7ebe30a69a4a50d33394c01ee7978d9bd515b5c650f20c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-freeze-c09.mts",
+      "bytes": 12810,
+      "sha256": "532cacf3c9dc24e6a3b47f157b20cf1721d580191803ba59f41c65ee33aa11f6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-freeze-correction.mts",
+      "bytes": 20440,
+      "sha256": "3144e10d4cf2fb4527612f5bc6d2349bddefd9bab14c548ac69ddd29102e49c7"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-freeze-final.mts",
+      "bytes": 6659,
+      "sha256": "162dc3e65b025d9e924a259b4dc1aa752a79bf6cd6722bc67788366abfe992dd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-ledger.mts",
+      "bytes": 28162,
+      "sha256": "e6f5ad33d0c2975d91e43842bc50eca1e55dc73c2c7e0389ca8e72bbdcb6fb49"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-preservation-diagnostic.mts",
+      "bytes": 4314,
+      "sha256": "19d056ad204c3cce37a076c7c0334c43d8f2ab8a5e428bfa739b0cdca4ca2c69"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-preserve-correction.mts",
+      "bytes": 3531,
+      "sha256": "3d4de414e60eb37bfe0fe61a86ff22dcd83368ffa23323b8d5b0faf78b82b55d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-probe-plan.mts",
+      "bytes": 9685,
+      "sha256": "a16d54c3fd69f30e82d4e356c4da4b85dcbf8b8dfbe62cc2bebd79a2766634c5"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-probes.mts",
+      "bytes": 14250,
+      "sha256": "a2d1e6ba90d7cfc0172019ba6eeed95feccaa416ea86fa45eb181ba2702b987f"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-public.mts",
+      "bytes": 2052,
+      "sha256": "b1d568316cd15d3482d4aa912f1e912fc6a382710a6e5fcc90bf2f2203599ddb"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-qualify.mts",
+      "bytes": 5605,
+      "sha256": "75927d9006566c6d744b913e527efffa2df854fa9cfa60f86df9193cdb46deaf"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-representation.mts",
+      "bytes": 6756,
+      "sha256": "ea76f7c1f4245ad146b7ffc6d78918ab0d6ab84a5c579683abc6652f31c7e32a"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-version.mts",
+      "bytes": 4343,
+      "sha256": "c5aca60f27296baa50b24dc25432d26a927f3530bec273be9ab4e56f737be1af"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-capacity.mts",
+      "bytes": 858,
+      "sha256": "d940160c9649694d5ff982a7650707d583a00586a17fd3b7ff8739bc5cfff28f"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-delayed-source-ack.mts",
+      "bytes": 2063,
+      "sha256": "a9694863823c05b9bc105db2ace9c9648d038cb6435fc96fa36a545149f21f5d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-fix3.mts",
+      "bytes": 9868,
+      "sha256": "6cd34c78b2b3ecfa21abc9383abc6d0e9bb6a72086228e512b44f037d27f5938"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-fix5.mts",
+      "bytes": 9019,
+      "sha256": "38fc574164fe21d4a462e9b5919866a961cacafdfb98c92254f0fbb0f4423556"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-freshness.mts",
+      "bytes": 2206,
+      "sha256": "023d2f3ecab5853a0ab862bb5f0eddc99aee5a6289786e06a9d1ad8fcb226ca6"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-integration-assertions.mts",
+      "bytes": 3659,
+      "sha256": "5015b8f7756ae0da5171120ef43ffbc418ac28bf7c154eeb53024dba440f3e81"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-isolation.mts",
+      "bytes": 5294,
+      "sha256": "39beb963b15a81791789f1c8c0b3d4e2848bbc2174785335fde6571b93ba8ba3"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-memory-growth.mts",
+      "bytes": 2128,
+      "sha256": "e5c6ff2b94f2269fd99b628fa7d9e55e9fdf5c09322e5a074423f39a36c73681"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-preservation.mts",
+      "bytes": 1319,
+      "sha256": "c95f76a880f3d03d7477c8005cfcd41fdcbf5ff872378282273ef3d2c0922303"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-public-controls.mts",
+      "bytes": 1018,
+      "sha256": "544cb0551e51f0571513812d83b42df8c4fd4a53112163530da3d26efccc0da8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-raw-source-a07.mts",
+      "bytes": 1521,
+      "sha256": "559f00f4920a9b7ed89ad379e5c8214d4d8ea9fc58db8243f9f2400efbb3ca7a"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-raw-source-identity.mts",
+      "bytes": 1899,
+      "sha256": "266fcad6243b124f86d85d15341cbce0a42337cccd3f771ce9ba215ff15ac65d"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-reader-attachment.mts",
+      "bytes": 6553,
+      "sha256": "5230599e82740a534b72bf34e0a5162f12e0f4dd797c2ad0bb02964585813bbd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-replay-process.mts",
+      "bytes": 3728,
+      "sha256": "715e8c042df970dabe3a95bd7a16f24c12c1d171f87cbc2c2ae19f9485cecafc"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-replay-runtime.mts",
+      "bytes": 1497,
+      "sha256": "c3f4953c46d8bedc27130e6d5ceb727f13309a96053823ad0c0ae060df131a63"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-replay-tape.mts",
+      "bytes": 1170,
+      "sha256": "3c25350a53b49c07a3b147378d01193525842d97d27d2a95fc11a5f0410a9971"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-replay.mts",
+      "bytes": 2030,
+      "sha256": "53623c5267bd58efb642f0961867271ea63271f9fec47ef0355c69e14474d29f"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-source-adapter.mts",
+      "bytes": 2979,
+      "sha256": "d8c4c34eca4970d5ff620d2e98372dd1dcd750b35c097ca872ac10953f6b0e13"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-source-adoption-timing.mts",
+      "bytes": 1522,
+      "sha256": "9e6badb2bff76a4895b4602581e38f6c0605d7e0f263ca8b126328cb93ef16f5"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-source-material.mts",
+      "bytes": 2040,
+      "sha256": "bf7879f8f0f57b1bc74bf326555e233aea0ea873b9344d335e891eb6a30648d2"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-source-oracle.mts",
+      "bytes": 1167,
+      "sha256": "d6a65df5719bed83f285c5ebe28f588b9b38aaf82dd72f0b35ddaf3c383c9c59"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-source-recipe-timing.mts",
+      "bytes": 1269,
+      "sha256": "046fed55dc7965340604fcbd8f8991e376bb9758e9bae023f0475175bccc2b10"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-source-variants.mts",
+      "bytes": 1047,
+      "sha256": "a86513ce2ef5deaa4e24f3c9d485044be227613c4c362fca37c5e82dcda3ecfe"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-wave3-affected.mts",
+      "bytes": 2286,
+      "sha256": "8e5da15f73584e45cf8e10b94512232d937c51036fff30e9aa240b731339e480"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-wave3-d02.mts",
+      "bytes": 2258,
+      "sha256": "85e6a831b54348e7dec6110b242d643928f28830d511d4b70ce264a9710243f0"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-wave3-domains.mts",
+      "bytes": 2958,
+      "sha256": "68a65c52c0da2809df2bbab65cde9d11ce00f06cfcdaf1c4667984036de1e4ca"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-wave3-lifecycle.mts",
+      "bytes": 1453,
+      "sha256": "d444ce7ecd2ede2385eb73cdb9f38ad61cc6fe3a7d091db66ae11236bf428658"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-wave4-b14.mts",
+      "bytes": 7545,
+      "sha256": "a9c02f1e1079963afea486bec2bd0b1c305a3619391bb3450689dca8dad79441"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-wave4-scan.mts",
+      "bytes": 8664,
+      "sha256": "2d4acdbb583fb8f59e39a67d97d36af0aa56a270a27bb38820da34308a58eb1e"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service.mts",
+      "bytes": 17220,
+      "sha256": "e5a462bce8fbc04af9e91df4586d22bd797c45077a6e5843b1f536cb9d50dc10"
+    }
+  ]
+}

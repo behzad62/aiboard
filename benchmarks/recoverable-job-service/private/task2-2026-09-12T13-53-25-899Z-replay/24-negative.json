@@ -1,0 +1,201 @@
+{
+  "schemaVersion": 1,
+  "derivationVersion": "rjs-input-hmac-sha256-v1",
+  "root": "1342c5b48b4f690272a6ea9a1d9195765f841dd7ff2b917ae69ba013f58f6c86",
+  "commitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+  "cases": [
+    {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "variantId": "C12/primary",
+      "caseCommitment": "ddc82ef9e0428b53c0b86b3e3f4d6c20fac88e311b5d232da7a0e937b05398fb",
+      "fixtureCommitment": "90c39011a1597ac0474b6bfdef44f3188688fa9bef050a5a9350a85a09bcfde9",
+      "fixtureAllocations": 15,
+      "authenticationCommitment": "c14fa28d36ced5799d5991e53b5ffcb6142df7618d6ea6d9f24dfff80d846509"
+    }
+  ],
+  "executedInputs": [
+    {
+      "variantId": "C12/primary",
+      "events": [
+        {
+          "type": "id",
+          "ordinal": 0,
+          "id": "512fa45fcd304e3f60ee26a22e3ee318"
+        },
+        {
+          "type": "id",
+          "ordinal": 1,
+          "id": "0feffd5eb309497aa0cbb65c3e1feec4"
+        },
+        {
+          "type": "id",
+          "ordinal": 2,
+          "id": "2267344c92c0f1bd917931598e880aab"
+        },
+        {
+          "type": "id",
+          "ordinal": 3,
+          "id": "72c1a35aa42064ce8dd582eaa8830eb3"
+        },
+        {
+          "type": "binding",
+          "binding": {
+            "id": "2267344c92c0f1bd917931598e880aab",
+            "birth": "72c1a35aa42064ce8dd582eaa8830eb3",
+            "kind": "agent",
+            "token": "04ee7c7e77b45c4ef5530014a8a1dfcca99d57bc8f1081a2d898fd85124d9cee"
+          }
+        },
+        {
+          "type": "grant",
+          "grant": {
+            "scopeId": "512fa45fcd304e3f60ee26a22e3ee318",
+            "ownerId": "0feffd5eb309497aa0cbb65c3e1feec4",
+            "epoch": 1,
+            "expiresAt": 20000,
+            "holder": {
+              "id": "2267344c92c0f1bd917931598e880aab",
+              "birth": "72c1a35aa42064ce8dd582eaa8830eb3",
+              "kind": "agent",
+              "token": "04ee7c7e77b45c4ef5530014a8a1dfcca99d57bc8f1081a2d898fd85124d9cee"
+            },
+            "token": "6bfce26bb0b9c89f06dd06a6421b6a5932ba48c7e4153be67b11a544fdd48e38"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 4,
+          "id": "4edfcab0196a201847df35bb0a61e359"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "createBatch",
+            "requestId": "4edfcab0196a201847df35bb0a61e359",
+            "deadline": 1002
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 5,
+          "id": "b16a5bc3d70e2d533bfeadc288b570cd"
+        },
+        {
+          "type": "id",
+          "ordinal": 6,
+          "id": "d22c7ee8a9c422d6d6179c66be5eec66"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "start",
+            "requestId": "d22c7ee8a9c422d6d6179c66be5eec66",
+            "deadline": 1002,
+            "batchId": "665dd5156702a085a4e76c2345e276b2",
+            "workloadId": "b16a5bc3d70e2d533bfeadc288b570cd"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 7,
+          "id": "0a8d0f2ee92f8dd627148ccb502f4ee9"
+        },
+        {
+          "type": "id",
+          "ordinal": 8,
+          "id": "755bbe93c931b67b9235275d57578685"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "start",
+            "requestId": "755bbe93c931b67b9235275d57578685",
+            "deadline": 1002,
+            "batchId": "665dd5156702a085a4e76c2345e276b2",
+            "workloadId": "0a8d0f2ee92f8dd627148ccb502f4ee9"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 9,
+          "id": "be93f0078a03235db360da7eaf163e4e"
+        },
+        {
+          "type": "output",
+          "jobId": "fc14d9453c7509127312533d6c36271d",
+          "stream": "stdout",
+          "bytes": [
+            11,
+            29,
+            47
+          ]
+        },
+        {
+          "type": "id",
+          "ordinal": 10,
+          "id": "45eafc8e50df45674b296c3653bbeddd"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "poll",
+            "requestId": "45eafc8e50df45674b296c3653bbeddd",
+            "deadline": 1002,
+            "jobId": "fc14d9453c7509127312533d6c36271d"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 11,
+          "id": "f49d449d6047bd8e45d0a0c7b58c2e3e"
+        },
+        {
+          "type": "id",
+          "ordinal": 12,
+          "id": "ef346fa1bc2b02c31fc47f025fc4c63a"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "consume",
+            "requestId": "ef346fa1bc2b02c31fc47f025fc4c63a",
+            "deadline": 1002,
+            "jobId": "fc14d9453c7509127312533d6c36271d",
+            "frame": {
+              "jobId": "fc14d9453c7509127312533d6c36271d",
+              "channelId": "e5f95148888808c903ab33d7ab0d3e60",
+              "stream": "stdout",
+              "seq": 0,
+              "offset": 0,
+              "length": 3,
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "be93f0078a03235db360da7eaf163e4e"
+            },
+            "consumerId": "f49d449d6047bd8e45d0a0c7b58c2e3e"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 13,
+          "id": "e996286d6a74f4d51474e3a6707525ff"
+        },
+        {
+          "type": "id",
+          "ordinal": 14,
+          "id": "570d0aaeb70f9b64d131195fface0e89"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "handoff",
+            "requestId": "570d0aaeb70f9b64d131195fface0e89",
+            "deadline": 1002,
+            "setupId": "1da8b1e3248fa5c0be6f9aca604eb391",
+            "successorJobId": "a4153db9d28a9732d1f9549d1f51eb64"
+          }
+        }
+      ]
+    }
+  ]
+}

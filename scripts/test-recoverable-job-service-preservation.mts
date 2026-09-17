@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';
+import {variants} from '../benchmarks/recoverable-job-service/private/variants.mjs';
+import {variants as before} from '../.superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-producer-before/benchmarks/recoverable-job-service/private/variants.mjs';
+const publicRows=JSON.parse(await readFile('benchmarks/recoverable-job-service/public/source-variants.json','utf8'));
+assert.equal(before.length,227);assert.equal(variants.length,227+publicRows.length,'all concrete published source variants scheduled');
+assert.deepEqual(variants.slice(0,227).map(v=>v.id),before.map(v=>v.id),'complete prior ordered identity preservation');
+assert.deepEqual(variants.slice(227).map(v=>v.id),publicRows.map(v=>v.id));
+const prefix='.superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-producer-before/';
+const path='benchmarks/recoverable-job-service/public/families.json';
+const oldFamilies=JSON.parse(await readFile(prefix+path,'utf8')),current=JSON.parse(await readFile(path,'utf8'));
+assert.equal(current.length,69);assert.deepEqual(current.map(f=>f.id),oldFamilies.map(f=>f.id));
+console.log('69 family IDs and all 227 ordered prior variants preserved; '+publicRows.length+' concrete source variants appended.');

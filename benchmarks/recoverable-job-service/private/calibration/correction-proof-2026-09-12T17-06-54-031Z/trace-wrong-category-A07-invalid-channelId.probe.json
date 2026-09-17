@@ -1,0 +1,96 @@
+{
+  "name": "trace-wrong-category-A07-invalid-channelId",
+  "variantId": "A07/invalid-channelId",
+  "sourceHash": "169461088ead336c9300a0024c2659c6e2500e291a69ed23a9b605ed88251650",
+  "failure": "poll categorical blocker",
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "poll must refuse",
+      "passed": true
+    },
+    {
+      "label": "poll categorical blocker",
+      "passed": false
+    }
+  ],
+  "faults": [],
+  "operations": 216,
+  "promiseJobs": 1016,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "poll",
+      "kind": "blocked",
+      "error": null,
+      "blockers": [
+        "gap"
+      ],
+      "state": null
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 0,
+    "driver.detach": 0,
+    "driver.release": 0,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "transportReturns": [
+    {
+      "key": {
+        "jobId": "9c63450e9e41f8f788fd7c4dce0c9711",
+        "channelId": "193ecc2f3db7394eb3cbd82c02a63194",
+        "stream": "stdout",
+        "seq": 0,
+        "offset": 0,
+        "length": 3,
+        "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+        "artifactId": "cc50e5e1fca9f8ab713619da1f82b533"
+      },
+      "bytesLength": 3
+    }
+  ],
+  "acceptedAudits": 0,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

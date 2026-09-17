@@ -5,11 +5,13 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, stat, writeFile, readdir, cp } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { specializeTrustedModule } from "./workbench-rjs-support.mjs";
 
 const VERSION = 1;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 256 * 1024;
+const MAX_VERIFIER_RESULT_BYTES = 64 * 1024 * 1024;
 const META_FILE = ".bench-run.json";
 const DEFAULT_APP_ORIGINS = [
   "http://localhost:3000",
@@ -29,9 +31,23 @@ const fixtureRoot = fixtureRootOption ? resolve(fixtureRootOption) : null;
 const runnerV2DirectoryOption = optionValue(options["runner-v2-dir"]);
 const appOrigins = parseAppOrigins(optionValues(options["app-origin"]));
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+const rjsAdapterPath = join(scriptDirectory, "workbench-rjs-verifier-adapter.mjs");
+const rjsRuntimeRoot = resolve(scriptDirectory, "..", "benchmarks", "recoverable-job-service");
+const rjsRuntimePath = join(rjsRuntimeRoot, "private", "runtime.mjs");
+const rjsIdentityPath = join(rjsRuntimeRoot, "private", "identity.mjs");
+const rjsEvaluatorPath = join(rjsRuntimeRoot, "private", "evaluator.mjs");
+const rjsQuickJsPackagePath = resolve(
+  scriptDirectory,
+  "..",
+  "node_modules",
+  "quickjs-emscripten",
+  "package.json"
+);
 const attemptMetaRoot = join(root, ".attempt-meta");
 const runnerStateRoot = join(root, ".runner-v2-state");
+const rjsReplayStateRoot = join(root, ".trusted-rjs-replay");
 const managedAttemptRunners = new Map();
+const activeVerifierRuns = new Map();
 const runnerV2Discovery = discoverRunnerV2(runnerV2DirectoryOption);
 const runnerV2Launcher = runnerV2Discovery?.ready ? runnerV2Discovery : null;
 
@@ -47,8 +63,15 @@ if (!Number.isInteger(port) || port <= 0 || port > 65535) {
 await mkdir(root, { recursive: true });
 await mkdir(attemptMetaRoot, { recursive: true });
 await mkdir(runnerStateRoot, { recursive: true });
+await mkdir(rjsReplayStateRoot, { recursive: true });
 
 const server = createServer(async (req, res) => {
+  const requestAbort = new AbortController();
+  const abortRequest = () => requestAbort.abort();
+  req.once("aborted", abortRequest);
+  res.once("close", () => {
+    if (!res.writableEnded) abortRequest();
+  });
   try {
     if (!req.url) throw new HttpError(400, "Missing request URL.");
     const url = new URL(req.url, `http://${host}:${port}`);
@@ -67,9 +90,10 @@ const server = createServer(async (req, res) => {
     }
 
     const body = req.method === "GET" ? {} : await readJsonBody(req);
-    const data = await route(url.pathname, body);
+    const data = await route(url.pathname, body, requestAbort.signal);
     sendJson(req, res, 200, data);
   } catch (error) {
+    if (requestAbort.signal.aborted && res.destroyed) return;
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof Error ? error.message : String(error);
     sendJson(req, res, status, { error: message });
@@ -117,9 +141,9 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
-async function route(pathname, body) {
+async function route(pathname, body, signal) {
   const compat = parseCompatRoute(pathname);
-  if (compat) return routeCompat(compat.attemptId, compat.endpoint, body);
+  if (compat) return routeCompat(compat.attemptId, compat.endpoint, body, signal);
 
   switch (pathname) {
     case "/bench/health":
@@ -131,6 +155,7 @@ async function route(pathname, body) {
         port,
         root,
         mcp: false,
+        rjs: await inspectRjsRuntime(),
         runnerV2: runnerV2Launcher
           ? { ready: true, source: runnerV2Launcher.source }
           : {
@@ -143,21 +168,21 @@ async function route(pathname, body) {
     case "/bench/prepare":
       return prepare(body);
     case "/bench/read-tree":
-      return withAttempt(body, async ({ attemptRoot }) => ({
-        files: await listWorkspaceFiles(attemptRoot),
+      return withAttempt(body, async ({ attemptRoot, meta }) => ({
+        files: await listWorkspaceFiles(attemptRoot, meta),
       }));
     case "/bench/read-file":
-      return withAttempt(body, async ({ attemptRoot }) => {
+      return withAttempt(body, async ({ attemptRoot, meta }) => {
         const relPath = requiredString(body, "path");
-        assertModelReadableWorkspacePath(relPath);
+        assertModelReadableWorkspacePath(relPath, meta);
         const file = resolveSafePath(attemptRoot, relPath);
         const content = await readFile(file, "utf8");
         return { content, bytes: Buffer.byteLength(content) };
       });
     case "/bench/write-file":
-      return withAttempt(body, async ({ attemptRoot }) => {
+      return withAttempt(body, async ({ attemptRoot, meta }) => {
         const relPath = requiredString(body, "path");
-        assertWritableWorkspacePath(relPath);
+        assertWritableWorkspacePath(relPath, meta);
         const file = resolveSafePath(attemptRoot, relPath);
         const content = requiredString(body, "content");
         await mkdir(dirname(file), { recursive: true });
@@ -165,18 +190,18 @@ async function route(pathname, body) {
         return { bytes: Buffer.byteLength(content) };
       });
     case "/bench/patch-file":
-      return withAttempt(body, async ({ attemptRoot }) => patchFile(attemptRoot, body));
+      return withAttempt(body, async ({ attemptRoot, meta }) => patchFile(attemptRoot, body, meta));
     case "/bench/run-command":
       return withAttempt(body, async ({ attemptRoot, meta }) => {
         const command = requiredString(body, "command");
         assertAllowedCommand(meta, command);
-        return runCommand(command, attemptRoot, optionalTimeout(body));
+        return runCommand(command, attemptRoot, optionalTimeout(body), undefined, signal);
       });
     case "/bench/run-verifier":
-      return withAttempt(body, async ({ attemptRoot, meta }) => runVerifier(attemptRoot, meta, body));
+      return withAttempt(body, async ({ attemptRoot, meta }) => runVerifier(attemptRoot, meta, body, signal));
     case "/bench/diff":
       return withAttempt(body, async ({ attemptRoot, meta }) => ({
-        diff: await createDiff(attemptRoot, meta.snapshot ?? {}),
+        diff: await createDiff(attemptRoot, meta.snapshot ?? {}, meta),
       }));
     case "/bench/artifact":
       return withAttempt(body, async ({ attemptRoot }) => {
@@ -212,7 +237,7 @@ async function route(pathname, body) {
   }
 }
 
-async function routeCompat(attemptId, endpoint, body) {
+async function routeCompat(attemptId, endpoint, body, signal) {
   const attemptRoot = attemptWorkspacePath(attemptId);
   const meta = await readMeta(attemptRoot);
   switch (endpoint) {
@@ -225,19 +250,19 @@ async function routeCompat(attemptId, endpoint, body) {
         platform: process.platform,
       };
     case "/ls":
-      return { files: await listWorkspaceFiles(attemptRoot) };
+      return { files: await listWorkspaceFiles(attemptRoot, meta) };
     case "/read": {
       const relPath = requiredString(body, "path");
-      assertModelReadableWorkspacePath(relPath);
+      assertModelReadableWorkspacePath(relPath, meta);
       const file = resolveSafePath(attemptRoot, relPath);
       const content = await readFile(file, "utf8");
       return { content, bytes: Buffer.byteLength(content) };
     }
     case "/read-range":
-      return readFileRange(attemptRoot, body);
+      return readFileRange(attemptRoot, body, meta);
     case "/write": {
       const relPath = requiredString(body, "path");
-      assertWritableWorkspacePath(relPath);
+      assertWritableWorkspacePath(relPath, meta);
       const file = resolveSafePath(attemptRoot, relPath);
       const content = requiredString(body, "content");
       await mkdir(dirname(file), { recursive: true });
@@ -245,15 +270,15 @@ async function routeCompat(attemptId, endpoint, body) {
       return { bytes: Buffer.byteLength(content) };
     }
     case "/patch":
-      return patchFile(attemptRoot, body);
+      return patchFile(attemptRoot, body, meta);
     case "/append":
-      return appendFile(attemptRoot, body);
+      return appendFile(attemptRoot, body, meta);
     case "/search":
-      return searchFiles(attemptRoot, body);
+      return searchFiles(attemptRoot, body, meta);
     case "/run": {
       const command = requiredString(body, "command");
       assertAllowedCommand(meta, command);
-      return runCommand(command, attemptRoot, optionalTimeout(body));
+      return runCommand(command, attemptRoot, optionalTimeout(body), undefined, signal);
     }
     default:
       throw new HttpError(404, "Unknown bench compatibility endpoint.");
@@ -287,6 +312,11 @@ async function prepare(body) {
       "Bench runner v0.1 cannot enforce network none while executing commands; use dependency-only or omit commands."
     );
   }
+  const trustedPolicy = parseTrustedPolicy(body.trustedPolicy);
+  const files = isRecord(body.files) ? { ...body.files } : null;
+  const rjsHealth = trustedPolicy
+    ? await requireMatchingRjsRuntime(trustedPolicy, files)
+    : null;
 
   const requestedAttemptId = optionalString(body, "attemptId");
   const attemptId = requestedAttemptId
@@ -298,9 +328,9 @@ async function prepare(body) {
   }
   await mkdir(attemptRoot, { recursive: true });
 
-  const files = isRecord(body.files) ? body.files : null;
   const repoUrl = optionalString(body, "repoUrl");
   if (files) {
+    if (trustedPolicy) specializeRjsFixture(files);
     for (const [path, content] of Object.entries(files)) {
       if (typeof content !== "string") {
         throw new HttpError(400, `Fixture file ${path} content must be a string.`);
@@ -333,6 +363,8 @@ async function prepare(body) {
     verifierCommand,
     verifierResultFile,
     allowedCommands,
+    ...(trustedPolicy ? { trustedPolicy } : {}),
+    ...(rjsHealth ? { trustedRuntime: rjsHealth } : {}),
     snapshot: {},
   };
 
@@ -345,10 +377,138 @@ async function prepare(body) {
   }
 
   meta.snapshot = await snapshotFiles(attemptRoot);
-  meta.hiddenFiles = await hideOracleFiles(attemptRoot, meta.snapshot);
+  meta.hiddenFiles = await hideOracleFiles(attemptRoot, meta.snapshot, meta);
   await initializeAttemptRepository(attemptRoot);
   await saveMeta(attemptRoot, meta);
   return { attemptId, caseId, root: attemptRoot };
+}
+
+async function inspectRjsRuntime() {
+  try {
+    if (process.versions.node !== "24.18.0") {
+      throw new Error(`Requires exactly Node.js 24.18.0; found ${process.versions.node}.`);
+    }
+    for (const path of [rjsRuntimePath, rjsIdentityPath, rjsEvaluatorPath, rjsAdapterPath]) {
+      if (!existsSync(path)) throw new Error(`Trusted runtime file is missing: ${basename(path)}`);
+    }
+    const [identity, evaluator, quickjsPackage] = await Promise.all([
+      import(pathToFileURL(rjsIdentityPath).href),
+      import(pathToFileURL(rjsEvaluatorPath).href),
+      readFile(rjsQuickJsPackagePath, "utf8").then(JSON.parse),
+    ]);
+    const hashes = await identity.scoreInputHashes();
+    if (quickjsPackage.version !== "0.32.0") {
+      throw new Error(`Requires quickjs-emscripten 0.32.0; found ${quickjsPackage.version ?? "unknown"}.`);
+    }
+    return {
+      ready: true,
+      nodeVersion: process.versions.node,
+      quickjsVersion: quickjsPackage.version,
+      contractHash: hashes.contractHash,
+      suiteHash: hashes.suiteHash,
+      profile: evaluator.PROFILE,
+    };
+  } catch (error) {
+    return {
+      ready: false,
+      nodeVersion: process.versions.node,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function parseTrustedPolicy(value) {
+  if (value === undefined || value === null) return null;
+  if (!isRecord(value) || value.kind !== "recoverable-job-service") {
+    throw new HttpError(400, "Unsupported trusted WorkBench policy.");
+  }
+  const policy = {
+    kind: value.kind,
+    runtimeModule: requiredString(value, "runtimeModule"),
+    requiredNodeVersion: requiredString(value, "requiredNodeVersion"),
+    requiredQuickJsVersion: requiredString(value, "requiredQuickJsVersion"),
+    contractHash: requiredString(value, "contractHash"),
+    suiteHash: requiredString(value, "suiteHash"),
+    hiddenPaths: normalizedPolicyPaths(value.hiddenPaths, "hiddenPaths"),
+    protectedPaths: normalizedPolicyPaths(value.protectedPaths, "protectedPaths"),
+    editablePaths: normalizedPolicyPaths(value.editablePaths, "editablePaths"),
+  };
+  if (policy.runtimeModule !== "benchmarks/recoverable-job-service/private/runtime.mjs") {
+    throw new HttpError(400, "Unexpected trusted RJS runtime module.");
+  }
+  if (policy.requiredNodeVersion !== "24.18.0" || policy.requiredQuickJsVersion !== "0.32.0") {
+    throw new HttpError(400, "Unexpected trusted RJS runtime versions.");
+  }
+  if (policy.editablePaths.length !== 1 || policy.editablePaths[0] !== "service.js") {
+    throw new HttpError(400, "RJS permits only service.js as editable source.");
+  }
+  return policy;
+}
+
+function normalizedPolicyPaths(value, label) {
+  const values = stringArray(value, `trustedPolicy.${label}`);
+  const normalized = values.map((path) => {
+    resolveSafePath(root, path);
+    return normalizeWorkspacePath(path);
+  });
+  if (new Set(normalized).size !== normalized.length) {
+    throw new HttpError(400, `trustedPolicy.${label} contains duplicate paths.`);
+  }
+  return normalized;
+}
+
+async function requireMatchingRjsRuntime(policy, files, recordedProfile) {
+  const health = await inspectRjsRuntime();
+  if (!health.ready) throw new HttpError(503, `RJS trusted runtime unavailable: ${health.error}`);
+  if (
+    health.nodeVersion !== policy.requiredNodeVersion ||
+    health.quickjsVersion !== policy.requiredQuickJsVersion ||
+    health.contractHash !== policy.contractHash ||
+    health.suiteHash !== policy.suiteHash
+  ) {
+    throw new HttpError(409, "RJS trusted runtime identity does not match the selected case.");
+  }
+  let caseMetadata = null;
+  if (files && typeof files["case-meta.json"] === "string") {
+    try {
+      caseMetadata = JSON.parse(files["case-meta.json"]);
+    } catch {
+      throw new HttpError(400, "RJS fixture case metadata is malformed.");
+    }
+  } else if (typeof recordedProfile === "string") {
+    caseMetadata = {
+      contractHash: policy.contractHash,
+      suiteHash: policy.suiteHash,
+      profile: recordedProfile,
+    };
+  } else {
+    throw new HttpError(400, "RJS fixture case metadata is required.");
+  }
+  if (
+    !isRecord(caseMetadata) ||
+    caseMetadata.contractHash !== policy.contractHash ||
+    caseMetadata.suiteHash !== policy.suiteHash ||
+    caseMetadata.profile !== health.profile
+  ) {
+    throw new HttpError(409, "RJS fixture profile or score identity does not match the trusted runtime.");
+  }
+  return health;
+}
+
+function specializeRjsFixture(files) {
+  for (const [path, modulePath] of [
+    ["public-test.mjs", rjsRuntimePath],
+    ["verify.mjs", rjsAdapterPath],
+  ]) {
+    if (typeof files[path] !== "string") {
+      throw new HttpError(400, `RJS fixture is missing ${path}.`);
+    }
+    try {
+      files[path] = specializeTrustedModule(files[path], pathToFileURL(modulePath).href);
+    } catch (error) {
+      throw new HttpError(400, error instanceof Error ? error.message : String(error));
+    }
+  }
 }
 
 function initializeAttemptRepository(attemptRoot) {
@@ -372,9 +532,9 @@ function initializeAttemptRepository(attemptRoot) {
   });
 }
 
-async function patchFile(attemptRoot, body) {
+async function patchFile(attemptRoot, body, meta) {
   const relPath = requiredString(body, "path");
-  assertWritableWorkspacePath(relPath);
+  assertWritableWorkspacePath(relPath, meta);
   const file = resolveSafePath(attemptRoot, relPath);
   const original = await readFile(file, "utf8");
   const ops = Array.isArray(body.ops)
@@ -401,9 +561,9 @@ async function patchFile(attemptRoot, body) {
   };
 }
 
-async function appendFile(attemptRoot, body) {
+async function appendFile(attemptRoot, body, meta) {
   const relPath = requiredString(body, "path");
-  assertWritableWorkspacePath(relPath);
+  assertWritableWorkspacePath(relPath, meta);
   const file = resolveSafePath(attemptRoot, relPath);
   const content = requiredString(body, "content");
   const reset = body.reset === true;
@@ -424,9 +584,9 @@ async function appendFile(attemptRoot, body) {
   };
 }
 
-async function readFileRange(attemptRoot, body) {
+async function readFileRange(attemptRoot, body, meta) {
   const rangePath = requiredString(body, "path");
-  assertModelReadableWorkspacePath(rangePath);
+  assertModelReadableWorkspacePath(rangePath, meta);
   const file = resolveSafePath(attemptRoot, rangePath);
   const content = await readFile(file, "utf8");
   const lines = content.split(/\r?\n/);
@@ -446,13 +606,13 @@ async function readFileRange(attemptRoot, body) {
   };
 }
 
-async function searchFiles(attemptRoot, body) {
+async function searchFiles(attemptRoot, body, meta) {
   const query = requiredString(body, "query").toLowerCase();
   const matches = [];
   await walk(attemptRoot, async (file) => {
     if (matches.length >= 100) return;
     const relPath = toWorkspacePath(attemptRoot, file);
-    if (isModelHiddenWorkspaceFile(relPath)) return;
+    if (isModelHiddenWorkspaceFile(relPath, meta)) return;
     let content = "";
     try {
       content = await readFile(file, "utf8");
@@ -473,7 +633,21 @@ async function searchFiles(attemptRoot, body) {
   return { results: matches };
 }
 
-async function runVerifier(attemptRoot, meta, body) {
+async function runVerifier(attemptRoot, meta, body, signal) {
+  const previous = activeVerifierRuns.get(meta.attemptId) ?? Promise.resolve();
+  let release;
+  const current = new Promise((resolveRun) => { release = resolveRun; });
+  activeVerifierRuns.set(meta.attemptId, current);
+  await waitForVerifierTurn(previous, signal);
+  try {
+    return await runVerifierExclusive(attemptRoot, meta, body, signal);
+  } finally {
+    release();
+    if (activeVerifierRuns.get(meta.attemptId) === current) activeVerifierRuns.delete(meta.attemptId);
+  }
+}
+
+async function runVerifierExclusive(attemptRoot, meta, body, signal) {
   const liveRunner = managedAttemptRunners.get(meta.attemptId);
   if (liveRunner?.child.exitCode === null) {
     throw new HttpError(409, "Runner V2 must stop before verifier execution.");
@@ -483,17 +657,45 @@ async function runVerifier(attemptRoot, meta, body) {
   if (!command) throw new HttpError(400, "No verifier command configured.");
   assertAllowedCommand(meta, command);
   await assertHarnessFilesUntampered(attemptRoot, meta);
-  const result = await runCommand(command, attemptRoot, optionalTimeout(body) ?? meta.timeoutSeconds);
   const resultFile = optionalString(body, "resultFile") ?? meta.verifierResultFile;
+  let childEnvironment;
+  if (meta.trustedPolicy?.kind === "recoverable-job-service") {
+    await requireMatchingRjsRuntime(
+      meta.trustedPolicy,
+      null,
+      meta.trustedRuntime?.profile
+    );
+    const replayStateFile = rjsReplayStatePath(meta);
+    const adapter = await import(pathToFileURL(rjsAdapterPath).href);
+    adapter.prepareReplayState(replayStateFile, {
+      contractHash: meta.trustedPolicy.contractHash,
+      suiteHash: meta.trustedPolicy.suiteHash,
+    });
+    if (resultFile) await rm(resolveSafePath(attemptRoot, resultFile), { force: true });
+    childEnvironment = { ...process.env, AIBOARD_RJS_REPLAY_STATE_FILE: replayStateFile };
+  }
+  const result = await runCommand(
+    command,
+    attemptRoot,
+    optionalTimeout(body) ?? meta.timeoutSeconds,
+    childEnvironment,
+    signal
+  );
   let resultJson = "";
   const artifactIds = [];
 
   if (resultFile) {
     const file = resolveSafePath(attemptRoot, resultFile);
     try {
+      const resultStat = await stat(file);
+      if (!resultStat.isFile()) throw new Error("Verifier result is not a regular file.");
+      if (resultStat.size > MAX_VERIFIER_RESULT_BYTES) {
+        throw new HttpError(422, "invalid_harness: complete verifier result exceeded trusted transport capacity.");
+      }
       resultJson = await readFile(file, "utf8");
       artifactIds.push(resultFile.replace(/\\/g, "/"));
-    } catch {
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
       resultJson = "";
     }
   }
@@ -511,6 +713,17 @@ async function runVerifier(attemptRoot, meta, body) {
     resultJson: resultJson.trim(),
     artifactIds,
   };
+}
+
+function rjsReplayStatePath(meta) {
+  const identity = [
+    meta.attemptId,
+    meta.caseId,
+    meta.trustedPolicy.contractHash,
+    meta.trustedPolicy.suiteHash,
+  ].join("\0");
+  const digest = createHash("sha256").update(identity).digest("hex");
+  return resolveSafeChild(rjsReplayStateRoot, `${digest}.json`);
 }
 
 async function cleanup(body) {
@@ -647,18 +860,24 @@ function metaPath(attemptId) {
   return resolveSafeChild(attemptMetaRoot, `${validateAttemptId(attemptId)}.json`);
 }
 
-function runCommand(command, cwd, timeoutSeconds) {
+function runCommand(command, cwd, timeoutSeconds, environment, signal) {
   const started = Date.now();
-  return new Promise((resolveCommand) => {
-    exec(
+  return new Promise((resolveCommand, rejectCommand) => {
+    let settled = false;
+    let aborted = false;
+    const child = exec(
       command,
       {
         cwd,
         timeout: Math.max(1, timeoutSeconds ?? 30) * 1000,
         windowsHide: true,
         maxBuffer: MAX_OUTPUT_BYTES * 4,
+        ...(environment ? { env: environment } : {}),
       },
       (error, stdout, stderr) => {
+        if (aborted) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
         const exitCode =
           error && typeof error.code === "number"
             ? error.code
@@ -676,14 +895,42 @@ function runCommand(command, cwd, timeoutSeconds) {
         });
       }
     );
+    const onAbort = () => {
+      if (settled || aborted) return;
+      aborted = true;
+      void terminateChild(child).finally(() => {
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        rejectCommand(Object.assign(new Error("Bench command cancelled."), { name: "AbortError" }));
+      });
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
-async function listWorkspaceFiles(attemptRoot) {
+function waitForVerifierTurn(previous, signal) {
+  if (!signal) return previous.catch(() => undefined);
+  if (signal.aborted) {
+    return Promise.reject(Object.assign(new Error("Bench verifier cancelled."), { name: "AbortError" }));
+  }
+  return new Promise((resolveWait, rejectWait) => {
+    const onAbort = () => {
+      rejectWait(Object.assign(new Error("Bench verifier cancelled."), { name: "AbortError" }));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    previous.catch(() => undefined).then(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolveWait();
+    });
+  });
+}
+
+async function listWorkspaceFiles(attemptRoot, meta) {
   const files = [];
   await walk(attemptRoot, async (file) => {
     const relPath = toWorkspacePath(attemptRoot, file);
-    if (isModelHiddenWorkspaceFile(relPath)) return;
+    if (isModelHiddenWorkspaceFile(relPath, meta)) return;
     files.push(relPath);
   });
   return files.sort();
@@ -698,10 +945,10 @@ async function snapshotFiles(attemptRoot) {
   return snapshot;
 }
 
-async function hideOracleFiles(attemptRoot, snapshot) {
+async function hideOracleFiles(attemptRoot, snapshot, meta) {
   const hiddenFiles = {};
   for (const [relPath, content] of Object.entries(snapshot)) {
-    if (!isModelHiddenWorkspaceFile(relPath)) continue;
+    if (!isModelHiddenWorkspaceFile(relPath, meta)) continue;
     hiddenFiles[relPath] = content;
     await rm(resolveSafePath(attemptRoot, relPath), { force: true });
   }
@@ -718,12 +965,13 @@ async function restoreOracleFiles(attemptRoot, meta) {
   }
 }
 
-async function createDiff(attemptRoot, before) {
+async function createDiff(attemptRoot, before, meta) {
   const after = await snapshotFiles(attemptRoot);
   const paths = Array.from(new Set([...Object.keys(before), ...Object.keys(after)])).sort();
   const chunks = [];
 
   for (const path of paths) {
+    if (isModelHiddenWorkspaceFile(path, meta)) continue;
     if (before[path] === after[path]) continue;
     if (before[path] === undefined) {
       chunks.push(`--- /dev/null\n+++ b/${path}\n${prefixLines(after[path] ?? "", "+")}`);
@@ -918,11 +1166,12 @@ const PROTECTED_WORKSPACE_FILES = new Set([
   META_FILE,
 ]);
 
-function isProtectedWorkspaceFile(relPath) {
+function isProtectedWorkspaceFile(relPath, meta) {
   if (typeof relPath !== "string") return false;
   const normalized = normalizeWorkspacePath(relPath);
   const base = normalized.split("/").pop() ?? normalized;
   return (
+    policyPaths(meta, "protectedPaths").has(normalized) ||
     PROTECTED_WORKSPACE_FILES.has(normalized) ||
     PROTECTED_WORKSPACE_FILES.has(base)
   );
@@ -942,18 +1191,19 @@ const MODEL_HIDDEN_WORKSPACE_FILES = new Set([
   META_FILE,
 ]);
 
-function isModelHiddenWorkspaceFile(relPath) {
+function isModelHiddenWorkspaceFile(relPath, meta) {
   if (typeof relPath !== "string") return false;
   const normalized = normalizeWorkspacePath(relPath);
   const base = normalized.split("/").pop() ?? normalized;
   return (
+    policyPaths(meta, "hiddenPaths").has(normalized) ||
     MODEL_HIDDEN_WORKSPACE_FILES.has(normalized) ||
     MODEL_HIDDEN_WORKSPACE_FILES.has(base)
   );
 }
 
-function assertModelReadableWorkspacePath(relPath) {
-  if (isModelHiddenWorkspaceFile(relPath)) {
+function assertModelReadableWorkspacePath(relPath, meta) {
+  if (isModelHiddenWorkspaceFile(relPath, meta)) {
     throw new HttpError(404, `File not found: ${relPath}`);
   }
 }
@@ -969,8 +1219,13 @@ function normalizeWorkspacePath(relPath) {
   return relPath.replace(/\\/g, "/").replace(/^\.?\//, "");
 }
 
-function assertWritableWorkspacePath(relPath) {
-  if (isProtectedWorkspaceFile(relPath)) {
+function assertWritableWorkspacePath(relPath, meta) {
+  const normalized = normalizeWorkspacePath(relPath);
+  const editable = policyPaths(meta, "editablePaths");
+  if (editable.size > 0 && !editable.has(normalized)) {
+    throw new HttpError(403, `RJS permits edits only to service.js: ${relPath}`);
+  }
+  if (isProtectedWorkspaceFile(relPath, meta)) {
     throw new HttpError(403, `Refusing to write protected harness file: ${relPath}`);
   }
 }
@@ -981,7 +1236,7 @@ function assertWritableWorkspacePath(relPath) {
 async function assertHarnessFilesUntampered(attemptRoot, meta) {
   const snapshot = meta?.snapshot ?? {};
   for (const relPath of Object.keys(snapshot)) {
-    if (!isProtectedWorkspaceFile(relPath)) continue;
+    if (!isProtectedWorkspaceFile(relPath, meta)) continue;
     if (isConfiguredVerifierResultFile(relPath, meta)) continue;
     let current;
     try {
@@ -999,6 +1254,11 @@ async function assertHarnessFilesUntampered(attemptRoot, meta) {
       );
     }
   }
+}
+
+function policyPaths(meta, key) {
+  const values = meta?.trustedPolicy?.[key];
+  return new Set(Array.isArray(values) ? values.map(normalizeWorkspacePath) : []);
 }
 
 function resolveSafePath(attemptRoot, relPath) {

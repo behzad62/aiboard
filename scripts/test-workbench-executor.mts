@@ -8,6 +8,13 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkBenchRunner, runBenchCommand } from "../lib/client/bench-runner";
 import { executeWorkBenchVerifierOnly } from "../lib/benchmark/workbench/executor";
+import { createRecoverableJobServiceCase } from "../lib/benchmark/workbench/recoverable-job-service/case-pack";
+import {
+  RECOVERABLE_JOB_SERVICE_FAMILIES,
+  RECOVERABLE_JOB_SERVICE_INPUT_HASHES,
+  RECOVERABLE_JOB_SERVICE_METADATA,
+  RECOVERABLE_JOB_SERVICE_PRODUCTION_PROVENANCE,
+} from "../lib/benchmark/workbench/recoverable-job-service/fixture";
 import type { CertifiedAttemptStatus } from "../lib/benchmark/types";
 import type { WorkBenchCase, WorkBenchExecutionInput } from "../lib/benchmark/workbench/types";
 
@@ -51,6 +58,9 @@ interface FakeRunnerOptions {
   verifierError?: string;
   verifierDelayMs?: number;
   verifierResultJson?: string;
+  verifierPassed?: boolean;
+  verifierScore?: number;
+  verifierExitCode?: number;
   diff?: string;
   prepareGate?: Promise<void>;
   verifierGate?: Promise<void>;
@@ -106,10 +116,10 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
           return;
         }
         sendJsonResponse(res, 200, {
-          passed: true,
-          score: 1,
+          passed: options.verifierPassed ?? true,
+          score: options.verifierScore ?? 1,
           durationMs: 12,
-          exitCode: 0,
+          exitCode: options.verifierExitCode ?? 0,
           stdoutPreview: options.verifierResultJson ?? verifierJson,
           stderrPreview: "",
           resultJson: options.verifierResultJson ?? verifierJson,
@@ -137,6 +147,78 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
     abortedPaths,
     stop: () => stopServer(server),
   };
+}
+
+function invalidRecoverableJobServiceResult(): string {
+  const families = RECOVERABLE_JOB_SERVICE_FAMILIES.map((family) => ({
+    id: family.id,
+    group: family.group,
+    mandatory: true,
+    passed: false,
+    safetyChecked: false,
+    scheduleId: "not-executed",
+    reason: "Evaluation input was invalid.",
+    assertions: [{ label: "Trusted input accepted", passed: false }],
+    operations: 0,
+    promiseJobs: 0,
+    variants: RECOVERABLE_JOB_SERVICE_PRODUCTION_PROVENANCE.variantIds
+      .filter((variantId) => variantId.startsWith(`${family.id}/`))
+      .map((variantId) => ({
+        id: variantId,
+        passed: false,
+        safetyChecked: false,
+        reason: "Evaluation input was invalid.",
+        assertions: [{ label: "Trusted input accepted", passed: false }],
+        operations: 0,
+        promiseJobs: 0,
+        inputIdentity: null,
+      })),
+  }));
+  const groups = Object.fromEntries(
+    ["A", "B", "C", "D", "E"].map((group) => [
+      group,
+      {
+        passed: 0,
+        total: families.filter((family) => family.group === group).length,
+        coverage: 0,
+      },
+    ])
+  );
+  const diagnostics = {
+    schemaVersion: RECOVERABLE_JOB_SERVICE_METADATA.schemaVersion,
+    benchmark: "recoverable-job-service",
+    profile: RECOVERABLE_JOB_SERVICE_METADATA.profile,
+    contractVersion: RECOVERABLE_JOB_SERVICE_METADATA.contractVersion,
+    suiteVersion: RECOVERABLE_JOB_SERVICE_METADATA.suiteVersion,
+    candidateHash: "0".repeat(64),
+    contractHash: RECOVERABLE_JOB_SERVICE_INPUT_HASHES.contractHash,
+    suiteHash: RECOVERABLE_JOB_SERVICE_INPUT_HASHES.suiteHash,
+    inputIdentity: null,
+    provenance: RECOVERABLE_JOB_SERVICE_PRODUCTION_PROVENANCE,
+    status: "invalid_harness",
+    resolved: false,
+    families,
+    groups,
+    macroCoverage: 0,
+    safetyFailures: [],
+    error: {
+      kind: "invalid_replay_input",
+      message: "Trusted replay input was rejected.",
+      familyId: null,
+    },
+  };
+  return JSON.stringify({
+    passed: false,
+    score: 0,
+    summary: "Recoverable Job Service evaluation invalid",
+    assertions: families.map((family) => ({
+      id: family.id,
+      label: `${family.id} — ${family.reason}`,
+      passed: false,
+      weight: 1,
+    })),
+    recoverableJobService: diagnostics,
+  });
 }
 
 function deferred<T>() {
@@ -614,6 +696,102 @@ try {
   );
 } finally {
   await verifierCrashRunner.stop();
+}
+
+const rjsCase = createRecoverableJobServiceCase();
+const invalidRjsResult = invalidRecoverableJobServiceResult();
+const invalidRjsRunner = await startCanonicalAttemptRunner("invalid-rjs-attempt", {
+  verifierResultJson: invalidRjsResult,
+  verifierPassed: false,
+  verifierScore: 0,
+  verifierExitCode: 2,
+});
+try {
+  const invalidRjs = await executeWorkBenchVerifierOnly({
+    case: rjsCase,
+    runner: { url: invalidRjsRunner.url, token: invalidRjsRunner.token },
+    attemptId: "invalid-rjs-attempt",
+    runId: "run-invalid-rjs",
+    teamCompositionId: "team-fixture",
+    runBuild: async () => ({
+      traceIds: ["trace-invalid-rjs"],
+      modelCalls: 1,
+    }),
+  });
+  check(
+    "trusted invalid diagnostics remain excluded from candidate scoring",
+    invalidRjs.attempt.status === "invalid_harness" &&
+      invalidRjs.attempt.verifiedQuality === 0 &&
+      invalidRjs.parsedVerifierResult.failureClass === "invalid_harness",
+    invalidRjs.attempt
+  );
+  check(
+    "trusted invalid diagnostics retain their complete result artifact",
+    invalidRjs.artifacts.some(
+      (artifact) =>
+        artifact.id === "invalid-rjs-attempt:verifier-result" &&
+        artifact.content.includes('"recoverableJobService"') &&
+        artifact.content.includes('"families"')
+    ),
+    invalidRjs.artifacts
+  );
+  check(
+    "trusted attempts persist their exact public contract snapshot",
+    invalidRjs.artifacts.some(
+      (artifact) =>
+        artifact.id === "invalid-rjs-attempt:rjs-public-contract" &&
+        artifact.content.includes(RECOVERABLE_JOB_SERVICE_INPUT_HASHES.contractHash) &&
+        artifact.content.includes(RECOVERABLE_JOB_SERVICE_INPUT_HASHES.suiteHash) &&
+        artifact.content.includes('"problem.md"')
+    ),
+    invalidRjs.artifacts
+  );
+} catch (error) {
+  check(
+    "trusted invalid diagnostics contract did not throw",
+    false,
+    error instanceof Error ? error.message : String(error)
+  );
+} finally {
+  await invalidRjsRunner.stop();
+}
+
+const mismatchedRjsExitRunner = await startCanonicalAttemptRunner("mismatched-rjs-exit", {
+  verifierResultJson: invalidRjsResult,
+  verifierPassed: false,
+  verifierScore: 0,
+  verifierExitCode: 1,
+});
+try {
+  const mismatch = await executeWorkBenchVerifierOnly({
+    case: rjsCase,
+    runner: { url: mismatchedRjsExitRunner.url, token: mismatchedRjsExitRunner.token },
+    attemptId: "mismatched-rjs-exit",
+    runId: "run-mismatched-rjs-exit",
+    teamCompositionId: "team-fixture",
+    runBuild: async () => ({
+      traceIds: ["trace-mismatched-rjs-exit"],
+      modelCalls: 1,
+    }),
+  });
+  check(
+    "trusted verifier exit and diagnostics must agree",
+    mismatch.attempt.status === "invalid_harness" &&
+      mismatch.artifacts.some(
+        (artifact) =>
+          artifact.id === "mismatched-rjs-exit:failure-log" &&
+          /exit code/i.test(artifact.content)
+      ),
+    mismatch.artifacts
+  );
+} catch (error) {
+  check(
+    "trusted verifier exit consistency failure stays structured",
+    false,
+    error instanceof Error ? error.message : String(error)
+  );
+} finally {
+  await mismatchedRjsExitRunner.stop();
 }
 
 const canonicalRunner = await startCanonicalAttemptRunner("prepared-attempt-id");

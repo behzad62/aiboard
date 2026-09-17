@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "purpose": "targeted correction proof; not full production qualification or calibration admission",
+  "output": "benchmarks\\recoverable-job-service\\private\\calibration\\correction-proof-2026-09-12T17-14-13-149Z",
+  "identity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f8f1f824577efab1719a750b22df833daf62c13fb9bf29b28bf9363cf94fa7f8"
+  },
+  "contractVersion": "rjs-contract-2.0.0",
+  "suiteVersion": "rjs-suite-2.0.0",
+  "node": "24.18.0",
+  "replayCommitment": "2d91c8fc312ebef59f8b17448f7dab364339ec2ef227bafe2a39a95ac66825ff",
+  "sourceHashes": {
+    "reference": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "setup-reader": "0f9af49f2f4679e1a0aee684b2820e3b63e7aace80319225bb5b76a1bbdf0963",
+    "record-envelope": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+    "lazy-roots": "6721011cdaeaa9ce543c2cc51069d2a8dd7f736b89977ec226cf7b726410a29d",
+    "wrong-category": "169461088ead336c9300a0024c2659c6e2500e291a69ed23a9b605ed88251650",
+    "range-integrity": "db9787ab2d9bfbf882a46830dbbe6784aa41f69819283cd4546fa251d8abea9c",
+    "forbidden-attach-expired": "50ff58d6e04603ecea3447ee6dcfac6e260abcf0eff3d711bc752b4fbf23d023",
+    "forbidden-attach-reserve": "b9383530a5dfa7f39d8216ca2a0d2fbd16c9fc9e8eed32e627bb6c8fd38d6ecb"
+  },
+  "affectedVariants": [
+    "B06/primary"
+  ],
+  "reusedProof": {
+    "path": "benchmarks\\recoverable-job-service\\private\\calibration\\correction-proof-2026-09-12T17-06-54-031Z\\summary.json",
+    "sha256": "4dcf5f64cf2e55237d3b7f121aad86c4967e5532ec632ca4199242da7113691b",
+    "scope": "Reuse all checks except the explicitly failed vacuous reserve neighbor; exact scorer/public identity verified."
+  },
+  "runs": [
+    {
+      "name": "forbidden-attach-reserve",
+      "sourceHash": "b9383530a5dfa7f39d8216ca2a0d2fbd16c9fc9e8eed32e627bb6c8fd38d6ecb",
+      "expectation": "insufficient reserve issues no work",
+      "variantIds": [
+        "B06/primary"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1951,
+      "operations": 212,
+      "promiseJobs": 983,
+      "failed": [
+        {
+          "id": "B06/primary",
+          "reason": "insufficient reserve issues no work",
+          "safety": []
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "name": "trace-forbidden-reserve",
+      "variantId": "B06/primary",
+      "failure": "insufficient reserve issues no work",
+      "safety": [],
+      "operations": 212,
+      "promiseJobs": 983
+    }
+  ],
+  "checks": [
+    {
+      "label": "forbidden-attach-reserve: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "forbidden-attach-reserve: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "forbidden-attach-reserve: B06/primary exact forbidden predicate",
+      "passed": true
+    },
+    {
+      "label": "trace-forbidden-reserve: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "reserve: forbidden neighbor issued an actual attachment",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

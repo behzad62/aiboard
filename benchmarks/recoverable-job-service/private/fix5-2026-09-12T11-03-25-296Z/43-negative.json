@@ -1,0 +1,277 @@
+{
+  "control": "omit-isolation",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B02"
+    ],
+    "variantIds": [
+      "B02/proof-isolation"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "02268c1a230a6b13d428f938c57e97d3ffa13a803d49db7362f72d0ddd6c94c8",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B02/proof-isolation"
+      ],
+      "scheduleHash": "01d4bf12c6aa90175d5490ec7f4bc7daa2064bb37e5678c745b453212e164afa",
+      "configurationHash": "65a7605f4f5bfdc202c8724637ace58c870474a8806f571b932ab8c0ae290760"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B02",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/B02/65a7605f4f5bfdc202c8724637ace58c870474a8806f571b932ab8c0ae290760",
+        "variants": [
+          {
+            "id": "B02/proof-isolation",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "acquired resource has exact physical retirement",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "acquired resource has exact physical retirement; safety: resource-release-proof, resource-still-owned",
+            "safetyFailures": [
+              {
+                "code": "resource-release-proof",
+                "jobId": "025babdf23b41a8f7e06c0acb1818980",
+                "detail": "isolation fact lacks actual exact retirement.",
+                "familyId": "B02",
+                "variantId": "B02/proof-isolation"
+              },
+              {
+                "code": "resource-still-owned",
+                "jobId": "025babdf23b41a8f7e06c0acb1818980",
+                "detail": "Released publication retains actual ownership.",
+                "familyId": "B02",
+                "variantId": "B02/proof-isolation"
+              }
+            ],
+            "operations": 382,
+            "promiseJobs": 1792
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B02/proof-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: released public job",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-isolation: acquired resource has exact physical retirement",
+            "passed": false
+          },
+          {
+            "label": "B02/proof-isolation: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "B02/proof-isolation: acquired resource has exact physical retirement; safety: resource-release-proof, resource-still-owned",
+        "operations": 382,
+        "promiseJobs": 1792
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "resource-release-proof",
+        "jobId": "025babdf23b41a8f7e06c0acb1818980",
+        "detail": "isolation fact lacks actual exact retirement.",
+        "familyId": "B02",
+        "variantId": "B02/proof-isolation"
+      },
+      {
+        "code": "resource-still-owned",
+        "jobId": "025babdf23b41a8f7e06c0acb1818980",
+        "detail": "Released publication retains actual ownership.",
+        "familyId": "B02",
+        "variantId": "B02/proof-isolation"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "B02",
+      "variantId": "B02/proof-isolation",
+      "execution": {
+        "variant": {
+          "id": "B02/proof-isolation",
+          "family": "B02",
+          "kind": "resource-proof",
+          "args": {
+            "resource": "isolation"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B02/qualification-v1",
+        "schedule": {
+          "partition": 2846,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}
