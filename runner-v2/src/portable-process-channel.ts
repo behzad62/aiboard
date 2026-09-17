@@ -12,11 +12,13 @@ import {
 } from "./interactive-process-channel.js";
 import type { ProcessBackendBinding, ProcessEffectFence } from "./process-backend.js";
 import {
+  PortableAuthorityUnavailableError,
   readPortableOutputSnapshot,
   validatePortableAcknowledgements,
   type PortableFenceSnapshotOutcome,
   type PortableOutputSnapshot,
 } from "./portable-process-protocol.mjs";
+import { OwnedFenceLockUnavailableError } from "./owned-fence-lock.mjs";
 
 export interface PortableChannelAuthority {
   readonly directory: string;
@@ -249,8 +251,12 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   }
 
   private async observeOutputSettlement(deadlineAt: number): Promise<BackpressuredOutputSettlement> {
+    const wallDeadline = Date.now() + Math.max(this.pollIntervalMs, deadlineAt - this.clock());
+    let coordinationBlocked = false;
     for (;;) {
-      if (this.clock() >= deadlineAt) return { status: "blocked", reason: "deadline" };
+      if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
+        return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
+      }
       const snapshot = this.authority.snapshot(() => {
         this.assertOutputDeadline();
         const state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
@@ -260,19 +266,41 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         return { terminal: state.status === "stopped", output: this.readOutputSnapshot() };
       });
       if (snapshot.status === "stale") return { status: "blocked", reason: "stale_fence" };
-      if (snapshot.status === "unavailable") return { status: "blocked", reason: snapshot.cause === "coordination" ? "coordination_unavailable" : "outcome_unknown" };
+      if (snapshot.status === "unavailable" && snapshot.cause === "coordination") {
+        coordinationBlocked = true;
+        await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
+        continue;
+      }
+      if (snapshot.status === "unavailable") return { status: "blocked", reason: "outcome_unknown" };
       if (snapshot.status !== "applied") return { status: "blocked", reason: "output_unaccounted" };
-      if (this.channelFailure) return { status: "blocked", reason: this.channelFailure instanceof PortableOutputSettlementFailure ? this.channelFailure.reason : "outcome_unknown" };
+      if (this.channelFailure) {
+        if (isRetryablePortableCoordination(this.channelFailure)) {
+          this.channelFailure = undefined;
+          coordinationBlocked = true;
+          await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
+          continue;
+        }
+        return { status: "blocked", reason: this.channelFailure instanceof PortableOutputSettlementFailure ? this.channelFailure.reason : "outcome_unknown" };
+      }
       const { terminal, output } = snapshot.value;
       if (terminal && output.output.length === 0 && output.acknowledgements.length === 0 && this.outputTasks === 0) {
-        if (this.clock() >= deadlineAt) return { status: "blocked", reason: "deadline" };
+        if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
+          return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
+        }
         try { this.reattest(false); } catch { return { status: "blocked", reason: "stale_fence" }; }
-        if (this.clock() >= deadlineAt) return { status: "blocked", reason: "deadline" };
+        if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
+          return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
+        }
         return { status: "settled" };
       }
+      coordinationBlocked = false;
       if (this.outputTasks === 0 && output.output.some((entry) => !this.deliveredOutput.has(entry.name))) this.scheduleOutput();
-      await delay(Math.min(this.pollIntervalMs, Math.max(0, deadlineAt - this.clock())));
+      await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
     }
+  }
+
+  private settlementRetryDelayMs(deadlineAt: number, wallDeadline: number): number {
+    return Math.min(this.pollIntervalMs, Math.max(0, deadlineAt - this.clock()), Math.max(0, wallDeadline - Date.now()));
   }
 
   private assertOutputDeadline(): void {
@@ -315,6 +343,9 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       this.assertOutputDeadline();
       this.reattest(false);
       const snapshot = this.outputSnapshot();
+      if (process.env.TASK12_MCP_TRACE === "1" && (snapshot.status !== "applied" || (snapshot.status === "applied" && snapshot.value.output.length > 0))) {
+        process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "channel.scheduleOutput", dir: this.authority.directory.slice(-48), status: snapshot.status, cause: "cause" in snapshot ? snapshot.cause : undefined, entries: snapshot.status === "applied" ? snapshot.value.output.length : undefined })}\n`);
+      }
       if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return;
       const entries = this.requireSnapshot(snapshot).output;
       const present = new Set(entries.map((entry) => entry.name));
@@ -342,6 +373,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         this.deliveredOutput.add(entry.name);
       }
     }).catch((error) => {
+      if (isRetryablePortableCoordination(error)) return;
       this.channelFailure = error instanceof Error ? error : new Error("Portable output channel failed.");
       this.cancelTerminalInspection();
       this.deliverTerminal({ state: "outcome_unknown" });
@@ -518,3 +550,16 @@ function positive(value: unknown): number {
   return value as number;
 }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function isRetryablePortableCoordination(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 6 && current; depth += 1) {
+    if (current instanceof OwnedFenceLockUnavailableError) return true;
+    if (current instanceof PortableAuthorityUnavailableError) return false;
+    const message = current instanceof Error ? current.message : String(current);
+    if (/writer fence is stale|identity re-attestation failed|identity mismatch/i.test(message)) return false;
+    if (/uncertain sidecar|database is locked|SQLITE_BUSY|fence lock remains held|fence effect boundary is unavailable/i.test(message))
+      return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}

@@ -51,7 +51,8 @@ test("MCP real host stays lazy then reuses only exact fresh-grant agent sessions
     assert.equal(first.agentSessionId, "actual-agent-1"); assert.deepEqual(first.actor, { role: "worker", id: "actual-worker" });
     assert.equal(first.callId, "first"); assert.equal(first.toolName, "mcp.docs.lookup"); assert.deepEqual(first.envelope.access, []);
     assert.equal(first.envelope.networkApproved, false);
-    assert.equal((await invoke("other", "actual-agent-2")).isError, false); assert.equal(run.streamingState.listSessionIds().length, 2);
+    const other = await invoke("other", "actual-agent-2");
+    assert.equal(other.isError, false, JSON.stringify(other)); assert.equal(run.streamingState.listSessionIds().length, 2);
     await manager.closeAgent({ runId, sessionId: "actual-agent-1", actor: { role: "worker", id: "actual-worker" } });
     assert.equal(run.streamingState.readSession(firstId)!.state, "released");
     assert.equal(run.streamingState.listSessionIds().map((id) => run.streamingState.readSession(id)).filter((record) => record?.state === "active").length, 1);

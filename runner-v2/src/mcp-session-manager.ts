@@ -139,6 +139,19 @@ export class McpSessionManager {
     const combined = original.signal ? AbortSignal.any([original.signal, controller.signal]) : controller.signal;
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     const at = Date.now();
+    if (process.env.TASK12_MCP_TRACE === "1") {
+      combined.addEventListener("abort", () => {
+        process.stderr.write(`${JSON.stringify({
+          t: Date.now(),
+          event: "mcp.signal.abort",
+          elapsedMs: Date.now() - at,
+          timeoutMs: this.timeoutMs,
+          originalAborted: original.signal?.aborted === true,
+          controllerAborted: controller.signal.aborted,
+          sessionId: original.sessionId,
+        })}\n`);
+      }, { once: true });
+    }
     let abortListener: (() => void) | undefined;
     try {
       const owner = await abortable(() => this.owner(server, tool, { ...original, signal: combined }), combined);
@@ -196,10 +209,15 @@ export class McpSessionManager {
           else if (!slot.busy) void this.retire(slot).catch((failure: unknown) => { server.error = `MCP cleanup is unverified: ${asError(failure).message}`; });
         } });
         slot.peer = peer;
+        if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "mcp.open.start", agent: slot.agent, timeoutMs })}\n`);
         const transport = await this.options.transportFactory.open({
           server: server.spec, owner, expected: server.discovered,
-          onOutput: (stream, bytes) => peer.feed(stream, bytes), onFailure: (error) => peer.close(error),
+          onOutput: (stream, bytes) => {
+            if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "mcp.feed", stream, bytes: bytes.byteLength, agent: slot.agent })}\n`);
+            peer.feed(stream, bytes);
+          }, onFailure: (error) => peer.close(error),
           handshake: async (writer) => {
+            if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "mcp.handshake.start", agent: slot.agent })}\n`);
             const initialized = await peer.request(writer, "initialize", { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "aiboard-runner-v2", version: "2" } }, timeoutMs, owner.context.signal);
             if (!initialized || typeof initialized !== "object") throw new McpSessionError("mcp_schema_changed", "MCP initialize response is invalid.");
             await peer.notify(writer, "notifications/initialized", {}, timeoutMs);
@@ -209,11 +227,13 @@ export class McpSessionManager {
             return canonicalMcpDigest({ initialized, tools });
           },
         });
+        if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "mcp.open.done", agent: slot.agent })}\n`);
         slot.transport = transport;
         if (slot.closed || this.closed || owner.context.signal?.aborted) throw new McpProtocolError("mcp_request_cancelled", "MCP owner closed during live acquisition.", "outcome_unknown");
         if (peer.error) throw peer.error;
       }
       if (!slot.transport.request) throw new McpSessionError("mcp_authority_required", "MCP transport lacks exact session-request authorization.");
+      if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "mcp.tools_call.start", agent: slot.agent, timeoutMs })}\n`);
       const result = await slot.transport.request(owner,
         (writer) => slot.peer!.request(writer, "tools/call", { name, arguments: args }, timeoutMs, owner.context.signal), timeoutMs);
       if (!result || typeof result !== "object" || Array.isArray(result)) throw new McpProtocolError("mcp_protocol_invalid", "MCP tools/call result is invalid.", "outcome_unknown");

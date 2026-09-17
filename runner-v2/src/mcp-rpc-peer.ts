@@ -76,15 +76,23 @@ export class McpRpcPeer {
     void response.catch(() => undefined);
     this.pending = current;
     const timeout = setTimeout(() => this.fail("mcp_request_timeout", "MCP request exceeded its write/response deadline."), timeoutMs);
-    const cancel = () => this.fail("mcp_request_cancelled", "MCP request was cancelled; protocol idleness is not established.");
+    const cancel = () => {
+      if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "rpc.cancel", method, id, started: current.started, responded: current.responded })}\n`);
+      this.fail("mcp_request_cancelled", "MCP request was cancelled; protocol idleness is not established.");
+    };
     signal?.addEventListener("abort", cancel, { once: true });
     try {
       current.started = true;
+      if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "rpc.start", method, id, timeoutMs })}\n`);
       // Promise.resolve().then also owns a writer that throws synchronously.
       const written = Promise.resolve().then(() => {
         if (this.failure) throw this.failure;
         return writer.write(payload, Math.min(timeoutMs, 30_000));
+      }).then((value) => {
+        if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "rpc.written", method, id })}\n`);
+        return value;
       }).catch((cause: unknown) => {
+        if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "rpc.write_failed", method, id, error: cause instanceof Error ? cause.message : String(cause) })}\n`);
         if (!this.failure) this.fail("mcp_write_outcome_unknown", "MCP request write acknowledgement is unavailable.", cause);
         throw this.failure!;
       });

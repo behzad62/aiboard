@@ -102,6 +102,7 @@ async function verifyMcpHandshake(
         available,
       })),
     ]);
+    if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "mcp.handshake.race", kind: outcome.kind, available: outcome.kind === "output" ? outcome.available : undefined, waitAborted: controller.signal.aborted })}\n`);
     if (outcome.kind === "handshake") return outcome.digest;
     if (outcome.kind === "failure") throw outcome.error;
     if (!outcome.available) {

@@ -385,6 +385,22 @@ test("round5 portable settlement waits through sink ACK publication retirement a
   } finally { await fixture.close(); }
 });
 
+test("round5 portable settlement retries a transient coordination sidecar then settles", async () => {
+  const fixture = await settlementFixture();
+  fixture.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+  const settlement = fixture.channel.settleBackpressuredOutput(2_000);
+  try {
+    await fixture.atAck;
+    fixture.resumeAck();
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
+    retirePortableOutputAcknowledgement({ channelDirectory: join(fixture.root, "channel"), nonce: "nonce", fence,
+      name: "stdout-000000000001.json", metadata: fixture.metadata });
+    fixture.transientCoordination(3);
+    fixture.stop();
+    assert.deepEqual(await settlement, { status: "settled" });
+  } finally { await fixture.close(); }
+});
+
 for (const failure of ["deadline", "deadline_final_reattest", "takeover", "takeover_final_snapshot", "coordination", "corrupt_snapshot", "retirement_intent", "suffix"] as const) {
   test(`round5 portable settlement blocks ${failure} while tracking the issued ACK`, async () => {
     const fixture = await settlementFixture();
@@ -443,6 +459,7 @@ async function settlementFixture() {
   let current = { ...fence } as { ownerId: string; fencingToken: number };
   let now = 1_000;
   let coordination = false;
+  let coordinationBlips = 0;
   let takeoverAfterSnapshot = false;
   let expireOnReattest = false;
   let entered!: () => void;
@@ -465,6 +482,10 @@ async function settlementFixture() {
         return result.value;
       },
       snapshot: (read) => {
+        if (coordinationBlips > 0) {
+          coordinationBlips -= 1;
+          return { status: "unavailable", cause: "coordination", error: new Error("transient sidecar") };
+        }
         if (coordination) return { status: "unavailable", cause: "coordination", error: new Error("held lock") };
         const result = runPortableFenceSnapshotSync({ lockPath: join(root, "effect.lock"), expectedFence: fence,
           readCurrentFence: () => current, read });
@@ -479,6 +500,7 @@ async function settlementFixture() {
     takeoverAfterSnapshot: () => { takeoverAfterSnapshot = true; },
     expireOnReattest: () => { expireOnReattest = true; },
     blockCoordination: () => { coordination = true; },
+    transientCoordination: (count: number) => { coordinationBlips = count; },
     stop: () => writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 })),
     appendSuffix: () => writeFileSync(join(root, "channel/output/stdout-000000000002.json"), JSON.stringify({ nonce: "nonce",
       metadata: { ...metadata, sequence: 2, startOffset: 1, endOffset: 2 }, bytes: bytes.toString("base64") })),

@@ -363,6 +363,11 @@ function drainOutput(stream, readable, evidencePath) {
     }
     const bytes = readable.read(available);
     if (!bytes) break;
+    try {
+      const line = `${JSON.stringify({ t: Date.now(), event: "drain", pid: process.pid, dir: config.directory, stream, bytes: bytes.byteLength, seq: outputSequences[stream] + 1 })}\n`;
+      appendFileSync(join(config.directory, "task12-trace.log"), line);
+      appendFileSync("/tmp/task12-mcp-traces.log", line);
+    } catch {}
     appendFileSync(evidencePath, bytes);
     const sequence = ++outputSequences[stream];
     const startOffset = outputOffsets[stream];
@@ -473,7 +478,15 @@ function handleChannelInput() {
         pendingChannelInput = pending;
         if (child.stdin.destroyed || !child.stdin.writable) pending.settled = true;
         else {
-          try { child.stdin.write(bytes, (error) => { pending.status = error ? "failed" : "acknowledged"; pending.settled = true; }); }
+          try { child.stdin.write(bytes, (error) => {
+            pending.status = error ? "failed" : "acknowledged";
+            pending.settled = true;
+            try {
+              const line = `${JSON.stringify({ t: Date.now(), event: "stdin.write", pid: process.pid, dir: config.directory, status: pending.status, bytes: bytes.byteLength, writable: child.stdin.writable, destroyed: child.stdin.destroyed, error: error ? String(error.message ?? error) : undefined })}\n`;
+              appendFileSync(join(config.directory, "task12-trace.log"), line);
+              appendFileSync("/tmp/task12-mcp-traces.log", line);
+            } catch {}
+          }); }
           catch { pending.settled = true; }
         }
         return;

@@ -252,7 +252,7 @@ test("C4 POSIX force queues the exact workload group and retains the supervisor 
   }
 });
 
-test("C4 POSIX v2 terminal observation preserves a live supervisor until authority release", async () => {
+test("C4 POSIX v2 terminal observation preserves a live supervisor until authority release", { timeout: 20_000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-terminal-witness-"));
   const directory = join(root, "owned-v2");
   const nonce = "c4-terminal-nonce";
@@ -308,6 +308,65 @@ test("C4 POSIX v2 terminal observation preserves a live supervisor until authori
     assert.equal(reusedGroupListings, 0, "durable retirement must not enumerate a numerically reused group");
     await assert.rejects(backend.release(binding, fence), /supervisor.*exit|witness/i);
     assert.equal(existsSync(directory), true, "release must retain authority while the terminal witness is alive");
+  } finally {
+    removeFixtureRoot(root);
+  }
+});
+
+test("C4 POSIX v2 release waits for the retired supervisor witness to exit before dropping authority", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-release-witness-exit-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "c4-release-witness-exit";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(directory, path), { recursive: true });
+  writeFileSync(join(directory, "stdout.log"), "");
+  writeFileSync(join(directory, "stderr.log"), "");
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...fence }));
+  writeFileSync(join(directory, "channel", "output-checkpoint.json"), JSON.stringify({
+    nonce,
+    stdout: { sequence: 0, endOffset: 0 },
+    stderr: { sequence: 0, endOffset: 0 },
+  }));
+  writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v2",
+    nonce,
+    supervisorPid: 9001,
+    supervisorBirth: "supervisor-birth",
+    workloadGroup,
+    workloadGroupRetirement: { state: "retired", cause: "anchor_release", at: "2026-09-06T00:00:01.000Z" },
+    launchEffect: "started",
+    rootProcess: null,
+    revision: 2,
+    handledControl: 0,
+    status: "stopped",
+    exitCode: 0,
+    signal: null,
+    knownProcesses: [],
+    error: null,
+    updatedAt: "2026-09-06T00:00:01.000Z",
+  }));
+  let supervisorInspections = 0;
+  const backend = createPosixProcessBackend({
+    stateDirectory: root,
+    pollIntervalMs: 1,
+    operations: {
+      inspectProcessBirth: (pid) => {
+        if (pid !== 9001) return { state: "absent" as const };
+        supervisorInspections += 1;
+        return supervisorInspections < 3
+          ? { state: "present" as const, fingerprint: "supervisor-birth" }
+          : { state: "absent" as const };
+      },
+      listPosixGroup: () => [],
+      signal: () => assert.fail("retired v2 release must not signal a process group"),
+    },
+  });
+  const binding = portableV2Binding(directory, nonce, "supervisor-birth", workloadGroup);
+  try {
+    assert.deepEqual(parseProcessReconciliation(await backend.reconcile(binding, fence)), { state: "exited", exitCode: 0 });
+    assert.deepEqual(await backend.release(binding, fence), { released: true });
+    assert.ok(supervisorInspections >= 3, "release must re-attest the supervisor witness until it actually exits");
+    assert.equal(existsSync(directory), false, "authority may drop only after the terminal witness has exited");
   } finally {
     removeFixtureRoot(root);
   }

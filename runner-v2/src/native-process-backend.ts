@@ -15,7 +15,7 @@ import type {
 import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshotSync } from "./portable-process-protocol.mjs";
-import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
+import { OwnedFenceAuthorityRetirementError, OwnedFenceLockUnavailableError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 
 const PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS = 2_000;
 const WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS = 15_000;
@@ -521,10 +521,22 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const assertOutputSettled = authorityRetired
       ? () => assertPortableOutputSettled(identity)
       : () => assertPortableOutputSettledAtFence(identity, _fence);
-    const validation = this.validate(identity);
+    let validation = this.validate(identity);
     if (validation === "mismatch" || validation === "unknown") throw new Error("Cannot release ownership without exact supervisor birth re-attestation.");
-    if (this.options.platform === "posix" && identity.version === 2 && validation !== "exited")
-      throw new Error("Cannot release POSIX workload authority while its terminal supervisor witness is still alive.");
+    if (this.options.platform === "posix" && identity.version === 2 && validation !== "exited") {
+      const retired = this.posixWorkloadSnapshot(identity);
+      if (retired.state === "ready" && retired.value.workloadGroupRetirement.state === "retired") {
+        const waitUntil = Date.now() + POSIX_FORCE_SETTLEMENT_DEADLINE_MS;
+        while (validation !== "exited" && Date.now() < waitUntil) {
+          await delay(this.pollIntervalMs);
+          validation = this.validate(identity);
+          if (validation === "mismatch" || validation === "unknown")
+            throw new Error("Cannot release ownership without exact supervisor birth re-attestation.");
+        }
+      }
+      if (validation !== "exited")
+        throw new Error("Cannot release POSIX workload authority while its terminal supervisor witness is still alive.");
+    }
     const emptiness = await this.emptiness(identity);
     if (emptiness !== "empty")
       throw new Error(emptiness === "outcome_unknown" ? "Cannot release ownership with unknown empty verification." : "Cannot release non-empty owned process identity.");
@@ -1200,7 +1212,7 @@ function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectF
       return effect();
     });
   } catch (error) {
-    if (error instanceof OwnedProcessIdentityMismatchError) throw error;
+    if (error instanceof OwnedProcessIdentityMismatchError || error instanceof OwnedFenceLockUnavailableError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
@@ -1215,7 +1227,7 @@ async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: Pro
       return effect();
     }, { retireAfterEffect: Boolean(retireAuthority), ...(retireAuthority ? { retireAuthority } : {}) });
   } catch (error) {
-    if (error instanceof OwnedProcessIdentityMismatchError) throw error;
+    if (error instanceof OwnedProcessIdentityMismatchError || error instanceof OwnedFenceLockUnavailableError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
