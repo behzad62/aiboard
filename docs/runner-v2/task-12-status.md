@@ -9,13 +9,13 @@ Plan: `docs/runner-v2/task-12-bounded-gates.md`
 - Gate B POSIX: PASS
 - Gate C Windows: PASS
 - Gate D macOS/config: IMPLEMENTED / DARWIN_MATRIX_FOLLOWUP
-- Gate E lifecycle/Docker: IN_PROGRESS
+- Gate E lifecycle/Docker: EVIDENCE_COMPLETE / REVIEW_PENDING
 - Gate F benchmark: NOT_STARTED
 - Gate G final acceptance: NOT_STARTED
 
 ## Current gate
 
-T12-E — lifecycle settlement and real Docker/OCI is in progress. Gate D implementation is frozen and independently reviewed; broader Darwin matrix cleanup remains recorded for final platform acceptance.
+T12-E — lifecycle settlement and real Docker/OCI implementation/evidence is complete on the controller side, but independent review is pending because every available external reviewer is currently quota/auth blocked. Do not start Gate F until Gate E receives its documented independent review or the user explicitly overrides that gate rule.
 
 ## Clean repair workspace
 
@@ -103,17 +103,28 @@ Gate D implementation/evidence:
 - Real `macos-latest` / Node 24 evidence run `35330634366` on temporary commit `7bae6fde` executed both new Darwin acceptance fixtures without skips: macOS `LocalPluginLoader` host-alias fixture PASS; capability extension/state-root host-alias fixture PASS; exact mapping classifier PASS.
 - The same broader three-file Darwin run finished 22 pass / 8 fail. Those eight failures are raw-vs-canonical macOS fixture/expectation portability issues (including `/var` vs `/private/var` keyed paths/assertions) outside the two new alias acceptance fixtures, so Gate D is frozen as implemented/reviewed but not claimed as full Darwin-matrix PASS. User explicitly authorized continuing to Gate E with this follow-up retained for platform acceptance.
 
+Gate E controller evidence:
+- No Gate-E source repair was required after the Gate B/C lifecycle fixes. Audit confirmed `reconcile: exited` is workload quiescence only: execution-host cleanup, internal kernel cleanup, and subprocess completion still require separate output settlement, terminal/empty proof, fresh authority where applicable, and backend/resource release.
+- `NativeOwnedProcessBackend` POSIX v2 deliberately permits durable workload retirement to reconcile `exited`, but `release()` independently rejects while the exact terminal supervisor witness is alive, requires settled output, verified emptiness, durable stopped proof, stable birth/fence attestation, and a final fenced release re-attestation.
+- Focused lifecycle/recovery suite (`execution-host-streaming-quiesce`, `runner-internal-process-kernel`, `subprocess-runtime`, `runner-resource-cleanup`): 84 pass, 0 fail, 0 skip.
+- Explicit Gate-E invariant subset: 7 pass, 0 fail. It covers workload-exit/output-unsettled separation, signal-only exit not replacing reconcile proof, live terminal supervisor blocking release, transient verified-empty retry, output finalized before verified cleanup/release, and fail-closed durable-state/reconcile recovery.
+- Real Docker CI-equivalent suite with `RUNNER_V2_REQUIRE_DOCKER=1` across `oci-execution-isolation-provider`, `managed-strict-oci`, and `mcp-tools`: 93 pass, 0 fail, 0 skip. Live-child cleanup, forced cleanup, attach cancellation/disappearance, exact restart recovery, image-mismatch blocking, strict duplex, and public MCP process-tree cleanup all passed.
+- Post-run `docker ps -a --filter label=ai-board.runner-v2.owned=true` returned no containers. `npx tsc -p runner-v2/tsconfig.json --noEmit` and `git diff --check` both exited 0.
+- OCI's remaining strict symbolic-component walker can still fail closed for macOS `/var/...` caller spellings in working-directory/translated absolute arguments. Controller audit classifies this as the already-recorded Darwin portability follow-up, not a release/lifecycle safety bypass; no trust rule was broadened in Gate E.
+
 ## Reviewer status
 
 T12-0 baseline evidence has been controller-verified. Gate A received two read-only independent reviews and finished `READY`. Gate B received three read-only independent review passes: the first correctly found parser/blank-evidence/test gaps but withdrew its initial last-tick-descendant premise after verifying the dedicated anchor wrapper; the second found a real lifecycle deadlock and unbounded retry in the first repair; both were fixed. The final Gate B reviewer verdict was `READY`, with no Critical or blocking Important findings, and explicitly re-audited both negative-PGID signal sites and all six prior blockers.
 
 Gate C received repeated read-only independent review passes. Earlier `NOT READY` reviews found the post-effect ACK replay bug, over-broad contention classification, missing Windows startup readiness, final-settlement re-attestation poisoning, coordination-path replacement misclassification, and startup busy-read intolerance; each blocker received focused RED/GREEN coverage before repair. The final full Gate C review was `READY` with no Critical findings and confirmed the ownership/control invariants. Its only requested follow-up was diagnostic reason preservation; that change then received a separate narrow post-READY review with verdict `READY` and no blockers.
 
-Gate D received two read-only independent reviews. The first correctly found an end-to-end split where capability capture accepted a Darwin host alias but `LocalPluginLoader` still rejected it. The loader was repaired to consume the same exact host-alias predicate, final-component checks were restored, and the second review returned `READY` with no Critical findings. Full Darwin matrix acceptance remains explicitly deferred because the broader evidence run exposed eight raw-vs-canonical fixture/expectation portability failures even though the new Darwin alias acceptance fixtures themselves passed. Gates E-G still require their documented independent review before acceptance.
+Gate D received two read-only independent reviews. The first correctly found an end-to-end split where capability capture accepted a Darwin host alias but `LocalPluginLoader` still rejected it. The loader was repaired to consume the same exact host-alias predicate, final-component checks were restored, and the second review returned `READY` with no Critical findings. Full Darwin matrix acceptance remains explicitly deferred because the broader evidence run exposed eight raw-vs-canonical fixture/expectation portability failures even though the new Darwin alias acceptance fixtures themselves passed.
+
+Gate E controller implementation/evidence is complete, but independent review is not. Review attempts were blocked before any code review occurred: direct Claude and Haiku hit the shared weekly quota; Gemini CLI requires `GOOGLE_CLOUD_PROJECT` for its cached workspace account; installed Codex v0.145 was too old for the account's current model; ephemeral Codex v0.155 reached the service but the account is out of Codex usage until its displayed reset; CCR is not exposed on the current command path. Do not interpret any of those tool failures as review results. Gate E remains `REVIEW_PENDING`; Gates F-G remain unstarted.
 
 ## Known later-gate issues
 
 - Gate D/G platform follow-up: the targeted Darwin host-alias acceptance fixtures pass, but the broader three-file macOS run still has eight raw-vs-canonical fixture/expectation portability failures that must be repaired or classified before final matrix acceptance.
-- Gate E: supervisor/output/release settlement and real Docker lifecycle remain open. `oci-execution-isolation-provider.ts` still has its own strict symbolic-component walker for caller working-directory/translated absolute paths; audit it here because `/var/...` caller spellings may currently fail closed on macOS. Revisit Gate B's accepted-but-short three-tick (~75 ms default) POSIX transient-inspection window if lifecycle evidence shows real host hiccups need a wider time floor; do not replace it with unbounded retry.
+- Gate E acceptance: controller audit and real Docker evidence are complete; only the required independent review remains open. `oci-execution-isolation-provider.ts` still safely fails closed for macOS `/var/...` caller spellings in working-directory/translated absolute paths; keep that with the Gate D/G Darwin portability follow-up unless independent review finds a lifecycle coupling. Gate E evidence did not justify widening Gate B's accepted three-tick POSIX transient-inspection window.
 - Gate F: certified preset timeout still requires causal classification, not timeout inflation.
 - Gate G final audit: recheck the currently unreachable POSIX branch in `activeOwnedPids` before any future reuse because it still has a legacy permissive parser shape; also retain the documented non-Linux `ps -o lstart=` birth-witness precision limitation in platform evidence.
