@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   capabilitiesConfigCanonicalTargetIsInsideProject,
+  isTrustedRunnerHostAliasResolution,
   loadRunnerCapabilitiesConfig,
   resolveRunnerCapabilitiesConfigPath,
   RunnerCapabilitiesConfigError,
@@ -158,6 +159,21 @@ test("capability configuration rejects a regular file reached through a user-cre
     rmSync(aliasRoot, { recursive: true, force: true });
     fixture.close();
   }
+});
+
+test("Darwin host-native aliases are exact fixed mappings, not arbitrary symlink permission", () => {
+  for (const [requested, canonical] of [
+    ["/var/folders/a/config.json", "/private/var/folders/a/config.json"],
+    ["/tmp/runner/config.json", "/private/tmp/runner/config.json"],
+    ["/etc/runner/config.json", "/private/etc/runner/config.json"],
+  ] as const) {
+    assert.equal(isTrustedRunnerHostAliasResolution(requested, canonical, "darwin"), true);
+  }
+  assert.equal(isTrustedRunnerHostAliasResolution("/var/folders/a", "/private/tmp/a", "darwin"), false);
+  assert.equal(isTrustedRunnerHostAliasResolution("/var-lookalike/a", "/private/var/a", "darwin"), false);
+  assert.equal(isTrustedRunnerHostAliasResolution("/user/alias/a", "/private/var/a", "darwin"), false);
+  assert.equal(isTrustedRunnerHostAliasResolution("/var/folders/a", "/private/var/folders/a", "linux"), false);
+  assert.equal(isTrustedRunnerHostAliasResolution("/var/folders/a", "/private/var/folders/a", "win32"), false);
 });
 
 test("capability configuration loads a regular file when only host-native path aliases differ", async () => {

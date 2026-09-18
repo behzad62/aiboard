@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -422,6 +423,49 @@ test("plugins cannot register lifecycle tools or impersonate protected and built
     }
   } finally {
     fixture.close();
+  }
+});
+
+test("macOS plugin loader accepts only the fixed host-native /var alias", async (context) => {
+  if (process.platform !== "darwin") {
+    context.skip("macOS host-native path alias fixture requires Darwin.");
+    return;
+  }
+  const root = mkdtempSync(join("/var/tmp", "aiboard-plugin-darwin-host-alias-"));
+  const project = join(root, "project");
+  const state = join(root, "runner state");
+  const plugin = join(root, "plugin");
+  try {
+    mkdirSync(project);
+    mkdirSync(state);
+    mkdirSync(plugin);
+    writeFileSync(join(plugin, "index.mjs"), `
+      export function createExtension() {
+        return {
+          capabilities() { return { tools: [], contextContributors: [], languageProviders: [] }; },
+          async start() {},
+          async close() {}
+        };
+      }
+    `);
+    writeFileSync(join(plugin, "runner-extension.json"), JSON.stringify({
+      apiVersion: 1,
+      id: "fixture.darwin-loader",
+      name: "fixture.darwin-loader",
+      version: "1.0.0",
+      entry: "index.mjs",
+      capabilities: [],
+    }));
+    assert.notEqual(plugin, realpathSync(plugin), "fixture must enter LocalPluginLoader through /var -> /private/var");
+    const loaded = await new LocalPluginLoader({
+      pluginDirectories: [plugin],
+      projectDirectory: project,
+      stateDirectory: state,
+    }).load();
+    assert.deepEqual(loaded.registry.manifests().map((manifest) => manifest.id), ["fixture.darwin-loader"]);
+    await loaded.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

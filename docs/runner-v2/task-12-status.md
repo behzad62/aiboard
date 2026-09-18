@@ -8,14 +8,14 @@ Plan: `docs/runner-v2/task-12-bounded-gates.md`
 - Gate A fencing: PASS
 - Gate B POSIX: PASS
 - Gate C Windows: PASS
-- Gate D macOS/config: NOT_STARTED
-- Gate E lifecycle/Docker: NOT_STARTED
+- Gate D macOS/config: IMPLEMENTED / DARWIN_MATRIX_FOLLOWUP
+- Gate E lifecycle/Docker: IN_PROGRESS
 - Gate F benchmark: NOT_STARTED
 - Gate G final acceptance: NOT_STARTED
 
 ## Current gate
 
-T12-C — Windows native ownership and cleanup is accepted. Next gate: T12-D — macOS canonical paths and config trust.
+T12-E — lifecycle settlement and real Docker/OCI is in progress. Gate D implementation is frozen and independently reviewed; broader Darwin matrix cleanup remains recorded for final platform acceptance.
 
 ## Clean repair workspace
 
@@ -95,15 +95,25 @@ Gate C RED/GREEN evidence:
 - Final owned-fence suite: 35 pass, 0 fail. Final process backend/protocol contract suite: 29 pass, 0 fail. Final portable channel suite: 76 pass, 0 fail. Final Windows backend suite: 95 pass, 0 fail.
 - `npx tsc -p runner-v2/tsconfig.json --noEmit`: exit 0. `git diff --check`: exit 0.
 
+Gate D implementation/evidence:
+- Added one exact Darwin host-alias predicate for `/var -> /private/var`, `/tmp -> /private/tmp`, and `/etc -> /private/etc`; all other platforms and mappings remain untrusted.
+- Capabilities config confinement, capability-contract extension/state roots, configured OCI executable attestation, and `LocalPluginLoader` now consume the same host-alias rule while final components and user-created parent aliases/junctions remain strict.
+- Windows bounded Gate-D suite: 28 pass, 0 fail, 2 Darwin-only skips across config, capability-contract, and plugin-loader tests; CLI trust-boundary subset 3 pass, 0 fail; TypeScript and diff-check clean.
+- Independent Gate-D re-review verdict: `READY`, no Critical findings; the earlier loader split was repaired before re-review.
+- Real `macos-latest` / Node 24 evidence run `35330634366` on temporary commit `7bae6fde` executed both new Darwin acceptance fixtures without skips: macOS `LocalPluginLoader` host-alias fixture PASS; capability extension/state-root host-alias fixture PASS; exact mapping classifier PASS.
+- The same broader three-file Darwin run finished 22 pass / 8 fail. Those eight failures are raw-vs-canonical macOS fixture/expectation portability issues (including `/var` vs `/private/var` keyed paths/assertions) outside the two new alias acceptance fixtures, so Gate D is frozen as implemented/reviewed but not claimed as full Darwin-matrix PASS. User explicitly authorized continuing to Gate E with this follow-up retained for platform acceptance.
+
 ## Reviewer status
 
 T12-0 baseline evidence has been controller-verified. Gate A received two read-only independent reviews and finished `READY`. Gate B received three read-only independent review passes: the first correctly found parser/blank-evidence/test gaps but withdrew its initial last-tick-descendant premise after verifying the dedicated anchor wrapper; the second found a real lifecycle deadlock and unbounded retry in the first repair; both were fixed. The final Gate B reviewer verdict was `READY`, with no Critical or blocking Important findings, and explicitly re-audited both negative-PGID signal sites and all six prior blockers.
 
-Gate C received repeated read-only independent review passes. Earlier `NOT READY` reviews found the post-effect ACK replay bug, over-broad contention classification, missing Windows startup readiness, final-settlement re-attestation poisoning, coordination-path replacement misclassification, and startup busy-read intolerance; each blocker received focused RED/GREEN coverage before repair. The final full Gate C review was `READY` with no Critical findings and confirmed the ownership/control invariants. Its only requested follow-up was diagnostic reason preservation; that change then received a separate narrow post-READY review with verdict `READY` and no blockers. Gates D-G still require their documented independent review before acceptance.
+Gate C received repeated read-only independent review passes. Earlier `NOT READY` reviews found the post-effect ACK replay bug, over-broad contention classification, missing Windows startup readiness, final-settlement re-attestation poisoning, coordination-path replacement misclassification, and startup busy-read intolerance; each blocker received focused RED/GREEN coverage before repair. The final full Gate C review was `READY` with no Critical findings and confirmed the ownership/control invariants. Its only requested follow-up was diagnostic reason preservation; that change then received a separate narrow post-READY review with verdict `READY` and no blockers.
+
+Gate D received two read-only independent reviews. The first correctly found an end-to-end split where capability capture accepted a Darwin host alias but `LocalPluginLoader` still rejected it. The loader was repaired to consume the same exact host-alias predicate, final-component checks were restored, and the second review returned `READY` with no Critical findings. Full Darwin matrix acceptance remains explicitly deferred because the broader evidence run exposed eight raw-vs-canonical fixture/expectation portability failures even though the new Darwin alias acceptance fixtures themselves passed. Gates E-G still require their documented independent review before acceptance.
 
 ## Known later-gate issues
 
-- Gate D: extracted config confinement fix is present as `99b4cfb2`; broader macOS `/var -> /private/var` capability-contract handling remains unresolved.
-- Gate E: supervisor/output/release settlement and real Docker lifecycle remain open. Revisit Gate B's accepted-but-short three-tick (~75 ms default) POSIX transient-inspection window if lifecycle evidence shows real host hiccups need a wider time floor; do not replace it with unbounded retry.
+- Gate D/G platform follow-up: the targeted Darwin host-alias acceptance fixtures pass, but the broader three-file macOS run still has eight raw-vs-canonical fixture/expectation portability failures that must be repaired or classified before final matrix acceptance.
+- Gate E: supervisor/output/release settlement and real Docker lifecycle remain open. `oci-execution-isolation-provider.ts` still has its own strict symbolic-component walker for caller working-directory/translated absolute paths; audit it here because `/var/...` caller spellings may currently fail closed on macOS. Revisit Gate B's accepted-but-short three-tick (~75 ms default) POSIX transient-inspection window if lifecycle evidence shows real host hiccups need a wider time floor; do not replace it with unbounded retry.
 - Gate F: certified preset timeout still requires causal classification, not timeout inflation.
 - Gate G final audit: recheck the currently unreachable POSIX branch in `activeOwnedPids` before any future reuse because it still has a legacy permissive parser shape; also retain the documented non-Linux `ps -o lstart=` birth-witness precision limitation in platform evidence.

@@ -16,12 +16,118 @@ import { createHash } from "node:crypto";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import {
   assertRunnerCapabilityContract,
+  captureRunnerExtensionClosure,
   cloneRunnerCapabilityContract,
   createRunnerCapabilityContract,
+  createRunnerCapabilityContractSnapshot,
   runnerCapabilitiesForContract,
   validateRunnerCapabilityContract,
 } from "../src/runner-capability-contract.js";
 import { EXECUTION_SAFETY_CONTRACT_VERSION } from "../src/execution-safety-contracts.js";
+
+test("capability extension and snapshot state roots reject user-created aliases", async (context) => {
+  const root = mkdtempSync(join(tmpdir(), "runner-capability-root-alias-"));
+  const extension = join(root, "extension");
+  const extensionAlias = join(root, "extension-alias");
+  const state = join(root, "state");
+  const stateAlias = join(root, "state-alias");
+  const cliDirectory = join(root, "cli");
+  const cliAlias = join(root, "cli-alias");
+  const cli = join(cliDirectory, process.platform === "win32" ? "oci.exe" : "oci");
+  try {
+    mkdirSync(extension);
+    mkdirSync(state);
+    mkdirSync(cliDirectory);
+    writeFileSync(cli, "fixture executable bytes");
+    writeFileSync(join(extension, "runner-extension.json"), JSON.stringify({
+      apiVersion: 1,
+      id: "fixture.alias-root",
+      name: "fixture.alias-root",
+      version: "1.0.0",
+      entry: "index.mjs",
+      capabilities: ["tools"],
+    }));
+    writeFileSync(join(extension, "index.mjs"), "export default {};\n");
+    try {
+      symlinkSync(extension, extensionAlias, process.platform === "win32" ? "junction" : "dir");
+      symlinkSync(state, stateAlias, process.platform === "win32" ? "junction" : "dir");
+      symlinkSync(cliDirectory, cliAlias, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") {
+        context.skip("The host does not permit directory alias creation.");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(captureRunnerExtensionClosure(extensionAlias), /symbolic link/i);
+    await assert.rejects(
+      createRunnerCapabilityContractSnapshot({ extensions: [extension], languageServers: [] }, stateAlias),
+      /symbolic link/i,
+    );
+    await assert.rejects(
+      createRunnerCapabilityContract({
+        extensions: [],
+        languageServers: [],
+        isolationProviders: [{
+          id: "oci.alias",
+          type: "oci",
+          cliPath: join(cliAlias, process.platform === "win32" ? "oci.exe" : "oci"),
+          image: "fixture/image:latest",
+          allowNetwork: false,
+        }],
+      }),
+      /symbolic path/i,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("macOS host-native tmp alias is accepted for extension and snapshot state roots", async (context) => {
+  if (process.platform !== "darwin") {
+    context.skip("macOS host-native path alias fixture requires Darwin.");
+    return;
+  }
+  const root = mkdtempSync(join("/var/tmp", "runner-capability-darwin-host-alias-"));
+  const extension = join(root, "extension");
+  const state = join(root, "state");
+  const cli = join(root, "oci");
+  try {
+    mkdirSync(extension);
+    mkdirSync(state);
+    writeFileSync(cli, "fixture executable bytes");
+    writeFileSync(join(extension, "runner-extension.json"), JSON.stringify({
+      apiVersion: 1,
+      id: "fixture.darwin-host-alias",
+      name: "fixture.darwin-host-alias",
+      version: "1.0.0",
+      entry: "index.mjs",
+      capabilities: ["tools"],
+    }));
+    writeFileSync(join(extension, "index.mjs"), "export default {};\n");
+    const canonicalExtension = realpathSync(extension);
+    const canonicalState = realpathSync(state);
+    assert.notEqual(extension, canonicalExtension, "fixture must enter through the macOS /var or /tmp host alias");
+    assert.notEqual(state, canonicalState, "fixture state root must enter through the macOS host alias");
+    const closure = await captureRunnerExtensionClosure(extension);
+    assert.equal(closure.directory, canonicalExtension);
+    const contract = await createRunnerCapabilityContractSnapshot({
+      extensions: [extension],
+      languageServers: [],
+      isolationProviders: [{
+        id: "oci.darwin-host-alias",
+        type: "oci",
+        cliPath: cli,
+        image: "fixture/image:latest",
+        allowNetwork: false,
+      }],
+    }, state);
+    assert.equal(contract.extensions.length, 1);
+    assert.equal(contract.isolationProviders?.[0]?.executable.path, realpathSync(cli));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("current capability snapshots bind the execution-safety contract version into the digest", async () => {
   const contract = await createRunnerCapabilityContract({ extensions: [], languageServers: [] });
