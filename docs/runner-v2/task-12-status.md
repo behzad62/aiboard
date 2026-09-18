@@ -10,12 +10,12 @@ Plan: `docs/runner-v2/task-12-bounded-gates.md`
 - Gate C Windows: PASS
 - Gate D macOS/config: IMPLEMENTED / DARWIN_MATRIX_FOLLOWUP
 - Gate E lifecycle/Docker: PASS
-- Gate F benchmark: NOT_STARTED
-- Gate G final acceptance: NOT_STARTED
+- Gate F benchmark: PASS
+- Gate G final acceptance: IN_PROGRESS
 
 ## Current gate
 
-T12-F — certified preset timeout causal classification and benchmark acceptance. Gate E lifecycle/Docker is accepted; do not inflate timeouts without identifying the causal blocker.
+T12-G — final integrated acceptance and platform-matrix audit. Gate F benchmark acceptance is complete: the Node 22 certified-preset failure was classified as `tsx@4.22.5` test-runner module-identity duplication, repaired by the dependency-only move to `tsx@4.23.13`, independently reviewed `READY`, and validated without changing benchmark waits, timeouts, thresholds, or Runner V2 runtime behavior. Gate G must resolve or explicitly classify the retained Darwin matrix follow-up and perform the final bounded whole-plan audit.
 
 ## Clean repair workspace
 
@@ -113,6 +113,14 @@ Gate E controller evidence:
 - OCI's remaining strict symbolic-component walker can still fail closed for macOS `/var/...` caller spellings in working-directory/translated absolute arguments. Controller audit classifies this as the already-recorded Darwin portability follow-up, not a release/lifecycle safety bypass; no trust rule was broadened in Gate E.
 - Independent Cursor Agent review at detached HEAD `1c47f285` returned `READY`: no Critical or Important Gate-E findings, all five required lifecycle/recovery cases had implementation proof plus regression coverage, and the reviewer independently reran the explicit invariant subset at 7 pass / 0 fail.
 
+Gate F causal-classification / GREEN evidence:
+- Historical Task-12 benchmark CI failed on Node 22 at `scripts/test-certified-preset-cancellation.mts:89/548`, where the unchanged helper allows 500 zero-delay scheduler turns before reporting `Timed out waiting for certified preset state.` The same failure reproduced in clean `node:22-bookworm` / Node 22.23.2 with the locked `tsx@4.22.5`; Linux/Windows Node 24 did not reproduce it.
+- Extended diagnostic instrumentation proved the four preset workers were admitted, but Node 22 never reached the test's stubbed OpenAI stream and failed before provider admission. The persisted fatal reason was normalized to the generic account/configuration-unavailable message, so that text is not treated as a unique fingerprint. The decisive evidence was a minimal module-identity probe: `tsx@4.22.5` on Node 22 loaded separate mutable provider/store singleton instances, so the production provider graph could not see the test-initialized client store. The same probe had one shared provider/store graph on Node 24.
+- On that exact Node 22 container, replacing only the test runner with `tsx@4.23.13` made the module-identity probe pass and made the untouched certified-preset test pass with its original 500-turn bound. A second independent store-sensitive benchmark script, `test-benchmark-model-effort-execution.mts`, recovered at the same time. This separates the failure from Runner V2 lifecycle/performance and identifies the benchmark test-runner compatibility bug.
+- Accepted implementation candidate changes only the `tsx` devDependency/lock from `4.22.5` to `4.23.13`. No Runner V2 source, certified benchmark logic, model-call timeout, workflow timeout, or benchmark threshold changed.
+- Fresh lockfile-controlled Linux Node 22.23.2 validation: `npm run test:certified` exited 0 in ~273 s with `tsx@4.23.13`, including the formerly failing preset cancellation case.
+- Fresh lockfile-controlled Linux Node 24 validation on a native container filesystem: `npm run test:certified` exited 0 in ~152 s with `tsx@4.23.13`. An earlier Windows-bind-mounted Node 24 run reached deep into the suite without assertion failures but terminated with host/runtime `ENOMEM`; Docker had ~7.75 GiB available and Windows ~33 GiB free. Re-running from a native Linux copy removed that environment variable and passed end to end without changing any memory or benchmark threshold.
+
 ## Reviewer status
 
 T12-0 baseline evidence has been controller-verified. Gate A received two read-only independent reviews and finished `READY`. Gate B received three read-only independent review passes: the first correctly found parser/blank-evidence/test gaps but withdrew its initial last-tick-descendant premise after verifying the dedicated anchor wrapper; the second found a real lifecycle deadlock and unbounded retry in the first repair; both were fixed. The final Gate B reviewer verdict was `READY`, with no Critical or blocking Important findings, and explicitly re-audited both negative-PGID signal sites and all six prior blockers.
@@ -123,9 +131,10 @@ Gate D received two read-only independent reviews. The first correctly found an 
 
 Gate E received a final read-only independent review in Cursor Agent against detached HEAD `1c47f285`. Verdict: `READY`. The reviewer found no Critical or Important findings, independently confirmed all five required Gate-E cases and reran the explicit invariant subset at 7/7. Minor non-blocking suggestions were: add a POSIX retired+supervisor-absent+leftover-output regression; add an OCI `cleaned_pending_ack`+still-listed-container residue regression; retain awareness that the internal kernel may treat `signal(): exited` as workload exit but still requires `verifyEmpty`+`release`; and note that Windows `release()` relies on production callers quiescing first. None was classified as a Gate-E lifecycle blocker.
 
+Gate F received a final read-only independent review in Cursor Agent against working HEAD `bf42482f` plus the three-file Gate-F candidate diff. Verdict: `READY`; no Critical findings. The reviewer independently confirmed the dependency/lockfile change is minimal, the certified-preset 500-turn wait and workflow timeout remain unchanged, the Node 22 RED→module-identity probe→`tsx@4.23.13` GREEN chain is causally sufficient, and the Node 22/24 controlled certified-suite evidence meets Gate F. Its one Important bookkeeping finding was this status file's stale “Gate F still requires causal classification” later-gate bullet; that stale line was removed before acceptance. The reviewer also noted that the generic persisted account/configuration error is normalized and should not be treated as the unique causal fingerprint; the evidence wording above now makes the module-identity probe decisive instead.
+
 ## Known later-gate issues
 
 - Gate D/G platform follow-up: the targeted Darwin host-alias acceptance fixtures pass, but the broader three-file macOS run still has eight raw-vs-canonical fixture/expectation portability failures that must be repaired or classified before final matrix acceptance.
 - Gate E non-blocking follow-ups: consider adding a POSIX retired+supervisor-absent+leftover-output regression and an OCI `cleaned_pending_ack`+still-listed-container residue regression during final hardening. The strict OCI macOS `/var/...` walker remains part of the Gate D/G Darwin portability follow-up, not a Gate-E lifecycle issue. Gate E evidence did not justify widening Gate B's accepted three-tick POSIX transient-inspection window.
-- Gate F: certified preset timeout still requires causal classification, not timeout inflation.
 - Gate G final audit: recheck the currently unreachable POSIX branch in `activeOwnedPids` before any future reuse because it still has a legacy permissive parser shape; also retain the documented non-Linux `ps -o lstart=` birth-witness precision limitation in platform evidence.
