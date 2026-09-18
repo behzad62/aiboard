@@ -17,6 +17,7 @@ import {
   type PortableFenceSnapshotOutcome,
   type PortableOutputSnapshot,
 } from "./portable-process-protocol.mjs";
+import { isOwnedFenceLockContention } from "./owned-fence-lock.mjs";
 
 export interface PortableChannelAuthority {
   readonly directory: string;
@@ -249,8 +250,12 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   }
 
   private async observeOutputSettlement(deadlineAt: number): Promise<BackpressuredOutputSettlement> {
+    const wallDeadline = Date.now() + Math.max(this.pollIntervalMs, deadlineAt - this.clock());
+    let coordinationBlocked = false;
     for (;;) {
-      if (this.clock() >= deadlineAt) return { status: "blocked", reason: "deadline" };
+      if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
+        return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
+      }
       const snapshot = this.authority.snapshot(() => {
         this.assertOutputDeadline();
         const state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
@@ -260,19 +265,41 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         return { terminal: state.status === "stopped", output: this.readOutputSnapshot() };
       });
       if (snapshot.status === "stale") return { status: "blocked", reason: "stale_fence" };
-      if (snapshot.status === "unavailable") return { status: "blocked", reason: snapshot.cause === "coordination" ? "coordination_unavailable" : "outcome_unknown" };
+      if (snapshot.status === "unavailable" && snapshot.cause === "coordination" && isRetryablePortableCoordination(snapshot.error)) {
+        coordinationBlocked = true;
+        await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
+        continue;
+      }
+      if (snapshot.status === "unavailable") return { status: "blocked", reason: "outcome_unknown" };
       if (snapshot.status !== "applied") return { status: "blocked", reason: "output_unaccounted" };
       if (this.channelFailure) return { status: "blocked", reason: this.channelFailure instanceof PortableOutputSettlementFailure ? this.channelFailure.reason : "outcome_unknown" };
       const { terminal, output } = snapshot.value;
       if (terminal && output.output.length === 0 && output.acknowledgements.length === 0 && this.outputTasks === 0) {
-        if (this.clock() >= deadlineAt) return { status: "blocked", reason: "deadline" };
-        try { this.reattest(false); } catch { return { status: "blocked", reason: "stale_fence" }; }
-        if (this.clock() >= deadlineAt) return { status: "blocked", reason: "deadline" };
+        if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
+          return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
+        }
+        try { this.reattest(false); }
+        catch (error) {
+          if (isRetryablePortableCoordination(error)) {
+            coordinationBlocked = true;
+            await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
+            continue;
+          }
+          return { status: "blocked", reason: "stale_fence" };
+        }
+        if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
+          return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
+        }
         return { status: "settled" };
       }
+      coordinationBlocked = false;
       if (this.outputTasks === 0 && output.output.some((entry) => !this.deliveredOutput.has(entry.name))) this.scheduleOutput();
-      await delay(Math.min(this.pollIntervalMs, Math.max(0, deadlineAt - this.clock())));
+      await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
     }
+  }
+
+  private settlementRetryDelayMs(deadlineAt: number, wallDeadline: number): number {
+    return Math.min(this.pollIntervalMs, Math.max(0, deadlineAt - this.clock()), Math.max(0, wallDeadline - Date.now()));
   }
 
   private assertOutputDeadline(): void {
@@ -330,23 +357,42 @@ class PortableProcessChannel implements InteractiveProcessChannel {
           throw new Error("Portable output acknowledgement metadata mismatch.");
         if (this.detached || sink !== this.outputSink) return;
         this.assertOutputDeadline();
-        await this.authority.effect("output_ack", () => {
-          this.assertOutputDeadline();
-          writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({
-            nonce: this.authority.nonce,
-            ownerId: this.authority.fence.ownerId,
-            fencingToken: this.authority.fence.fencingToken,
-            metadata: entry.metadata,
-          }));
-        });
+        try {
+          await this.authority.effect("output_ack", () => {
+            this.assertOutputDeadline();
+            writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({
+              nonce: this.authority.nonce,
+              ownerId: this.authority.fence.ownerId,
+              fencingToken: this.authority.fence.fencingToken,
+              metadata: entry.metadata,
+            }));
+          });
+        } catch (error) {
+          if (isRetryablePortableCoordination(error) && this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) {
+            this.deliveredOutput.add(entry.name);
+            continue;
+          }
+          throw error;
+        }
         this.deliveredOutput.add(entry.name);
       }
     }).catch((error) => {
+      if (isRetryablePortableCoordination(error)) return;
       this.channelFailure = error instanceof Error ? error : new Error("Portable output channel failed.");
       this.cancelTerminalInspection();
       this.deliverTerminal({ state: "outcome_unknown" });
       this.scheduleTerminal();
     }).finally(() => { this.outputTasks--; });
+  }
+
+  private hasExactDurableOutputAcknowledgement(name: string, metadata: BackpressuredOutputMetadata): boolean {
+    try {
+      const value = JSON.parse(readFileSync(join(this.ackDirectory, name), "utf8"));
+      return value.nonce === this.authority.nonce &&
+        value.ownerId === this.authority.fence.ownerId &&
+        value.fencingToken === this.authority.fence.fencingToken &&
+        JSON.stringify(value.metadata) === JSON.stringify(metadata);
+    } catch { return false; }
   }
 
   private outputFiles(): Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }> {
@@ -516,5 +562,8 @@ function writeAtomic(path: string, value: string): void {
 function positive(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error("Portable channel capacity/state is invalid.");
   return value as number;
+}
+function isRetryablePortableCoordination(error: unknown): boolean {
+  return isOwnedFenceLockContention(error);
 }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }

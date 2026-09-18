@@ -41,6 +41,9 @@ const posixBarrierWaiter = new Int32Array(new SharedArrayBuffer(4));
 const ATOMIC_REPLACEMENT_INITIAL_RETRY_MS = 1_000;
 const ATOMIC_WRITE_MAX_RETRY_MS = 1_000;
 const STATE_PUBLICATION_MAX_RETRY_MS = 15_000;
+const WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS = 15_000;
+const FENCE_HOLDER_READ_RETRY_MS = 250;
+const FENCE_HOLDER_READ_RETRY_DELAY_MS = 5;
 for (const directory of [channelDirectory, channelOutputDirectory, channelInputDirectory, channelAckDirectory]) mkdirSync(directory, { recursive: true });
 if (!existsSync(outputCheckpointPath)) writeAtomic(outputCheckpointPath, JSON.stringify({ nonce: config.nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
 const replayCapacityChunks = config.replayCapacityChunks ?? 16;
@@ -82,6 +85,7 @@ let windowsTreeInspectionDeadlineMs = WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS;
 let windowsBirthInspectionAttempts = 0;
 let windowsBirthInspectionDeadlineMs = WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS;
 let launchEffect = config.platform === "windows" ? "prepared" : "prepared";
+let windowsLaunchUnknownDetail = "Initial Windows process identity was not captured before discovery.";
 let rootProcess = null;
 let posixSupervisorBirth = null;
 let posixWorkloadGroup = null;
@@ -148,20 +152,31 @@ if (!child.pid) {
   fail("Owned process has no PID.", "stopped");
 }
 if (config.platform === "windows") {
-  const inspection = inspectWindowsBirthWithRetry(child.pid);
-  if (inspection.state === "present") {
-    rootProcess = { pid: child.pid, birth: inspection.fingerprint };
-    knownProcesses.set(child.pid, inspection.fingerprint);
-    publish("preparing");
-    writeFileSync(childGoPath, config.nonce);
-    const startup = waitForChildStartup(5_000);
-    if (startup?.status === "started") launchEffect = "started";
-    else if (startup?.status === "error") {
-      launchEffect = "started";
-      fail(startup.error ?? "Owned process failed to start.", "stopped");
-    } else launchEffect = "unknown";
-  } else {
+  const holderReady = config.fence === undefined || waitForExactWindowsLockHolder(WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS);
+  if (!holderReady) {
     launchEffect = "unknown";
+    windowsLaunchUnknownDetail = "Windows supervisor fence-holder authority is unavailable before child startup.";
+    publish("outcome_unknown", windowsLaunchUnknownDetail);
+  } else {
+    const inspection = inspectWindowsBirthWithRetry(child.pid);
+    if (inspection.state === "present") {
+      rootProcess = { pid: child.pid, birth: inspection.fingerprint };
+      knownProcesses.set(child.pid, inspection.fingerprint);
+      publish("preparing");
+      writeFileSync(childGoPath, config.nonce);
+      const startup = waitForChildStartup(5_000);
+      if (startup?.status === "started") launchEffect = "started";
+      else if (startup?.status === "error") {
+        launchEffect = "started";
+        fail(startup.error ?? "Owned process failed to start.", "stopped");
+      } else {
+        launchEffect = "unknown";
+        windowsLaunchUnknownDetail = "Windows child startup did not complete before its deadline.";
+      }
+    } else {
+      launchEffect = "unknown";
+      windowsLaunchUnknownDetail = "Initial Windows process birth inspection was unavailable or the PID disappeared before discovery.";
+    }
   }
 } else initializePosixBootstrap();
 installOutput("stdout", child.stdout, stdoutPath);
@@ -184,7 +199,7 @@ child.once("exit", (code, signal) => {
   publish(launchEffect === "started" ? "running" : "outcome_unknown");
 });
 if (config.platform === "windows")
-  publish(launchEffect === "started" ? "running" : "outcome_unknown", launchEffect === "unknown" ? "Initial Windows process birth inspection was unavailable or the PID disappeared before discovery." : null);
+  publish(launchEffect === "started" ? "running" : "outcome_unknown", launchEffect === "unknown" ? windowsLaunchUnknownDetail : null);
 
 const timer = setInterval(tick, Math.max(10, config.pollIntervalMs ?? 25));
 process.stdin.resume();
@@ -198,7 +213,7 @@ function tick() {
       return;
     }
     if (launchEffect === "unknown") {
-      publish("outcome_unknown", "Initial Windows process identity was not captured before discovery.");
+      publish("outcome_unknown", windowsLaunchUnknownDetail);
       return;
     }
     handleChannelAcks();
@@ -602,10 +617,39 @@ function publishChannelInputAck(command, status, reason) {
   writeAtomic(join(channelAckDirectory, `input-${String(command.sequence).padStart(12, "0")}.json`), JSON.stringify({ nonce: config.nonce, ownerId: command.ownerId, fencingToken: command.fencingToken, sequence: command.sequence, status, ...(reason ? { reason } : {}) }));
 }
 
+function waitForExactWindowsLockHolder(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      const holder = JSON.parse(readFileSync(lockHolderPath, "utf8"));
+      return holder.nonce === config.nonce && holder.holderPid === process.pid &&
+        typeof holder.holderBirth === "string" && holder.holderBirth.length > 0;
+    } catch (error) {
+      if (!["ENOENT", "EBUSY", "EPERM", "EACCES"].includes(error?.code)) return false;
+    }
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(waiter, 0, 0, Math.min(10, Math.max(0, deadline - Date.now())));
+  }
+}
+
+function readFenceHolderForEffect() {
+  const deadline = Date.now() + FENCE_HOLDER_READ_RETRY_MS;
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try { return JSON.parse(readFileSync(lockHolderPath, "utf8")); }
+    catch (error) {
+      if (error?.code !== "EBUSY" || Date.now() >= deadline) throw error;
+      const remaining = Math.max(0, deadline - Date.now());
+      Atomics.wait(waiter, 0, 0, Math.min(FENCE_HOLDER_READ_RETRY_DELAY_MS, remaining));
+    }
+  }
+}
+
 function withCurrentFenceEffect(ownerId, fencingToken, effect) {
   const lock = join(config.directory, ".fence.lock");
   try {
-    const holder = JSON.parse(readFileSync(lockHolderPath, "utf8"));
+    const holder = readFenceHolderForEffect();
     if (holder.nonce !== config.nonce || holder.holderPid !== process.pid || typeof holder.holderBirth !== "string" || !holder.holderBirth)
       throw new Error("Portable fence holder identity is invalid.");
     return runPortableFenceEffectSync({

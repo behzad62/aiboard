@@ -34,6 +34,9 @@ test("supervisor ACK takeover at the protected effect is a nonfatal stale no-op"
   let lockCalls = 0;
   const reads: string[] = [];
   const context = vm.createContext({
+    Atomics, Date, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250,
+    FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
     channelAckDirectory: "ack",
     channelDirectory: "channel",
     channelOutputDirectory: "output",
@@ -78,6 +81,7 @@ test("supervisor ACK takeover at the protected effect is a nonfatal stale no-op"
   retained.delete = (key: string) => { retainedDeletes += 1; return originalDelete(key); };
   vm.runInContext(`${extractFunction(supervisorSource, "readCurrentFence")}
 ${extractFunction(supervisorSource, "readCurrentFenceStrict")}
+${extractFunction(supervisorSource, "readFenceHolderForEffect")}
 ${extractFunction(supervisorSource, "withCurrentFenceEffect")}
 ${extractFunction(supervisorSource, "forgetRetiredOutput")}
 ${extractFunction(supervisorSource, "handleChannelAcks")}`, context);

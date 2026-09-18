@@ -13,6 +13,7 @@ import { parseProcessLaunchResult, parseProcessReconciliation, type ProcessBacke
 import type { BackpressuredOutputMetadata } from "../src/interactive-process-channel.js";
 import { createPortableProcessChannelProvider, type PortableChannelAuthority } from "../src/portable-process-channel.js";
 import { retirePortableOutputAcknowledgement, runPortableFenceEffectSync, runPortableFenceSnapshotSync } from "../src/portable-process-protocol.mjs";
+import { OwnedFenceContentionError, OwnedFenceLockUnavailableError } from "../src/owned-fence-lock.mjs";
 
 for (const mode of ["replacement", "removal", "detach"] as const) {
   test(`C1 cap output-error dispatch ${mode} respects registration lifetime and fresh scheduling`, async () => {
@@ -385,6 +386,257 @@ test("round5 portable settlement waits through sink ACK publication retirement a
   } finally { await fixture.close(); }
 });
 
+test("round5 portable settlement retries transient contention during final re-attestation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-final-reattest-contention-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  let contendFinalReattest = false;
+  let finalReattestContentions = 0;
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 500,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => {
+        if (contendFinalReattest && finalReattestContentions++ === 0)
+          throw new OwnedFenceContentionError("transient final re-attestation contention");
+        return "live";
+      },
+      effect: async (_kind, effect) => effect(),
+      snapshot: (read) => {
+        const value = read();
+        if (value && typeof value === "object" && "terminal" in value && value.terminal === true) contendFinalReattest = true;
+        return { status: "applied", value };
+      },
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => entry);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 }));
+    assert.deepEqual(await channel.settleBackpressuredOutput(Date.now() + 2_000), { status: "settled" });
+    assert.ok(finalReattestContentions >= 2, "settlement must retry after one transient final re-attestation contention");
+  } finally {
+    unsubscribe();
+    await channel.detach();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("round5 portable settlement retries transient coordination contention then settles", async () => {
+  const fixture = await settlementFixture();
+  fixture.channel.subscribeBackpressuredOutput(async (metadata) => metadata);
+  const settlement = fixture.channel.settleBackpressuredOutput(2_000);
+  try {
+    await fixture.atAck;
+    fixture.resumeAck();
+    await waitFor(() => readdirSync(join(fixture.root, "channel/ack")).length === 1);
+    retirePortableOutputAcknowledgement({ channelDirectory: join(fixture.root, "channel"), nonce: "nonce", fence,
+      name: "stdout-000000000001.json", metadata: fixture.metadata });
+    fixture.transientCoordination(3);
+    fixture.stop();
+    assert.deepEqual(await settlement, { status: "settled" });
+  } finally { await fixture.close(); }
+});
+
+test("round5 portable output ACK retries transient owned-fence contention without poisoning settlement", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-contention-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  const bytes = Buffer.from("x");
+  const metadata: BackpressuredOutputMetadata = {
+    stream: "stdout", sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  let ackContention = 2;
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => "live",
+      effect: async (kind, effect) => {
+        if (kind === "output_ack" && ackContention-- > 0)
+          throw new OwnedFenceContentionError("transient fence contention");
+        return effect();
+      },
+      snapshot: (read) => ({ status: "applied", value: read() }),
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => entry);
+  const settlement = channel.settleBackpressuredOutput(Date.now() + 2_000);
+  try {
+    await waitFor(() => readdirSync(join(root, "channel/ack")).length === 1);
+    retirePortableOutputAcknowledgement({ channelDirectory: join(root, "channel"), nonce: "nonce", fence,
+      name: "stdout-000000000001.json", metadata });
+    writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 }));
+    assert.deepEqual(await settlement, { status: "settled" });
+  } finally {
+    unsubscribe();
+    await channel.detach();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("round5 a fresh channel still replays retained output even when an old exact ACK exists", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-reattach-replay-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  const bytes = Buffer.from("x");
+  const metadata: BackpressuredOutputMetadata = {
+    stream: "stdout", sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  writeFileSync(join(root, "channel/ack/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", ...fence, metadata }));
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => "live",
+      effect: async (_kind, effect) => effect(),
+      snapshot: (read) => ({ status: "applied", value: read() }),
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  let sinkCalls = 0;
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => { sinkCalls += 1; return entry; });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(sinkCalls, 1, "reattach preserves at-least-once replay even if an old exact ACK remains durable");
+  } finally {
+    unsubscribe();
+    await channel.detach();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("round5 portable output ACK recognizes an exact durable ACK after post-effect contention without replay", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-posteffect-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  const bytes = Buffer.from("x");
+  const metadata: BackpressuredOutputMetadata = {
+    stream: "stdout", sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  let ackEffects = 0;
+  let sinkCalls = 0;
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => "live",
+      effect: async (kind, effect) => {
+        if (kind !== "output_ack") return effect();
+        ackEffects += 1;
+        const value = effect();
+        if (ackEffects === 1)
+          throw new OwnedFenceContentionError("Owned fence lock remains held by an exact live holder.");
+        return value;
+      },
+      snapshot: (read) => ({ status: "applied", value: read() }),
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => { sinkCalls += 1; return entry; });
+  const settlement = channel.settleBackpressuredOutput(Date.now() + 2_000);
+  try {
+    await waitFor(() => readdirSync(join(root, "channel/ack")).length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(sinkCalls, 1, "an exact already-durable ACK must suppress sink replay");
+    assert.equal(ackEffects, 1, "an exact already-durable ACK must suppress a second ACK effect");
+    retirePortableOutputAcknowledgement({ channelDirectory: join(root, "channel"), nonce: "nonce", fence,
+      name: "stdout-000000000001.json", metadata });
+    writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 }));
+    assert.deepEqual(await settlement, { status: "settled" });
+  } finally {
+    unsubscribe();
+    await channel.detach();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("round5 portable settlement does not retry permanent coordination-classified protocol corruption", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-settlement-permanent-coordination-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  let snapshots = 0;
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => "live",
+      effect: async (_kind, effect) => effect(),
+      snapshot: (read) => {
+        snapshots += 1;
+        if (snapshots === 1) return { status: "applied", value: read() };
+        return { status: "unavailable", cause: "coordination", error: new OwnedFenceLockUnavailableError("Owned fence protocol canonical schema is incomplete.") };
+      },
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => entry);
+  const snapshotsBeforeSettlement = snapshots;
+  const startedAt = Date.now();
+  try {
+    assert.deepEqual(await channel.settleBackpressuredOutput(Date.now() + 1_000), { status: "blocked", reason: "outcome_unknown" });
+    assert.ok(snapshots > snapshotsBeforeSettlement, "settlement must inspect authority before failing closed");
+    assert.ok(Date.now() - startedAt < 250, "permanent corruption must fail fast rather than consume the settlement deadline");
+  } finally {
+    unsubscribe();
+    await channel.detach();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("round5 portable output ACK treats permanent owned-fence protocol invalidity as terminal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-invalid-fence-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  const bytes = Buffer.from("x");
+  const metadata: BackpressuredOutputMetadata = {
+    stream: "stdout", sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  let ackAttempts = 0;
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => "live",
+      effect: async (kind, effect) => {
+        if (kind === "output_ack") {
+          ackAttempts += 1;
+          throw new OwnedFenceLockUnavailableError("Owned fence protocol canonical schema is incomplete.");
+        }
+        return effect();
+      },
+      snapshot: (read) => ({ status: "applied", value: read() }),
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => entry);
+  try {
+    assert.deepEqual(await channel.settleBackpressuredOutput(Date.now() + 1_000), { status: "blocked", reason: "outcome_unknown" });
+    assert.equal(ackAttempts, 1, "permanent protocol invalidity must not be retried as contention");
+    assert.deepEqual(readdirSync(join(root, "channel/ack")), []);
+  } finally {
+    unsubscribe();
+    await channel.detach();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 for (const failure of ["deadline", "deadline_final_reattest", "takeover", "takeover_final_snapshot", "coordination", "corrupt_snapshot", "retirement_intent", "suffix"] as const) {
   test(`round5 portable settlement blocks ${failure} while tracking the issued ACK`, async () => {
     const fixture = await settlementFixture();
@@ -443,6 +695,7 @@ async function settlementFixture() {
   let current = { ...fence } as { ownerId: string; fencingToken: number };
   let now = 1_000;
   let coordination = false;
+  let coordinationBlips = 0;
   let takeoverAfterSnapshot = false;
   let expireOnReattest = false;
   let entered!: () => void;
@@ -465,7 +718,11 @@ async function settlementFixture() {
         return result.value;
       },
       snapshot: (read) => {
-        if (coordination) return { status: "unavailable", cause: "coordination", error: new Error("held lock") };
+        if (coordinationBlips > 0) {
+          coordinationBlips -= 1;
+          return { status: "unavailable", cause: "coordination", error: new OwnedFenceContentionError("transient sidecar") };
+        }
+        if (coordination) return { status: "unavailable", cause: "coordination", error: new OwnedFenceContentionError("held lock") };
         const result = runPortableFenceSnapshotSync({ lockPath: join(root, "effect.lock"), expectedFence: fence,
           readCurrentFence: () => current, read });
         if (takeoverAfterSnapshot) current = { ownerId: "successor", fencingToken: 8 };
@@ -479,6 +736,7 @@ async function settlementFixture() {
     takeoverAfterSnapshot: () => { takeoverAfterSnapshot = true; },
     expireOnReattest: () => { expireOnReattest = true; },
     blockCoordination: () => { coordination = true; },
+    transientCoordination: (count: number) => { coordinationBlips = count; },
     stop: () => writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 })),
     appendSuffix: () => writeFileSync(join(root, "channel/output/stdout-000000000002.json"), JSON.stringify({ nonce: "nonce",
       metadata: { ...metadata, sequence: 2, startOffset: 1, endOffset: 2 }, bytes: bytes.toString("base64") })),

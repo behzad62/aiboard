@@ -72,11 +72,27 @@ export class OwnedFenceAuthorityRetirementError extends Error {
   }
 }
 
-class OwnedFenceProtocolObservationChangedError extends OwnedFenceLockUnavailableError {
+export class OwnedFenceContentionError extends OwnedFenceLockUnavailableError {
+  constructor(message, options) {
+    super(message, options);
+    this.name = "OwnedFenceContentionError";
+  }
+}
+
+class OwnedFenceProtocolObservationChangedError extends OwnedFenceContentionError {
   constructor(message, options) {
     super(message, options);
     this.name = "OwnedFenceProtocolObservationChangedError";
   }
+}
+
+export function isOwnedFenceLockContention(error) {
+  if (error instanceof AggregateError)
+    return error.errors.length > 0 && error.errors.every((entry) => isOwnedFenceLockContention(entry));
+  if (error instanceof OwnedFenceContentionError) return true;
+  return error instanceof Error && error.cause !== undefined
+    ? isOwnedFenceLockContention(error.cause)
+    : false;
 }
 
 export function withOwnedFenceLockSync(path, effect, options = {}) {
@@ -306,7 +322,7 @@ function acquire(path, options) {
       } catch (error) {
         if (!isBusy(error) || Date.now() >= deadline)
           throw isBusy(error)
-            ? new OwnedFenceLockUnavailableError(`Owned fence lock remains held by an exact live holder${describeHolder(database)}.`, { cause: error })
+            ? new OwnedFenceContentionError(`Owned fence lock remains held by an exact live holder${describeHolder(database)}.`, { cause: error })
             : error;
         Atomics.wait(waiter, 0, 0, retryDelayMs);
       }
@@ -314,7 +330,7 @@ function acquire(path, options) {
     for (;;) {
       if (tryClaim(context)) { context.afterClaim?.(); return context; }
       if (Date.now() >= deadline)
-        throw new OwnedFenceLockUnavailableError("Owned fence lock remains held by an exact live holder.");
+        throw new OwnedFenceContentionError("Owned fence lock remains held by an exact live holder.");
       Atomics.wait(waiter, 0, 0, retryDelayMs);
     }
   } catch (error) {
@@ -357,7 +373,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
         if (!provisionalSnapshot) {
           observedProvisionalContention = true;
           waitForProtocolRetry(
-            new OwnedFenceLockUnavailableError("Owned fence provisional coordination creation remained contested."),
+            new OwnedFenceContentionError("Owned fence provisional coordination creation remained contested."),
             deadline,
             retryDelayMs,
           );
@@ -373,7 +389,7 @@ function openProtocol(path, authorityId, deadline, retryDelayMs, assertAuthority
       } else {
         if (observedProvisionalContention && beforeOpenIdentity.size === "0") {
           waitForProtocolRetry(
-            new OwnedFenceLockUnavailableError("Owned fence provisional coordination winner is not initialized yet."),
+            new OwnedFenceContentionError("Owned fence provisional coordination winner is not initialized yet."),
             deadline,
             retryDelayMs,
           );
@@ -722,6 +738,10 @@ function assertProtocolObservation(path, mainSnapshot, stage) {
     assertNoProtocolSidecars(path, mainSnapshot);
     if (mainSnapshot) return assertCoordinationPathSnapshot(path, mainSnapshot);
   } catch (error) {
+    if (mainSnapshot) {
+      try { assertCoordinationPathIdentity(path, mainSnapshot); }
+      catch (identityError) { throw identityError; }
+    }
     throw new OwnedFenceProtocolObservationChangedError(
       `Owned fence protocol changed or gained an uncertain sidecar ${stage}.`,
       { cause: error },
@@ -1097,8 +1117,9 @@ function normalizeBirth(value) { return value.replace(/(\.\d{6})\d+(Z)$/, "$1$2"
 function rollbackQuietly(database) { try { database.exec("ROLLBACK"); } catch {} }
 function isBusy(error) { return /database is locked|database table is locked|SQLITE_BUSY/i.test(String(error?.message ?? error)); }
 function normalizeUnavailable(error) {
-  return error instanceof OwnedFenceLockUnavailableError
-    ? error
+  if (error instanceof OwnedFenceLockUnavailableError) return error;
+  return isBusy(error)
+    ? new OwnedFenceContentionError("Owned fence lock protocol is temporarily contended.", { cause: error })
     : new OwnedFenceLockUnavailableError("Owned fence lock protocol is unavailable or invalid.", { cause: error });
 }
 function describeHolder(database) {

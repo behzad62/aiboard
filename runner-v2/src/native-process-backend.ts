@@ -227,9 +227,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         // A late exact birth is not launch success authority. It is retained
         // only so a matching supervisor can bind the child barrier to its
         // durable birth before this caller accepts any launch state.
-        writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
+        writeJsonAtomic(join(directory, "lock-holder.json"), {
           nonce, holderPid: child.pid, holderBirth: supervisorBirth.fingerprint,
-        }), { mode: 0o600 });
+        });
       }
       if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
       if (supervisorBirth.deadlineExpired) throw new Error("Portable supervisor birth discovery deadline is exhausted.");

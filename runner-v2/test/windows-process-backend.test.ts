@@ -12,8 +12,159 @@ import test from "node:test";
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
+import vm from "node:vm";
+import ts from "typescript";
 import { inspectWindowsFixtureBirth, runLateBirthFixture } from "./support/late-birth-fixture.js";
 import { createLateBirthFixtureClock } from "./support/late-birth-clock.js";
+
+test("Windows portable supervisor retries transient lock-holder read contention at the fence effect boundary", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let reads = 0;
+  let effects = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250,
+    FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
+    config: { directory: "root", nonce: "nonce" },
+    join,
+    lockHolderPath: "root/lock-holder.json",
+    process: { pid: 9001 },
+    PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
+    readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
+    readFileSync: (path: string) => {
+      assert.equal(path.replace(/\\/g, "/"), "root/lock-holder.json");
+      reads += 1;
+      if (reads === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      return JSON.stringify({ nonce: "nonce", holderPid: 9001, holderBirth: "birth" });
+    },
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => {
+      effects += 1;
+      return { status: "applied", value: options.effect() };
+    },
+  });
+  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  assert.deepEqual(vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'ok')", context), { status: "applied", value: "ok" });
+  assert.equal(reads, 2, "one transient Windows file-contention read must be retried");
+  assert.equal(effects, 1, "the protected effect runs only after exact holder identity is proven");
+});
+
+test("Windows portable supervisor bounds persistent lock-holder contention by wall clock", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let reads = 0;
+  let effects = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250, FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
+    config: { directory: "root", nonce: "nonce" }, join, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
+    readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
+    readFileSync: () => { reads += 1; throw Object.assign(new Error("busy"), { code: "EBUSY" }); },
+    runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
+  });
+  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  const started = Date.now();
+  const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
+  const elapsed = Date.now() - started;
+  assert.deepEqual({ status: result.status, cause: result.cause }, { status: "unavailable", cause: "authority" });
+  assert.ok(elapsed >= 200 && elapsed < 1_000, `persistent contention must stop near the 250ms wall budget, elapsed=${elapsed}`);
+  assert.ok(reads > 1);
+  assert.equal(effects, 0);
+});
+
+test("Windows portable supervisor does not classify a missing lock-holder as effect-level contention", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let reads = 0;
+  let effects = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250, FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
+    config: { directory: "root", nonce: "nonce" }, join, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
+    readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
+    readFileSync: () => { reads += 1; throw Object.assign(new Error("missing"), { code: "ENOENT" }); },
+    runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
+  });
+  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
+  assert.deepEqual({ status: result.status, cause: result.cause }, { status: "unavailable", cause: "authority" });
+  assert.equal(reads, 1, "missing holder is startup/readiness evidence, not effect-level lock contention");
+  assert.equal(effects, 0);
+});
+
+test("Windows portable supervisor waits for slow lock-holder publication before child startup and rejects a broken holder immediately", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const helper = extractOptionalNamedFunction(source, "waitForExactWindowsLockHolder");
+  assert.notEqual(helper, "", "Windows startup must have an explicit lock-holder readiness barrier");
+  assert.match(source, /const WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS = 15_000;/,
+    "the readiness budget must match the parent's bounded Windows supervisor birth-discovery window");
+  assert.match(source, /config\.fence === undefined \|\| waitForExactWindowsLockHolder\(WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS\)/,
+    "the production parent-managed Windows launch path must cross the readiness barrier before child startup");
+  assert.match(source, /windowsLaunchUnknownDetail/,
+    "Windows startup must retain the specific ownership-readiness failure reason instead of overwriting it with a generic birth-inspection error");
+
+  let reads = 0;
+  const delayed = vm.createContext({
+    Atomics, Date, JSON, Int32Array, SharedArrayBuffer,
+    config: { nonce: "nonce" }, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    readFileSync: () => {
+      reads += 1;
+      if (reads <= 2) throw Object.assign(new Error("not published yet"), { code: "ENOENT" });
+      return JSON.stringify({ nonce: "nonce", holderPid: 9001, holderBirth: "birth" });
+    },
+  });
+  vm.runInContext(helper, delayed);
+  assert.equal(vm.runInContext("waitForExactWindowsLockHolder(100)", delayed), true);
+  assert.equal(reads, 3, "slow publication is retried only at startup readiness");
+
+  for (const code of ["EBUSY", "EPERM", "EACCES"] as const) {
+    let transientReads = 0;
+    const transient = vm.createContext({
+      Atomics, Date, JSON, Int32Array, SharedArrayBuffer,
+      config: { nonce: "nonce" }, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+      readFileSync: () => {
+        transientReads += 1;
+        if (transientReads === 1) throw Object.assign(new Error(code), { code });
+        return JSON.stringify({ nonce: "nonce", holderPid: 9001, holderBirth: "birth" });
+      },
+    });
+    vm.runInContext(helper, transient);
+    assert.equal(vm.runInContext("waitForExactWindowsLockHolder(100)", transient), true, `${code} is transient only during startup readiness`);
+    assert.equal(transientReads, 2, `${code} should retry once then accept the exact published holder`);
+  }
+
+  let mismatchReads = 0;
+  const broken = vm.createContext({
+    Atomics, Date, JSON, Int32Array, SharedArrayBuffer,
+    config: { nonce: "nonce" }, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    readFileSync: () => {
+      mismatchReads += 1;
+      return JSON.stringify({ nonce: "nonce", holderPid: 9002, holderBirth: "replacement" });
+    },
+  });
+  vm.runInContext(helper, broken);
+  assert.equal(vm.runInContext("waitForExactWindowsLockHolder(100)", broken), false);
+  assert.equal(mismatchReads, 1, "a published foreign holder is broken authority, not slow startup");
+});
+
+test("Windows portable supervisor never retries a mismatched readable lock-holder identity", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let reads = 0;
+  let effects = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250, FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
+    config: { directory: "root", nonce: "nonce" }, join, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
+    readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
+    readFileSync: () => { reads += 1; return JSON.stringify({ nonce: "nonce", holderPid: 9002, holderBirth: "replacement" }); },
+    runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
+  });
+  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
+  assert.deepEqual({ status: result.status, cause: result.cause }, { status: "unavailable", cause: "authority" });
+  assert.equal(reads, 1, "readable stale holder identity is terminal, not retryable contention");
+  assert.equal(effects, 0);
+});
 
 for (const mode of ["present", "absent", "recycled", "malformed", "inspection_error", "cancel"] as const) {
   test(`round4 default native birth observation preserves ${mode} and joins inspection close`, async (t) => {
@@ -3066,4 +3217,18 @@ function stoppedJobSnapshot(processId: string) {
     stderr: "",
     ownershipReleased: true,
   };
+}
+
+function extractOptionalNamedFunction(source: string, name: string): string {
+  const file = ts.createSourceFile("portable-process-supervisor.mjs", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  const declaration = file.statements.find((statement): statement is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+  );
+  return declaration?.getText(file) ?? "";
+}
+
+function extractNamedFunction(source: string, name: string): string {
+  const declaration = extractOptionalNamedFunction(source, name);
+  if (!declaration) throw new Error(`missing production function ${name}`);
+  return declaration;
 }
