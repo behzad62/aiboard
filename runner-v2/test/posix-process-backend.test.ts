@@ -68,6 +68,39 @@ test("generic POSIX birth discovery keeps its one-second absolute envelope", { t
   assert.ok(attempts >= 2 && attempts <= 3, `unexpected POSIX birth attempt count: ${attempts}`);
 });
 
+test("generic POSIX birth probes classify a failed ps after exact exit as absent", async () => {
+  const source = readFileSync(new URL("../src/native-process-backend.ts", import.meta.url), "utf8");
+  const syncContext = vm.createContext({
+    PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS: 2_000,
+    WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS: 15_000,
+    process: { platform: "darwin" },
+    execFileSync: () => { throw new Error("ps exited after target exit"); },
+    pidAlive: () => false,
+  });
+  vm.runInContext(extractNamedTsFunction(source, "osProcessBirth"), syncContext);
+  assert.deepEqual(
+    JSON.parse(vm.runInContext("JSON.stringify(osProcessBirth(4242, 'posix'))", syncContext)),
+    { state: "absent" },
+  );
+
+  const asyncContext = vm.createContext({
+    PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS: 2_000,
+    process: { platform: "darwin" },
+    pidAlive: () => false,
+    parseBirthInspection: () => assert.fail("a failed ps must not be parsed as successful birth evidence"),
+    execFile: (_command: unknown, _args: unknown, _options: unknown, callback: (error: Error, stdout: string) => void) => {
+      queueMicrotask(() => callback(new Error("ps exited after target exit"), ""));
+      return { once: (_event: string, handler: () => void) => { queueMicrotask(handler); } };
+    },
+    queueMicrotask,
+  });
+  vm.runInContext(extractNamedTsFunction(source, "osProcessBirthAsync"), asyncContext);
+  assert.deepEqual(
+    JSON.parse(await vm.runInContext("osProcessBirthAsync(4242, 'posix', { aborted: false }).then(JSON.stringify)", asyncContext)),
+    { state: "absent" },
+  );
+});
+
 test("POSIX native session fixture owns descendants after launcher exit", async (t) => {
   if (process.platform === "win32") {
     t.skip("POSIX session/process-group behavior requires a POSIX host.");
@@ -3523,6 +3556,16 @@ function extractTickPosix(source: string): string {
 }
 function extractFenceEffectFunctions(source: string): string {
   return `const FENCE_HOLDER_READ_RETRY_MS = 250;\nconst FENCE_HOLDER_READ_RETRY_DELAY_MS = 5;\n${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`;
+}
+function extractNamedTsFunction(source: string, name: string): string {
+  const file = ts.createSourceFile("native-process-backend.ts", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+  const declaration = file.statements.find((statement): statement is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+  );
+  if (!declaration) throw new Error(`missing production function ${name}`);
+  return ts.transpileModule(declaration.getText(file), {
+    compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+  }).outputText;
 }
 function extractNamedFunction(source: string, name: string): string {
   const file = ts.createSourceFile("portable-process-supervisor.mjs", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);

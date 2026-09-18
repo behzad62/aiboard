@@ -43,6 +43,30 @@ test("generic POSIX holder inspection distinguishes exact absence from uncertain
   }
 });
 
+test("current holder birth retries after a transient self-inspection failure instead of poisoning later fence claims", () => {
+  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
+  let inspections = 0;
+  const context = vm.createContext({
+    process: { pid: 4242 },
+    inspectProcessBirth: () => {
+      inspections += 1;
+      return inspections === 1
+        ? { state: "unknown" }
+        : { state: "same", fingerprint: "birth-recovered" };
+    },
+    OwnedFenceLockUnavailableError,
+  });
+  vm.runInContext("let cachedCurrentBirth;", context);
+  vm.runInContext(extractNamedJsFunction(source, "currentProcessBirthFingerprint").replace(/^export\s+/, ""), context);
+
+  assert.throws(
+    () => vm.runInContext("currentProcessBirthFingerprint()", context),
+    /Current owned fence holder birth identity is unavailable/,
+  );
+  assert.equal(vm.runInContext("currentProcessBirthFingerprint()", context), "birth-recovered");
+  assert.equal(inspections, 2, "a transient unknown self-birth result must be retried on the next acquisition");
+});
+
 test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-lock-legacy-authority-"));
   const lockPath = join(root, "effect.sqlite");

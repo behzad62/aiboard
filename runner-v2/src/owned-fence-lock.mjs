@@ -237,10 +237,12 @@ export async function recoverRevokedOwnedFenceLock(path, options = {}) {
 }
 
 export function currentProcessBirthFingerprint() {
-  cachedCurrentBirth ??= inspectProcessBirth(process.pid);
-  if (cachedCurrentBirth.state !== "same")
+  if (cachedCurrentBirth?.state === "same") return cachedCurrentBirth.fingerprint;
+  const inspected = inspectProcessBirth(process.pid);
+  if (inspected.state !== "same")
     throw new OwnedFenceLockUnavailableError("Current owned fence holder birth identity is unavailable.");
-  return cachedCurrentBirth.fingerprint;
+  cachedCurrentBirth = inspected;
+  return inspected.fingerprint;
 }
 
 export async function retryRetiredOwnedFenceCleanup(path, cleanup, options = {}) {
