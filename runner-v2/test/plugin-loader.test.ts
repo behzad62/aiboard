@@ -669,8 +669,9 @@ function createFixture(name: string) {
       const directory = join(root, options.directoryName ?? `plugin ${id}`);
       mkdirSync(directory, { recursive: true });
       const entryName = options.entry ?? "index.mjs";
+      const entry = join(directory, entryName);
       if (!entryName.includes("..") && !entryName.includes("linked/")) {
-        writeFileSync(join(directory, entryName), "export const fixture = true;\n");
+        writeFileSync(entry, "export const fixture = true;\n");
       }
       this.manifest(
         directory,
@@ -679,7 +680,7 @@ function createFixture(name: string) {
         options.apiVersion ?? 1,
         entryName,
       );
-      return { directory, entry: join(directory, entryName) };
+      return { directory, entry: existsSync(entry) ? realpathSync(entry) : entry };
     },
     manifest(
       directory: string,

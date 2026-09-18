@@ -204,8 +204,13 @@ test("capability configuration confinement uses the canonical target, not the le
   try {
     symlinkSync(project, aliasRoot, process.platform === "win32" ? "junction" : "dir");
     const lexical = join(aliasRoot, "runner-capabilities.json");
+    const canonicalProject = realpathSync(project);
     assert.equal(isLexicallyInside(project, lexical), false, "the lexical alias must appear outside the project");
-    assert.equal(isLexicallyInside(project, realpathSync(lexical)), true, "the canonical target must be inside the project");
+    assert.equal(
+      isLexicallyInside(canonicalProject, realpathSync(lexical)),
+      true,
+      "the canonical target must be inside the canonical project",
+    );
     await assert.rejects(
       loadRunnerCapabilitiesConfig(lexical),
       isConfigError("symbolic_config"),
@@ -217,7 +222,6 @@ test("capability configuration confinement uses the canonical target, not the le
     assert.equal(await capabilitiesConfigCanonicalTargetIsInsideProject(project, insideConfig), true);
     assert.equal(await capabilitiesConfigCanonicalTargetIsInsideProject(project, outsideConfig), false);
 
-    const canonicalProject = realpathSync(project);
     if (normalizePath(project) !== normalizePath(canonicalProject)) {
       const hostAliasedInside = join(project, "runner-capabilities.json");
       assert.equal(

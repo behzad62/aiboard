@@ -170,8 +170,10 @@ test("capability contracts bind optional OCI configuration without probing or di
     });
     assert.notEqual(changed.digest, contract.digest);
     const boundProviders = runnerCapabilitiesForContract(config, contract).isolationProviders;
-    assert.deepEqual(boundProviders?.map(({ cliIdentity: _identity, ...provider }) => provider),
-      config.isolationProviders);
+    assert.deepEqual(
+      boundProviders?.map(({ cliIdentity: _identity, ...provider }) => provider),
+      [{ ...config.isolationProviders![0]!, cliPath: realpathSync(cli) }],
+    );
     assert.deepEqual(boundProviders?.[0]?.cliIdentity, contract.isolationProviders?.[0]?.executable);
     assert.notEqual(
       runnerCapabilitiesForContract(config, contract).isolationProviders,
@@ -224,7 +226,7 @@ import {
 } from "../src/language-server-executable.js";
 
 test("language-server command search preserves POSIX PATH and Windows cwd semantics", () => {
-  const root = join("C:", "runner capability candidate fixture");
+  const root = join(process.cwd(), "runner capability candidate fixture");
   assert.deepEqual(
     languageServerCommandCandidates("fixture-server", {
       commandSearchDirectory: root,
@@ -365,10 +367,11 @@ test("capability contracts attest the resolved launcher and reject a PATH replac
       commandSearchDirectory: root,
       environment: firstEnvironment,
     });
+    const canonicalFirstLauncher = realpathSync(firstLauncher);
     assert.equal(contract.languageServerExecutableIdentityVersion, 1);
-    assert.equal(contract.languageServers[0]?.executable?.path, firstLauncher);
+    assert.equal(contract.languageServers[0]?.executable?.path, canonicalFirstLauncher);
     const bound = runnerCapabilitiesForContract(config, contract);
-    assert.equal(bound.languageServers[0]?.command, firstLauncher);
+    assert.equal(bound.languageServers[0]?.command, canonicalFirstLauncher);
     assert.equal(
       bound.languageServers[0]?.commandIdentity?.digest,
       contract.languageServers[0]?.executable?.digest,
