@@ -1701,6 +1701,144 @@ test("authorized stop finalizes evidence, detaches, and durably releases adopted
   assert.ok(fixture.calls.includes("reconcile"), "adopted cleanup verifies the exact host");
 });
 
+test("authorized stop cannot adopt a takeover fence between authorization assertion and lease renewal", async () => {
+  let current = new Date(now);
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { clock: () => current });
+  let race = false;
+  let replacement: ReturnType<typeof fixture.kernel.store.readBySession>;
+  const sessions = Object.freeze({
+    ...fixture.authority,
+    validateOperationAuthorization(
+      authorization: Parameters<typeof fixture.authority.validateOperationAuthorization>[0],
+      expected: Parameters<typeof fixture.authority.validateOperationAuthorization>[1],
+    ) {
+      const validated = fixture.authority.validateOperationAuthorization(authorization, expected);
+      if (race) {
+        const owned = fixture.kernel.store.readBySession("stream-1")!;
+        current = new Date(Date.parse(owned.leaseExpiresAt));
+        replacement = fixture.authority.takeover({
+          sessionId: owned.sessionId, ownerId: owned.ownerId, fencingToken: owned.fencingToken,
+          expectedRevision: owned.revision, newOwnerId: "session-authority:replacement",
+          newFencingToken: owned.fencingToken + 1,
+          leaseExpiresAt: new Date(current.getTime() + 60_000).toISOString(),
+        }).record;
+      }
+      return validated;
+    },
+  });
+  const runtime = createStreamingProcessSessionRuntime({ ...fixture.runtimeOptions, sessions });
+  const facade = await runtime.open(fixture.request);
+  const operation = { sessionId: "stream-1", operation: "stop" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  const authorization = facade.authorizeFirstOperation(operation);
+  race = true;
+  const stopError = await facade.stop(authorization, { ...operation, binding: fixture.request.binding })
+    .then(() => undefined, (error: unknown) => error);
+  assert.ok(replacement, `synthetic takeover must complete before stale stop continues: ${String(stopError)}`);
+  assert.ok(stopError, "the stale stop must reject after the replacement fence is installed");
+  const durable = fixture.kernel.store.readBySession("stream-1")!;
+  assert.equal(durable.ownerId, replacement.ownerId);
+  assert.equal(durable.fencingToken, replacement!.fencingToken);
+  assert.equal(durable.revision, replacement!.revision, "stale stop must not renew or mutate the replacement owner");
+  assert.equal(durable.state, replacement!.state, "stale stop must not begin stopping the replacement owner");
+});
+
+test("authorized stop cannot begin stopping after takeover races a successful lease renewal", async () => {
+  let current = new Date(now);
+  let authority: Awaited<ReturnType<typeof makeFixture>>["authority"] | undefined;
+  let kernel: Awaited<ReturnType<typeof makeFixture>>["kernel"] | undefined;
+  let armed = false;
+  let baselineRevision = Number.MAX_SAFE_INTEGER;
+  let replacement: ReturnType<NonNullable<typeof kernel>["store"]["readBySession"]>;
+  let inTakeover = false;
+  const clock = () => {
+    if (armed && !inTakeover && authority && kernel) {
+      const owned = kernel.store.readBySession("stream-1");
+      if (owned && owned.revision > baselineRevision) {
+        inTakeover = true;
+        current = new Date(Date.parse(owned.leaseExpiresAt));
+        replacement = authority.takeover({
+          sessionId: owned.sessionId, ownerId: owned.ownerId, fencingToken: owned.fencingToken,
+          expectedRevision: owned.revision, newOwnerId: "session-authority:post-renewal",
+          newFencingToken: owned.fencingToken + 1,
+          leaseExpiresAt: new Date(current.getTime() + 60_000).toISOString(),
+        }).record;
+        inTakeover = false;
+      }
+    }
+    return new Date(current);
+  };
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { clock });
+  authority = fixture.authority; kernel = fixture.kernel;
+  const facade = await fixture.runtime.open(fixture.request);
+  const operation = { sessionId: "stream-1", operation: "stop" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  const authorization = facade.authorizeFirstOperation(operation);
+  const before = fixture.kernel.store.readBySession("stream-1")!;
+  baselineRevision = before.revision;
+  current = new Date(Date.parse(before.leaseExpiresAt) - 1);
+  armed = true;
+  const stopError = await facade.stop(authorization, { ...operation, binding: fixture.request.binding })
+    .then(() => undefined, (error: unknown) => error);
+  assert.ok(replacement, "the takeover must land after renewal and before begin_stopping");
+  assert.ok(stopError, "begin_stopping must reject the now-stale renewed fence");
+  const durable = fixture.kernel.store.readBySession("stream-1")!;
+  assert.equal(durable.ownerId, replacement.ownerId);
+  assert.equal(durable.fencingToken, replacement.fencingToken);
+  assert.equal(durable.revision, replacement.revision);
+  assert.equal(durable.state, replacement.state);
+});
+
+test("expired or re-fenced stop authorization cannot regain authority through renewal", async () => {
+  let current = new Date(now);
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { clock: () => current });
+  const facade = await fixture.runtime.open(fixture.request);
+  const operation = { sessionId: "stream-1", operation: "stop" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  const expiredAuthorization = facade.authorizeFirstOperation(operation);
+  const expiredRecord = fixture.kernel.store.readBySession("stream-1")!;
+  current = new Date(Date.parse(expiredRecord.leaseExpiresAt));
+  await assert.rejects(facade.stop(expiredAuthorization, { ...operation, binding: fixture.request.binding }));
+  assert.deepEqual(fixture.kernel.store.readBySession("stream-1"), expiredRecord, "expired caller must not self-renew before validation");
+
+  const takenOver = fixture.authority.takeover({
+    sessionId: expiredRecord.sessionId, ownerId: expiredRecord.ownerId, fencingToken: expiredRecord.fencingToken,
+    expectedRevision: expiredRecord.revision, newOwnerId: expiredRecord.ownerId,
+    newFencingToken: expiredRecord.fencingToken + 1,
+    leaseExpiresAt: new Date(current.getTime() + 60_000).toISOString(),
+  }).record;
+  assert.throws(
+    () => fixture.authority.assertOperationAuthorization(expiredAuthorization, { ...operation, binding: fixture.request.binding }),
+    /stale owner fence|stale/i,
+    "same textual owner with a newer fence must invalidate the old authorization",
+  );
+  assert.deepEqual(fixture.kernel.store.readBySession("stream-1"), takenOver);
+});
+
+test("stale facade cannot renew a replacement fence before minting a new operation authorization", async () => {
+  let current = new Date(now);
+  const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { clock: () => current });
+  const facade = await fixture.runtime.open(fixture.request);
+  const original = fixture.kernel.store.readBySession("stream-1")!;
+  current = new Date(Date.parse(original.leaseExpiresAt));
+  const replacement = fixture.authority.takeover({
+    sessionId: original.sessionId, ownerId: original.ownerId, fencingToken: original.fencingToken,
+    expectedRevision: original.revision, newOwnerId: "session-authority:replacement-facade",
+    newFencingToken: original.fencingToken + 1,
+    leaseExpiresAt: new Date(current.getTime() + 60_000).toISOString(),
+  }).record;
+  current = new Date(Date.parse(replacement.leaseExpiresAt) - 10_000);
+  const binding = { ...fixture.request.binding, callId: "call-after-takeover" };
+  const grant = await fixture.grants.issue({
+    ...binding, workspacePath: process.cwd(), access: [], externalApproved: false,
+    destructiveApproved: false, networkApproved: false,
+  });
+  const operation = { sessionId: "stream-1", operation: "observe" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
+  assert.throws(
+    () => facade.authorizeOperation({ ...operation, grant, binding }),
+    /stale|fence|authority/i,
+    "a facade created under the old fence must not adopt the replacement fence before authorizing",
+  );
+  assert.deepEqual(fixture.kernel.store.readBySession("stream-1"), replacement, "stale facade must not renew the replacement lease");
+});
+
 test("undefined evidence finalization cannot become a lossless durable proof", async () => {
   const fixture = await makeFixture(2, "cleaned");
   fixture.setEvidenceSpool(() => ({

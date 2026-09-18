@@ -5,7 +5,7 @@
 Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
 - Gate 0 baseline: PASS
-- Gate A fencing: NOT_STARTED
+- Gate A fencing: PASS
 - Gate B POSIX: NOT_STARTED
 - Gate C Windows: NOT_STARTED
 - Gate D macOS/config: NOT_STARTED
@@ -15,7 +15,7 @@ Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
 ## Current gate
 
-T12-0 — Controlled repair baseline is complete. Next gate: T12-A — Exact ownership, authorization, and fencing.
+T12-A — Exact ownership, authorization, and fencing is accepted. Next gate: T12-B — POSIX ownership and destructive control.
 
 ## Clean repair workspace
 
@@ -43,7 +43,7 @@ Legitimate reviewed fixes extracted from `9878a12b`:
 ## Quarantined local-only patches
 
 Do not copy these into the repair branch without the owning gate's review:
-- `9878a12b` managed-stop/session-runtime attempt in `streaming-process-session-runtime.ts` and its test: Gate A must redesign exact fence continuity; the audit found the stale-owner TOCTOU still unresolved.
+- `9878a12b` managed-stop/session-runtime attempt remains quarantined; Gate A was reimplemented and reviewed independently on the bounded repair branch instead of copying that checkpoint.
 - `bf57a2de` Windows/portable/MCP coordination patch: Gate C must independently review it before inclusion.
 - Benchmark/calibration/generated artifacts contained in `9878a12b`: excluded from Task-12 repair history.
 
@@ -63,13 +63,20 @@ Baseline hygiene evidence:
 - no competing process was found using the new repair worktree;
 - dependency reuse is an ignored local `node_modules` junction only, not repository content.
 
+Gate A RED/GREEN evidence:
+- The takeover-between-authorization-and-renewal regression failed before the fix because the stale stop mutated the replacement owner; replacement revision changed from 2 to 7.
+- A stale facade was also proven able to mint under a replacement fence before the fence-scoped facade renewal fix.
+- Final focused Gate-A invariant run: 6 pass, 0 fail. It covers normal stop, takeover before renewal, takeover after renewal before `begin_stopping`, stale/expired operation authorization, same owner/new fence, stale facade renewal, and preserves the established exact-owner long-idle renewal behavior.
+- Final bounded Gate-A suite: 353 pass, 0 fail across `session-authority`, `streaming-session-store`, full streaming-session runtime, and streaming execution-host quiescence coverage.
+- `npx tsc -p runner-v2/tsconfig.json --noEmit`: exit 0.
+- The accepted implementation carries an exact owner/fence through authorization validation, lease renewal, durable `begin_stopping`, cleanup admission, compound request retention, graceful cleanup, and recovery cleanup; required fence arguments are compile-time mandatory on the renewal/cleanup primitives.
+
 ## Reviewer status
 
-T12-0 baseline evidence has been controller-verified. It is a repository-hygiene prerequisite, not a functional acceptance gate. Gates A-G still require their documented independent review before acceptance.
+T12-0 baseline evidence has been controller-verified. Gate A received two read-only independent reviews. The first found the stop-cleanup fence handoff and facade-renewal concerns; the real fence-continuity issue was repaired and the idle-renewal concern was reconciled against the repository's existing exact-owner contract. The second reviewer verdict was `READY`, with no Critical or blocking Important findings, and explicitly traced exact fence continuity through durable stopping. Gates B-G still require their documented independent review before acceptance.
 
 ## Known later-gate issues
 
-- Gate A: managed-stop lease-renewal fencing TOCTOU remains unresolved and is next.
 - Gate B: extracted POSIX safety fix is present as `7317fa49`, but Gate B still needs its full invariant review and POSIX-host evidence.
 - Gate C: `bf57a2de` coordination patch remains quarantined pending independent Windows review.
 - Gate D: extracted config confinement fix is present as `99b4cfb2`; broader macOS `/var -> /private/var` capability-contract handling remains unresolved.
