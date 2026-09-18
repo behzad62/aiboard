@@ -14,6 +14,7 @@ import type {
 } from "./process-backend.js";
 import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
+import { parsePosixGroupMembers } from "./portable-process-posix-control.mjs";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshotSync } from "./portable-process-protocol.mjs";
 import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 
@@ -1075,17 +1076,12 @@ function osProcessBirths(pids: readonly number[], platform: "posix" | "windows")
     return result;
   } catch { return undefined; }
 }
-function osPosixGroupMembers(groupId: number): number[] | undefined {
+function osPosixGroupMembers(groupId: number): readonly number[] | undefined {
   try {
-    return execFileSync("ps", ["-e", "-o", "pid=,pgid="], {
+    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid="], {
       encoding: "utf8",
       timeout: PROCESS_MEMBERSHIP_INSPECTION_DEADLINE_MS,
-    })
-      .split(/\r?\n/)
-      .map((line) => line.trim().split(/\s+/).map(Number))
-      .filter(([, pgid]) => pgid === groupId)
-      .map(([pid]) => pid!)
-      .filter((pid) => pid > 0);
+    }), groupId);
   } catch { return undefined; }
 }
 function pidAlive(pid: number): boolean {

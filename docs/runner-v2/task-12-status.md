@@ -6,7 +6,7 @@ Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
 - Gate 0 baseline: PASS
 - Gate A fencing: PASS
-- Gate B POSIX: NOT_STARTED
+- Gate B POSIX: PASS
 - Gate C Windows: NOT_STARTED
 - Gate D macOS/config: NOT_STARTED
 - Gate E lifecycle/Docker: NOT_STARTED
@@ -15,7 +15,7 @@ Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
 ## Current gate
 
-T12-A — Exact ownership, authorization, and fencing is accepted. Next gate: T12-B — POSIX ownership and destructive control.
+T12-B — POSIX ownership and destructive control is accepted. Next gate: T12-C — Windows native ownership and cleanup.
 
 ## Clean repair workspace
 
@@ -71,14 +71,27 @@ Gate A RED/GREEN evidence:
 - `npx tsc -p runner-v2/tsconfig.json --noEmit`: exit 0.
 - The accepted implementation carries an exact owner/fence through authorization validation, lease renewal, durable `begin_stopping`, cleanup admission, compound request retention, graceful cleanup, and recovery cleanup; required fence arguments are compile-time mandatory on the renewal/cleanup primitives.
 
+Gate B RED/GREEN evidence:
+- The extracted `7317fa49` stale-PGID repair was independently re-audited rather than accepted from checkpoint history.
+- The shared POSIX membership parser now fails closed for malformed/nonpositive rows and for a blank successful `ps` snapshot; the native backend reuses that parser so junk evidence cannot become false emptiness/release proof.
+- Every negative-PGID signal in `runner-v2/src` is centralized in `signalOwnedPosixGroup`; its two supervisor call sites perform a fresh exact inner-fence re-attestation immediately before signaling.
+- Before anchor exit, the exact anchor PID/group/birth witness is re-attested. After anchor exit, force control requires at least one exact recorded live descendant birth witness and refuses recycled, mismatched, empty, or unprovable groups without blind signaling.
+- Exact descendant witnesses are learned only while the authenticated anchor remains live; witness discovery stops after real anchor exit so a recycled PGID cannot manufacture new ownership evidence.
+- Transient control inspection preserves the exact request and is bounded to three attempts for one owner/fence/sequence/action. During the retry window status remains non-terminal; at exhaustion the tick publishes `outcome_unknown` and stops launching further control inspections for that exact request.
+- Workload retirement/output settlement runs before polling new control once retirement is durable. Graceful requests after real anchor exit are stale no-ops; only force may address birth-attested surviving descendants.
+- Final Windows focused POSIX suite: 56 pass, 0 fail, 1 POSIX-host skip.
+- Final Linux Node 24 suite: 57 pass, 0 fail, 0 skip, including the real immediate-launcher-exit/surviving-descendant fixture.
+- Shared portable protocol/contract validation: 33 pass, 0 fail. Targeted Windows destructive-control compatibility: 2 pass, 0 fail. `npx tsc -p runner-v2/tsconfig.json --noEmit`: exit 0.
+- `ps -e -o pid=,pgid=` was verified to emit the expected numeric format in both `node:24-bookworm` and `node:24-alpine` target-style containers.
+
 ## Reviewer status
 
-T12-0 baseline evidence has been controller-verified. Gate A received two read-only independent reviews. The first found the stop-cleanup fence handoff and facade-renewal concerns; the real fence-continuity issue was repaired and the idle-renewal concern was reconciled against the repository's existing exact-owner contract. The second reviewer verdict was `READY`, with no Critical or blocking Important findings, and explicitly traced exact fence continuity through durable stopping. Gates B-G still require their documented independent review before acceptance.
+T12-0 baseline evidence has been controller-verified. Gate A received two read-only independent reviews and finished `READY`. Gate B received three read-only independent review passes: the first correctly found parser/blank-evidence/test gaps but withdrew its initial last-tick-descendant premise after verifying the dedicated anchor wrapper; the second found a real lifecycle deadlock and unbounded retry in the first repair; both were fixed. The final reviewer verdict was `READY`, with no Critical or blocking Important findings, and explicitly re-audited both negative-PGID signal sites and all six prior blockers. Two additional reviewer-requested regression proofs were added after the `READY` verdict without changing production code. Gates C-G still require their documented independent review before acceptance.
 
 ## Known later-gate issues
 
-- Gate B: extracted POSIX safety fix is present as `7317fa49`, but Gate B still needs its full invariant review and POSIX-host evidence.
-- Gate C: `bf57a2de` coordination patch remains quarantined pending independent Windows review.
+- Gate C: `bf57a2de` coordination patch remains quarantined pending independent Windows review. A Windows taskkill-watchdog run also exposed a transient `lock-holder.json` read/replace race (`Portable fence holder identity is unavailable`); the isolated rerun passed and independent review found no Gate-B causal path, so classify it with Gate C coordination/fence contention.
 - Gate D: extracted config confinement fix is present as `99b4cfb2`; broader macOS `/var -> /private/var` capability-contract handling remains unresolved.
-- Gate E: supervisor/output/release settlement and real Docker lifecycle remain open.
+- Gate E: supervisor/output/release settlement and real Docker lifecycle remain open. Revisit Gate B's accepted-but-short three-tick (~75 ms default) POSIX transient-inspection window if lifecycle evidence shows real host hiccups need a wider time floor; do not replace it with unbounded retry.
 - Gate F: certified preset timeout still requires causal classification, not timeout inflation.
+- Gate G final audit: recheck the currently unreachable POSIX branch in `activeOwnedPids` before any future reuse because it still has a legacy permissive parser shape; also retain the documented non-Linux `ps -o lstart=` birth-witness precision limitation in platform evidence.

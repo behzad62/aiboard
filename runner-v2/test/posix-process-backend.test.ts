@@ -82,7 +82,7 @@ test("POSIX native session fixture owns descendants after launcher exit", async 
   try {
     const launch = parseProcessLaunchResult(await backend.launch(request([
       "-e",
-      "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'});console.log(c.pid);setTimeout(()=>process.exit(0),30)",
+      "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore'});process.stdout.write(String(c.pid)+'\\n',()=>process.exit(0))",
     ])));
     const liveBinding = bindingFor(launch);
     binding = liveBinding;
@@ -619,6 +619,8 @@ test("C4 POSIX rejects malformed nonempty ps identity and membership rows", asyn
   assert.equal(control.parsePosixPsIdentity(9002, "not-a-process"), undefined);
   assert.deepEqual(control.parsePosixGroupMembers(" 9002 9002\n 9003 9002\n", 9002), [9002, 9003]);
   assert.equal(control.parsePosixGroupMembers("9002 9002\nmalformed-row\n", 9002), undefined);
+  assert.equal(control.parsePosixGroupMembers("\n  \n", 9002), undefined,
+    "an empty ps snapshot cannot prove that an owned group is empty");
   assert.deepEqual(
     control.parsePosixGroupMembers("2 0\n1 1\n 9002 9002\n 9003 9002\n", 9002),
     [9002, 9003],
@@ -678,6 +680,53 @@ test("C4 POSIX descendant reattestation refuses a recycled PGID without a record
     ),
     { state: "empty" },
     "a listed PID that is already gone between ps and inspect is emptiness, not an unprovable recycled group",
+  );
+});
+
+test("C4 POSIX records exact descendant birth witnesses only while the authenticated anchor is live", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const context = vm.createContext({
+    Map,
+    posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixWorkloadGroup: workloadGroup,
+    posixRecordedMembers: new Map<number, string>(),
+    inspectPosixProcessIdentity: (pid: number) => pid === 9003
+      ? { state: "present", value: { pid, groupId: workloadGroup.groupId, birth: "descendant-birth" } }
+      : pid === 9004
+        ? { state: "present", value: { pid, groupId: 9999, birth: "foreign-birth" } }
+        : { state: "unknown" },
+  });
+  vm.runInContext(extractNamedFunction(supervisorSource, "recordOwnedPosixMembers"), context);
+  vm.runInContext("recordOwnedPosixMembers([9003, 9004, 9005])", context);
+  assert.deepEqual(
+    JSON.parse(vm.runInContext("JSON.stringify([...posixRecordedMembers.entries()])", context)),
+    [[9003, "descendant-birth"]],
+    "only exact current members of the owned group receive durable birth witnesses",
+  );
+  vm.runInContext("posixAnchorExited = true; recordOwnedPosixMembers([9006])", context);
+  assert.equal(vm.runInContext("posixRecordedMembers.has(9006)", context), false,
+    "witness discovery must stop after real anchor exit so a recycled PGID cannot manufacture new ownership evidence");
+});
+
+test("C4 POSIX descendant continuity allows current same-group members to ride on one exact recorded birth witness", async () => {
+  const control = await import("../src/portable-process-posix-control.mjs");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const recorded = new Map([[9003, "recorded-birth"]]);
+  assert.deepEqual(
+    control.reattestOwnedPosixDescendants(
+      workloadGroup,
+      recorded,
+      (pid: number) => ({ state: "present", value: { pid, groupId: 9002, birth: pid === 9003 ? "recorded-birth" : "later-member-birth" } }),
+      () => [9003, 9004],
+    ),
+    { state: "ready", members: [9003, 9004] },
+    "one exact live birth witness proves the group number never became free for recycling",
   );
 });
 
@@ -1171,11 +1220,16 @@ test("C4 POSIX supervisor preserves its witness and reports outcome_unknown afte
     handledControl: 0,
     join,
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixForceControlApplied: false,
     posixWorkloadGroup: workloadGroup,
     process: { pid: 9001 },
     publish: (status: string, error?: string) => { published.push({ status, error }); },
-    reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    reattestOwnedPosixAnchor: () => ({ state: "identity_mismatch" }),
     readFileSync: (path: string) => {
       if (path === "root/control.json") return JSON.stringify(request);
       if (path === "root/fence.json") return JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken });
@@ -1217,6 +1271,11 @@ test("C4 POSIX supervisor reattests inside the fenced effect before a group sign
     handledControl: 0,
     join,
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixForceControlApplied: false,
     posixWorkloadGroup: workloadGroup,
     process: { pid: 9001 },
@@ -1240,9 +1299,48 @@ test("C4 POSIX supervisor reattests inside the fenced effect before a group sign
 
   assert.doesNotThrow(() => vm.runInContext("handleControl()", context));
   assert.equal(reattestations, 2, "the exact anchor must be checked again inside the fence effect");
-  assert.deepEqual(signals, [], "a lost anchor during the fence effect must not receive numeric-only control");
-  assert.equal(vm.runInContext("handledControl", context), 1, "the unsafe request is recorded as resolved rather than retried numerically");
-  assert.equal(published.at(-1)?.status, "outcome_unknown");
+  assert.deepEqual(signals, [], "a transiently unprovable anchor during the fence effect must not receive numeric-only control");
+  assert.equal(vm.runInContext("handledControl", context), 0, "a transient inner-fence inspection must leave the exact request retryable");
+  assert.equal(vm.runInContext("posixControlInspectionDeferred", context), true, "transient inner-fence uncertainty must be carried back to the tick");
+  assert.equal(published.some(({ status }) => status === "outcome_unknown"), false, "transient inner-fence uncertainty is retryable rather than terminal");
+});
+
+test("C4 POSIX supervisor consumes an inner-fence identity mismatch without signalling", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const request = { nonce: "anchor-mismatch-race", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" } as const;
+  const publications: Array<{ status: string; error?: string }> = [];
+  const signals: Array<{ groupId: number; action: string }> = [];
+  let reattestations = 0;
+  const context = vm.createContext({
+    Error, JSON, Number, Symbol, PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: request.nonce, platform: "posix" },
+    controlPath: "root/control.json", fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json",
+    handledControl: 0, join, posixAnchorExited: false,
+    posixControlInspectionDeferred: false, posixControlInspectionFailures: 0, posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null, POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixForceControlApplied: false, posixWorkloadGroup: workloadGroup, process: { pid: 9001 },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ++reattestations === 1
+      ? { state: "ready", members: [workloadGroup.leaderPid, 9003] }
+      : { state: "identity_mismatch" },
+    readFileSync: (path: string) => path === "root/control.json" ? JSON.stringify(request)
+      : path === "root/fence.json" ? JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken })
+      : path === "root/lock-holder.json" ? JSON.stringify({ nonce: request.nonce, holderPid: 9001, holderBirth: "supervisor-birth" })
+      : (() => { throw new Error(`unexpected synthetic read ${path}`); })(),
+    existsSync: (path: string) => path === "root/control.json", unlinkSync: () => undefined,
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    settlePortableSupervisorCommand,
+    signalOwnedPosixGroup: (action: string, _signal: unknown, groupId: number) => { signals.push({ action, groupId }); },
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
+  vm.runInContext("handleControl()", context);
+  assert.equal(reattestations, 2);
+  assert.deepEqual(signals, [], "identity mismatch inside the fence must never reach numeric group control");
+  assert.equal(vm.runInContext("handledControl", context), 1, "a definitive identity mismatch is consumed instead of retried against the numeric PGID");
+  assert.equal(vm.runInContext("posixControlInspectionDeferred", context), false);
+  assert.equal(publications.at(-1)?.status, "outcome_unknown");
+  assert.match(publications.at(-1)?.error ?? "", /anchor.*unavailable|numeric-only/i);
 });
 
 test("C4 POSIX supervisor treats readable EOF as exact pipe completion even when stream close is delayed", () => {
@@ -1359,6 +1457,11 @@ test("C4 POSIX producer keeps the real channel unsettled until closed pipes drai
     outputSequences: { stdout: 0, stderr: 0 },
     outputCheckpointPath: join(channelDirectory, "output-checkpoint.json"),
     posixAnchorExited: true,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorReleaseRequested: false,
     posixForceControlApplied: true,
     posixStderrClosed: false,
@@ -1510,6 +1613,11 @@ test("C4 POSIX producer drains a closed unread tail after backpressure before te
     outputSequences: { stdout: 0, stderr: 0 },
     outputCheckpointPath: join(channelDirectory, "output-checkpoint.json"),
     posixAnchorExited: true,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorReleaseRequested: false,
     posixForceControlApplied: true,
     posixStderrClosed: false,
@@ -1703,6 +1811,11 @@ test("C4 POSIX supervisor retires forced workload causally and waits for output 
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExitCode: null,
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorExitSignal: null,
     posixAnchorReleaseAuthority: null,
     posixAnchorReleaseRequested: false,
@@ -1830,6 +1943,11 @@ test("C4 POSIX supervisor releases an exact lone anchor only after executable ex
     listOwnedPosixGroupMembers: () => [...groupMembers],
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorExitCode: null,
     posixAnchorExitSignal: null,
     posixAnchorReleaseAuthority: null,
@@ -1980,6 +2098,11 @@ test("C4 POSIX supervisor refuses anchor release when membership changes inside 
     launchEffect: "started",
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorReleaseAuthority: null,
     posixAnchorReleaseRequested: false,
     posixForceControlApplied: false,
@@ -2056,6 +2179,11 @@ test("C4 POSIX supervisor replaces an unconsumed anchor release marker after a h
     launchEffect: "started",
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorReleaseAuthority: { ownerId: "owner", fencingToken: 1 },
     posixAnchorReleaseRequested: true,
     posixForceControlApplied: false,
@@ -2135,6 +2263,11 @@ test("C4 POSIX supervisor retains authority when an anchor exits before reportin
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExitCode: null,
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorExitSignal: null,
     posixAnchorReleaseAuthority: null,
     posixAnchorReleaseRequested: false,
@@ -2238,6 +2371,11 @@ test("C4 POSIX supervisor rejects mismatched released records and non-clean anch
       lockHolderPath: "root/lock-holder.json",
       posixAnchorExitCode: null,
       posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
       posixAnchorExitSignal: null,
       posixAnchorReleaseAuthority: authority,
       posixAnchorReleaseRequested: true,
@@ -2321,6 +2459,11 @@ test("C4 POSIX supervisor retains uncertain authority when a forced anchor exits
     listOwnedPosixGroupMembers: () => [9003],
     posixAnchorExitCode: null,
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorExitSignal: null,
     posixAnchorReleaseRequested: false,
     posixChildReleasedAnchorRelease: null,
@@ -2382,6 +2525,11 @@ test("C4 POSIX supervisor keeps its anchor through graceful control before one e
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExitCode: null,
     posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixAnchorExitSignal: null,
     posixAnchorReleaseAuthority: null,
     posixAnchorReleaseRequested: false,
@@ -2468,6 +2616,11 @@ test("C4 POSIX force after authenticated anchor exit refuses a numeric group tha
     join,
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: true,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixForceControlApplied: false,
     posixRecordedMembers: new Map([[9003, "original-descendant-birth"]]),
     posixSupervisorBirth: "supervisor-birth",
@@ -2506,6 +2659,7 @@ test("C4 POSIX force after authenticated anchor exit retries an unprovable inspe
   const request = { nonce: "retry-unprovable-force", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
   const signals: Array<[number, NodeJS.Signals]> = [];
   const publications: Array<{ status: string; error?: string }> = [];
+  let descendantInspections = 0;
   const context = vm.createContext({
     Error,
     JSON,
@@ -2518,17 +2672,171 @@ test("C4 POSIX force after authenticated anchor exit retries an unprovable inspe
     join,
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: true,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixForceControlApplied: false,
     posixRecordedMembers: new Map([[9003, "original-descendant-birth"]]),
     posixSupervisorBirth: "supervisor-birth",
     posixWorkloadGroup: workloadGroup,
+    posixWorkloadRetirement: { state: "active" },
+    launchEffect: "started",
+    child: { stdout: {}, stderr: {} },
+    stdoutPath: "root/stdout.log",
+    stderrPath: "root/stderr.log",
+    handleChannelAcks: () => undefined,
+    handleChannelInput: () => undefined,
+    drainOutput: () => undefined,
+    refreshPosixChildStatus: () => undefined,
+    listOwnedPosixGroupMembers: () => [9003],
+    hasCausalPosixAnchorRelease: () => false,
+    retirePosixWorkload: () => assert.fail("transient inspection must not retire the workload"),
     process: {
       pid: 9001,
       kill: (pid: number, signal: NodeJS.Signals) => { signals.push([pid, signal]); },
     },
     publish: (status: string, error?: string) => { publications.push({ status, error }); },
     reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
-    reattestOwnedPosixDescendants: () => ({ state: "outcome_unknown" }),
+    reattestOwnedPosixDescendants: () => { descendantInspections += 1; return { state: "outcome_unknown" }; },
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/control.json") return JSON.stringify(request);
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: request.nonce, holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    settlePortableSupervisorCommand,
+    signalOwnedPosixGroup,
+    existsSync: (path: string) => path.replace(/\\/g, "/") === "root/control.json",
+    unlinkSync: () => undefined,
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}\n${extractTickPosix(supervisorSource)}`, context);
+  vm.runInContext("tickPosix()", context);
+  assert.deepEqual(signals, [], "an unprovable inspect must not receive a destructive group signal");
+  assert.equal(vm.runInContext("posixForceControlApplied", context), false);
+  assert.equal(vm.runInContext("handledControl", context), 0, "a transient inspect race must leave the force request retryable");
+  assert.equal(publications.some(({ status }) => status === "outcome_unknown"), false, "output settlement requires running|stopping|stopped while inspection is retryable");
+  assert.equal(publications.at(-1)?.status, "running", "a retryable ownership inspection keeps the workload conservatively running");
+  vm.runInContext("tickPosix(); tickPosix(); tickPosix()", context);
+  assert.equal(descendantInspections, 3, "the same exact force request must stop launching ownership inspections after the configured retry cap");
+  assert.equal(vm.runInContext("posixControlInspectionFailures", context), 3);
+  assert.equal(publications.at(-1)?.status, "outcome_unknown", "exhausted bounded retry must become visible durable uncertainty");
+  assert.match(publications.at(-1)?.error ?? "", /attempt 3 of 3|remained unavailable after 3 attempts/i);
+  assert.deepEqual(signals, [], "bounded retry exhaustion must never fall back to numeric-only group control");
+});
+
+test("C4 POSIX post-anchor graceful control cannot block retirement or terminal exit", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  let request = { nonce: "post-anchor-graceful", ownerId: "owner", fencingToken: 1, sequence: 1, action: "terminate" };
+  let terminalOutput = false;
+  let exits = 0;
+  const publications: Array<{ status: string; error?: string }> = [];
+  const context = vm.createContext({
+    Date, Error, JSON, Number, Symbol, PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: request.nonce, platform: "posix" },
+    controlPath: "root/control.json", fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json",
+    handledControl: 0, join, launchEffect: "started",
+    posixAnchorExited: true, posixAnchorReleaseRequested: false,
+    posixControlInspectionDeferred: false, posixControlInspectionFailures: 0, posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null, POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixForceControlApplied: false, posixSupervisorBirth: "supervisor-birth",
+    posixWorkloadGroup: workloadGroup, posixWorkloadRetirement: { state: "active" },
+    child: { stdout: {}, stderr: {} }, stdoutPath: "root/stdout.log", stderrPath: "root/stderr.log",
+    handleChannelAcks: () => undefined, handleChannelInput: () => undefined, drainOutput: () => undefined,
+    refreshPosixChildStatus: () => undefined, listOwnedPosixGroupMembers: () => [],
+    hasCausalPosixAnchorRelease: () => true,
+    posixOutputPipesDrained: () => terminalOutput, posixOutputSettled: () => terminalOutput,
+    process: { pid: 9001, exit: () => { exits += 1; } }, timer: "synthetic-timer", clearInterval: () => undefined,
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/control.json") return JSON.stringify(request);
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: request.nonce, holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    existsSync: (path: string) => path.replace(/\\/g, "/") === "root/control.json",
+    unlinkSync: () => undefined,
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    settlePortableSupervisorCommand,
+    reattestOwnedPosixAnchor: () => assert.fail("a graceful request after real anchor exit must not re-attest or signal the dead anchor"),
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}\n${extractNamedFunction(supervisorSource, "retirePosixWorkload")}\n${extractTickPosix(supervisorSource)}`, context);
+  vm.runInContext("tickPosix()", context);
+  assert.equal(vm.runInContext("handledControl", context), 1, "the stale graceful request is consumed as a no-op");
+  assert.equal(vm.runInContext("posixWorkloadRetirement.state", context), "retired", "clean anchor exit still retires with output unsettled");
+  assert.equal(exits, 0, "unsettled output still keeps the supervisor witness alive");
+  request = { ...request, sequence: 2, action: "force_terminate" };
+  terminalOutput = true;
+  vm.runInContext("tickPosix()", context);
+  assert.equal(exits, 1, "a newly published control request cannot block an already-retired workload from terminal exit");
+  assert.equal(vm.runInContext("handledControl", context), 1, "retired workload exit occurs before polling the new control request");
+  assert.equal(publications.at(-1)?.status, "stopped");
+});
+
+test("C4 POSIX bounds retry of one exact unavailable control inspection", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const request = { nonce: "bounded-inspection", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" } as const;
+  let inspections = 0;
+  const context = vm.createContext({
+    Error, JSON, Number, Symbol, PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: request.nonce, platform: "posix" },
+    controlPath: "root/control.json", fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json",
+    handledControl: 0, join, posixAnchorExited: false,
+    posixControlInspectionDeferred: false, posixControlInspectionFailures: 0, posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null, POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixForceControlApplied: false, posixWorkloadGroup: workloadGroup, process: { pid: 9001 },
+    publish: () => undefined,
+    reattestOwnedPosixAnchor: () => { inspections += 1; return { state: "outcome_unknown" }; },
+    readFileSync: (path: string) => path === "root/control.json" ? JSON.stringify(request)
+      : path === "root/fence.json" ? JSON.stringify({ nonce: request.nonce, ownerId: request.ownerId, fencingToken: request.fencingToken })
+      : path === "root/lock-holder.json" ? JSON.stringify({ nonce: request.nonce, holderPid: 9001, holderBirth: "supervisor-birth" })
+      : (() => { throw new Error(`unexpected synthetic read ${path}`); })(),
+    existsSync: (path: string) => path === "root/control.json", unlinkSync: () => undefined,
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    settlePortableSupervisorCommand, signalOwnedPosixGroup,
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
+  vm.runInContext("handleControl(); handleControl(); handleControl(); handleControl()", context);
+  assert.equal(inspections, 3, "the fourth tick must not launch another host inspection for the same exact request");
+  assert.equal(vm.runInContext("posixControlInspectionFailures", context), 3);
+  assert.equal(vm.runInContext("posixControlInspectionDeferred", context), true);
+  assert.match(vm.runInContext("posixControlInspectionDetail", context), /attempt 3 of 3/i);
+});
+
+test("C4 POSIX post-anchor force keeps the request retryable when the inner fence re-attestation is transiently unknown", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const request = { nonce: "inner-descendant-race", ownerId: "owner", fencingToken: 1, sequence: 1, action: "force_terminate" };
+  const signals: Array<[number, NodeJS.Signals]> = [];
+  const publications: Array<{ status: string; error?: string }> = [];
+  let descendantAttestations = 0;
+  const context = vm.createContext({
+    Error, JSON, Number, PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: request.nonce, platform: "posix" },
+    controlPath: "root/control.json", fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json",
+    handledControl: 0, join,
+    posixAnchorExited: true,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixForceControlApplied: false,
+    posixRecordedMembers: new Map([[9003, "descendant-birth"]]),
+    posixSupervisorBirth: "supervisor-birth",
+    posixWorkloadGroup: workloadGroup,
+    process: { pid: 9001, kill: (pid: number, signal: NodeJS.Signals) => { signals.push([pid, signal]); } },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    reattestOwnedPosixDescendants: () => ++descendantAttestations === 1
+      ? { state: "ready", members: [9003] }
+      : { state: "outcome_unknown" },
     readFileSync: (path: string) => {
       const normalized = path.replace(/\\/g, "/");
       if (normalized === "root/control.json") return JSON.stringify(request);
@@ -2544,10 +2852,11 @@ test("C4 POSIX force after authenticated anchor exit retries an unprovable inspe
   });
   vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractNamedFunction(supervisorSource, "withCurrentFenceEffect")}\n${extractNamedFunction(supervisorSource, "completeControl")}\n${extractNamedFunction(supervisorSource, "handleControl")}`, context);
   vm.runInContext("handleControl()", context);
-  assert.deepEqual(signals, [], "an unprovable inspect must not receive a destructive group signal");
-  assert.equal(vm.runInContext("posixForceControlApplied", context), false);
-  assert.equal(vm.runInContext("handledControl", context), 0, "a transient inspect race must leave the force request retryable");
-  assert.equal(publications.some(({ status }) => status === "outcome_unknown"), false, "output settlement requires running|stopping|stopped");
+  assert.equal(descendantAttestations, 2);
+  assert.deepEqual(signals, []);
+  assert.equal(vm.runInContext("handledControl", context), 0, "transient inner-fence uncertainty must not consume the exact force request");
+  assert.equal(vm.runInContext("posixControlInspectionDeferred", context), true);
+  assert.equal(publications.some(({ status }) => status === "outcome_unknown"), false);
 });
 
 test("C4 POSIX force after authenticated anchor exit signals only a re-attested descendant group", () => {
@@ -2569,6 +2878,11 @@ test("C4 POSIX force after authenticated anchor exit signals only a re-attested 
     join,
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: true,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixForceControlApplied: false,
     posixRecordedMembers: new Map([[9003, "descendant-birth"]]),
     posixSupervisorBirth: "supervisor-birth",
@@ -2621,6 +2935,11 @@ test("C4 POSIX force after authenticated anchor exit does not signal an empty re
     join,
     lockHolderPath: "root/lock-holder.json",
     posixAnchorExited: true,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
     posixForceControlApplied: false,
     posixRecordedMembers: new Map([[9003, "descendant-birth"]]),
     posixSupervisorBirth: "supervisor-birth",

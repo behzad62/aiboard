@@ -53,6 +53,7 @@ const WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS = 2_000;
 const WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS = 15_000;
 const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 const POSIX_GROUP_INSPECTION_DEADLINE_MS = 15_000;
+const POSIX_CONTROL_INSPECTION_FAILURE_LIMIT = 3;
 const outputSequences = { stdout: 0, stderr: 0 };
 const outputOffsets = { stdout: 0, stderr: 0 };
 const retained = new Map();
@@ -91,6 +92,10 @@ let posixAnchorExitSignal = null;
 let posixAnchorReleaseRequested = false;
 let posixAnchorReleaseAuthority = null;
 let posixChildReleasedAnchorRelease = null;
+let posixControlInspectionDeferred = false;
+let posixControlInspectionFailures = 0;
+let posixControlInspectionDetail = "";
+let posixDeferredControlSignature = null;
 let posixForceControlApplied = false;
 const posixRecordedMembers = new Map();
 let posixChildStatusSignature;
@@ -288,7 +293,8 @@ function tickPosix() {
     return;
   }
   refreshPosixChildStatus();
-  handleControl();
+  // Retirement is authoritative for workload quiescence. Do not let a stale or
+  // newly published control request block terminal output settlement and exit.
   if (posixWorkloadRetirement.state === "retired") {
     const outputPipesDrained = posixOutputPipesDrained();
     publish(outputPipesDrained ? "stopped" : "running");
@@ -298,6 +304,17 @@ function tickPosix() {
     }
     return;
   }
+  posixControlInspectionDeferred = false;
+  handleControl();
+  if (!posixControlInspectionDeferred) {
+    posixControlInspectionFailures = 0;
+    posixControlInspectionDetail = "";
+    posixDeferredControlSignature = null;
+  }
+  const retryingControlInspection = posixControlInspectionDeferred &&
+    posixControlInspectionFailures < POSIX_CONTROL_INSPECTION_FAILURE_LIMIT;
+  const exhaustedControlInspection = posixControlInspectionDeferred &&
+    posixControlInspectionFailures >= POSIX_CONTROL_INSPECTION_FAILURE_LIMIT;
   if (posixAnchorExited) {
     const members = listOwnedPosixGroupMembers(posixWorkloadGroup.groupId);
     if (members === undefined) {
@@ -312,6 +329,19 @@ function tickPosix() {
       retirePosixWorkload("force_terminate");
       return;
     }
+    if (launchEffect === "unknown") {
+      publish("outcome_unknown", "POSIX executable startup was never proven before anchor exit.");
+      return;
+    }
+    if (retryingControlInspection) {
+      publish("running");
+      return;
+    }
+    if (exhaustedControlInspection) {
+      publish("outcome_unknown", posixControlInspectionDetail ||
+        `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`);
+      return;
+    }
     publish("outcome_unknown", "POSIX anchor exited before an authenticated released-child record and clean causal exit were observed.");
     return;
   }
@@ -321,6 +351,19 @@ function tickPosix() {
     return;
   }
   if (anchor.state !== "ready") {
+    if (launchEffect === "unknown") {
+      publish("outcome_unknown", "POSIX executable startup was never proven.");
+      return;
+    }
+    if (retryingControlInspection) {
+      publish("running");
+      return;
+    }
+    if (exhaustedControlInspection) {
+      publish("outcome_unknown", posixControlInspectionDetail ||
+        `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`);
+      return;
+    }
     publish("outcome_unknown", "POSIX workload anchor identity or group membership is unavailable.");
     return;
   }
@@ -339,7 +382,16 @@ function tickPosix() {
       return;
     }
   }
-  publish(launchEffect === "unknown" ? "outcome_unknown" : "running");
+  if (launchEffect === "unknown") {
+    publish("outcome_unknown", "POSIX executable startup was never proven.");
+    return;
+  }
+  if (exhaustedControlInspection) {
+    publish("outcome_unknown", posixControlInspectionDetail ||
+      `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`);
+    return;
+  }
+  publish("running");
 }
 
 function installOutput(stream, readable, evidencePath) {
@@ -521,6 +573,8 @@ function completeControl(request, apply) {
     apply: () => {
       if (!exactRequestStillPublished()) return { disposition: "deferred" };
       const value = apply();
+      if (value === Symbol.for("aiboard.runner-v2.posix-control-deferred"))
+        return { disposition: "deferred" };
       handledControl = request.sequence;
       return { disposition: "applied", value };
     },
@@ -836,6 +890,28 @@ function handleControl() {
     completeControl(request, () => undefined);
     return;
   }
+  // Once the POSIX anchor has actually exited there is no graceful group
+  // control left to apply. Only force may still target birth-attested surviving
+  // descendants; graceful requests are stale no-ops and must not block lifecycle
+  // retirement or terminal output settlement.
+  if (config.platform === "posix" && posixAnchorExited && request.action !== "force_terminate") {
+    completeControl(request, () => undefined);
+    return;
+  }
+  if (config.platform === "posix") {
+    const signature = `${request.ownerId}\0${request.fencingToken}\0${request.sequence}\0${request.action}`;
+    if (posixDeferredControlSignature !== signature) {
+      posixDeferredControlSignature = signature;
+      posixControlInspectionFailures = 0;
+      posixControlInspectionDetail = "";
+    }
+    if (posixControlInspectionFailures >= POSIX_CONTROL_INSPECTION_FAILURE_LIMIT) {
+      posixControlInspectionDeferred = true;
+      if (!posixControlInspectionDetail)
+        posixControlInspectionDetail = `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`;
+      return;
+    }
+  }
   if (config.platform === "windows") {
     if (config.windowsControlInspector) refreshWindowsTree();
     if (ownershipInspectionUnknown) {
@@ -896,9 +972,12 @@ function handleControl() {
         return;
       }
       if (observedDescendants.state === "outcome_unknown") {
-        // Refuse the numeric kill, but do not poison status. Output settlement
-        // only accepts running|stopping|stopped; a transient inspect race must
-        // retry on the next tick instead of making retained output unprovable.
+        // Refuse the numeric kill, but do not poison status during the bounded
+        // retry window. The same exact request stops launching host inspection
+        // tools after the limit and becomes durable outcome_unknown evidence.
+        posixControlInspectionDeferred = true;
+        posixControlInspectionFailures += 1;
+        posixControlInspectionDetail = `POSIX descendant ownership inspection is unavailable (attempt ${posixControlInspectionFailures} of ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT}).`;
         return;
       }
       if (observedDescendants.state !== "ready") {
@@ -911,6 +990,12 @@ function handleControl() {
           posixForceControlApplied = true;
           return { state: "signalled" };
         }
+        if (current.state === "outcome_unknown") {
+          posixControlInspectionDeferred = true;
+          posixControlInspectionFailures += 1;
+          posixControlInspectionDetail = `POSIX descendant ownership inspection is unavailable inside the fence (attempt ${posixControlInspectionFailures} of ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT}).`;
+          return Symbol.for("aiboard.runner-v2.posix-control-deferred");
+        }
         if (current.state !== "ready") return { state: "anchor_unavailable" };
         signalOwnedPosixGroup(request.action, process.kill, posixWorkloadGroup.groupId);
         posixForceControlApplied = true;
@@ -921,12 +1006,24 @@ function handleControl() {
       return;
     }
     const observedAnchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
+    if (observedAnchor.state === "outcome_unknown") {
+      posixControlInspectionDeferred = true;
+      posixControlInspectionFailures += 1;
+      posixControlInspectionDetail = `POSIX anchor ownership inspection is unavailable (attempt ${posixControlInspectionFailures} of ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT}).`;
+      return;
+    }
     if (observedAnchor.state !== "ready") {
       publish("outcome_unknown", "POSIX workload anchor is unavailable at the control boundary; refusing numeric-only group control.");
       return;
     }
     const applied = completeControl(request, () => {
       const anchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
+      if (anchor.state === "outcome_unknown") {
+        posixControlInspectionDeferred = true;
+        posixControlInspectionFailures += 1;
+        posixControlInspectionDetail = `POSIX anchor ownership inspection is unavailable inside the fence (attempt ${posixControlInspectionFailures} of ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT}).`;
+        return Symbol.for("aiboard.runner-v2.posix-control-deferred");
+      }
       if (anchor.state !== "ready") return { state: "anchor_unavailable" };
       signalOwnedPosixGroup(request.action, process.kill, posixWorkloadGroup.groupId);
       if (request.action === "force_terminate") posixForceControlApplied = true;

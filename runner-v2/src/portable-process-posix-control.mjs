@@ -66,11 +66,13 @@ export function listOwnedPosixGroupMembers(groupId) {
 export function parsePosixGroupMembers(output, groupId) {
   if (!positivePid(groupId) || typeof output !== "string") return undefined;
   const members = [];
+  let sawSnapshotRow = false;
   for (const line of output.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     const match = /^(-?\d+)\s+(-?\d+)$/.exec(trimmed);
     if (!match) return undefined;
+    sawSnapshotRow = true;
     const pid = Number(match[1]);
     const pgid = Number(match[2]);
     // Linux kernel threads report a positive PID with pgid 0. Only that row
@@ -79,7 +81,9 @@ export function parsePosixGroupMembers(output, groupId) {
     if (!positivePid(pid) || !positivePid(pgid)) return undefined;
     if (pgid === groupId) members.push(pid);
   }
-  return members;
+  // A successful `ps -e` snapshot necessarily contains at least its own row.
+  // Blank output is therefore unavailable evidence, never exact emptiness.
+  return sawSnapshotRow ? members : undefined;
 }
 
 export function reattestOwnedPosixAnchor(workloadGroup, inspect = inspectPosixProcessIdentity, listMembers = listOwnedPosixGroupMembers) {
