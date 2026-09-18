@@ -6,11 +6,12 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type {
-  ProcessBackend,
-  ProcessBackendBinding,
-  ProcessEffectFence,
-  ProcessLaunchRequest,
+import {
+  ProcessReleasePendingError,
+  type ProcessBackend,
+  type ProcessBackendBinding,
+  type ProcessEffectFence,
+  type ProcessLaunchRequest,
 } from "./process-backend.js";
 import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
@@ -525,7 +526,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const validation = this.validate(identity);
     if (validation === "mismatch" || validation === "unknown") throw new Error("Cannot release ownership without exact supervisor birth re-attestation.");
     if (this.options.platform === "posix" && identity.version === 2 && validation !== "exited")
-      throw new Error("Cannot release POSIX workload authority while its terminal supervisor witness is still alive.");
+      throw new ProcessReleasePendingError("Cannot release POSIX workload authority while its terminal supervisor witness is still alive.");
     const emptiness = await this.emptiness(identity);
     if (emptiness !== "empty")
       throw new Error(emptiness === "outcome_unknown" ? "Cannot release ownership with unknown empty verification." : "Cannot release non-empty owned process identity.");

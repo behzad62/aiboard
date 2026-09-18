@@ -16,6 +16,7 @@ import {
   parseProcessReconciliation,
   parseProcessReleaseResult,
   parseProcessSignalResult,
+  ProcessReleasePendingError,
   type ProcessBackend,
   type ProcessBackendBinding,
   type ProcessEffectFence,
@@ -295,7 +296,16 @@ export function createRunnerInternalProcessKernel(options: {
             }
             unsubscribe();
             await channel.detach();
-            parseProcessReleaseResult(await backend.release(binding, fence));
+            const releaseDeadline = Date.now() + terminationTimeoutMs;
+            for (;;) {
+              try {
+                parseProcessReleaseResult(await backend.release(binding, fence));
+                break;
+              } catch (error) {
+                if (!(error instanceof ProcessReleasePendingError) || Date.now() >= releaseDeadline) throw error;
+                await delay(Math.min(POLL_INTERVAL_MS, Math.max(1, releaseDeadline - Date.now())));
+              }
+            }
             active.delete(owned);
             return disposition;
           })();

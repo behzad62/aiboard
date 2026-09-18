@@ -98,6 +98,13 @@ export type ProcessReconciliation =
   | { readonly state: "identity_mismatch" }
   | { readonly state: "outcome_unknown" };
 export type ProcessReleaseResult = { readonly released: true };
+export class ProcessReleasePendingError extends Error {
+  readonly code = "process_release_pending";
+  constructor(message: string) {
+    super(message);
+    this.name = "ProcessReleasePendingError";
+  }
+}
 export interface ProcessLaunchRequest {
   readonly intent: ExecutionInvocationIntent;
   readonly grant: ConsumedExecutionGrant;
