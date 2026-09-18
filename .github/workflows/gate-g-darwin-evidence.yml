@@ -1,0 +1,37 @@
+name: Gate G Darwin evidence
+
+on:
+  push:
+    branches:
+      - ci/task12-gateg-darwin-evidence
+
+permissions:
+  contents: read
+
+jobs:
+  darwin-path-trust:
+    name: Darwin path trust (Node ${{ matrix.node-version }})
+    runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Gate D/G path-trust evidence
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/runner-capabilities-config.test.ts
+          runner-v2/test/runner-capability-contract.test.ts
+          runner-v2/test/plugin-loader.test.ts
+      - name: TypeScript
+        run: npx tsc -p runner-v2/tsconfig.json --noEmit
