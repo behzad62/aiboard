@@ -1083,7 +1083,7 @@ function osProcessBirths(pids: readonly number[], platform: "posix" | "windows")
 }
 function osPosixGroupMembers(groupId: number): readonly number[] | undefined {
   try {
-    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid="], {
+    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid=,stat="], {
       encoding: "utf8",
       timeout: PROCESS_MEMBERSHIP_INSPECTION_DEADLINE_MS,
     }), groupId);

@@ -54,7 +54,7 @@ export function parsePosixPsIdentity(pid, row) {
 export function listOwnedPosixGroupMembers(groupId) {
   if (!positivePid(groupId)) return undefined;
   try {
-    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid="], {
+    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid=,stat="], {
       encoding: "utf8",
       timeout: POSIX_INSPECTION_DEADLINE_MS,
     }), groupId);
@@ -70,15 +70,23 @@ export function parsePosixGroupMembers(output, groupId) {
   for (const line of output.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const match = /^(-?\d+)\s+(-?\d+)$/.exec(trimmed);
+    const match = /^(-?\d+)\s+(-?\d+)\s+(\S+)$/.exec(trimmed);
     if (!match) return undefined;
     sawSnapshotRow = true;
     const pid = Number(match[1]);
     const pgid = Number(match[2]);
+    const state = match[3];
+    // The first ps state character is the execution state; remaining BSD
+    // modifiers describe priority/session/foreground attributes. Refuse an
+    // unknown token rather than guessing whether that process can execute.
+    if (!/^[DRSTtXxIZU][<NLsl+]*$/.test(state)) return undefined;
     // Linux kernel threads report a positive PID with pgid 0. Only that row
     // is skipped; pid 0 or any other non-positive identity fails closed.
     if (positivePid(pid) && pgid === 0) continue;
     if (!positivePid(pid) || !positivePid(pgid)) return undefined;
+    // A zombie has already exited and cannot execute or receive a signal. Its
+    // unreaped pid/pgid row is not live workload membership.
+    if (state.startsWith("Z")) continue;
     if (pgid === groupId) members.push(pid);
   }
   // A successful `ps -e` snapshot necessarily contains at least its own row.

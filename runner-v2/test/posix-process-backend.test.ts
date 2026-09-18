@@ -136,7 +136,11 @@ test("POSIX native session fixture owns descendants after launcher exit", async 
       releaseOutputAcknowledgement();
     };
     const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
-      assert.equal(metadata.stream, "stdout", "the descendant PID fixture emits its evidence on stdout");
+      // Node 22 still emits its SQLite ExperimentalWarning on the inherited
+      // stderr pipe. Acknowledge that unrelated runtime diagnostic immediately
+      // so ordered delivery can reach the workload stdout whose ACK this fixture
+      // intentionally holds across the terminal-cleanup assertion.
+      if (metadata.stream === "stderr") return metadata;
       observedOutput.push(Buffer.from(bytes));
       await outputAcknowledgement;
       return metadata;
@@ -650,23 +654,42 @@ test("C4 POSIX rejects malformed nonempty ps identity and membership rows", asyn
     { pid: 9002, groupId: 9002, birth: "Mon Sep  6 00:00:00 2026" },
   );
   assert.equal(control.parsePosixPsIdentity(9002, "not-a-process"), undefined);
-  assert.deepEqual(control.parsePosixGroupMembers(" 9002 9002\n 9003 9002\n", 9002), [9002, 9003]);
-  assert.equal(control.parsePosixGroupMembers("9002 9002\nmalformed-row\n", 9002), undefined);
+  assert.deepEqual(control.parsePosixGroupMembers(" 9002 9002 S\n 9003 9002 R\n", 9002), [9002, 9003]);
+  assert.equal(control.parsePosixGroupMembers("9002 9002 S\nmalformed-row\n", 9002), undefined);
   assert.equal(control.parsePosixGroupMembers("\n  \n", 9002), undefined,
     "an empty ps snapshot cannot prove that an owned group is empty");
   assert.deepEqual(
-    control.parsePosixGroupMembers("2 0\n1 1\n 9002 9002\n 9003 9002\n", 9002),
+    control.parsePosixGroupMembers("2 0 I\n1 1 Ss\n 9002 9002 S\n 9003 9002 R\n", 9002),
     [9002, 9003],
     "kernel threads with pgid 0 must not void an otherwise exact membership snapshot",
   );
-  assert.equal(control.parsePosixGroupMembers("0 9002\n9002 9002\n", 9002), undefined,
+  assert.equal(control.parsePosixGroupMembers("0 9002 S\n9002 9002 S\n", 9002), undefined,
     "pid 0 with a positive pgid is not a kernel thread and must fail closed");
-  assert.equal(control.parsePosixGroupMembers("9003 -1\n9002 9002\n", 9002), undefined,
+  assert.equal(control.parsePosixGroupMembers("9003 -1 S\n9002 9002 S\n", 9002), undefined,
     "a negative pgid row must fail closed");
-  assert.equal(control.parsePosixGroupMembers("9002 12.5\n", 9002), undefined,
+  assert.equal(control.parsePosixGroupMembers("9002 12.5 S\n", 9002), undefined,
     "a non-integer numeric membership row must fail closed");
-  assert.equal(control.parsePosixGroupMembers("abc 9002\n9002 9002\n", 9002), undefined,
+  assert.equal(control.parsePosixGroupMembers("abc 9002 S\n9002 9002 S\n", 9002), undefined,
     "a non-numeric membership row must fail closed");
+});
+
+test("C4 POSIX membership excludes zombies but fails closed on unknown process state", async () => {
+  const control = await import("../src/portable-process-posix-control.mjs");
+  assert.deepEqual(
+    control.parsePosixGroupMembers("1 1 Ss\n9002 9002 Zs\n9003 9002 S\n", 9002),
+    [9003],
+    "a zombie anchor is already non-executing membership and must not block exact workload quiescence",
+  );
+  assert.deepEqual(
+    control.parsePosixGroupMembers("1 1 Ss\n9002 9002 Z+\n", 9002),
+    [],
+    "a successful host snapshot containing only zombie rows for the owned group proves no live members remain",
+  );
+  assert.equal(
+    control.parsePosixGroupMembers("1 1 Ss\n9002 9002 mystery\n", 9002),
+    undefined,
+    "an unrecognized process state must fail closed instead of being treated as live or dead",
+  );
 });
 
 test("C4 POSIX descendant reattestation refuses a recycled PGID without a recorded birth witness", async () => {
