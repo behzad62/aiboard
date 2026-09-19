@@ -1,0 +1,10 @@
+{
+  "time": "2026-09-15T08:28:49.4929599Z",
+  "recordedBirthIdentities": 113,
+  "rootCount": 569,
+  "birthMatchedOwnedProcesses": [],
+  "rootReferencingProcesses": [],
+  "liveTestReviewWrappers": [],
+  "clean": true,
+  "note": "Read-only audit of exact recorded process births, descendants and exact fixture-root command references. Recycled PIDs are not ownership. This supplements the GREEN fixtures own release/shutdown assertions. No processes or roots are removed."
+}

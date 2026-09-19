@@ -1,0 +1,131 @@
+{
+  "id": "language-write-ceiling-removed",
+  "target": "runner-v2/src/streaming-request-operation.ts",
+  "test": "runner-v2/test/streaming-language-operation.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-green",
+  "sourceFinalSha256": "2db57465fe4cd567ababc43031c96d43bd90b24a553d06e26758a4077585c608",
+  "testFinalSha256": "acde65962ca2e7c65f90203494d3b6010b75b980e5b6a7d4e7868e5ea9eef831",
+  "redReceipt": {
+    "id": "fault-language-write-ceiling-removed-red",
+    "startedAt": "2026-09-12T17:26:18.438Z",
+    "finishedAt": "2026-09-12T17:26:19.161Z",
+    "wrapperPid": 71488,
+    "testPid": 66616,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP compound call stops",
+      "runner-v2/test/streaming-language-operation.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "fault-language-write-ceiling-removed-green",
+    "startedAt": "2026-09-12T17:26:19.208Z",
+    "finishedAt": "2026-09-12T17:26:19.901Z",
+    "wrapperPid": 84224,
+    "testPid": 80780,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP compound call stops",
+      "runner-v2/test/streaming-language-operation.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/red-terminal.json",
+      "sha256": "1c1fb8d2f6eb6d153e87d5b6506b3f9f78f910bcb04b56ca33baa6e6e95f1b08"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/red-inputs-before.json",
+      "sha256": "ebc9efa5b4d0ad5d359e1c5728457f6e0f7e71c577a54be15cfbd3c7f8567317"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/red-inputs-after.json",
+      "sha256": "ebc9efa5b4d0ad5d359e1c5728457f6e0f7e71c577a54be15cfbd3c7f8567317"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/red-stdout.log",
+      "sha256": "f1fa064f1a6577a0321c6c73b7ef8d642780d55afd99661a6430c24a2b6e5e81"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/red-wrapper.json",
+      "sha256": "a4c3f938439e39bf60591dfc35d421a51b5f805af11ca94ef7bce35fb8e280c2"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/red-child.json",
+      "sha256": "4fe8990364d284f2b5bc1fc1a80b41d4b60d7f44da583d47a1e44885398cf07c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/green-terminal.json",
+      "sha256": "8201d997c835464ea4b4b76810c8fdbd5c20d91a62b8995c361d058b2fe31a4c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/green-inputs-before.json",
+      "sha256": "15bb635840a4cc1ac60ee79bf14f0d083127df978efb250048d2a1c499b74e68"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/green-inputs-after.json",
+      "sha256": "15bb635840a4cc1ac60ee79bf14f0d083127df978efb250048d2a1c499b74e68"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/green-stdout.log",
+      "sha256": "5152575406f49566e61126aaa01595049ee2d5e16a2f63cbd00620bc55643c86"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/green-wrapper.json",
+      "sha256": "2fd4bb0cf0fa69e48017ddf4a4ee930b4ca7b4d8c52c4cea63b024c962d454a1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-language-write-ceiling-removed-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-write-ceiling-removed/green-child.json",
+      "sha256": "1256661ad9066f56b1431e35c92ca3464baafcc7623d52b9ab2f13d6a24d33e1"
+    }
+  ]
+}

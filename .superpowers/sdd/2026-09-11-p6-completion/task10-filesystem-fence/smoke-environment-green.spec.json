@@ -1,0 +1,6 @@
+{
+  "id": "smoke-environment-green",
+  "tests": [
+    "runner-v2/test/final-verification-runtime-b1.test.ts"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "pid": 15340,
+  "identity": {
+    "Id": 15340,
+    "StartTimeUtc": "2026-09-13T19:46:22.7721070Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-13T19:46:22.842Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\eslint-acceptance.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/eslint/bin/eslint.js",
+    "runner-v2/src",
+    "runner-v2/test"
+  ],
+  "spec": {
+    "id": "eslint-acceptance",
+    "args": [
+      "node_modules/eslint/bin/eslint.js",
+      "runner-v2/src",
+      "runner-v2/test"
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { BuildRunPolicy, BuildSkillMode } from "@/lib/db/schema";
 import {
   buildSkillModeLabel,
@@ -10,6 +10,7 @@ import {
 } from "@/lib/orchestrator/build-policy";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { usesBuildBudgetControls } from "@/lib/client/native-build-policy";
 
@@ -58,6 +59,7 @@ export interface BuildRunPolicyValue {
   skillMode: BuildSkillMode;
   budgetUsd: number;
   timeLimitMinutes: number;
+  alwaysRequireIndependentVerifier: boolean;
 }
 
 interface BuildRunPolicyControlProps {
@@ -163,6 +165,27 @@ export function BuildRunPolicyControl({
             );
           })}
         </div>
+      </div>
+
+      <div className="flex items-start justify-between gap-4 rounded-lg border bg-muted/20 p-4">
+        <div className="space-y-1">
+          <Label htmlFor="build-always-independent-verifier">
+            Always run independent verification
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            High-risk builds always require an independent verifier. Enable this
+            to verify low-risk builds too.
+          </p>
+        </div>
+        <Switch
+          id="build-always-independent-verifier"
+          checked={value.alwaysRequireIndependentVerifier}
+          disabled={disabled}
+          onCheckedChange={(alwaysRequireIndependentVerifier) =>
+            onChange({ ...value, alwaysRequireIndependentVerifier })
+          }
+          aria-label="Always run independent verification"
+        />
       </div>
 
       {usesBuildBudgetControls(value.runPolicy) && (

@@ -1,0 +1,4 @@
+import { writeFile } from "node:fs/promises";
+
+await writeFile(process.argv[2], String(process.pid), { flag: "wx" });
+setInterval(() => undefined, 1_000);

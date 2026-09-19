@@ -1,0 +1,24 @@
+{
+  "id": "fault-supervisor-stream-error-green",
+  "startedAt": "2026-09-12T17:26:09.491Z",
+  "finishedAt": "2026-09-12T17:26:10.181Z",
+  "wrapperPid": 104164,
+  "testPid": 54640,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 412,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/windows-job-supervisor-input.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

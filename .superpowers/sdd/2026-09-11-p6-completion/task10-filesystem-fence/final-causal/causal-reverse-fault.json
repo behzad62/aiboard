@@ -1,0 +1,33 @@
+{
+  "acceptedSha256": "48a61aa60deb472301f41cced009ef9ed60ff9e1061298dd1b547be69d4d9d3d",
+  "startedAt": "2026-09-15T07:52:26.593Z",
+  "faults": [
+    {
+      "id": "canonicalization",
+      "acceptedSha256": "48a61aa60deb472301f41cced009ef9ed60ff9e1061298dd1b547be69d4d9d3d",
+      "faultySha256": "216eefb340e5221e347c6c9ab4246cbb617a4462a4da514124667372ade3d04e",
+      "redRun": "fault-canonicalization-red",
+      "retainedDiagnosticRoot": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-zhVQxN",
+      "violation": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-zhVQxN\\outside\\new.txt",
+      "violationSha256": "3e590b17ee677253116266b02889c55d03b94524d581024848ccad4582af926e",
+      "violationBytesConfirmed": true,
+      "restoredGreenRun": "fault-canonicalization-restored-green",
+      "restoredSha256": "48a61aa60deb472301f41cced009ef9ed60ff9e1061298dd1b547be69d4d9d3d"
+    },
+    {
+      "id": "overwrite",
+      "acceptedSha256": "48a61aa60deb472301f41cced009ef9ed60ff9e1061298dd1b547be69d4d9d3d",
+      "faultySha256": "ec7578aa2566b5924a17d2c6e3fec23303061177bb415b72074a138d0e802374",
+      "redRun": "fault-overwrite-red",
+      "retainedDiagnosticRoot": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-fo87AF",
+      "violation": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-fo87AF\\workspace\\value.txt",
+      "violationSha256": "95713e9cbdd1dfcb2d4080c2537f418d43ca0da25f0d7d6631f4f7c97b89dc47",
+      "violationBytesConfirmed": true,
+      "restoredGreenRun": "fault-overwrite-restored-green",
+      "restoredSha256": "48a61aa60deb472301f41cced009ef9ed60ff9e1061298dd1b547be69d4d9d3d"
+    }
+  ],
+  "verified": true,
+  "finishedAt": "2026-09-15T07:52:30.688Z",
+  "finalSourceSha256": "48a61aa60deb472301f41cced009ef9ed60ff9e1061298dd1b547be69d4d9d3d"
+}

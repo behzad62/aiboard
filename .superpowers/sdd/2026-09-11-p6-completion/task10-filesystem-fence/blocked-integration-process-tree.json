@@ -1,0 +1,7 @@
+{
+  "ProcessId": 44236,
+  "ParentProcessId": 3012,
+  "CreationDate": "2026-09-15T11:26:06.646172+04:00",
+  "Name": "node.exe",
+  "CommandLine": "\"C:\\Program Files\\nodejs\\node.exe\" --use-largepages=off --trace-event-file-pattern=node_trace.${rotation}.log --v8-pool-size=4 --node-snapshot --cpu-prof-interval=1000 --report-signal=SIGUSR2 --tls-cipher-list=TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA --secure-heap=0 --secure-heap-min=2 --stack-trace-limit=10 --test-isolation=process --network-family-autoselection-attempt-timeout=250 --heapsnapshot-near-heap-limit=0 --heap-prof-interval=524288 --max-http-header-size=16384 --test-concurrency=1 --test-timeout=0 --test-coverage-branches=0 --test-coverage-functions=0 --test-coverage-lines=0 --watch-kill-signal=SIGTERM --import=./runner-v2/test/support/cli-root-observer.mjs --import=tsx --inspect-port=127.0.0.1:9229 --inspect-publish-uid=stderr,http --import ./runner-v2/test/support/cli-root-observer.mjs --import tsx runner-v2\\test\\integration-manager.test.ts"
+}

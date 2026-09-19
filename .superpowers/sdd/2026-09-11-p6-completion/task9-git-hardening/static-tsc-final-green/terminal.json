@@ -1,0 +1,20 @@
+{
+  "id": "static-tsc-final-green",
+  "startedAt": "2026-09-14T19:54:56.011Z",
+  "finishedAt": "2026-09-14T19:55:02.244Z",
+  "wrapperPid": 18388,
+  "testPid": 8604,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "runner-v2/tsconfig.json",
+    "--noEmit"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

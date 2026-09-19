@@ -6,9 +6,9 @@ import test from "node:test";
 
 import type { ToolCallBlock, ToolResult } from "../src/agent-contracts.js";
 import { createCodeIntelligenceTools } from "../src/code-intelligence-tools.js";
-import { RepositoryIntelligence } from "../src/repository-intelligence.js";
+import { RepositoryIntelligence } from "./support/git-fixture.js";
 import { ToolBroker } from "../src/tool-broker.js";
-import { TypeScriptIntelligence } from "../src/typescript-intelligence.js";
+import { TypeScriptIntelligence } from "./support/git-fixture.js";
 
 test("code intelligence tools expose bounded read-only native contracts", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-code-tools-"));
@@ -23,7 +23,10 @@ test("code intelligence tools expose bounded read-only native contracts", async 
     const repository = new RepositoryIntelligence();
     const typescript = new TypeScriptIntelligence(repository);
     const broker = new ToolBroker({ permissionProfile: "project", workspacePath: root });
-    for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+    for (const tool of createCodeIntelligenceTools({
+      repository,
+      language: typescript,
+    })) {
       broker.register(tool);
     }
 

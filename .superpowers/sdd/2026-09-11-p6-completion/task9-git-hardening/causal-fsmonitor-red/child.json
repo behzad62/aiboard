@@ -1,0 +1,22 @@
+{
+  "pid": 17964,
+  "identity": {
+    "Id": 17964,
+    "StartTimeUtc": "2026-09-14T15:38:26.0719360Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 43472,
+  "spawnedAt": "2026-09-14T15:38:26.350Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=neutralizes repository fsmonitor",
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ]
+}

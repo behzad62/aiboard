@@ -1,0 +1,70 @@
+{
+  "pid": 30428,
+  "identity": {
+    "Id": 30428,
+    "StartTimeUtc": "2026-09-15T15:09:54.9383994Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T15:09:54.977Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\affected-pre-review.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery.test.ts",
+    "runner-v2/test/process-recovery-kernel.test.ts",
+    "runner-v2/test/process-recovery-control.test.ts",
+    "runner-v2/test/process-recovery-disclosure.test.ts",
+    "runner-v2/test/process-recovery-model-free.test.ts",
+    "runner-v2/test/durable-process-store.test.ts",
+    "runner-v2/test/subprocess-runtime.test.ts",
+    "runner-v2/test/execution-grants.test.ts",
+    "runner-v2/test/execution-host.test.ts",
+    "runner-v2/test/execution-host-credential-graph.test.ts",
+    "runner-v2/test/one-shot-command-executor.test.ts",
+    "runner-v2/test/one-shot-command-family-production-matrix.test.ts",
+    "runner-v2/test/one-shot-command-routing-static.test.ts",
+    "runner-v2/test/one-shot-output-capture.test.ts",
+    "runner-v2/test/scheduler-store.test.ts",
+    "runner-v2/test/recovery-smoke.test.ts",
+    "runner-v2/test/native-build-manager.test.ts",
+    "runner-v2/test/control-server.test.ts",
+    "runner-v2/test/streaming-expired-host-recovery.test.ts",
+    "runner-v2/test/streaming-precheckpoint-recovery.test.ts"
+  ],
+  "spec": {
+    "tests": [
+      "runner-v2/test/process-recovery.test.ts",
+      "runner-v2/test/process-recovery-kernel.test.ts",
+      "runner-v2/test/process-recovery-control.test.ts",
+      "runner-v2/test/process-recovery-disclosure.test.ts",
+      "runner-v2/test/process-recovery-model-free.test.ts",
+      "runner-v2/test/durable-process-store.test.ts",
+      "runner-v2/test/subprocess-runtime.test.ts",
+      "runner-v2/test/execution-grants.test.ts",
+      "runner-v2/test/execution-host.test.ts",
+      "runner-v2/test/execution-host-credential-graph.test.ts",
+      "runner-v2/test/one-shot-command-executor.test.ts",
+      "runner-v2/test/one-shot-command-family-production-matrix.test.ts",
+      "runner-v2/test/one-shot-command-routing-static.test.ts",
+      "runner-v2/test/one-shot-output-capture.test.ts",
+      "runner-v2/test/scheduler-store.test.ts",
+      "runner-v2/test/recovery-smoke.test.ts",
+      "runner-v2/test/native-build-manager.test.ts",
+      "runner-v2/test/control-server.test.ts",
+      "runner-v2/test/streaming-expired-host-recovery.test.ts",
+      "runner-v2/test/streaming-precheckpoint-recovery.test.ts"
+    ],
+    "id": "affected-pre-review"
+  }
+}

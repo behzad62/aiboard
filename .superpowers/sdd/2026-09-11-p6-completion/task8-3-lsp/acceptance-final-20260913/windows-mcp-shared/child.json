@@ -1,0 +1,22 @@
+{
+  "pid": 35548,
+  "identity": {
+    "Id": 35548,
+    "StartTimeUtc": "2026-09-13T18:59:59.4185012Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 33072,
+  "spawnedAt": "2026-09-13T18:59:59.686Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/mcp-tools.test.ts",
+    "runner-v2/test/real-streaming-integration.test.ts"
+  ]
+}

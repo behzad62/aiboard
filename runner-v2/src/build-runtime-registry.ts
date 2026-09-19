@@ -22,6 +22,8 @@ export interface BuildControlPlane {
   step(runId: string): Promise<BuildStepResult>;
   runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult>;
   activate(runId: string): void;
+  submitUserGuidance(runId: string, input: UserGuidanceControlInput): Promise<SchedulerProjection>;
+  answerArchitectQuestion(runId: string, input: ArchitectQuestionAnswerControlInput): Promise<SchedulerProjection>;
   pause(runId: string, reason: string, idempotencyKey: string): Promise<SchedulerProjection>;
   resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection>;
   continue(runId: string, idempotencyKey: string): Promise<SchedulerProjection>;
@@ -30,11 +32,30 @@ export interface BuildControlPlane {
     runtimeId: string,
     idempotencyKey: string
   ): Promise<SchedulerProjection>;
+  selectVerifierRuntime(
+    runId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection>;
   selectProjectHandoff(
     runId: string,
     choice: ProjectHandoffChoice,
     idempotencyKey: string
   ): Promise<SchedulerProjection>;
+}
+
+export interface UserGuidanceControlInput {
+  guidanceId: string;
+  text: string;
+  version: number;
+  idempotencyKey: string;
+}
+
+export interface ArchitectQuestionAnswerControlInput {
+  questionId: string;
+  expectedVersion: number;
+  answer: string;
+  idempotencyKey: string;
 }
 
 export class BuildRuntimeRegistry implements BuildControlPlane {
@@ -122,6 +143,24 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     void pump.catch(() => undefined);
   }
 
+  async submitUserGuidance(
+    runId: string,
+    input: UserGuidanceControlInput
+  ): Promise<SchedulerProjection> {
+    const projection = this.require(runId).submitUserGuidance(input);
+    this.wake(runId);
+    return projection;
+  }
+
+  async answerArchitectQuestion(
+    runId: string,
+    input: ArchitectQuestionAnswerControlInput
+  ): Promise<SchedulerProjection> {
+    const projection = this.require(runId).answerArchitectQuestion(input);
+    this.wake(runId);
+    return projection;
+  }
+
   async pause(runId: string, reason: string, idempotencyKey: string): Promise<SchedulerProjection> {
     return this.require(runId).pause(reason, idempotencyKey);
   }
@@ -142,6 +181,14 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     return this.require(runId).selectArchitectHandoff(runtimeId, idempotencyKey);
   }
 
+  async selectVerifierRuntime(
+    runId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection> {
+    return this.require(runId).selectVerifierRuntime(runtimeId, idempotencyKey);
+  }
+
   async selectProjectHandoff(
     _runId: string,
     _choice: ProjectHandoffChoice,
@@ -154,5 +201,14 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     const runtime = this.runtimes.get(runId);
     if (!runtime) throw new Error(`Unknown build runtime ${runId}.`);
     return runtime;
+  }
+
+  private wake(runId: string): void {
+    const active = this.pumps.get(runId);
+    if (!active) {
+      this.activate(runId);
+      return;
+    }
+    void active.finally(() => this.activate(runId)).catch(() => undefined);
   }
 }

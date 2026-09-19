@@ -1,0 +1,27 @@
+TAP version 13
+# Subtest: LSP shared transport uses the real launching call and fresh exact language request authority
+not ok 1 - LSP shared transport uses the real launching call and fresh exact language request authority
+  ---
+  duration_ms: 283.8827
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\lsp-transport-authority.test.ts:1:1549'
+  failureType: 'testCodeFailure'
+  error: 'shared LSP transport must respect the concrete channel write bound'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    Object.write (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-transport-authority.test.ts:29:63)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\execution-host-lsp-transport.ts:184:18)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 552.7116

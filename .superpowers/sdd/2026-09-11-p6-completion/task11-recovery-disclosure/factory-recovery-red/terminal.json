@@ -1,0 +1,25 @@
+{
+  "id": "factory-recovery-red",
+  "startedAt": "2026-09-15T13:00:22.828Z",
+  "finishedAt": "2026-09-15T13:00:50.875Z",
+  "wrapperPid": 50256,
+  "testPid": 56588,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 446,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=NativeBuildFactory executes",
+    "runner-v2/test/native-final-verification-factory.test.ts"
+  ],
+  "rootCount": 4,
+  "retainedRoots": []
+}

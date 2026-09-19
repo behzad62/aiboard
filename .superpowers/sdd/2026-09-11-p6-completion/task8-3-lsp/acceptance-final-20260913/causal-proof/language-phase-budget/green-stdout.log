@@ -1,0 +1,20 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-language-budget-pUoJVZ"}
+# Subtest: LSP language operation budget lets the typed write timeout settle before the shared ownership deadline
+ok 1 - LSP language operation budget lets the typed write timeout settle before the shared ownership deadline
+  ---
+  duration_ms: 89.3646
+  type: 'test'
+  ...
+# exact synthetic LSP language-budget root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-language-budget-pUoJVZ
+# closed synthetic LSP language-budget root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-language-budget-pUoJVZ
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-language-budget-pUoJVZ","existsAtExit":false}
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 293.1213

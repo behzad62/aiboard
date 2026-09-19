@@ -1,0 +1,23 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+const root = 'D:/repos/ai-discussion-board/.worktrees/runner-v2-robust-build';
+const e = '.superpowers/sdd/2026-09-11-p6-completion/task11-recovery-disclosure';
+const stripBom = s => s.charCodeAt(0) === 0xfeff ? s.slice(1) : s;
+const baseline = JSON.parse(stripBom(fs.readFileSync(path.join(root,e,'baseline.json'),'utf8')));
+const code = new Set(execFileSync('git',['diff','--cached','--name-only'],{cwd:root,encoding:'utf8'}).trim().split(/\r?\n/).filter(p=>p && !p.startsWith(e+'/')));
+const isTask11 = p => code.has(p) || p === '.superpowers/sdd/2026-09-11-p6-completion/plan.md' || p.startsWith(e+'/');
+const sha = p => crypto.createHash('sha256').update(fs.readFileSync(path.join(root,p))).digest('hex');
+const protectedRows = baseline.files.filter(x=>!isTask11(x.path));
+const drift = [], missing = [];
+for (const row of protectedRows) { const full=path.join(root,row.path); if(!fs.existsSync(full)){missing.push(row.path);continue;} if(sha(row.path)!==row.sha256)drift.push(row.path); }
+const splitStatus = s => s.split('\0').filter(Boolean);
+const baseUnrelated = splitStatus(baseline.status).filter(line=>!isTask11(line.slice(3))).sort();
+const currentStatus = execFileSync('git',['status','--porcelain=v1','-z','--untracked-files=all'],{cwd:root,encoding:'utf8'});
+const currentUnrelated = splitStatus(currentStatus).filter(line=>!isTask11(line.slice(3))).sort();
+const sameStatus = JSON.stringify(baseUnrelated)===JSON.stringify(currentUnrelated);
+const result={verified:drift.length===0&&missing.length===0&&sameStatus,protectedChecked:protectedRows.length,protectedDrift:drift,protectedMissing:missing,baselineUnrelatedStatusCount:baseUnrelated.length,currentUnrelatedStatusCount:currentUnrelated.length,unrelatedStatusPreserved:sameStatus,currentHead:execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),task11CodePathCount:code.size};
+fs.writeFileSync(path.join(root,e,'final-acceptance','final-precommit-audit.json'),JSON.stringify(result,null,2)+'\n');
+console.log(JSON.stringify(result,null,2));
+if(!result.verified)process.exit(1);

@@ -1,0 +1,13 @@
+{
+  "stagedCodeCount": 31,
+  "mismatchCount": 1,
+  "allLineEndingOnly": true,
+  "normalizedPaths": [
+    {
+      "path": "runner-v2/test/streaming-process-session-runtime.test.ts",
+      "workingBytes": 285969,
+      "stagedBytes": 282670
+    }
+  ],
+  "remaining": []
+}

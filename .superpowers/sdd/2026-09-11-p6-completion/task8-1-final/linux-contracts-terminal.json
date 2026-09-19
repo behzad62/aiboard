@@ -1,0 +1,26 @@
+{
+  "startedAt": "2026-09-11T14:45:07.212536+00:00",
+  "finishedAt": "2026-09-11T14:45:20.531422+00:00",
+  "wrapperPid": 55028,
+  "exitCode": 0,
+  "compileExit": 0,
+  "containerId": "640ed88b388ab81138127c2bb50cad461c4b0fc37a07c1ea1a0ae278affbfaa2",
+  "imageId": "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+  "containerState": {
+    "Status": "exited",
+    "Running": false,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 0,
+    "ExitCode": 0,
+    "Error": "",
+    "StartedAt": "2026-09-11T14:45:16.328638603Z",
+    "FinishedAt": "2026-09-11T14:45:20.130291707Z"
+  },
+  "containerRemoved": true,
+  "tmpCopyExit": 0,
+  "bundleFiles": 356,
+  "scope": "actual Linux portable authority/output/bootstrap/API contracts and memory/SQLite results; no real Git executable integration or macOS/remote CI claim"
+}

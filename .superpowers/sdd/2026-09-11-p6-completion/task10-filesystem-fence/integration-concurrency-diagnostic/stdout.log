@@ -1,0 +1,77 @@
+C5 CLI root: {"event":"created","path":"C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz"}
+TRACE winner ["rev-parse","--show-toplevel"]
+TRACE winner ["symbolic-ref","--quiet","HEAD"]
+TRACE winner ["merge-base","--is-ancestor","4c624bb4501a97814a51d197538ec9407055e3af","HEAD"]
+TRACE winner ["rev-parse","HEAD"]
+TRACE loser ["rev-parse","--show-toplevel"]
+TRACE loser ["symbolic-ref","--quiet","HEAD"]
+TRACE loser ["merge-base","--is-ancestor","4c624bb4501a97814a51d197538ec9407055e3af","HEAD"]
+TRACE loser ["rev-parse","HEAD"]
+TRACE loser ["rev-parse","--show-toplevel"]
+TRACE loser ["symbolic-ref","--quiet","HEAD"]
+TRACE loser ["merge-base","--is-ancestor","4c624bb4501a97814a51d197538ec9407055e3af","HEAD"]
+TRACE loser ["rev-parse","HEAD"]
+TRACE winner ["rev-parse","--show-toplevel"]
+TRACE winner ["symbolic-ref","--quiet","HEAD"]
+TRACE winner ["merge-base","--is-ancestor","4c624bb4501a97814a51d197538ec9407055e3af","HEAD"]
+TRACE winner ["rev-parse","HEAD"]
+TRACE loser ["symbolic-ref","--quiet","HEAD"]
+TRACE loser ["rev-parse","--verify","HEAD^{commit}"]
+TRACE loser ["status","--porcelain=v1","-z","--untracked-files=all"]
+TRACE loser ["diff","--binary","--full-index","4c624bb4501a97814a51d197538ec9407055e3af","180e9b692b8dddf32c843854f9cca299e69b76db","--"]
+TRACE loser ["show","-s","--format=%B","4c624bb4501a97814a51d197538ec9407055e3af"]
+TRACE winner ["symbolic-ref","--quiet","HEAD"]
+TRACE winner ["rev-parse","--verify","HEAD^{commit}"]
+TRACE winner ["status","--porcelain=v1","-z","--untracked-files=all"]
+TRACE winner ["diff","--binary","--full-index","4c624bb4501a97814a51d197538ec9407055e3af","180e9b692b8dddf32c843854f9cca299e69b76db","--"]
+TRACE winner ["show","-s","--format=%B","4c624bb4501a97814a51d197538ec9407055e3af"]
+TRACE loser ["read-tree","4c624bb4501a97814a51d197538ec9407055e3af"]
+TRACE loser ["apply","--check","--cached","--binary","C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz\\state\\handoff\\run-handoff-concurrent-journals-aa54a23735.7b7313cd-2c55-4734-8153-00b11a91d4a6-4b2bf59172.patch"]
+TRACE loser ["apply","--cached","--binary","C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz\\state\\handoff\\run-handoff-concurrent-journals-aa54a23735.7b7313cd-2c55-4734-8153-00b11a91d4a6-4b2bf59172.patch"]
+TRACE loser ["write-tree"]
+TRACE loser ["commit-tree","ea37a97686eee5357b3ae4dac996172f0b4ee580","-p","4c624bb4501a97814a51d197538ec9407055e3af","-m","Apply completed AIBoard build","-m","AIBoard-Run: run_handoff-concurrent-journals\nAIBoard-Integration: 180e9b692b8dddf32c843854f9cca299e69b76db\nAIBoard-Transition: 7b7313cd-2c55-4734-8153-00b11a91d4a6"]
+TRACE commit barrier entry 0
+TRACE winner ["read-tree","4c624bb4501a97814a51d197538ec9407055e3af"]
+TRACE winner ["apply","--check","--cached","--binary","C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz\\state\\handoff\\run-handoff-concurrent-journals-aa54a23735.30f40d4c-b236-41d0-9c72-1c4d32df7628-99eff9ec3f.patch"]
+TRACE winner ["apply","--cached","--binary","C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz\\state\\handoff\\run-handoff-concurrent-journals-aa54a23735.30f40d4c-b236-41d0-9c72-1c4d32df7628-99eff9ec3f.patch"]
+TRACE winner ["write-tree"]
+TRACE winner ["commit-tree","ea37a97686eee5357b3ae4dac996172f0b4ee580","-p","4c624bb4501a97814a51d197538ec9407055e3af","-m","Apply completed AIBoard build","-m","AIBoard-Run: run_handoff-concurrent-journals\nAIBoard-Integration: 180e9b692b8dddf32c843854f9cca299e69b76db\nAIBoard-Transition: 30f40d4c-b236-41d0-9c72-1c4d32df7628"]
+TRACE commit barrier entry 1
+TRACE loser ["symbolic-ref","--quiet","HEAD"]
+TRACE loser ["rev-parse","--verify","HEAD"]
+TRACE loser ["status","--porcelain=v1","-z","--untracked-files=all"]
+TRACE winner ["symbolic-ref","--quiet","HEAD"]
+TRACE winner ["rev-parse","--verify","HEAD"]
+TRACE winner ["status","--porcelain=v1","-z","--untracked-files=all"]
+TRACE loser ["rev-parse","--absolute-git-dir"]
+TRACE winner ["rev-parse","--absolute-git-dir"]
+TRACE loser ["diff","--name-only","-z","4c624bb4501a97814a51d197538ec9407055e3af","1cd2439825358b52abf9f0af5da894c0ecd9b45e","--"]
+TRACE loser ["ls-files","--others","-z"]
+TRACE winner ["diff","--name-only","-z","4c624bb4501a97814a51d197538ec9407055e3af","18328242c34fee52297ef643a6e662e993cf758f","--"]
+TRACE winner ["ls-files","--others","-z"]
+TRACE loser ["update-ref","refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/handoff/7b7313cd-2c55-4734-8153-00b11a91d4a6-4b2bf59172","4c624bb4501a97814a51d197538ec9407055e3af",""]
+TRACE winner ["update-ref","refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/handoff/30f40d4c-b236-41d0-9c72-1c4d32df7628-99eff9ec3f","4c624bb4501a97814a51d197538ec9407055e3af",""]
+TRACE loser ["symbolic-ref","--quiet","HEAD"]
+TRACE loser ["rev-parse","--verify","HEAD"]
+TRACE loser ["status","--porcelain=v1","-z","--untracked-files=all"]
+TRACE loser ["update-ref","refs/heads/main","1cd2439825358b52abf9f0af5da894c0ecd9b45e","4c624bb4501a97814a51d197538ec9407055e3af"]
+TRACE loser waiting winnerAdvanced
+TRACE winner ["symbolic-ref","--quiet","HEAD"]
+TRACE winner ["rev-parse","--verify","HEAD"]
+TRACE winner ["status","--porcelain=v1","-z","--untracked-files=all"]
+TRACE winner ["update-ref","refs/heads/main","18328242c34fee52297ef643a6e662e993cf758f","4c624bb4501a97814a51d197538ec9407055e3af"]
+TRACE winner ["update-ref","refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/handoff/30f40d4c-b236-41d0-9c72-1c4d32df7628-99eff9ec3f","18328242c34fee52297ef643a6e662e993cf758f","4c624bb4501a97814a51d197538ec9407055e3af"]
+TRACE loser ["rev-parse","--verify","refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/handoff/7b7313cd-2c55-4734-8153-00b11a91d4a6-4b2bf59172"]
+TRACE winner waiting loserAttempted
+TRACE loser ["rev-parse","--verify","refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/handoff/7b7313cd-2c55-4734-8153-00b11a91d4a6-4b2bf59172"]
+TRACE loser ["update-ref","-d","refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/handoff/7b7313cd-2c55-4734-8153-00b11a91d4a6-4b2bf59172","4c624bb4501a97814a51d197538ec9407055e3af"]
+✔ concurrent managers cannot delete the winning post-ref crash journal (7218.8198ms)
+C5 CLI root: {"event":"exit","path":"C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz","existsAtExit":false}
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10770.7206

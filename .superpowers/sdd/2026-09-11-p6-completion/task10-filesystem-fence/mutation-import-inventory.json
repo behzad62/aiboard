@@ -1,0 +1,365 @@
+[
+  {
+    "path": "runner-v2/src/artifact-reachability.ts",
+    "imports": [
+      "open"
+    ]
+  },
+  {
+    "path": "runner-v2/src/artifact-store.ts",
+    "imports": [
+      "mkdir",
+      "rename",
+      "unlink",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/bounded-output-spool.ts",
+    "imports": [
+      "mkdir",
+      "open",
+      "rmdir",
+      "unlink",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/browser-tools.ts",
+    "imports": [
+      "mkdir",
+      "rename",
+      "rm",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/cli.ts",
+    "imports": [
+      "mkdir"
+    ]
+  },
+  {
+    "path": "runner-v2/src/durable-process-store.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/encrypted-provider-config-store.ts",
+    "imports": [
+      "mkdirSync",
+      "renameSync",
+      "rmSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/execution-host.ts",
+    "imports": [
+      "mkdir",
+      "mkdtemp",
+      "open",
+      "rename",
+      "rm"
+    ]
+  },
+  {
+    "path": "runner-v2/src/execution-isolation-provider.ts",
+    "imports": [
+      "mkdir",
+      "open",
+      "rename",
+      "rm",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/filesystem-mutation-fence.ts",
+    "imports": [
+      "*default*"
+    ]
+  },
+  {
+    "path": "runner-v2/src/final-verification-cleanup.ts",
+    "imports": [
+      "mkdir",
+      "rename",
+      "rm",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/final-verification-port-authority.ts",
+    "imports": [
+      "mkdir",
+      "open",
+      "rm",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/final-verification-profile.ts",
+    "imports": [
+      "mkdir",
+      "rename",
+      "rm",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/git-baseline.ts",
+    "imports": [
+      "rm"
+    ]
+  },
+  {
+    "path": "runner-v2/src/git-bootstrap.ts",
+    "imports": [
+      "mkdir"
+    ]
+  },
+  {
+    "path": "runner-v2/src/git-preflight.ts",
+    "imports": [
+      "rm"
+    ]
+  },
+  {
+    "path": "runner-v2/src/integration-manager.ts",
+    "imports": [
+      "mkdir",
+      "rename",
+      "rm",
+      "rmdir",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/managed-process-record.ts",
+    "imports": [
+      "renameSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/managed-process-supervisor.mjs",
+    "imports": [
+      "appendFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/managed-process.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/mcp-executable-digest.ts",
+    "imports": [
+      "open"
+    ]
+  },
+  {
+    "path": "runner-v2/src/native-build-factory.ts",
+    "imports": [
+      "copyFile",
+      "mkdir",
+      "mkdtemp",
+      "open",
+      "rm"
+    ]
+  },
+  {
+    "path": "runner-v2/src/native-process-backend.ts",
+    "imports": [
+      "mkdirSync",
+      "renameSync",
+      "rmSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/oci-execution-isolation-provider.ts",
+    "imports": [
+      "mkdir",
+      "open",
+      "rename",
+      "rm",
+      "rmdir",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/owned-fence-lock.mjs",
+    "imports": [
+      "openSync",
+      "unlinkSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/permission-store.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/plugin-loader.ts",
+    "imports": [
+      "mkdir"
+    ]
+  },
+  {
+    "path": "runner-v2/src/portable-process-channel.ts",
+    "imports": [
+      "renameSync",
+      "unlinkSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/portable-process-child.mjs",
+    "imports": [
+      "renameSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/portable-process-protocol.mjs",
+    "imports": [
+      "renameSync",
+      "unlinkSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/portable-process-supervisor.mjs",
+    "imports": [
+      "appendFileSync",
+      "mkdirSync",
+      "renameSync",
+      "unlinkSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/repository-intelligence.ts",
+    "imports": [
+      "open"
+    ]
+  },
+  {
+    "path": "runner-v2/src/runner-capability-contract.ts",
+    "imports": [
+      "chmod",
+      "mkdir",
+      "mkdtemp",
+      "rename",
+      "rm",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/runner-internal-execution-context.ts",
+    "imports": [
+      "mkdir",
+      "rename",
+      "rm",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/runner-internal-process-kernel.ts",
+    "imports": [
+      "mkdir"
+    ]
+  },
+  {
+    "path": "runner-v2/src/sqlite-agent-session-store.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/sqlite-budget-ledger.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/sqlite-build-spec-store.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/sqlite-event-store.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/sqlite-evidence-store.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/sqlite-project-memory.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/sqlite-scheduler-store.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/sqlite-tool-ledger.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/streaming-session-store.ts",
+    "imports": [
+      "mkdirSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/verification-workspace.ts",
+    "imports": [
+      "mkdir",
+      "rename",
+      "rm",
+      "writeFile"
+    ]
+  },
+  {
+    "path": "runner-v2/src/windows-job-process-host.ts",
+    "imports": [
+      "mkdirSync",
+      "openSync",
+      "renameSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/windows-process-semantic-probes.ts",
+    "imports": [
+      "mkdirSync",
+      "mkdtempSync",
+      "rmSync",
+      "writeFileSync"
+    ]
+  },
+  {
+    "path": "runner-v2/src/workspace-manager.ts",
+    "imports": [
+      "mkdir",
+      "rmdir"
+    ]
+  }
+]

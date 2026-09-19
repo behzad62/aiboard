@@ -1,0 +1,25 @@
+{
+  "id": "fault-rpc-replay-restored-green",
+  "startedAt": "2026-09-12T17:26:28.653Z",
+  "finishedAt": "2026-09-12T17:26:29.337Z",
+  "wrapperPid": 120452,
+  "testPid": 120392,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 412,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP shared client never replays",
+    "runner-v2/test/lsp-shared-client.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

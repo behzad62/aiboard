@@ -1,0 +1,6 @@
+{
+  "id": "runtime-current-red",
+  "tests": [
+    "runner-v2/test/git-runtime-runner.test.ts"
+  ]
+}

@@ -1,0 +1,31 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-env-LoswuF"}
+# Subtest: LSP executable resolution uses only the explicitly prepared environment, never ambient PATH
+not ok 1 - LSP executable resolution uses only the explicitly prepared environment, never ambient PATH
+  ---
+  duration_ms: 33.579
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\language-environment.test.ts:1:350'
+  failureType: 'testCodeFailure'
+  error: 'an omitted environment must not acquire ambient command search authority'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\language-environment.test.ts:13:12)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# static language environment fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-env-LoswuF
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-env-LoswuF","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 279.4121

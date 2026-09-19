@@ -1,0 +1,26 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-concurrent-journals-FTIzZH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-concurrent-journals-uSOc3b"}
+# Subtest: concurrent managers cannot delete the winning post-ref crash journal
+ok 1 - concurrent managers cannot delete the winning post-ref crash journal
+  ---
+  duration_ms: 7454.4376
+  type: 'test'
+  ...
+# Subtest: concurrent managers cannot delete the winning post-ref crash journal (early loser)
+ok 2 - concurrent managers cannot delete the winning post-ref crash journal (early loser)
+  ---
+  duration_ms: 7452.3704
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-concurrent-journals-FTIzZH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-integration-handoff-concurrent-journals-uSOc3b","existsAtExit":false}
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 18078.2269

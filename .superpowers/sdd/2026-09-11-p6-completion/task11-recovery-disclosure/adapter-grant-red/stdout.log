@@ -1,0 +1,38 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-adapter-jl4H2P"}
+# Subtest: process recovery: subprocess adapter issues one exact native recovery grant and revokes it
+not ok 1 - process recovery: subprocess adapter issues one exact native recovery grant and revokes it
+  ---
+  duration_ms: 6.0463
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:11662'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    Object.recoverExceptional (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:185:64)
+    Object.execute (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\process-recovery.ts:85:49)
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:196:34)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1325:25)
+    Test.start (node:internal/test_runner/test:1191:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17)
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-adapter-jl4H2P","existsAtExit":false}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 394.5864

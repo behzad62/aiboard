@@ -1,0 +1,131 @@
+{
+  "id": "mcp-one-write-widened",
+  "target": "runner-v2/src/streaming-request-operation.ts",
+  "test": "runner-v2/test/streaming-language-operation.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-green",
+  "sourceFinalSha256": "2db57465fe4cd567ababc43031c96d43bd90b24a553d06e26758a4077585c608",
+  "testFinalSha256": "acde65962ca2e7c65f90203494d3b6010b75b980e5b6a7d4e7868e5ea9eef831",
+  "redReceipt": {
+    "id": "fault-mcp-one-write-widened-red",
+    "startedAt": "2026-09-12T17:26:19.946Z",
+    "finishedAt": "2026-09-12T17:26:21.449Z",
+    "wrapperPid": 92436,
+    "testPid": 78592,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP and MCP",
+      "runner-v2/test/streaming-language-operation.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "fault-mcp-one-write-widened-green",
+    "startedAt": "2026-09-12T17:26:21.493Z",
+    "finishedAt": "2026-09-12T17:26:22.187Z",
+    "wrapperPid": 90860,
+    "testPid": 93772,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP and MCP",
+      "runner-v2/test/streaming-language-operation.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/red-terminal.json",
+      "sha256": "2eb48ae71582421695c3e8229dde31796355ea574201506e2deda101eda910ba"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/red-inputs-before.json",
+      "sha256": "6fe57442401a8b6961842c60cb67482cf75e3104c217a5fbc4bb4cc4b48d1db5"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/red-inputs-after.json",
+      "sha256": "6fe57442401a8b6961842c60cb67482cf75e3104c217a5fbc4bb4cc4b48d1db5"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/red-stdout.log",
+      "sha256": "ed6971faa9c01f951472e5486dc84a9dec791921fdd8ec21aa7bf85967ce7525"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/red-wrapper.json",
+      "sha256": "3787c44f5880e99c552b9fc547c34527d991b7ade6ae76a9909b52b2701f002c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/red-child.json",
+      "sha256": "474d48aafb24c9d9f156d019dd5d88605b91737250ca189027fcc156073d5de3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/green-terminal.json",
+      "sha256": "a91af830a105e143432b2c483e57c3741931367c8b058a06575a46f68402175e"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/green-inputs-before.json",
+      "sha256": "d0c1c949208c81ba788aeef1e0a4bb63864e11a0e3107a6882b9b6e1fc0bd699"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/green-inputs-after.json",
+      "sha256": "d0c1c949208c81ba788aeef1e0a4bb63864e11a0e3107a6882b9b6e1fc0bd699"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/green-stdout.log",
+      "sha256": "803409baf0bb7a41e1f1ddeb3fec0d3ddee93dc5310bbcd0f79fda1b9311431b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/green-wrapper.json",
+      "sha256": "1232ff328f974884b47658adddd51dfeb3352f2c3fe3521673a56c7e2d49ea09"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-mcp-one-write-widened-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/mcp-one-write-widened/green-child.json",
+      "sha256": "cb5d5c011d397d1c741714b4910e234b62f94fe70d51bd5e41f858af22fa729e"
+    }
+  ]
+}

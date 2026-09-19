@@ -1,0 +1,1 @@
+{"id":"windows-mcp-shared","tests":["runner-v2/test/mcp-tools.test.ts","runner-v2/test/real-streaming-integration.test.ts"]}

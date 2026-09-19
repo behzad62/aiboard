@@ -1,0 +1,27 @@
+{
+  "id": "current-shutdown-budget-red",
+  "startedAt": "2026-09-13T19:40:43.823Z",
+  "finishedAt": "2026-09-13T19:40:44.487Z",
+  "wrapperPid": 3480,
+  "testPid": 38524,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 416,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP shared shutdown budgets response and acknowledged exit as serial bounded phases$",
+    "runner-v2/test/lsp-shared-client.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-shutdown-budget-UJ25fQ"
+  ]
+}

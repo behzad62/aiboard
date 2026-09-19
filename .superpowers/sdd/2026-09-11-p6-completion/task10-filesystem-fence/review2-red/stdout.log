@@ -1,0 +1,128 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-f8NuCJ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Pm8yxm"}
+# Subtest: filesystem fence: review2: create link refusal EPERM is actionable and cleans staging
+not ok 1 - filesystem fence: review2: create link refusal EPERM is actionable and cleans staging
+  ---
+  duration_ms: 47.0125
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\filesystem-mutation-fence.test.ts:1:859'
+  failureType: 'testCodeFailure'
+  error: '{"callId":"call-1","toolName":"fs.write","isError":true,"error":{"code":"filesystem_operation_failed","message":"link publication unavailable"},"content":[{"type":"text","text":"link publication unavailable"},{"type":"json","value":{"partialMutation":false,"completedNamespaceSteps":0,"osCode":"EPERM"}}]}'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    refused (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:60:10)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:419:3)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:49:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Task 10 RED/diagnostic root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-f8NuCJ
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-J89GMg"}
+# Subtest: filesystem fence: review2: create link refusal EACCES is actionable and cleans staging
+not ok 2 - filesystem fence: review2: create link refusal EACCES is actionable and cleans staging
+  ---
+  duration_ms: 33.8856
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\filesystem-mutation-fence.test.ts:1:859'
+  failureType: 'testCodeFailure'
+  error: '{"callId":"call-1","toolName":"fs.write","isError":true,"error":{"code":"filesystem_operation_failed","message":"link publication unavailable"},"content":[{"type":"text","text":"link publication unavailable"},{"type":"json","value":{"partialMutation":false,"completedNamespaceSteps":0,"osCode":"EACCES"}}]}'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    refused (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:60:10)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:419:3)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:49:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Task 10 RED/diagnostic root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-Pm8yxm
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-EVOpei"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-y1px0X"}
+# Subtest: filesystem fence: review2: create link refusal EMLINK is actionable and cleans staging
+not ok 3 - filesystem fence: review2: create link refusal EMLINK is actionable and cleans staging
+  ---
+  duration_ms: 32.5652
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\filesystem-mutation-fence.test.ts:1:859'
+  failureType: 'testCodeFailure'
+  error: '{"callId":"call-1","toolName":"fs.write","isError":true,"error":{"code":"filesystem_operation_failed","message":"link publication unavailable"},"content":[{"type":"text","text":"link publication unavailable"},{"type":"json","value":{"partialMutation":false,"completedNamespaceSteps":0,"osCode":"EMLINK"}}]}'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    refused (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:60:10)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:419:3)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:49:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Task 10 RED/diagnostic root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-J89GMg
+# Subtest: filesystem fence: review2: POSIX canonical spelling refusal supplies the exact retry path without broadening authority
+not ok 4 - filesystem fence: review2: POSIX canonical spelling refusal supplies the exact retry path without broadening authority
+  ---
+  duration_ms: 5.7472
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\filesystem-mutation-fence.test.ts:1:859'
+  failureType: 'testCodeFailure'
+  error: '{"callId":"call-1","toolName":"fs.write","isError":true,"error":{"code":"filesystem_alias","message":"The final canonical path is not the authorized path."},"content":[{"type":"text","text":"The final canonical path is not the authorized path."},{"type":"json","value":{"path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-EVOpei\\\\workspace\\\\value.txt"}}]}'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:435:12)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:49:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Task 10 RED/diagnostic root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-EVOpei
+# Subtest: filesystem fence: review2: POSIX catches a same-object writer after the final revision read
+not ok 5 - filesystem fence: review2: POSIX catches a same-object writer after the final revision read
+  ---
+  duration_ms: 33.5324
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\filesystem-mutation-fence.test.ts:1:859'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"callId":"call-1","toolName":"fs.write","content":[{"type":"json","value":{"path":"value.txt","sha256":"95713e9cbdd1dfcb2d4080c2537f418d43ca0da25f0d7d6631f4f7c97b89dc47","byteLength":11}}],"isError":false}
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    refused (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:59:10)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:462:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-mutation-fence.test.ts:49:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Task 10 RED/diagnostic root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-fence-y1px0X
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-f8NuCJ","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Pm8yxm","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-J89GMg","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-EVOpei","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-y1px0X","existsAtExit":true}
+1..5
+# tests 5
+# suites 0
+# pass 0
+# fail 5
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 538.4839

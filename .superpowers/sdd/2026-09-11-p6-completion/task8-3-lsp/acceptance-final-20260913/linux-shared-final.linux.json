@@ -1,0 +1,33 @@
+{
+  "id": "linux-shared-final",
+  "groups": [
+    {
+      "tests": [
+        "streaming-language-operation",
+        "streaming-request-operation",
+        "streaming-output-v2",
+        "streaming-output-checkpoint",
+        "session-authority",
+        "evidence-continuation",
+        "child-environment",
+        "portable-process-channel",
+        "portable-process-protocol",
+        "windows-job-output-replay",
+        "windows-job-supervisor-input",
+        "streaming-process-session-runtime",
+        "streaming-session-store",
+        "streaming-live-open-cancellation",
+        "streaming-late-isolation-cleanup",
+        "streaming-unstarted-host-cleanup",
+        "bounded-output-spool",
+        "execution-host",
+        "linked-output-spill-storage"
+      ]
+    },
+    {
+      "tests": [
+        "posix-process-backend"
+      ]
+    }
+  ]
+}

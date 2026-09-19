@@ -1,0 +1,30 @@
+{
+  "at": "2026-09-13T19:42:08.202Z",
+  "reason": "Correct contradictory linked-file TEST adapter only. Production native unlink behavior, security checks and all existing assertions unchanged.",
+  "red": [
+    "linux-lsp-shared-acceptance/terminal.json",
+    "linux-linked-regression-red/terminal.json"
+  ],
+  "changes": [
+    {
+      "path": "runner-v2/test/support/linked-output-spill-storage.ts",
+      "beforeSha256": "dc216be574d3ed52873ef6a1e305b06cb8ec8d081eb8241721a137f59fb50224",
+      "afterSha256": "8d98a8306b84d4854a588ca0b7fff63601f830ab2dc800633a6ac5ee4b583744"
+    },
+    {
+      "path": "runner-v2/test/bounded-output-spool.test.ts",
+      "beforeSha256": "aa0142dc8e05355a5715f47ce80bdb566e1957c7efba311b2223d0879f5e2431",
+      "afterSha256": "136e2d22de2a4c84566c48c0b3d185fb3b281f019c22bd7110fa2e7a6bd827e0"
+    },
+    {
+      "path": "runner-v2/test/evidence-continuation.test.ts",
+      "beforeSha256": "fd3ff18e480aa4910062e5f6bc25d88189280242e416dd4f1bffa162fde0a4e2",
+      "afterSha256": "786ae9bcdd2036f4d66f80ba4535ce62c2bd0581cb55a8d12faa4ffe6ea52799"
+    },
+    {
+      "path": "runner-v2/test/streaming-process-session-runtime.test.ts",
+      "beforeSha256": "21b4d7efcc653f35aa4e68beb9a7fe7115123258c089696f4bbff71ed0c46c5e",
+      "afterSha256": "909b9f3fd8cc3146df5d009e640b9795985df791cb44401d14596261c89dc044"
+    }
+  ]
+}

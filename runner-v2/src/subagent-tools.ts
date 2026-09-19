@@ -1,3 +1,6 @@
+import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
+import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
@@ -32,7 +35,10 @@ import { createSkillTools } from "./skill-tools.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
 
 interface SpawnSubagentInput {
   assignment: string;
@@ -45,11 +51,13 @@ interface ReturnSubagentInput {
 }
 
 export interface SubagentToolsOptions {
+  git?: RunGitExecutionContext;
   model: AgentModel;
   subagentModelForSession?: (sessionId: string) => AgentModel;
   runId: string;
   parentSessionId: string;
   taskId: string;
+  attempt?: number;
   parentActorId: string;
   permissionProfile: PermissionProfile;
   workspacePath: string;
@@ -69,6 +77,9 @@ export interface SubagentToolsOptions {
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  language?: LanguageIntelligenceProvider;
+  execution?: OneShotCommandExecutor;
+  executionGrants?: ExecutionGrantAuthority;
 }
 
 export function createSubagentTools(
@@ -153,6 +164,7 @@ function spawnSubagentTool(
       }
 
       const broker = new ToolBroker({
+        git: options.git,
         permissionProfile: options.permissionProfile,
         workspacePath: options.workspacePath,
         artifacts: options.artifacts,
@@ -160,24 +172,29 @@ function spawnSubagentTool(
         ...(options.permissions
           ? { approve: (request) => options.permissions!.requestTool(request) }
           : {}),
+        ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
       });
-      const repository = new RepositoryIntelligence();
-      const typescript = new TypeScriptIntelligence(repository);
+      const repository = new RepositoryIntelligence(options.git ? (request) => options.git!.current().run(request) : undefined);
+      const language = options.language ?? new TypeScriptIntelligence(repository);
       for (const tool of createFilesystemTools({
         artifacts: options.artifacts,
         repository,
-        diagnostics: typescript,
+        diagnostics: language,
         ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
         ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
       })) {
         if (!readOnly || tool.definition.readOnly) broker.register(tool);
       }
-      for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+      for (const tool of createCodeIntelligenceTools({
+        repository,
+        language,
+      })) {
         broker.register(tool);
       }
       for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
       for (const tool of createSessionTools(options.sessions)) broker.register(tool);
       if (!readOnly) for (const tool of createProcessTools({
+        ...(options.execution ? { execution: options.execution } : {}),
         ...(options.allowedCommands
           ? { allowedCommands: options.allowedCommands }
           : {}),
@@ -196,6 +213,8 @@ function spawnSubagentTool(
           artifacts: options.artifacts,
           ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
           taskId: options.taskId,
+          ...(options.execution ? { execution: options.execution } : {}),
+          ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
           clock,
           ...(options.allowedCommands
             ? { allowedCommands: options.allowedCommands }
@@ -207,16 +226,18 @@ function spawnSubagentTool(
           broker.register(tool);
         }
       }
-      for (const tool of createGitTools()) {
+      for (const tool of createGitTools(options.git)) {
         if (readOnly ? tool.definition.readOnly : tool.definition.name !== "git.commit") {
           broker.register(tool);
         }
       }
       if (!readOnly && options.evidenceStore) {
         for (const tool of createEvidenceTools({
+      git: options.git,
           store: options.evidenceStore,
           artifacts: options.artifacts,
           taskId: options.taskId,
+          ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
           clock,
           ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
         })) broker.register(tool);
@@ -249,7 +270,7 @@ function spawnSubagentTool(
             clock,
           })
         : broker;
-      const result = await runAgentLoop({
+      const result = await withLanguageAgentLifecycle(options.language, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId, actor: { role: "subagent", id: `${options.parentActorId}:${callId}` } }, () => runAgentLoop({
         model,
         registry: toolRuntime,
         context: {
@@ -265,7 +286,7 @@ function spawnSubagentTool(
         onCheckpoint: async (checkpoint) => {
           await options.sessions.checkpoint(sessionId, checkpoint, clock());
         },
-      });
+      })));
       if (result.status !== "subagent_returned") {
         const reason = result.status === "suspended"
           ? `${result.reason}${result.error ? `: ${result.error}` : ""}`

@@ -1,0 +1,34 @@
+{
+  "pid": 11856,
+  "identity": {
+    "Id": 11856,
+    "StartTimeUtc": "2026-09-12T17:26:14.5273266Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-12T17:26:14.561Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\continue-20260912\\gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\continue-20260912\\fault-filesystem-authority-dropped-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP invocation propagates the exact original fs",
+    "runner-v2/test/language-invocation-propagation.test.ts"
+  ],
+  "spec": {
+    "id": "fault-filesystem-authority-dropped-green",
+    "tests": [
+      "runner-v2/test/language-invocation-propagation.test.ts"
+    ],
+    "pattern": "^LSP invocation propagates the exact original fs"
+  }
+}

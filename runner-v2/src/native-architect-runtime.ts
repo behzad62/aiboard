@@ -1,3 +1,7 @@
+import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
+import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
@@ -11,6 +15,7 @@ import {
 } from "./agent-loop.js";
 import {
   buildArchitectContext,
+  architectContextSections,
   type ArchitectReviewSubmission,
   type PromptEvidence,
 } from "./agent-prompts.js";
@@ -31,12 +36,14 @@ import type {
   ArchitectActionRequest,
   ArchitectRuntimeDriver,
 } from "./build-runtime.js";
-import type { ContextLimits } from "./context-assembler.js";
+import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import type { CapabilityRegistry } from "./capability-registry.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import { createEvidenceTools } from "./evidence-tools.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createGitTools } from "./git-tools.js";
 import { createMemoryTools } from "./memory-tools.js";
+import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -59,6 +66,11 @@ import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
+import {
+  assembleContextWithExtensions,
+  registerExtensionCapabilities,
+} from "./extension-runtime.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import {
   AgentProtocolError,
@@ -69,6 +81,8 @@ import type {
 } from "./provider-call-retry.js";
 
 export interface NativeArchitectRuntimeOptions {
+  git?: RunGitExecutionContext;
+  executionGrants?: ExecutionGrantAuthority;
   schedulerStore: SchedulerStore;
   router: RuntimeRouter;
   health: ProviderHealthRegistry;
@@ -82,6 +96,7 @@ export interface NativeArchitectRuntimeOptions {
   evidenceStore: EvidenceStore;
   projectId: string;
   projectRoot: string;
+  canonicalProjectRoot?: string;
   objective: string;
   budgetLedger?: BudgetLedger;
   contextLimits?: ContextLimits;
@@ -98,6 +113,8 @@ export interface NativeArchitectRuntimeOptions {
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
+  capabilityRegistry?: CapabilityRegistry;
+  language?: LanguageIntelligenceProvider;
   providerRetryRuntime?: RunnerProviderRetryRuntime;
 }
 
@@ -150,9 +167,16 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         role: "system",
         content: [
           "You are the AIBoard Architect. Use one native lifecycle tool for the requested decision.",
+          "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
+          "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.",
+          "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
           "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",
           "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
           "When current evidence proves that a planned task is already satisfied or its assumptions are stale, reconcile the Architect-owned plan: cancel or revise that task and rewire its pending dependents. Do not require a fabricated code change merely because a task exists.",
+          "When a legacy in-flight run requires an acceptance-contract upgrade, record criteria for every non-cancelled task with upgrade_acceptance_contract before reviewing or completing work.",
+          "When final verification planning is requested, inspect the canonical repository state and use plan_final_verification with an explicit build, tests, runtime_smoke, and browser plan.",
+          "When final verification review is requested, inspect the exact current submission and persisted category evidence, then use review_final_verification with one semantic rationale per category plus an explicit low/high Architect risk declaration and rationale. Require repair when the evidence does not support approval, and declare high risk whenever semantic concerns exceed the kernel-observed paths and effects.",
+          "When final verification repairs are requested, use plan_verification_repairs to create narrowly scoped ordinary tasks whose provenance and acceptance criteria cover every failed category exactly once.",
         ].join("\n"),
       },
     ];
@@ -190,6 +214,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       }
     }
     const extras = new ToolBroker({
+      git: this.options.git, executionGrants: this.options.executionGrants,
       permissionProfile: this.options.permissionProfile ?? "project",
       workspacePath: this.options.projectRoot,
       artifacts: this.options.artifacts,
@@ -198,8 +223,8 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         ? { approve: (approval) => this.options.permissions!.requestTool(approval) }
         : {}),
     });
-    const repository = new RepositoryIntelligence();
-    const typescript = new TypeScriptIntelligence(repository);
+    const repository = new RepositoryIntelligence(this.options.git ? (request) => this.options.git!.current().run(request) : undefined);
+    const language = this.options.language ?? new TypeScriptIntelligence(repository);
     for (const tool of createFilesystemTools({
       artifacts: this.options.artifacts,
       repository,
@@ -208,15 +233,19 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     })) {
       if (tool.definition.readOnly) extras.register(tool);
     }
-    for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+    for (const tool of createCodeIntelligenceTools({
+      repository,
+      language,
+    })) {
       extras.register(tool);
     }
     for (const tool of createArtifactTools(this.options.artifacts)) extras.register(tool);
     for (const tool of createSessionTools(this.options.sessions)) extras.register(tool);
-    for (const tool of createGitTools()) {
+    for (const tool of createGitTools(this.options.git)) {
       if (tool.definition.readOnly) extras.register(tool);
     }
     for (const tool of createEvidenceTools({
+      git: this.options.git,
       store: this.options.evidenceStore,
       artifacts: this.options.artifacts,
       taskId: "architect",
@@ -248,6 +277,12 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         extras.register(tool);
       }
     }
+    if (this.options.capabilityRegistry) {
+      registerExtensionCapabilities(this.options.capabilityRegistry, extras, {
+        includeTool: ({ tool }) =>
+          tool.definition.readOnly === true && tool.definition.effect === "none",
+      });
+    }
     const inspectionTools = this.options.runPolicy === "plan_only"
       ? new PlanOnlyInspectionRuntime(extras)
       : extras;
@@ -272,7 +307,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           clock: this.clock,
         })
       : model;
-    const result = await runAgentLoop({
+    const result = await withLanguageAgentLifecycle(this.options.language, request.context, () => withMcpAgentLifecycle(this.options.mcpManager, request.context, () => runAgentLoop({
       model: runtimeModel,
       registry: tools,
       context: {
@@ -280,7 +315,8 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         workspacePath: architectInspectionWorkspace(
           request.reason,
           projection,
-          this.options.projectRoot
+          this.options.projectRoot,
+          this.options.canonicalProjectRoot,
         ),
       },
       initialMessages: messages,
@@ -303,7 +339,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       onCheckpoint: async (checkpoint) => {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
       },
-    });
+    })));
     if (result.status === "architect_action") {
       this.options.health.recordSuccess(candidate.providerId);
       this.persistHealth(request.runId, candidate.providerId);
@@ -325,6 +361,17 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       this.requireHandoff(request.runId, failure.message, ["code"], runtimeId);
       return;
     }
+    if (
+      result.status === "suspended" &&
+      result.reason === "cancelled" &&
+      Object.values(
+        rebuildSchedulerProjection(
+          this.options.schedulerStore.readRun(request.runId)
+        ).userGuidance
+      ).some((guidance) => guidance.status === "submitted")
+    ) {
+      return;
+    }
     const reason =
       result.status === "suspended"
         ? result.reason === "protocol_error"
@@ -342,14 +389,26 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
   }
 
   private ensureInitialized(runId: string): void {
-    if (this.options.schedulerStore.readRun(runId).length > 0) return;
+    const events = this.options.schedulerStore.readRun(runId);
+    if (events.length > 0) {
+      const durableObjective = rebuildSchedulerProjection(events).initialObjective;
+      if (
+        durableObjective !== undefined &&
+        durableObjective !== this.options.objective
+      ) {
+        throw new Error(
+          "The durable initial objective does not match the native Architect configuration."
+        );
+      }
+      return;
+    }
     this.options.schedulerStore.append({
       runId,
       type: "run.initialized",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "native-architect-runtime" },
       idempotencyKey: "run-initialized",
-      payload: {},
+      payload: { objective: this.options.objective },
     });
   }
 
@@ -467,11 +526,12 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         summary: `${record.taskId}: ${evidenceFactSummary(record.fact)}`,
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
-    return buildArchitectContext({
-      limits: this.options.contextLimits ?? {
+    const limits = this.options.contextLimits ?? {
         maxBytes: 512 * 1024,
         maxEstimatedTokens: 128 * 1024,
-      },
+      };
+    const input = {
+      limits,
       objective: this.options.objective,
       reason: request.reason,
       projection,
@@ -481,45 +541,110 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       memories,
       evidence,
       recentHistory: [],
-    });
+    };
+    if (!this.options.capabilityRegistry) return buildArchitectContext(input);
+    return (await assembleContextWithExtensions({
+      registry: this.options.capabilityRegistry,
+      assembler: new ContextAssembler(limits),
+      baseSections: architectContextSections(input),
+      request: {
+        runId: request.runId,
+        sessionId: request.context.sessionId,
+        actor: request.context.actor,
+        objective: this.options.objective,
+        workspacePath: request.context.workspacePath ?? architectInspectionWorkspace(
+          request.reason,
+          projection,
+          this.options.projectRoot,
+          this.options.canonicalProjectRoot,
+        ),
+        ...("taskId" in request.reason ? { taskId: request.reason.taskId } : {}),
+        signal: request.context.signal ?? new AbortController().signal,
+      },
+      artifacts: this.options.artifacts,
+    })).pack;
   }
 
   private async reviewSubmission(
     request: ArchitectActionRequest,
     projection: ReturnType<typeof rebuildSchedulerProjection>
   ): Promise<ArchitectReviewSubmission | undefined> {
-    if (request.reason.type !== "review_required") return undefined;
-    const task = projection.tasks[request.reason.taskId];
-    if (!task) throw new Error(`Unknown review task ${request.reason.taskId}.`);
-    const session = await this.options.sessions.load(
-      `worker:${request.runId}:${task.id}:${task.attempt}`
+    return await loadArchitectReviewSubmission(
+      this.options.sessions,
+      request.runId,
+      request.reason,
+      projection
     );
-    const changeSet = session.changeSet;
-    if (!changeSet || changeSet.id !== request.reason.changeSetId) {
-      throw new Error(
-        `Submitted change set ${request.reason.changeSetId} is unavailable for review.`
-      );
-    }
-    return {
-      taskId: task.id,
-      attempt: task.attempt,
-      changeSetId: changeSet.id,
-      baselineRevision: changeSet.baselineRevision,
-      taskRevision: changeSet.taskRevision,
-      changedPaths: [...changeSet.changedPaths],
-      diffArtifactHash: changeSet.diffArtifactHash,
-      evidenceArtifactHashes: [...changeSet.evidenceArtifactHashes],
-    };
   }
+}
+
+export async function loadArchitectReviewSubmission(
+  sessions: Pick<SqliteAgentSessionStore, "load">,
+  runId: string,
+  reason: ArchitectActionReason,
+  projection: ReturnType<typeof rebuildSchedulerProjection>
+): Promise<ArchitectReviewSubmission | undefined> {
+  if (reason.type !== "review_required") return undefined;
+  const task = projection.tasks[reason.taskId];
+  if (!task) throw new Error(`Unknown review task ${reason.taskId}.`);
+  const sessionId = resolveWorkerSessionId(
+    runId,
+    task.id,
+    task.attempt,
+    task.assignedWorkerId ?? standardWorkerId(task.id, task.attempt),
+    projection.runtime.workerAssignments[`${task.id}:${task.attempt}`]?.sessionId
+  );
+  const session = await sessions.load(sessionId);
+  const changeSet = session.changeSet;
+  if (!changeSet || changeSet.id !== reason.changeSetId) {
+    throw new Error(
+      `Submitted change set ${reason.changeSetId} is unavailable for review.`
+    );
+  }
+  return {
+    taskId: task.id,
+    attempt: task.attempt,
+    changeSetId: changeSet.id,
+    baselineRevision: changeSet.baselineRevision,
+    taskRevision: changeSet.taskRevision,
+    changedPaths: [...changeSet.changedPaths],
+    diffArtifactHash: changeSet.diffArtifactHash,
+    evidenceArtifactHashes: [...changeSet.evidenceArtifactHashes],
+    ...(changeSet.acceptanceCriteria
+      ? { acceptanceCriteria: changeSet.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+      : {}),
+    ...(changeSet.acceptanceCriteriaVersion !== undefined
+      ? { acceptanceCriteriaVersion: changeSet.acceptanceCriteriaVersion }
+      : {}),
+    ...(changeSet.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: changeSet.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
+      : {}),
+  };
 }
 
 export function architectInspectionWorkspace(
   reason: ArchitectActionReason,
   projection: ReturnType<typeof rebuildSchedulerProjection>,
-  projectRoot: string
+  projectRoot: string,
+  canonicalProjectRoot?: string,
 ): string {
-  if (reason.type !== "review_required") return projectRoot;
-  return projection.tasks[reason.taskId]?.workspacePath?.trim() || projectRoot;
+  if (reason.type === "review_required") {
+    return projection.tasks[reason.taskId]?.workspacePath?.trim() || projectRoot;
+  }
+  if (
+    reason.type === "final_verification_plan_required" ||
+    reason.type === "final_verification_review_required" ||
+    reason.type === "final_verification_repair_plan_required" ||
+    reason.type === "verifier_repair_plan_required"
+  ) {
+    return canonicalProjectRoot?.trim() || projectRoot;
+  }
+  return projectRoot;
 }
 
 export function prioritizedArchitectCapabilities(

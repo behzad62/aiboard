@@ -796,11 +796,9 @@ function runnerV2Candidate(candidate, cli) {
 
 function runnerV2Invocation(launcher, projectPath, statePath, runnerToken) {
   return {
-    command: "npx",
+    command: process.execPath,
     args: [
-      "-y",
-      "node@24.18.0",
-      "node_modules/tsx/dist/cli.mjs",
+      join(launcher.directory, "node_modules", "tsx", "dist", "cli.mjs"),
       launcher.cli,
       "--project",
       projectPath,

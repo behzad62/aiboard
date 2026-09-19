@@ -47,6 +47,10 @@ import {
   stopDiscussion,
 } from "./engine";
 import { queueBuildNote } from "./build-notes";
+import {
+  submitNativeBuildUserGuidance,
+  type NativeBuildProjection,
+} from "./runner-v2";
 import { normalizeBuildTasksForResume } from "@/lib/orchestrator/build";
 import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 
@@ -125,6 +129,75 @@ export function addBuildNote(
   };
   insertMessage(message);
   return { id: message.id, round };
+}
+
+export interface NativeBuildNoteIdentity {
+  guidanceId: string;
+  idempotencyKey: string;
+}
+
+/**
+ * Deliver text to an active Runner V2 Build, then record the user timeline
+ * receipt. The deterministic message identity prevents a transport retry from
+ * creating duplicate browser messages, and this path never touches the legacy
+ * in-memory note queue.
+ */
+export async function submitNativeBuildNote(
+  discussionId: string,
+  note: string,
+  identity: NativeBuildNoteIdentity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{
+  projection: NativeBuildProjection;
+  message: { id: string; round: number };
+}> {
+  const discussion = getDiscussionById(discussionId);
+  if (
+    !discussion ||
+    discussion.mode !== "build" ||
+    !discussion.nativeBuildRunId ||
+    !discussion.runnerUrl ||
+    !discussion.runnerToken
+  ) {
+    throw new Error("This discussion is not connected to an active Runner V2 Build.");
+  }
+  const trimmed = note.trim();
+  if (!trimmed) throw new Error("The note is empty.");
+  if (!identity.guidanceId.trim() || !identity.idempotencyKey.trim()) {
+    throw new Error("The guidance delivery identity is missing.");
+  }
+
+  const projection = await submitNativeBuildUserGuidance(
+    { url: discussion.runnerUrl, token: discussion.runnerToken },
+    discussion.nativeBuildRunId,
+    {
+      guidanceId: identity.guidanceId,
+      text: trimmed,
+      idempotencyKey: identity.idempotencyKey,
+    },
+    fetchImpl,
+  );
+  const messageId = `native-guidance:${identity.guidanceId}`;
+  const existing = getMessagesForDiscussion(discussionId).find(
+    (message) => message.id === messageId,
+  );
+  if (existing) {
+    return { projection, message: { id: existing.id, round: existing.round } };
+  }
+  const round = getMessagesForDiscussion(discussionId).reduce(
+    (max, message) => Math.max(max, message.round),
+    0,
+  );
+  insertMessage({
+    id: messageId,
+    discussionId,
+    round,
+    modelId: "user",
+    role: "user",
+    content: trimmed,
+    createdAt: new Date().toISOString(),
+  });
+  return { projection, message: { id: messageId, round } };
 }
 
 /**
@@ -286,6 +359,7 @@ export interface DiscussionConfigInput {
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
+  buildAlwaysRequireIndependentVerifier?: boolean;
 }
 
 export function minimumParticipatingModelsForMode(mode: DiscussionMode): number {
@@ -349,11 +423,16 @@ export function updateDiscussionConfig(
       buildBudgetUsd: input.buildBudgetUsd ?? discussion.buildBudgetUsd,
       buildTimeLimitMinutes:
         input.buildTimeLimitMinutes ?? discussion.buildTimeLimitMinutes,
+      buildAlwaysRequireIndependentVerifier:
+        input.buildAlwaysRequireIndependentVerifier ??
+        discussion.buildAlwaysRequireIndependentVerifier,
     });
     patch.buildRunPolicy = buildSettings.runPolicy;
     patch.buildSkillMode = buildSettings.skillMode;
     patch.buildBudgetUsd = buildSettings.budgetUsd;
     patch.buildTimeLimitMinutes = buildSettings.timeLimitMinutes;
+    patch.buildAlwaysRequireIndependentVerifier =
+      buildSettings.alwaysRequireIndependentVerifier;
   }
   updateDiscussion(id, patch);
   return { ...discussion, ...patch };
@@ -422,6 +501,7 @@ export interface CreateDiscussionInput {
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
+  buildAlwaysRequireIndependentVerifier?: boolean;
 }
 
 export function createDiscussion(input: CreateDiscussionInput): { id: string } {
@@ -438,6 +518,9 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     buildBudgetUsd: input.buildBudgetUsd ?? settings.defaultBuildBudgetUsd,
     buildTimeLimitMinutes:
       input.buildTimeLimitMinutes ?? settings.defaultBuildTimeLimitMinutes,
+    buildAlwaysRequireIndependentVerifier:
+      input.buildAlwaysRequireIndependentVerifier ??
+      settings.defaultBuildAlwaysRequireIndependentVerifier,
   });
   const now = new Date().toISOString();
   const id = uuidv4();
@@ -471,6 +554,10 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
     buildBudgetUsd: input.mode === "build" ? buildSettings.budgetUsd : undefined,
     buildTimeLimitMinutes:
       input.mode === "build" ? buildSettings.timeLimitMinutes : undefined,
+    buildAlwaysRequireIndependentVerifier:
+      input.mode === "build"
+        ? buildSettings.alwaysRequireIndependentVerifier
+        : undefined,
     buildStopReason: null,
     buildStoppedAt: null,
     createdAt: now,

@@ -1,0 +1,6 @@
+{
+  "id": "cli-complete-recheck",
+  "tests": [
+    "runner-v2/test/cli-capabilities-config.test.ts"
+  ]
+}

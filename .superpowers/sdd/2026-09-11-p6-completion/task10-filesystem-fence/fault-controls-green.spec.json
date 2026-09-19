@@ -1,0 +1,7 @@
+{
+  "id": "fault-controls-green",
+  "pattern": "publication is create-if-absent|a new-file parent retarget",
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ]
+}

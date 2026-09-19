@@ -1,0 +1,11 @@
+{
+  "fault": "pid-only-scope-validation",
+  "mutatedLine": "return left.rootPid !== undefined && left.rootPid === right.rootPid;",
+  "beforeHash": "6c714ee96b7ed61ebdede90b8f4728edb7d19b6f3fc92bf851347c5a8356bbad",
+  "restoredHash": "6c714ee96b7ed61ebdede90b8f4728edb7d19b6f3fc92bf851347c5a8356bbad",
+  "redExit": 1,
+  "greenExit": 0,
+  "restoredExactly": true,
+  "redExpected": true,
+  "greenExpected": true
+}

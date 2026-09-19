@@ -1,0 +1,7 @@
+{
+  "id": "durable-capabilities-red",
+  "pattern": "durably records the selected backend semantic capabilities",
+  "tests": [
+    "runner-v2/test/subprocess-runtime.test.ts"
+  ]
+}

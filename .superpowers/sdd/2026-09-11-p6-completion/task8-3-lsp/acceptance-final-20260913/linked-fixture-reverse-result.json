@@ -1,0 +1,10 @@
+{
+  "startedAt": "2026-09-13T19:43:43.541Z",
+  "file": "runner-v2/test/support/linked-output-spill-storage.ts",
+  "originalHash": "8d98a8306b84d4854a588ca0b7fff63601f830ab2dc800633a6ac5ee4b583744",
+  "faultHash": "dc216be574d3ed52873ef6a1e305b06cb8ec8d081eb8241721a137f59fb50224",
+  "exitCode": 1,
+  "behavioralRed": true,
+  "restoredHash": "8d98a8306b84d4854a588ca0b7fff63601f830ab2dc800633a6ac5ee4b583744",
+  "finishedAt": "2026-09-13T19:43:54.665Z"
+}

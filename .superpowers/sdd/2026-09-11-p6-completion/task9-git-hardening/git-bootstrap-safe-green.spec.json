@@ -1,0 +1,7 @@
+{
+  "id": "git-bootstrap-safe-green",
+  "tests": [
+    "runner-v2/test/git-bootstrap.test.ts"
+  ],
+  "pattern": "^baseline bootstrap"
+}

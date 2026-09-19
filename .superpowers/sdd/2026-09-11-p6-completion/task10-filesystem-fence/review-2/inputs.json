@@ -1,0 +1,50 @@
+[
+  {
+    "path": "runner-v2/src/filesystem-mutation-fence.ts",
+    "sha256": "cffa6c0fe449042be7ba6d16c42122798b631c6815ca26768a1c2f56f6e4750c"
+  },
+  {
+    "path": "runner-v2/src/execution-grants.ts",
+    "sha256": "6f4d505272a4f70ce55c169fe5d466baa99bf9d915c3f511a05f589afa95e00f"
+  },
+  {
+    "path": "runner-v2/src/tool-broker.ts",
+    "sha256": "e971fa0203e6e6ed76d8be93b7c23717c4cd1a0021e1ca562a20e92c6e88c2ab"
+  },
+  {
+    "path": "runner-v2/src/filesystem-tools.ts",
+    "sha256": "e5194680fb741ba129c1ebfa4bbfa78f66ac83253d81ad1d0a54f7bdb1bef708"
+  },
+  {
+    "path": "runner-v2/src/agent-contracts.ts",
+    "sha256": "44ad2cb6cb6fd3ce4b9ec46f1074d7c324dd418d6dae2b28bb538e53eb85c9d9"
+  },
+  {
+    "path": "runner-v2/src/git-baseline.ts",
+    "sha256": "23facbeac641010c29b0d58a198680de759ec5aec6f902f1eba085c63d3cebed"
+  },
+  {
+    "path": "runner-v2/src/git-bootstrap.ts",
+    "sha256": "0ff927075699c8f0c93288fe995792b5e26e04eb530adc87d0741a7b47b1a7b3"
+  },
+  {
+    "path": "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "sha256": "dd96a37b032cefea6d005b2000ceef1cbc0c4a7c693558cb4636db07cb787d30"
+  },
+  {
+    "path": "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "sha256": "e8bad9e4c70c03967e6987cd83ba3bc83fc0e0746ee9bdb2d570d60dc934411b"
+  },
+  {
+    "path": "runner-v2/test/language-invocation-propagation.test.ts",
+    "sha256": "95545ed952d8391873d09d03be011214cb479778022f940f02a092dd5ec6730a"
+  },
+  {
+    "path": "runner-v2/test/filesystem-mutation-routing.test.ts",
+    "sha256": "d6e72af9db5a834167abbd489b500d1a17a2b72b1853794d500265178d6849db"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/review-resolution.md",
+    "sha256": "69d760b71bc9645631d3e25fdaea641bd4e6b6a16a893128b36b5b4a771d738d"
+  }
+]

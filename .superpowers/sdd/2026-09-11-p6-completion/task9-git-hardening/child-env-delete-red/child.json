@@ -1,0 +1,22 @@
+{
+  "pid": 11464,
+  "identity": {
+    "Id": 11464,
+    "StartTimeUtc": "2026-09-14T11:44:51.5571035Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 38356,
+  "spawnedAt": "2026-09-14T11:44:51.939Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^explicit undefined removes an inherited safe variable by canonical name$",
+    "runner-v2/test/child-environment.test.ts"
+  ]
+}

@@ -1,0 +1,62 @@
+[
+  {
+    "path": "runner-v2/src/filesystem-mutation-fence.ts",
+    "sha256": "6e41b4fc94a347eaf0bd66e2d51847cef0a85fdd3f8199272f7c8d7f38ee3a7b"
+  },
+  {
+    "path": "runner-v2/src/execution-grants.ts",
+    "sha256": "6f4d505272a4f70ce55c169fe5d466baa99bf9d915c3f511a05f589afa95e00f"
+  },
+  {
+    "path": "runner-v2/src/tool-broker.ts",
+    "sha256": "e971fa0203e6e6ed76d8be93b7c23717c4cd1a0021e1ca562a20e92c6e88c2ab"
+  },
+  {
+    "path": "runner-v2/src/filesystem-tools.ts",
+    "sha256": "e5194680fb741ba129c1ebfa4bbfa78f66ac83253d81ad1d0a54f7bdb1bef708"
+  },
+  {
+    "path": "runner-v2/src/agent-contracts.ts",
+    "sha256": "44ad2cb6cb6fd3ce4b9ec46f1074d7c324dd418d6dae2b28bb538e53eb85c9d9"
+  },
+  {
+    "path": "runner-v2/src/git-baseline.ts",
+    "sha256": "23facbeac641010c29b0d58a198680de759ec5aec6f902f1eba085c63d3cebed"
+  },
+  {
+    "path": "runner-v2/src/git-bootstrap.ts",
+    "sha256": "0ff927075699c8f0c93288fe995792b5e26e04eb530adc87d0741a7b47b1a7b3"
+  },
+  {
+    "path": "runner-v2/test/lsp-real-host.test.ts",
+    "sha256": "9be26dc2315a104f47932e96ffd726c44e0e2aceac98137d8039f1eb874d7654"
+  },
+  {
+    "path": "runner-v2/test/support/lsp-owned-fixture.ts",
+    "sha256": "9baa0062be02bd590adc275211202d22c4e198e4cc5ed53fb6816fffc7a50cd8"
+  },
+  {
+    "path": "runner-v2/test/support/git-fixture.ts",
+    "sha256": "92cf67eb8836334c5b98aa24b26c74ceca0b025ffe355335cd2fd027f724d1aa"
+  },
+  {
+    "path": "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "sha256": "ddf2d21ae415609156303b35eaba64e0f19a930c7dc6ed4037a850ea7c03ad7c"
+  },
+  {
+    "path": "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "sha256": "638e7f293782f7882e72bd2d355f61f36b2a3072f9a29991c760357adeb0b09f"
+  },
+  {
+    "path": "runner-v2/test/language-invocation-propagation.test.ts",
+    "sha256": "95545ed952d8391873d09d03be011214cb479778022f940f02a092dd5ec6730a"
+  },
+  {
+    "path": "runner-v2/test/filesystem-mutation-routing.test.ts",
+    "sha256": "d6e72af9db5a834167abbd489b500d1a17a2b72b1853794d500265178d6849db"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/review-resolution.md",
+    "sha256": "280b58b1744541d94c93eaeb4f306ebfec3592e2c73db4da56bf36c2e4a3b9fc"
+  }
+]

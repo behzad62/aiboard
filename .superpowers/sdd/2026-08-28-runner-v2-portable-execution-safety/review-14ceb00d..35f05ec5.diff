@@ -1,0 +1,2288 @@
+# Review package: 14ceb00d..35f05ec5
+
+## Commits
+35f05ec5 docs(runner-v2): record packet 8.0B2 evidence
+7100c5de feat(runner-v2): add portable bounded process channels
+
+## Files changed
+ .../task-8.0b2-report.md                           | 136 +++++++++
+ runner-v2/src/managed-process.ts                   | 110 +++++++-
+ runner-v2/src/native-process-backend.ts            |  48 +++-
+ runner-v2/src/portable-process-channel.ts          | 304 +++++++++++++++++++++
+ runner-v2/src/portable-process-child.mjs           |   2 +-
+ runner-v2/src/portable-process-supervisor.mjs      | 106 ++++++-
+ runner-v2/src/posix-process-backend.ts             |   2 +
+ runner-v2/src/process-host-semantic-probes.ts      |  47 ++++
+ runner-v2/src/windows-job-process-host.ts          |  63 +++++
+ runner-v2/src/windows-process-backend.ts           |  78 +++---
+ runner-v2/test/portable-process-channel.test.ts    | 166 +++++++++++
+ runner-v2/test/process-backend-contract.test.ts    |  12 +-
+ .../test/process-host-semantic-probes.test.ts      |  87 ++++++
+ runner-v2/test/windows-process-backend.test.ts     | 100 +++----
+ 14 files changed, 1165 insertions(+), 96 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b2-report.md b/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b2-report.md
+new file mode 100644
+index 00000000..cbbcc557
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b2-report.md
+@@ -0,0 +1,136 @@
++# Task 8.0B2 implementation evidence
++
++## Scope and design
++
++- Entry authority: `task-8.0b2-brief.md`; implementation began at clean head
++  `14ceb00d`.
++- Added four independent immutable semantic facts (`unavailable`, `partial`,
++  `verified`) for portable duplex, Windows batch argv, exact tree/birth, and
++  active Job containment. Job never gates the other facts.
++- Extracted an actor-free `WindowsJobProcessHost` contract and frozen concrete
++  host boundary. `ManagedProcessService` delegates its backend-private methods
++  through that boundary; the Job backend imports only the low-level host.
++- Extended the existing portable supervisor evidence directory with an
++  authenticated file protocol for ordered input, close, stop, retained output,
++  exact metadata acknowledgements, detach, and reattach. No second process
++  owner, database, CLI selection, OCI path, or family routing was added.
++- New launch identities bind the exact writer fence into their birth digest.
++  Portable and Job effects reject stale fences before control, reconciliation,
++  emptiness, or release. Historical identities remain readable without gaining
++  new authority.
++- The supervisor reads at most the declared aggregate retained byte/chunk
++  window, leaving Node stream backpressure active until exact sink
++  acknowledgement metadata is durably returned. Evidence logs remain separate.
++- Current host: Windows. POSIX native execution is explicitly skipped, while
++  platform-neutral contract tests prove negative-group signalling, independent
++  birth checks, enumeration failure, escalation, and stable emptiness.
++
++## Packet RED/GREEN evidence
++
++### B2.1 semantic probes and boundary
++
++- RED: `npx tsx --test runner-v2/test/process-host-semantic-probes.test.ts`
++  failed because the semantic-probe module did not exist, then because the Job
++  backend imported `managed-process.ts` and fabricated a worker actor.
++- GREEN: 5/5 after independent facts, active-probe semantics, static dependency
++  guard, and extracted frozen host boundary.
++
++### B2.2 low-level Windows host
++
++- Existing compatibility suite remained GREEN after delegation:
++  native executable PATH resolution, PATHEXT `.cmd` argv boundaries, unsafe
++  batch refusal, restart, authenticated signal/reconcile/release, absolute
++  output offsets, and Job-unavailable baseline.
++- Focused current evidence: managed/Windows/probe suite 45/45 GREEN.
++- Public managed records, errors, snapshots, actor ownership, tool API, and
++  ordinary managed-process behavior were not changed.
++
++### B2.3 bounded duplex
++
++- RED: first real portable test failed with
++  `backpressuredChannelProvider is not a function`.
++- Intermediate exact failures found and repaired: slow Windows membership scan
++  delayed input acceptance; pipe write callback did not provide the required
++  bounded acknowledgement; retained chunks were repeatedly delivered while
++  awaiting supervisor deletion; a two-write fixture was legally coalesced into
++  one stream chunk.
++- GREEN: portable channel suite 4/4 covering identical sink acknowledgement
++  ordering, real ordered writes, input close, partial stdout/stderr metadata,
++  terminal wait, detach, bounded retained window, exact reattach/replay, and
++  stale writer-fence refusal.
++
++### B2.4 platform lifecycle
++
++- Adapter/backend group: 40 pass, 0 fail, 1 explicit POSIX-host skip.
++- Current-host real Windows portable supervisor and independently active-probed
++  Job fixtures both ran. Tests cover surviving descendants, launcher exit,
++  force escalation, recycled birth, unknown enumeration, output beyond tail,
++  release serialization, restart, and verified emptiness.
++
++### B2.5 repair and mutations
++
++Each mutation was applied to production, proved RED, reverted, and the exact
++test proved GREEN:
++
++1. POSIX root PID instead of negative group: contract RED with `9001` versus
++   `-9001`; reverted GREEN 1/1.
++2. Writer-fence check bypass: real stale-fence fixture RED; reverted GREEN 1/1.
++3. Job `verified` without active create/close result: strict selection RED;
++   reverted GREEN 1/1.
++4. Managed-facade import in Job backend: static dependency test RED; reverted
++   GREEN 1/1. The same guard rejects agent contracts and actor construction.
++5. Provider acknowledgement before sink acknowledgement: held-sink test RED
++   because an ack file appeared early; reverted GREEN 1/1.
++6. Removed aggregate byte bound: real retained-window fixture RED; reverted
++   GREEN 1/1.
++7. Stale output sequence/digest/offset acceptance remains guarded by the B1
++   continuity suite included in the broad run; corrupt channel chunks now fail
++   the private channel to `outcome_unknown` rather than disappearing.
++8. Coupling portable/batch to Job remains guarded by the independent semantic
++   combination test included in the probe suite.
++
++Self-review additionally found two issues after broad validation: input-close
++was not fail-closed across an unknown acknowledgement, and consumed input ack
++files accumulated. The repair reserves closed state before the effect and
++removes exact consumed ack files. Portable 4/4 plus typecheck reran GREEN.
++
++## Broad validation
++
++- Combined required compatibility command: 404 total, 403 pass, 0 fail, 1
++  explicit POSIX-native Windows-host skip.
++- Includes process backend contract, subprocess runtime, managed process,
++  complete B1, complete 8.0A, Task 7/Task 3 durable process/isolation/tool
++  broker/bounded spool, portable, POSIX, Windows, and semantic probes.
++- Post-host-extraction affected reruns: 45/45 managed/Windows/probe; 18 pass,
++  0 fail, 1 POSIX skip for portable/process-contract/POSIX; final portable 4/4.
++- `npm run typecheck:runner-v2`: GREEN.
++- Targeted ESLint over every changed TypeScript source/test: GREEN.
++- `git diff --check`: GREEN (only repository line-ending notices).
++- Static audit: Job backend/host contain no managed facade, agent/model
++  contract, or actor dependency; raw spawn/signal/platform branches remain in
++  the approved adapter/host/supervisor surfaces. No production family or CLI
++  graph changed. No exact Node patch pin was added; maintained Node 22/24 policy
++  is unchanged.
++
++## Probe facts and cleanup
++
++- Current real Job active create/close probe: verified by the real Job fixture.
++- Portable duplex: verified by real roundtrip/replay fixtures.
++- Windows batch argv: verified by existing real PATHEXT `.cmd` boundary and
++  unsafe-metacharacter refusal fixtures independently of Job selection.
++- Exact Windows tree/birth: verified by portable and Job lifecycle fixtures.
++- POSIX native: skipped because the current host is Windows; contract/static
++  proof remains green.
++- Residue audit found one exact terminal test root left by an earlier interrupted
++  test process. Its durable state was `stopped`, exit code 0, with no live owned
++  process. The exact root was removed. Final named temp-root and portable
++  supervisor/child process audit returned zero. Older default-state entries
++  dated before this task were preserved.
++
++## Residual concerns
++
++- Windows portable tree discovery depends on CIM availability and intentionally
++  becomes `outcome_unknown` when inspection cannot be proven.
++- The file protocol is backend-private and intentionally not selected by the
++  production CLI/family graph until later approved packets.
++- Focused implementation commit: `7100c5de`.
+diff --git a/runner-v2/src/managed-process.ts b/runner-v2/src/managed-process.ts
+index 7e8771b4..3a09ab8b 100644
+--- a/runner-v2/src/managed-process.ts
++++ b/runner-v2/src/managed-process.ts
+@@ -11,20 +11,26 @@ import {
+   readSync,
+   readdirSync,
+   renameSync,
+   writeFileSync,
+ } from "node:fs";
+ import { request } from "node:http";
+ import { dirname, join, resolve } from "node:path";
+ import { fileURLToPath } from "node:url";
+ 
+ import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
++import type {
++  WindowsJobLaunchRequest,
++  WindowsJobOwnershipKey,
++  WindowsJobProcessHost,
++} from "./windows-job-process-host.js";
++import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
+ 
+ const SUPERVISOR_PROTOCOL = "aiboard-managed-process/v1";
+ const DEFAULT_START_DEADLINE_MS = 5_000;
+ const DEFAULT_STOP_DEADLINE_MS = 5_000;
+ 
+ export type ManagedProcessStatus = "running" | "stopped" | "exited_unknown";
+ 
+ export interface ManagedProcessSupervisorRecord {
+   protocol: typeof SUPERVISOR_PROTOCOL;
+   token: string;
+@@ -167,31 +173,32 @@ export function readHistoricalManagedProcessObservations(
+   );
+ }
+ 
+ export class ManagedProcessError extends Error {
+   constructor(readonly code: string, message: string) {
+     super(message);
+     this.name = "ManagedProcessError";
+   }
+ }
+ 
+-export class ManagedProcessService {
++export class ManagedProcessService implements WindowsJobProcessHost {
+   private readonly stateDirectory: string;
+   private readonly idFactory: () => string;
+   private readonly clock: () => string;
+   private readonly maxPollBytes: number;
+   private readonly startDeadlineMs: number;
+   private readonly stopDeadlineMs: number;
+   private readonly platform: NodeJS.Platform;
+   private readonly supervisorScriptPath: string;
+   private readonly records = new Map<string, ManagedProcessRecord>();
+   private readonly launchers = new Set<ChildProcess>();
++  private readonly windowsJobHost: WindowsJobProcessHost;
+ 
+   constructor(options: ManagedProcessServiceOptions) {
+     this.stateDirectory = resolve(options.stateDirectory);
+     this.idFactory = options.idFactory ?? (() => `process_${randomUUID()}`);
+     this.clock = options.clock ?? (() => new Date().toISOString());
+     this.maxPollBytes = options.maxPollBytes ?? 256 * 1024;
+     this.startDeadlineMs = options.startDeadlineMs ?? DEFAULT_START_DEADLINE_MS;
+     this.stopDeadlineMs = options.stopDeadlineMs ?? DEFAULT_STOP_DEADLINE_MS;
+     this.platform = options.platform ?? process.platform;
+     this.supervisorScriptPath = options.supervisorScriptPath ?? join(
+@@ -199,20 +206,28 @@ export class ManagedProcessService {
+       "managed-process-supervisor.mjs"
+     );
+     mkdirSync(this.stateDirectory, { recursive: true });
+     for (const name of readdirSync(this.stateDirectory)) {
+       if (!name.endsWith(".json")) continue;
+       const record = JSON.parse(
+         readFileSync(join(this.stateDirectory, name), "utf8")
+       ) as ManagedProcessRecord;
+       this.records.set(record.processId, record);
+     }
++    this.windowsJobHost = createWindowsJobProcessHost({
++      launchOwned: (input) => this.launchOwnedMechanics(input),
++      signalOwned: (processId, signal, owner) => this.signalOwnedMechanics(processId, signal, owner),
++      reconcileOwned: (processId, owner) => this.reconcileOwnedMechanics(processId, owner),
++      releaseOwned: (processId, owner, expectedStartedAt) => this.releaseOwnedMechanics(processId, owner, expectedStartedAt),
++      readOwnedOutput: (processId, owner, offsets) => this.readOwnedOutputMechanics(processId, owner, offsets),
++      probeActiveJobCreateClose: () => this.probeActiveJobCreateCloseMechanics(),
++    });
+   }
+ 
+   async start(
+     input: StartManagedProcessInput,
+     context: ToolExecutionContext,
+     workspacePath: string
+   ): Promise<ManagedProcessSnapshot> {
+     if (this.platform !== "win32") {
+       throw new ManagedProcessError(
+         "process_containment_unavailable",
+@@ -515,20 +530,105 @@ export class ManagedProcessService {
+       status: record.status,
+       exitCode: record.exitCode,
+       signal: record.signal,
+       startedAt: record.startedAt,
+       updatedAt: record.updatedAt,
+       stdout: tail(record.stdoutPath, this.maxPollBytes),
+       stderr: tail(record.stderrPath, this.maxPollBytes),
+     };
+   }
+ 
++  /** Backend-private actor-free ownership seam used by the Windows Job adapter. */
++  async launchOwned(input: WindowsJobLaunchRequest): Promise<ManagedProcessSnapshot> {
++    return await this.windowsJobHost.launchOwned(input);
++  }
++
++  private async launchOwnedMechanics(input: WindowsJobLaunchRequest): Promise<ManagedProcessSnapshot> {
++    return await this.start({
++      command: input.command,
++      args: [...input.args],
++      cwd: ".",
++      env: { ...input.environment },
++      inheritEnvironment: false,
++    }, internalOwnershipContext(input), input.workingDirectory);
++  }
++
++  async signalOwned(
++    processId: string,
++    signal: "SIGTERM" | "SIGINT" | "SIGKILL",
++    owner: WindowsJobOwnershipKey,
++  ): Promise<ManagedProcessSnapshot> {
++    return await this.windowsJobHost.signalOwned(processId, signal, owner);
++  }
++
++  private async signalOwnedMechanics(
++    processId: string,
++    signal: "SIGTERM" | "SIGINT" | "SIGKILL",
++    owner: WindowsJobOwnershipKey,
++  ): Promise<ManagedProcessSnapshot> {
++    return await this.signal(processId, signal, internalOwnershipContext(owner));
++  }
++
++  async reconcileOwned(
++    processId: string,
++    owner: WindowsJobOwnershipKey,
++  ): Promise<ManagedProcessOwnershipSnapshot> {
++    return await this.windowsJobHost.reconcileOwned(processId, owner);
++  }
++
++  private async reconcileOwnedMechanics(
++    processId: string,
++    owner: WindowsJobOwnershipKey,
++  ): Promise<ManagedProcessOwnershipSnapshot> {
++    return await this.reconcileOwnership(processId, internalOwnershipContext(owner));
++  }
++
++  async releaseOwned(
++    processId: string,
++    owner: WindowsJobOwnershipKey,
++    expectedStartedAt: string,
++  ): Promise<ManagedProcessOwnershipSnapshot> {
++    return await this.windowsJobHost.releaseOwned(processId, owner, expectedStartedAt);
++  }
++
++  private async releaseOwnedMechanics(
++    processId: string,
++    owner: WindowsJobOwnershipKey,
++    expectedStartedAt: string,
++  ): Promise<ManagedProcessOwnershipSnapshot> {
++    return await this.releaseOwnership(processId, internalOwnershipContext(owner), expectedStartedAt);
++  }
++
++  readOwnedOutput(
++    processId: string,
++    owner: WindowsJobOwnershipKey,
++    offsets: { readonly stdout: number; readonly stderr: number },
++  ): ManagedProcessOutputRead {
++    return this.windowsJobHost.readOwnedOutput(processId, owner, offsets);
++  }
++
++  private readOwnedOutputMechanics(
++    processId: string,
++    owner: WindowsJobOwnershipKey,
++    offsets: { readonly stdout: number; readonly stderr: number },
++  ): ManagedProcessOutputRead {
++    return this.readOutputSince(processId, internalOwnershipContext(owner), offsets);
++  }
++
++  async probeActiveJobCreateClose(): Promise<boolean> {
++    return await this.windowsJobHost.probeActiveJobCreateClose();
++  }
++
++  private async probeActiveJobCreateCloseMechanics(): Promise<boolean> {
++    return await this.probeJobObjectAvailability();
++  }
++
+   /** Authenticated ownership view used by the durable Windows backend adapter. */
+   async reconcileOwnership(
+     processId: string,
+     context: ToolExecutionContext
+   ): Promise<ManagedProcessOwnershipSnapshot> {
+     const record = this.ownedRecord(processId, context);
+     this.assertBackendOwnershipActive(record);
+     if (!validSupervisorIdentity(record.supervisor)) {
+       throw new ManagedProcessError(
+         "process_control_unavailable",
+@@ -668,20 +768,28 @@ export class ManagedProcessService {
+       return JSON.parse(
+         readFileSync(join(this.stateDirectory, `${processId}.json`), "utf8")
+       ) as ManagedProcessRecord;
+     } catch (error) {
+       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+       throw error;
+     }
+   }
+ }
+ 
++function internalOwnershipContext(owner: WindowsJobOwnershipKey): ToolExecutionContext {
++  return {
++    runId: owner.runId,
++    sessionId: owner.sessionId,
++    actor: { role: "worker", id: `internal:${owner.sessionId}` },
++  };
++}
++
+ function unreadBytes(path: string, offset: number, maximum: number): Uint8Array {
+   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Managed process output offset is invalid.");
+   let descriptor: number;
+   try { descriptor = openSync(path, "r"); } catch (error) {
+     if ((error as NodeJS.ErrnoException).code === "ENOENT") return new Uint8Array();
+     throw error;
+   }
+   try {
+     const size = fstatSync(descriptor).size;
+     if (offset > size) throw new Error("Managed process output offset exceeds the durable stream length.");
+diff --git a/runner-v2/src/native-process-backend.ts b/runner-v2/src/native-process-backend.ts
+index 05c7b5ee..893d737a 100644
+--- a/runner-v2/src/native-process-backend.ts
++++ b/runner-v2/src/native-process-backend.ts
+@@ -5,28 +5,31 @@ import { tmpdir } from "node:os";
+ import { dirname, join, resolve } from "node:path";
+ import { fileURLToPath } from "node:url";
+ 
+ import type {
+   ProcessBackend,
+   ProcessBackendBinding,
+   ProcessEffectFence,
+   ProcessLaunchRequest,
+ } from "./process-backend.js";
+ import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
++import { createPortableProcessChannelProvider } from "./portable-process-channel.js";
+ 
+ export interface NativeOwnedProcessBackendOptions {
+   readonly stateDirectory?: string;
+   readonly pollIntervalMs?: number;
+   readonly platform: "posix" | "windows";
+   readonly backendId: string;
+   readonly capabilities: ExecutionSafetyCapabilities;
+   readonly operations?: NativeProcessOperations;
++  readonly replayCapacityChunks?: number;
++  readonly replayCapacityBytes?: number;
+ }
+ export interface NativeProcessOperations {
+   inspectProcessBirth(pid: number, platform: "posix" | "windows"): ProcessBirthInspection;
+   listPosixGroup(groupId: number): readonly number[] | undefined;
+   signal(pid: number, signal: NodeJS.Signals): void;
+ }
+ export type ProcessBirthInspection =
+   | { readonly state: "present"; readonly fingerprint: string }
+   | { readonly state: "absent" }
+   | { readonly state: "unknown" };
+@@ -48,20 +51,21 @@ export class NativeProcessLaunchBlockedError extends AggregateError {
+   }
+ }
+ 
+ interface Identity {
+   readonly version: 1;
+   readonly backendId: string;
+   readonly nonce: string;
+   readonly directory: string;
+   readonly supervisorPid: number;
+   readonly supervisorBirth: string;
++  readonly fence?: ProcessEffectFence;
+ }
+ interface SupervisorState {
+   readonly protocol: "aiboard-portable-process/v1";
+   readonly nonce: string;
+   readonly supervisorPid: number;
+   readonly launchEffect?: "not_started" | "prepared" | "started" | "unknown";
+   readonly rootProcess?: { readonly pid: number; readonly birth: string } | null;
+   readonly revision: number;
+   readonly handledControl: number;
+   readonly status: "preparing" | "running" | "stopped" | "outcome_unknown";
+@@ -105,39 +109,43 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
+     const supervisor = join(dirname(fileURLToPath(import.meta.url)), "portable-process-supervisor.mjs");
+     const encoded = Buffer.from(JSON.stringify({
+       nonce,
+       directory,
+       executable: request.intent.executable,
+       arguments: [...request.intent.arguments],
+       workingDirectory: request.intent.workingDirectory,
+       environment: { ...request.environment },
+       platform: this.options.platform,
+       pollIntervalMs: this.pollIntervalMs,
++      replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
++      replayCapacityBytes: this.options.replayCapacityBytes ?? 256 * 1024,
++      fence: { ...request.fence },
+     })).toString("base64url");
+     const child = spawn(process.execPath, [supervisor, encoded], {
+       detached: true,
+       windowsHide: true,
+       stdio: "ignore",
+     });
+     if (!child.pid) throw new Error("Portable process supervisor has no PID.");
+     child.unref();
+     let identity: Identity | undefined;
+     try {
+       const supervisorBirth = await this.waitForBirth(child.pid, 1_000);
+       if (!supervisorBirth) throw new Error("Portable supervisor birth identity is unavailable.");
+       identity = {
+         version: 1,
+         backendId: this.options.backendId,
+         nonce,
+         directory,
+         supervisorPid: child.pid,
+         supervisorBirth,
++        fence: Object.freeze({ ...request.fence }),
+       };
+       const state = await this.waitForState(directory, nonce, child.pid, 5_000);
+       if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
+       const startedAt = state.updatedAt;
+       return launchResult(identity, startedAt);
+     } catch (error) {
+       if (!identity) {
+         const failedState = readState(directory);
+         if (
+           failedState?.nonce === nonce &&
+@@ -168,40 +176,64 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
+         throw new AggregateError(
+           [error, cleanupError],
+           `Portable process launch failed and owned cleanup could not be verified; evidence retained at ${directory}.`,
+         );
+       }
+       rmSync(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+       throw error;
+     }
+   }
+ 
++  backpressuredChannelProvider() {
++    return createPortableProcessChannelProvider({
++      replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
++      replayCapacityBytes: this.options.replayCapacityBytes ?? 256 * 1024,
++      pollIntervalMs: this.pollIntervalMs,
++      authority: (binding) => {
++        const identity = this.identity(binding);
++        if (!identity.fence) throw new Error("Portable channel writer/fence identity is unavailable.");
++        return {
++          directory: identity.directory,
++          nonce: identity.nonce,
++          fence: identity.fence,
++          reattest: () => {
++            const state = this.validate(identity);
++            if (state === "mismatch" || state === "unknown") throw new Error("Portable channel identity re-attestation failed.");
++            return state === "live" ? "live" : "exited";
++          },
++        };
++      },
++    });
++  }
++
+   async observe(
+     binding: ProcessBackendBinding,
+     output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>,
+     _fence: ProcessEffectFence,
+   ): Promise<unknown> {
+     const identity = this.identity(binding);
++    this.assertFence(identity, _fence);
+     for (;;) {
+       await this.flushOutput(identity, output);
+       const reconciled = await this.reconcile(binding, _fence) as { state: string; exitCode?: number; signal?: string };
+       if (reconciled.state === "exited") {
+         await this.flushOutput(identity, output);
+         return reconciled;
+       }
+       if (reconciled.state !== "running") throw new Error(`Owned process observation failed: ${reconciled.state}.`);
+       await delay(this.pollIntervalMs);
+     }
+   }
+ 
+   async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, _fence?: ProcessEffectFence): Promise<unknown> {
+     const identity = this.identity(binding);
++    this.assertFence(identity, _fence);
+     const validation = this.validate(identity);
+     if (validation === "mismatch") throw new Error("Owned process identity mismatch.");
+     if (validation === "unknown") throw new Error("Owned process identity inspection is unavailable.");
+     if (validation === "exited") return this.signalState(await this.emptiness(identity));
+     if (this.options.platform === "posix") {
+       const signal = action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM";
+       this.operations.signal(-identity.supervisorPid, signal);
+     } else {
+       const beforeSignal = await this.emptiness(identity);
+       if (beforeSignal === "identity_mismatch") throw new Error("Owned descendant identity mismatch.");
+@@ -209,20 +241,21 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
+       const state = readState(identity.directory);
+       const sequence = (state?.handledControl ?? 0) + 1;
+       writeFileSync(join(identity.directory, "control.json"), JSON.stringify({ nonce: identity.nonce, sequence, action }), { mode: 0o600 });
+     }
+     await delay(action === "force_terminate" ? 250 : 75);
+     return this.signalState(await this.emptiness(identity));
+   }
+ 
+   async verifyEmpty(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
+     const identity = this.identity(binding);
++    this.assertFence(identity, _fence);
+     const validation = this.validate(identity);
+     if (validation === "mismatch")
+       return { empty: false, detail: "Owned process identity changed before quiescence verification." };
+     if (validation === "unknown")
+       return { empty: false, detail: "Owned process identity inspection is unavailable." };
+     const emptiness = await this.emptiness(identity);
+     if (emptiness === "empty") return { empty: true, proofArtifactId: `native-empty:${identity.nonce}` };
+     return {
+       empty: false,
+       detail: emptiness === "nonempty"
+@@ -231,20 +264,21 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
+           ? "Owned process identity changed before quiescence verification."
+           : "Owned process membership could not be enumerated or verified.",
+     };
+   }
+ 
+   async reconcile(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
+     let identity: Identity;
+     try { identity = this.identity(binding); } catch (error) {
+       return { state: error instanceof OwnedProcessIdentityMismatchError ? "identity_mismatch" : "outcome_unknown" };
+     }
++    try { this.assertFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
+     const validation = this.validate(identity);
+     if (validation === "mismatch") return { state: "identity_mismatch" };
+     if (validation === "unknown") return { state: "outcome_unknown" };
+     const state = readState(identity.directory);
+     if (!state) return { state: "outcome_unknown" };
+     if (state.nonce !== identity.nonce || state.supervisorPid !== identity.supervisorPid)
+       return { state: "identity_mismatch" };
+     if (state.status === "outcome_unknown") return { state: "outcome_unknown" };
+     const emptiness = await this.emptiness(identity);
+     if (emptiness === "identity_mismatch") return { state: "identity_mismatch" };
+@@ -252,41 +286,47 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
+     if (validation === "live" || emptiness === "nonempty") return { state: "running" };
+     return {
+       state: "exited",
+       ...(state.exitCode === null ? {} : { exitCode: state.exitCode }),
+       ...(state.signal ? { signal: state.signal } : {}),
+     };
+   }
+ 
+   async release(binding: ProcessBackendBinding, _fence?: ProcessEffectFence): Promise<unknown> {
+     const identity = this.identity(binding);
++    this.assertFence(identity, _fence);
+     const emptiness = await this.emptiness(identity);
+     if (emptiness !== "empty")
+       throw new Error(emptiness === "outcome_unknown" ? "Cannot release ownership with unknown empty verification." : "Cannot release non-empty owned process identity.");
+     this.outputOffsets.delete(identity.nonce);
+     rmSync(identity.directory, { recursive: true, force: true });
+     return { released: true };
+   }
+ 
+   private assertPlatform(): void {
+     if (this.options.platform === "windows" ? process.platform !== "win32" : process.platform === "win32")
+       throw new Error(`${this.options.platform} native process backend is unavailable on ${process.platform}.`);
+   }
+   private identity(binding: ProcessBackendBinding): Identity {
+     const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as Identity;
+     if (value.version !== 1 || value.backendId !== this.options.backendId || !value.nonce || !value.directory || !Number.isSafeInteger(value.supervisorPid) || !value.supervisorBirth)
+       throw new Error("Owned process opaque identity is invalid.");
+-    const expected = createHash("sha256").update(`${value.nonce}\0${value.supervisorBirth}`).digest("hex");
++    const expected = birthDiscriminator(value);
+     if (binding.birthFingerprint.discriminator !== expected || binding.rootPid !== value.supervisorPid)
+       throw new OwnedProcessIdentityMismatchError("Owned process birth fingerprint is invalid.");
+     return value;
+   }
++  private assertFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
++    if (!identity.fence) return;
++    if (!fence || fence.ownerId !== identity.fence.ownerId || fence.fencingToken !== identity.fence.fencingToken)
++      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale.");
++  }
+   private validate(identity: Identity): "live" | "exited" | "mismatch" | "unknown" {
+     const inspection = this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
+     if (inspection.state === "unknown") return "unknown";
+     if (inspection.state === "absent") return "exited";
+     return inspection.fingerprint === identity.supervisorBirth ? "live" : "mismatch";
+   }
+   private async emptiness(identity: Identity): Promise<"empty" | "nonempty" | "identity_mismatch" | "outcome_unknown"> {
+     if (this.options.platform === "posix") {
+       const members = this.operations.listPosixGroup(identity.supervisorPid);
+       return members === undefined ? "outcome_unknown" : members.length === 0 ? "empty" : "nonempty";
+@@ -492,26 +532,30 @@ function validKnownProcess(value: unknown): value is { readonly pid: number; rea
+   return !!value && typeof value === "object" &&
+     Number.isSafeInteger((value as { pid?: unknown }).pid) &&
+     typeof (value as { birth?: unknown }).birth === "string" &&
+     (value as { birth: string }).birth.length > 0;
+ }
+ function launchResult(identity: Identity, startedAt: string) {
+   return {
+     opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url"),
+     birthFingerprint: {
+       observedAt: startedAt,
+-      discriminator: createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}`).digest("hex"),
++      discriminator: birthDiscriminator(identity),
+     },
+     rootPid: identity.supervisorPid,
+     startedAt,
+   };
+ }
++function birthDiscriminator(identity: Pick<Identity, "nonce" | "supervisorBirth" | "fence">): string {
++  const fence = identity.fence ? `\0${identity.fence.ownerId}\0${identity.fence.fencingToken}` : "";
++  return createHash("sha256").update(`${identity.nonce}\0${identity.supervisorBirth}${fence}`).digest("hex");
++}
+ function launchBlocker(identity: Identity, message: string): NativeProcessLaunchBlockedError {
+   const state = readState(identity.directory);
+   const startedAt = state?.updatedAt ?? new Date().toISOString();
+   const detail = `${message} Evidence retained at ${identity.directory}.`;
+   return new NativeProcessLaunchBlockedError(
+     [new Error(detail)],
+     identity.directory,
+     launchResult(identity, startedAt),
+     detail,
+   );
+diff --git a/runner-v2/src/portable-process-channel.ts b/runner-v2/src/portable-process-channel.ts
+new file mode 100644
+index 00000000..0470631e
+--- /dev/null
++++ b/runner-v2/src/portable-process-channel.ts
+@@ -0,0 +1,304 @@
++import { createHash, randomUUID } from "node:crypto";
++import { existsSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
++import { join } from "node:path";
++
++import {
++  BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
++  type BackpressuredOutputAcknowledgement,
++  type BackpressuredOutputMetadata,
++  type InteractiveProcessChannel,
++  type InteractiveProcessWrite,
++} from "./interactive-process-channel.js";
++import type { ProcessBackendBinding, ProcessEffectFence } from "./process-backend.js";
++
++export interface PortableChannelAuthority {
++  readonly directory: string;
++  readonly nonce: string;
++  readonly fence: ProcessEffectFence;
++  reattest(): "live" | "exited";
++}
++
++export interface PortableProcessChannelProviderOptions {
++  readonly replayCapacityChunks: number;
++  readonly replayCapacityBytes: number;
++  readonly pollIntervalMs: number;
++  authority(binding: ProcessBackendBinding): PortableChannelAuthority;
++}
++
++export function createPortableProcessChannelProvider(options: PortableProcessChannelProviderOptions) {
++  const replayCapacityChunks = positive(options.replayCapacityChunks);
++  const replayCapacityBytes = positive(options.replayCapacityBytes);
++  const pollIntervalMs = positive(options.pollIntervalMs);
++  const acquire = async (binding: ProcessBackendBinding) =>
++    new PortableProcessChannel(options.authority(binding), pollIntervalMs);
++  return Object.freeze({
++    version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
++    replayCapacityChunks,
++    replayCapacityBytes,
++    acquire,
++    async reattach(binding: ProcessBackendBinding) {
++      const channel = await acquire(binding);
++      return {
++        version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
++        binding,
++        channel,
++        retainedWindow: channel.retainedWindow(),
++        replayCapacityChunks,
++        replayCapacityBytes,
++        nextSequence: channel.nextWriteSequence(),
++        inputClosed: channel.isInputClosed(),
++      };
++    },
++  });
++}
++
++class PortableProcessChannel implements InteractiveProcessChannel {
++  private readonly channelDirectory: string;
++  private readonly outputDirectory: string;
++  private readonly inputDirectory: string;
++  private readonly ackDirectory: string;
++  private nextCommand = 1;
++  private nextWrite = 1;
++  private inputClosed = false;
++  private detached = false;
++  private outputTimer?: ReturnType<typeof setInterval>;
++  private terminalTimer?: ReturnType<typeof setInterval>;
++  private outputSink?: (metadata: BackpressuredOutputMetadata, bytes: Uint8Array) => Promise<BackpressuredOutputAcknowledgement>;
++  private outputTail = Promise.resolve();
++  private readonly deliveredOutput = new Set<string>();
++  private readonly terminalSinks = new Set<(result: unknown) => void>();
++  private channelFailure?: Error;
++
++  constructor(private readonly authority: PortableChannelAuthority, private readonly pollIntervalMs: number) {
++    this.channelDirectory = join(authority.directory, "channel");
++    this.outputDirectory = join(this.channelDirectory, "output");
++    this.inputDirectory = join(this.channelDirectory, "input");
++    this.ackDirectory = join(this.channelDirectory, "ack");
++    this.restoreInputState();
++  }
++
++  async write(input: InteractiveProcessWrite, payload: Uint8Array): Promise<unknown> {
++    this.assertAttached();
++    this.reattest(true);
++    if (this.inputClosed) throw new Error("Portable channel input is closed.");
++    if (input.sequence !== this.nextWrite) throw new Error("Portable channel write sequence is stale or out of order.");
++    const owned = new Uint8Array(payload);
++    if (owned.byteLength !== input.byteLength || createHash("sha256").update(owned).digest("hex") !== input.digest)
++      throw new Error("Portable channel write metadata does not match its payload.");
++    const commandSequence = this.nextCommand++;
++    this.nextWrite++;
++    await this.command(commandSequence, {
++      type: "write",
++      byteLength: owned.byteLength,
++      digest: input.digest,
++      bytes: Buffer.from(owned).toString("base64"),
++    }, input.timeoutMs);
++    return { acknowledged: true, sequence: input.sequence };
++  }
++
++  async closeInput(): Promise<unknown> {
++    this.assertAttached();
++    this.reattest(true);
++    if (this.inputClosed) return false;
++    const sequence = this.nextCommand++;
++    // Reserve closure before the effect. An unknown acknowledgement must never
++    // make later writes look replay-safe.
++    this.inputClosed = true;
++    this.persistInputState();
++    await this.command(sequence, { type: "close_input" }, 5_000);
++    return true;
++  }
++
++  subscribePrivateOutput(sink: (bytes: Uint8Array) => void): () => void {
++    return this.subscribeBackpressuredOutput(async (metadata, bytes) => {
++      sink(new Uint8Array(bytes));
++      return metadata;
++    });
++  }
++
++  subscribeBackpressuredOutput(
++    sink: (metadata: BackpressuredOutputMetadata, ownedBytes: Uint8Array) => Promise<BackpressuredOutputAcknowledgement>,
++  ): () => void {
++    this.assertAttached();
++    if (this.outputSink) throw new Error("Portable channel output already has a consumer.");
++    this.outputSink = sink;
++    this.outputTimer = setInterval(() => this.scheduleOutput(), this.pollIntervalMs);
++    this.scheduleOutput();
++    return () => {
++      this.outputSink = undefined;
++      if (this.outputTimer) clearInterval(this.outputTimer);
++      this.outputTimer = undefined;
++    };
++  }
++
++  async gracefulStop(): Promise<unknown> {
++    this.assertAttached();
++    this.reattest(true);
++    const sequence = this.nextCommand++;
++    await this.command(sequence, { type: "graceful_stop" }, 5_000);
++    return { acknowledged: true };
++  }
++
++  async waitForTerminal(): Promise<unknown> {
++    for (;;) {
++      const terminal = this.terminal();
++      if (terminal) return terminal;
++      await delay(this.pollIntervalMs);
++    }
++  }
++
++  observeTerminal(sink: (result: unknown) => void): () => void {
++    this.terminalSinks.add(sink);
++    this.terminalTimer ??= setInterval(() => {
++      const result = this.terminal();
++      if (!result) return;
++      for (const listener of this.terminalSinks) listener(result);
++      this.terminalSinks.clear();
++      if (this.terminalTimer) clearInterval(this.terminalTimer);
++      this.terminalTimer = undefined;
++    }, this.pollIntervalMs);
++    return () => this.terminalSinks.delete(sink);
++  }
++
++  async detach(): Promise<unknown> {
++    if (this.detached) return false;
++    this.detached = true;
++    this.outputSink = undefined;
++    if (this.outputTimer) clearInterval(this.outputTimer);
++    if (this.terminalTimer) clearInterval(this.terminalTimer);
++    this.outputTimer = undefined;
++    this.terminalTimer = undefined;
++    this.terminalSinks.clear();
++    await this.outputTail.catch(() => undefined);
++    return true;
++  }
++
++  retainedWindow(): readonly BackpressuredOutputMetadata[] {
++    return this.outputFiles().map((entry) => entry.metadata);
++  }
++  nextWriteSequence(): number { return this.nextWrite; }
++  isInputClosed(): boolean { return this.inputClosed; }
++
++  private scheduleOutput(): void {
++    this.outputTail = this.outputTail.then(async () => {
++      const sink = this.outputSink;
++      if (!sink || this.detached) return;
++      this.reattest(false);
++      const entries = this.outputFiles();
++      const present = new Set(entries.map((entry) => entry.name));
++      for (const name of this.deliveredOutput) if (!present.has(name)) this.deliveredOutput.delete(name);
++      for (const entry of entries) {
++        if (sink !== this.outputSink || this.detached) return;
++        if (this.deliveredOutput.has(entry.name)) continue;
++        const acknowledgement = await sink(entry.metadata, entry.bytes);
++        if (JSON.stringify(acknowledgement) !== JSON.stringify(entry.metadata))
++          throw new Error("Portable output acknowledgement metadata mismatch.");
++        writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({ nonce: this.authority.nonce, metadata: entry.metadata }));
++        this.deliveredOutput.add(entry.name);
++      }
++    }).catch((error) => {
++      this.channelFailure = error instanceof Error ? error : new Error("Portable output channel failed.");
++      for (const listener of this.terminalSinks) listener({ state: "outcome_unknown" });
++      this.terminalSinks.clear();
++    });
++  }
++
++  private outputFiles(): Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }> {
++    let names: string[];
++    try { names = readdirSync(this.outputDirectory).filter((name) => name.endsWith(".json")).sort(); }
++    catch { return []; }
++    const entries = [];
++    for (const name of names) {
++      try {
++        const value = JSON.parse(readFileSync(join(this.outputDirectory, name), "utf8"));
++        if (value.nonce !== this.authority.nonce) continue;
++        const bytes = Buffer.from(value.bytes, "base64");
++        if (!validMetadata(value.metadata, bytes)) continue;
++        entries.push({ name, metadata: value.metadata, bytes: new Uint8Array(bytes) });
++      } catch (error) {
++        throw new Error("Portable output chunk is invalid.", { cause: error });
++      }
++    }
++    return entries;
++  }
++
++  private async command(sequence: number, body: Record<string, unknown>, timeoutMs: number): Promise<void> {
++    this.persistInputState();
++    const name = `input-${String(sequence).padStart(12, "0")}.json`;
++    writeAtomic(join(this.inputDirectory, name), JSON.stringify({
++      nonce: this.authority.nonce,
++      ownerId: this.authority.fence.ownerId,
++      fencingToken: this.authority.fence.fencingToken,
++      sequence,
++      ...body,
++    }));
++    const deadline = Date.now() + timeoutMs;
++    const ackPath = join(this.ackDirectory, name);
++    while (Date.now() < deadline) {
++      this.reattest(false);
++      try {
++        const ack = JSON.parse(readFileSync(ackPath, "utf8"));
++        if (ack.nonce === this.authority.nonce && ack.sequence === sequence && ack.status === "acknowledged") {
++          try { unlinkSync(ackPath); } catch {}
++          return;
++        }
++        if (ack.status === "failed") throw new Error("Portable channel command failed.");
++      } catch (error) {
++        if (existsSync(ackPath)) throw error;
++      }
++      await delay(this.pollIntervalMs);
++    }
++    let detail = "state unavailable";
++    try { detail = JSON.stringify({ state: JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8")), input: readdirSync(this.inputDirectory), ack: readdirSync(this.ackDirectory).map((name) => [name, readFileSync(join(this.ackDirectory, name), "utf8")]) }); } catch {}
++    throw new Error(`Portable channel command acknowledgement timed out. ${detail}`);
++  }
++
++  private terminal(): unknown | undefined {
++    if (this.channelFailure) return { state: "outcome_unknown" };
++    try {
++      const state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
++      if (state.nonce !== this.authority.nonce) throw new Error("Portable channel identity mismatch.");
++      return state.status === "stopped"
++        ? { state: "exited", ...(state.exitCode === null ? {} : { exitCode: state.exitCode }), ...(state.signal ? { signal: state.signal } : {}) }
++        : state.status === "outcome_unknown" ? { state: "outcome_unknown" } : undefined;
++    } catch { return undefined; }
++  }
++
++  private reattest(requireLive: boolean): void {
++    const state = this.authority.reattest();
++    if (requireLive && state !== "live") throw new Error("Portable channel owner is not live.");
++  }
++  private assertAttached(): void { if (this.detached) throw new Error("Portable channel is detached."); }
++  private statePath(): string { return join(this.channelDirectory, "client-state.json"); }
++  private restoreInputState(): void {
++    try {
++      const value = JSON.parse(readFileSync(this.statePath(), "utf8"));
++      if (value.nonce !== this.authority.nonce || value.ownerId !== this.authority.fence.ownerId || value.fencingToken !== this.authority.fence.fencingToken) throw new Error("Portable channel writer/fence mismatch.");
++      this.nextCommand = positive(value.nextCommand);
++      this.nextWrite = positive(value.nextWrite);
++      this.inputClosed = value.inputClosed === true;
++    } catch (error) {
++      if (existsSync(this.statePath())) throw error;
++      this.persistInputState();
++    }
++  }
++  private persistInputState(): void {
++    writeAtomic(this.statePath(), JSON.stringify({ nonce: this.authority.nonce, ownerId: this.authority.fence.ownerId, fencingToken: this.authority.fence.fencingToken, nextCommand: this.nextCommand, nextWrite: this.nextWrite, inputClosed: this.inputClosed }));
++  }
++}
++
++function validMetadata(value: unknown, bytes: Uint8Array): value is BackpressuredOutputMetadata {
++  if (!value || typeof value !== "object") return false;
++  const metadata = value as BackpressuredOutputMetadata;
++  return (metadata.stream === "stdout" || metadata.stream === "stderr") && Number.isSafeInteger(metadata.sequence) && metadata.sequence > 0 && metadata.byteLength === bytes.byteLength && metadata.endOffset === metadata.startOffset + metadata.byteLength && metadata.digest === createHash("sha256").update(bytes).digest("hex");
++}
++function writeAtomic(path: string, value: string): void {
++  const temporary = `${path}.${randomUUID()}.tmp`;
++  writeFileSync(temporary, value, { mode: 0o600 });
++  renameSync(temporary, path);
++}
++function positive(value: unknown): number {
++  if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error("Portable channel capacity/state is invalid.");
++  return value as number;
++}
++function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
+diff --git a/runner-v2/src/portable-process-child.mjs b/runner-v2/src/portable-process-child.mjs
+index 751d9d2d..73027516 100644
+--- a/runner-v2/src/portable-process-child.mjs
++++ b/runner-v2/src/portable-process-child.mjs
+@@ -3,21 +3,21 @@ import { existsSync, renameSync, writeFileSync } from "node:fs";
+ 
+ const config = JSON.parse(Buffer.from(process.argv[2] ?? "", "base64url").toString("utf8"));
+ const waiter = new Int32Array(new SharedArrayBuffer(4));
+ 
+ while (!existsSync(config.goPath)) Atomics.wait(waiter, 0, 0, 10);
+ 
+ const child = spawn(config.executable, config.arguments, {
+   cwd: config.workingDirectory,
+   env: config.environment,
+   windowsHide: true,
+-  stdio: ["ignore", "inherit", "inherit"],
++  stdio: ["inherit", "inherit", "inherit"],
+ });
+ child.once("error", (error) => {
+   publish({ status: "error", error: error.message });
+   process.exit(1);
+ });
+ child.once("spawn", () => publish({ status: "started" }));
+ child.once("exit", (code, signal) => {
+   if (signal) process.kill(process.pid, signal);
+   else process.exit(code ?? 1);
+ });
+diff --git a/runner-v2/src/portable-process-supervisor.mjs b/runner-v2/src/portable-process-supervisor.mjs
+index 78c9a42c..62a357d9 100644
+--- a/runner-v2/src/portable-process-supervisor.mjs
++++ b/runner-v2/src/portable-process-supervisor.mjs
+@@ -1,22 +1,35 @@
+ import { spawn, spawnSync } from "node:child_process";
+-import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
++import { createHash } from "node:crypto";
++import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+ import { join } from "node:path";
+ import { fileURLToPath } from "node:url";
+ 
+ const config = JSON.parse(Buffer.from(process.argv[2] ?? "", "base64url").toString("utf8"));
+ const statePath = join(config.directory, "state.json");
+ const controlPath = join(config.directory, "control.json");
+ const stdoutPath = join(config.directory, "stdout.log");
+ const stderrPath = join(config.directory, "stderr.log");
+ const childGoPath = join(config.directory, "child-go");
+ const childStatusPath = join(config.directory, "child-status.json");
++const channelDirectory = join(config.directory, "channel");
++const channelOutputDirectory = join(channelDirectory, "output");
++const channelInputDirectory = join(channelDirectory, "input");
++const channelAckDirectory = join(channelDirectory, "ack");
++for (const directory of [channelDirectory, channelOutputDirectory, channelInputDirectory, channelAckDirectory]) mkdirSync(directory, { recursive: true });
++const replayCapacityChunks = config.replayCapacityChunks ?? 16;
++const replayCapacityBytes = config.replayCapacityBytes ?? 256 * 1024;
++const outputSequences = { stdout: 0, stderr: 0 };
++const outputOffsets = { stdout: 0, stderr: 0 };
++const retained = new Map();
++let retainedBytes = 0;
++let handledInput = 0;
+ let revision = 0;
+ let handledControl = 0;
+ let targetExited = false;
+ let targetExitCode = null;
+ let targetSignal = null;
+ const knownProcesses = new Map();
+ let ownershipMismatch = false;
+ let ownershipInspectionUnknown = false;
+ let ownershipInspectionDetail = "";
+ let launchEffect = config.platform === "windows" ? "prepared" : "started";
+@@ -28,27 +41,27 @@ const child = config.platform === "windows"
+       executable: config.executable,
+       arguments: config.arguments,
+       workingDirectory: config.workingDirectory,
+       environment: config.environment,
+       goPath: childGoPath,
+       statusPath: childStatusPath,
+     })).toString("base64url")], {
+       cwd: config.workingDirectory,
+       env: config.environment,
+       windowsHide: true,
+-      stdio: ["ignore", "pipe", "pipe"],
++      stdio: ["pipe", "pipe", "pipe"],
+     })
+   : spawn(config.executable, config.arguments, {
+   cwd: config.workingDirectory,
+   env: config.environment,
+   windowsHide: true,
+-  stdio: ["ignore", "pipe", "pipe"],
++  stdio: ["pipe", "pipe", "pipe"],
+   });
+ if (!child.pid) {
+   launchEffect = "not_started";
+   fail("Owned process has no PID.", "stopped");
+ }
+ if (config.platform === "windows") {
+   const inspection = inspectWindowsBirth(child.pid);
+   if (inspection.state === "present") {
+     rootProcess = { pid: child.pid, birth: inspection.fingerprint };
+     knownProcesses.set(child.pid, inspection.fingerprint);
+@@ -57,42 +70,46 @@ if (config.platform === "windows") {
+     const startup = waitForChildStartup(5_000);
+     if (startup?.status === "started") launchEffect = "started";
+     else if (startup?.status === "error") {
+       launchEffect = "started";
+       fail(startup.error ?? "Owned process failed to start.", "stopped");
+     } else launchEffect = "unknown";
+   } else {
+     launchEffect = "unknown";
+   }
+ }
+-child.stdout.on("data", (chunk) => appendFileSync(stdoutPath, chunk));
+-child.stderr.on("data", (chunk) => appendFileSync(stderrPath, chunk));
++installOutput("stdout", child.stdout, stdoutPath);
++installOutput("stderr", child.stderr, stderrPath);
+ child.once("error", (error) => fail(error.message));
+ child.once("exit", (code, signal) => {
+   targetExited = true;
+   targetExitCode = code;
+   targetSignal = signal;
+   publish(launchEffect === "started" ? "running" : "outcome_unknown");
+ });
+ publish(launchEffect === "started" ? "running" : "outcome_unknown", launchEffect === "unknown" ? "Initial Windows process birth inspection was unavailable or the PID disappeared before discovery." : null);
+ 
+ const timer = setInterval(tick, Math.max(10, config.pollIntervalMs ?? 25));
+ process.stdin.resume();
+ process.on("SIGTERM", () => {});
+ process.on("SIGINT", () => {});
+ 
+ function tick() {
+   try {
+     if (launchEffect === "unknown") {
+       publish("outcome_unknown", "Initial Windows process identity was not captured before discovery.");
+       return;
+     }
++    handleChannelAcks();
++    handleChannelInput();
++    drainOutput("stdout", child.stdout, stdoutPath);
++    drainOutput("stderr", child.stderr, stderrPath);
+     if (config.platform === "windows") refreshWindowsTree();
+     if (ownershipInspectionUnknown) {
+       publish("outcome_unknown", `Owned Windows process inspection is unavailable: ${ownershipInspectionDetail}`);
+       return;
+     }
+     if (ownershipMismatch) {
+       publish("outcome_unknown", "Owned Windows descendant birth identity changed.");
+       return;
+     }
+     handleControl();
+@@ -105,20 +122,99 @@ function tick() {
+       publish("stopped");
+       clearInterval(timer);
+       process.exit(0);
+     }
+     publish("running");
+   } catch (error) {
+     fail(error instanceof Error ? error.message : String(error));
+   }
+ }
+ 
++function installOutput(stream, readable, evidencePath) {
++  readable.on("readable", () => drainOutput(stream, readable, evidencePath));
++}
++
++function drainOutput(stream, readable, evidencePath) {
++  while (retained.size < replayCapacityChunks && retainedBytes < replayCapacityBytes) {
++    const maximum = Math.min(16 * 1024, replayCapacityBytes - retainedBytes);
++    if (maximum < 1) break;
++    const bytes = readable.read(maximum);
++    if (!bytes) break;
++    appendFileSync(evidencePath, bytes);
++    const sequence = ++outputSequences[stream];
++    const startOffset = outputOffsets[stream];
++    const endOffset = startOffset + bytes.byteLength;
++    outputOffsets[stream] = endOffset;
++    const metadata = {
++      stream,
++      sequence,
++      startOffset,
++      endOffset,
++      byteLength: bytes.byteLength,
++      digest: createHash("sha256").update(bytes).digest("hex"),
++    };
++    const name = `${stream}-${String(sequence).padStart(12, "0")}`;
++    writeAtomic(join(channelOutputDirectory, `${name}.json`), JSON.stringify({ nonce: config.nonce, metadata, bytes: Buffer.from(bytes).toString("base64") }));
++    retained.set(name, metadata);
++    retainedBytes += bytes.byteLength;
++  }
++}
++
++function handleChannelAcks() {
++  for (const name of readdirSync(channelAckDirectory).filter((entry) => entry.endsWith(".json"))) {
++    let ack;
++    try { ack = JSON.parse(readFileSync(join(channelAckDirectory, name), "utf8")); } catch { continue; }
++    const key = name.slice(0, -5);
++    const expected = retained.get(key);
++    if (!expected || ack.nonce !== config.nonce || JSON.stringify(ack.metadata) !== JSON.stringify(expected)) continue;
++    try { unlinkSync(join(channelOutputDirectory, `${key}.json`)); } catch {}
++    try { unlinkSync(join(channelAckDirectory, name)); } catch {}
++    retained.delete(key);
++    retainedBytes -= expected.byteLength;
++  }
++}
++
++function handleChannelInput() {
++  const expectedName = `input-${String(handledInput + 1).padStart(12, "0")}.json`;
++  const path = join(channelInputDirectory, expectedName);
++  if (!existsSync(path)) return;
++  let command;
++  try { command = JSON.parse(readFileSync(path, "utf8")); } catch { return; }
++  if (command.nonce !== config.nonce || command.ownerId !== config.fence?.ownerId || command.fencingToken !== config.fence?.fencingToken || command.sequence !== handledInput + 1) return;
++  if (command.type === "write") {
++    const bytes = Buffer.from(command.bytes, "base64");
++    if (bytes.byteLength !== command.byteLength || createHash("sha256").update(bytes).digest("hex") !== command.digest) return;
++    if (child.stdin.destroyed || !child.stdin.writable) publishChannelInputAck(command.sequence, "failed");
++    else {
++      child.stdin.write(bytes);
++      publishChannelInputAck(command.sequence, "acknowledged");
++    }
++  } else if (command.type === "close_input") {
++    child.stdin.end(() => publishChannelInputAck(command.sequence, "acknowledged"));
++  } else if (command.type === "graceful_stop") {
++    writeAtomic(controlPath, JSON.stringify({ nonce: config.nonce, sequence: handledControl + 1, action: "terminate" }));
++    publishChannelInputAck(command.sequence, "acknowledged");
++  } else return;
++  handledInput = command.sequence;
++  try { unlinkSync(path); } catch {}
++}
++
++function publishChannelInputAck(sequence, status) {
++  writeAtomic(join(channelAckDirectory, `input-${String(sequence).padStart(12, "0")}.json`), JSON.stringify({ nonce: config.nonce, sequence, status }));
++}
++
++function writeAtomic(destination, value) {
++  const temporary = `${destination}.${process.pid}.tmp`;
++  writeFileSync(temporary, value);
++  replaceState(temporary, destination);
++}
++
+ function waitForChildStartup(timeoutMs) {
+   const deadline = Date.now() + timeoutMs;
+   const waiter = new Int32Array(new SharedArrayBuffer(4));
+   while (Date.now() < deadline) {
+     try { return JSON.parse(readFileSync(childStatusPath, "utf8")); } catch {}
+     Atomics.wait(waiter, 0, 0, 10);
+   }
+   return undefined;
+ }
+ 
+diff --git a/runner-v2/src/posix-process-backend.ts b/runner-v2/src/posix-process-backend.ts
+index ce7efdbc..06a8ce8f 100644
+--- a/runner-v2/src/posix-process-backend.ts
++++ b/runner-v2/src/posix-process-backend.ts
+@@ -1,17 +1,19 @@
+ import { NativeOwnedProcessBackend } from "./native-process-backend.js";
+ import type { NativeProcessOperations } from "./native-process-backend.js";
+ 
+ export interface PosixProcessBackendOptions {
+   readonly stateDirectory?: string;
+   readonly pollIntervalMs?: number;
+   readonly operations?: NativeProcessOperations;
++  readonly replayCapacityChunks?: number;
++  readonly replayCapacityBytes?: number;
+ }
+ 
+ export class PosixProcessBackend extends NativeOwnedProcessBackend {
+   constructor(options: PosixProcessBackendOptions = {}) {
+     super({
+       ...options,
+       platform: "posix",
+       backendId: "runner-posix-process-group-v1",
+       capabilities: {
+         tree_termination: "enforced",
+diff --git a/runner-v2/src/process-host-semantic-probes.ts b/runner-v2/src/process-host-semantic-probes.ts
+new file mode 100644
+index 00000000..e551edab
+--- /dev/null
++++ b/runner-v2/src/process-host-semantic-probes.ts
+@@ -0,0 +1,47 @@
++export type ProcessHostSemanticFact = "unavailable" | "partial" | "verified";
++
++export interface ProcessHostSemanticProbeSource {
++  portableDuplex(): Promise<boolean | "partial">;
++  windowsBatchArgv(): Promise<boolean | "partial">;
++  exactTreeBirth(): Promise<boolean | "partial">;
++  /** This operation must actually create and close a Job Object. */
++  activeJobCreateClose(): Promise<boolean | "partial">;
++}
++
++export interface ProcessHostSemanticFacts {
++  readonly portableDuplex: ProcessHostSemanticFact;
++  readonly windowsBatchArgv: ProcessHostSemanticFact;
++  readonly exactTreeBirth: ProcessHostSemanticFact;
++  readonly jobContainment: ProcessHostSemanticFact;
++}
++
++export async function probeProcessHostSemantics(
++  source: ProcessHostSemanticProbeSource,
++): Promise<ProcessHostSemanticFacts> {
++  // Probe every semantic independently. In particular, a failed Job probe must
++  // not erase portable or batch capabilities that were separately attested.
++  const [portableDuplex, windowsBatchArgv, exactTreeBirth, jobContainment] =
++    await Promise.all([
++      settle(source.portableDuplex),
++      settle(source.windowsBatchArgv),
++      settle(source.exactTreeBirth),
++      settle(source.activeJobCreateClose),
++    ]);
++  return Object.freeze({
++    portableDuplex,
++    windowsBatchArgv,
++    exactTreeBirth,
++    jobContainment,
++  });
++}
++
++async function settle(
++  probe: () => Promise<boolean | "partial">,
++): Promise<ProcessHostSemanticFact> {
++  try {
++    const result = await probe();
++    return result === true ? "verified" : result === "partial" ? "partial" : "unavailable";
++  } catch {
++    return "unavailable";
++  }
++}
+diff --git a/runner-v2/src/windows-job-process-host.ts b/runner-v2/src/windows-job-process-host.ts
+new file mode 100644
+index 00000000..3f91877d
+--- /dev/null
++++ b/runner-v2/src/windows-job-process-host.ts
+@@ -0,0 +1,63 @@
++/** Internal ownership key. It is deliberately independent of model/agent identities. */
++export interface WindowsJobOwnershipKey {
++  readonly runId: string;
++  readonly sessionId: string;
++}
++
++export interface WindowsJobLaunchRequest extends WindowsJobOwnershipKey {
++  readonly command: string;
++  readonly args: readonly string[];
++  readonly workingDirectory: string;
++  readonly environment: Readonly<Record<string, string>>;
++}
++
++export interface WindowsJobProcessSnapshot {
++  readonly processId: string;
++  readonly pid: number;
++  readonly status: "running" | "stopped" | "exited_unknown";
++  readonly exitCode: number | null;
++  readonly signal: NodeJS.Signals | null;
++  readonly startedAt: string;
++  readonly updatedAt: string;
++  readonly stdout: string;
++  readonly stderr: string;
++  readonly ownershipReleased?: boolean;
++}
++
++export interface WindowsJobOutputRead {
++  readonly stdout: Uint8Array;
++  readonly stderr: Uint8Array;
++  readonly next: { readonly stdout: number; readonly stderr: number };
++}
++
++/** Backend-private host contract. Implementations own authentication and durable reconciliation. */
++export interface WindowsJobProcessHost {
++  launchOwned(request: WindowsJobLaunchRequest): Promise<WindowsJobProcessSnapshot>;
++  signalOwned(
++    processId: string,
++    signal: "SIGTERM" | "SIGINT" | "SIGKILL",
++    owner: WindowsJobOwnershipKey,
++  ): Promise<WindowsJobProcessSnapshot>;
++  reconcileOwned(processId: string, owner: WindowsJobOwnershipKey): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }>;
++  releaseOwned(processId: string, owner: WindowsJobOwnershipKey, expectedStartedAt: string): Promise<WindowsJobProcessSnapshot & { readonly ownershipReleased: boolean }>;
++  readOwnedOutput(processId: string, owner: WindowsJobOwnershipKey, offsets: { readonly stdout: number; readonly stderr: number }): WindowsJobOutputRead;
++  probeActiveJobCreateClose(): Promise<boolean>;
++}
++
++/**
++ * Constructs the authenticated backend-private host boundary. The injected
++ * mechanics remain inaccessible to adapters and no agent/model identity can
++ * enter this surface.
++ */
++export function createWindowsJobProcessHost(
++  operations: WindowsJobProcessHost,
++): WindowsJobProcessHost {
++  return Object.freeze({
++    launchOwned: operations.launchOwned.bind(operations),
++    signalOwned: operations.signalOwned.bind(operations),
++    reconcileOwned: operations.reconcileOwned.bind(operations),
++    releaseOwned: operations.releaseOwned.bind(operations),
++    readOwnedOutput: operations.readOwnedOutput.bind(operations),
++    probeActiveJobCreateClose: operations.probeActiveJobCreateClose.bind(operations),
++  });
++}
+diff --git a/runner-v2/src/windows-process-backend.ts b/runner-v2/src/windows-process-backend.ts
+index 0205f204..f400991f 100644
+--- a/runner-v2/src/windows-process-backend.ts
++++ b/runner-v2/src/windows-process-backend.ts
+@@ -1,36 +1,37 @@
+ import { NativeOwnedProcessBackend } from "./native-process-backend.js";
+ import type { NativeProcessOperations } from "./native-process-backend.js";
+ import { createHash } from "node:crypto";
+ 
+ import type { ProcessBackend, ProcessBackendBinding, ProcessEffectFence, ProcessLaunchRequest } from "./process-backend.js";
+ import type { ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
+-import type { ManagedProcessService } from "./managed-process.js";
++import type { WindowsJobProcessHost } from "./windows-job-process-host.js";
+ 
+ export interface WindowsProcessBackendOptions {
+   readonly stateDirectory?: string;
+   readonly pollIntervalMs?: number;
+   readonly operations?: NativeProcessOperations;
++  readonly replayCapacityChunks?: number;
++  readonly replayCapacityBytes?: number;
+   /** A caller may supply the existing authenticated Job supervisor as an optional enhancement. */
+-  readonly jobObjects?: "unavailable" | { readonly service: ManagedProcessService };
++  readonly jobObjects?: "unavailable" | { readonly service: WindowsJobProcessHost };
+ }
+-export type WindowsJobProcessService = Pick<
+-  ManagedProcessService,
+-  "start" | "signal" | "reconcileOwnership" | "releaseOwnership" | "readOutputSince" | "probeJobObjectAvailability"
+->;
++export type WindowsJobProcessService = WindowsJobProcessHost;
+ 
+ export class WindowsProcessBackend extends NativeOwnedProcessBackend {
+   constructor(options: WindowsProcessBackendOptions = {}) {
+     super({
+       stateDirectory: options.stateDirectory,
+       pollIntervalMs: options.pollIntervalMs,
+       operations: options.operations,
++      replayCapacityChunks: options.replayCapacityChunks,
++      replayCapacityBytes: options.replayCapacityBytes,
+       platform: "windows",
+       backendId: "runner-windows-supervisor-v1",
+       capabilities: {
+         tree_termination: "partial",
+         crash_cleanup: "unavailable",
+         verified_emptiness: "partial",
+         write_confinement: "unavailable",
+       },
+     });
+   }
+@@ -42,124 +43,126 @@ export function createWindowsProcessBackend(options: WindowsProcessBackendOption
+     : new WindowsProcessBackend(options);
+ }
+ 
+ /** Adapts the existing authenticated Windows Job supervisor to the durable SPI. */
+ export class WindowsJobObjectProcessBackend implements ProcessBackend {
+   private readonly offsets = new Map<string, { stdout: number; stderr: number }>();
+   private readonly controls = new Map<string, JobControlLane>();
+   private readonly activations = new Map<string, Promise<JobControlLane>>();
+   constructor(private readonly service: WindowsJobProcessService) {}
+   async probe(): Promise<unknown> {
+-    if (!(await this.service.probeJobObjectAvailability()))
++    if (!(await this.service.probeActiveJobCreateClose()))
+       throw new Error("Authenticated Windows Job Object enhancement is unavailable.");
+     return {
+       attestationVersion: 1,
+       backendId: "runner-windows-job-v1",
+       verified: true,
+       platformLabel: "windows",
+       capabilities: {
+         tree_termination: "enforced",
+         crash_cleanup: "enforced",
+         verified_emptiness: "enforced",
+         write_confinement: "unavailable",
+       },
+     };
+   }
+   async launch(request: ProcessLaunchRequest): Promise<unknown> {
+     const sessionId = request.intent.sessionId ?? request.intent.invocationId;
+-    const snapshot = await this.service.start({
+-      command: request.intent.executable,
+-      args: [...request.intent.arguments],
+-      cwd: ".",
+-      env: { ...request.environment },
+-      inheritEnvironment: false,
+-    }, {
++    const snapshot = await this.service.launchOwned({
+       runId: request.intent.runId,
+       sessionId,
+-      actor: { role: "worker", id: sessionId },
+-    }, request.intent.workingDirectory);
+-    const opaqueIdentity: JobOpaqueIdentity = { processId: snapshot.processId, runId: request.intent.runId, sessionId, startedAt: snapshot.startedAt };
+-    const birthDiscriminator = createHash("sha256").update(`${snapshot.processId}\0${snapshot.startedAt}`).digest("hex");
++      command: request.intent.executable,
++      args: [...request.intent.arguments],
++      workingDirectory: request.intent.workingDirectory,
++      environment: { ...request.environment },
++    });
++    const opaqueIdentity: JobOpaqueIdentity = { processId: snapshot.processId, runId: request.intent.runId, sessionId, startedAt: snapshot.startedAt, fence: { ...request.fence } };
++    const birthDiscriminator = jobBirthDiscriminator(opaqueIdentity);
+     const identity: JobIdentity = { ...opaqueIdentity, birthDiscriminator };
+     this.registerLane(identity);
+     return {
+       opaqueIdentity: Buffer.from(JSON.stringify(opaqueIdentity)).toString("base64url"),
+       birthFingerprint: {
+         observedAt: snapshot.startedAt,
+         discriminator: birthDiscriminator,
+       },
+       rootPid: snapshot.pid,
+       startedAt: snapshot.startedAt,
+     };
+   }
+   async observe(binding: ProcessBackendBinding, output: (stream: ProcessOutputStream, bytes: Uint8Array) => Promise<void>, _fence: ProcessEffectFence): Promise<unknown> {
+     const identity = jobIdentity(binding);
++    assertJobFence(identity, _fence);
+     for (;;) {
+       const { snapshot, deliveredOutput } = await this.control(identity, async () => {
+         const offsets = this.offsets.get(identity.processId) ?? { stdout: 0, stderr: 0 };
+-        const unread = this.service.readOutputSince(identity.processId, jobContext(identity), offsets);
++        const unread = this.service.readOwnedOutput(identity.processId, jobOwner(identity), offsets);
+         for (const stream of ["stdout", "stderr"] as const) {
+           if (unread[stream].byteLength > 0) await output(stream, unread[stream]);
+         }
+         this.offsets.set(identity.processId, { ...unread.next });
+         return {
+-          snapshot: await this.service.reconcileOwnership(identity.processId, jobContext(identity)),
++          snapshot: await this.service.reconcileOwned(identity.processId, jobOwner(identity)),
+           deliveredOutput: unread.stdout.byteLength > 0 || unread.stderr.byteLength > 0,
+         };
+       });
+       if (snapshot.status === "stopped" && !deliveredOutput)
+         return { state: "exited", ...(snapshot.exitCode === null ? {} : { exitCode: snapshot.exitCode }), ...(snapshot.signal ? { signal: snapshot.signal } : {}) };
+       if (snapshot.status === "exited_unknown" && snapshot.ownershipReleased)
+         throw new Error("Windows Job supervisor outcome is unknown.");
+       await new Promise((resolve) => setTimeout(resolve, 25));
+     }
+   }
+-  async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction): Promise<unknown> {
++  async signal(binding: ProcessBackendBinding, action: ProcessEscalationAction, fence?: ProcessEffectFence): Promise<unknown> {
+     const identity = jobIdentity(binding);
++    assertJobFence(identity, fence);
+     const snapshot = await this.control(identity, async () =>
+-      await this.service.signal(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobContext(identity)));
++      await this.service.signalOwned(identity.processId, action === "force_terminate" ? "SIGKILL" : action === "interrupt" ? "SIGINT" : "SIGTERM", jobOwner(identity)));
+     return { state: snapshot.status === "stopped" ? "exited" : "running" };
+   }
+-  async verifyEmpty(binding: ProcessBackendBinding): Promise<unknown> {
++  async verifyEmpty(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
+     const identity = jobIdentity(binding);
++    assertJobFence(identity, fence);
+     const snapshot = await this.control(identity, async () =>
+-      await this.service.reconcileOwnership(identity.processId, jobContext(identity)));
++      await this.service.reconcileOwned(identity.processId, jobOwner(identity)));
+     return snapshot.status === "stopped" && snapshot.ownershipReleased ? { empty: true, proofArtifactId: `windows-job-empty:${identity.processId}` } : { empty: false, detail: "Windows Job Object still contains active processes." };
+   }
+-  async reconcile(binding: ProcessBackendBinding): Promise<unknown> {
++  async reconcile(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
+     let identity: JobIdentity;
+     try { identity = jobIdentity(binding); } catch (error) {
+       return { state: error instanceof JobIdentityMismatchError ? "identity_mismatch" : "outcome_unknown" };
+     }
++    try { assertJobFence(identity, fence); } catch { return { state: "identity_mismatch" }; }
+     try {
+       const snapshot = await this.control(identity, async () =>
+-        await this.service.reconcileOwnership(identity.processId, jobContext(identity)));
++        await this.service.reconcileOwned(identity.processId, jobOwner(identity)));
+       if (snapshot.startedAt !== identity.startedAt) return { state: "identity_mismatch" };
+       if (snapshot.status === "running") return { state: "running" };
+       if (snapshot.status === "exited_unknown")
+         return snapshot.ownershipReleased ? { state: "outcome_unknown" } : { state: "running" };
+       return { state: "exited", ...(snapshot.exitCode === null ? {} : { exitCode: snapshot.exitCode }), ...(snapshot.signal ? { signal: snapshot.signal } : {}) };
+     } catch { return { state: "outcome_unknown" }; }
+   }
+-  async release(binding: ProcessBackendBinding): Promise<unknown> {
++  async release(binding: ProcessBackendBinding, fence?: ProcessEffectFence): Promise<unknown> {
+     const identity = jobIdentity(binding);
++    assertJobFence(identity, fence);
+     const processId = identity.processId;
+     let lane = this.controls.get(processId);
+     const activation = this.activations.get(processId);
+     if (!lane && activation) lane = await activation;
+     if (!lane) lane = this.registerLane(identity);
+     this.assertLaneIdentity(lane, identity);
+     if (!lane.release) {
+       lane.releaseRequested = true;
+       const release = lane.tail.catch(() => undefined)
+         .then(async () => {
+-          await this.service.releaseOwnership(processId, jobContext(identity), identity.startedAt);
++          await this.service.releaseOwned(processId, jobOwner(identity), identity.startedAt);
+           this.offsets.delete(processId);
+           if (this.controls.get(processId) === lane) this.controls.delete(processId);
+         });
+       lane.release = release;
+     }
+     const release = lane.release;
+     try {
+       await release;
+     } catch (error) {
+       if (lane.release === release) lane.release = undefined;
+@@ -178,21 +181,21 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
+ 
+   private async ensureLane(identity: JobIdentity): Promise<JobControlLane> {
+     const existing = this.controls.get(identity.processId);
+     if (existing) {
+       this.assertLaneIdentity(existing, identity);
+       return existing;
+     }
+     let activation = this.activations.get(identity.processId);
+     if (!activation) {
+       activation = (async () => {
+-        const snapshot = await this.service.reconcileOwnership(identity.processId, jobContext(identity));
++        const snapshot = await this.service.reconcileOwned(identity.processId, jobOwner(identity));
+         if (snapshot.startedAt !== identity.startedAt) throw new JobIdentityMismatchError("Windows Job startedAt identity mismatch.");
+         return this.registerLane(identity);
+       })();
+       this.activations.set(identity.processId, activation);
+       void activation.finally(() => {
+         if (this.activations.get(identity.processId) === activation) this.activations.delete(identity.processId);
+       }).catch(() => undefined);
+     }
+     const lane = await activation;
+     this.assertLaneIdentity(lane, identity);
+@@ -226,23 +229,32 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
+   }
+ }
+ 
+ interface JobControlLane {
+   tail: Promise<void>;
+   releaseRequested: boolean;
+   identity: JobIdentity;
+   release?: Promise<void>;
+ }
+ 
+-interface JobOpaqueIdentity { processId: string; runId: string; sessionId: string; startedAt: string }
++interface JobOpaqueIdentity { processId: string; runId: string; sessionId: string; startedAt: string; fence?: ProcessEffectFence }
+ interface JobIdentity extends JobOpaqueIdentity { birthDiscriminator: string }
+ class JobIdentityMismatchError extends Error {}
+ function jobIdentity(binding: ProcessBackendBinding): JobIdentity {
+   const value = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8")) as JobOpaqueIdentity;
+   if (!value.processId || !value.runId || !value.sessionId || !value.startedAt) throw new Error("Windows Job identity is invalid.");
+-  const discriminator = createHash("sha256").update(`${value.processId}\0${value.startedAt}`).digest("hex");
++  const discriminator = jobBirthDiscriminator(value);
+   if (binding.birthFingerprint.discriminator !== discriminator) throw new JobIdentityMismatchError("Windows Job birth fingerprint is invalid.");
+   return { ...value, birthDiscriminator: discriminator };
+ }
+-function jobContext(identity: JobIdentity) {
+-  return { runId: identity.runId, sessionId: identity.sessionId, actor: { role: "worker" as const, id: identity.sessionId } };
++function jobBirthDiscriminator(identity: JobOpaqueIdentity): string {
++  const fence = identity.fence ? `\0${identity.fence.ownerId}\0${identity.fence.fencingToken}` : "";
++  return createHash("sha256").update(`${identity.processId}\0${identity.startedAt}${fence}`).digest("hex");
++}
++function assertJobFence(identity: JobIdentity, fence: ProcessEffectFence | undefined): void {
++  if (!identity.fence) return;
++  if (!fence || identity.fence.ownerId !== fence.ownerId || identity.fence.fencingToken !== fence.fencingToken)
++    throw new JobIdentityMismatchError("Windows Job writer fence is stale.");
++}
++function jobOwner(identity: JobIdentity) {
++  return { runId: identity.runId, sessionId: identity.sessionId };
+ }
+diff --git a/runner-v2/test/portable-process-channel.test.ts b/runner-v2/test/portable-process-channel.test.ts
+new file mode 100644
+index 00000000..aeada2a2
+--- /dev/null
++++ b/runner-v2/test/portable-process-channel.test.ts
+@@ -0,0 +1,166 @@
++import assert from "node:assert/strict";
++import { createHash } from "node:crypto";
++import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import test from "node:test";
++
++import { WindowsProcessBackend } from "../src/windows-process-backend.js";
++import { parseProcessLaunchResult, type ProcessBackendBinding } from "../src/process-backend.js";
++import type { BackpressuredOutputMetadata } from "../src/interactive-process-channel.js";
++import { createPortableProcessChannelProvider } from "../src/portable-process-channel.js";
++
++test("portable provider retains a chunk until the identical sink acknowledgement settles", async () => {
++  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-ack-order-"));
++  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
++  const bytes = Buffer.from("held");
++  const metadata: BackpressuredOutputMetadata = { stream: "stdout", sequence: 1, startOffset: 0, endOffset: 4, byteLength: 4, digest: createHash("sha256").update(bytes).digest("hex") };
++  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
++  writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, nextCommand: 1, nextWrite: 1, inputClosed: false }));
++  let release!: () => void;
++  const barrier = new Promise<void>((resolve) => { release = resolve; });
++  let entered = false;
++  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 1, replayCapacityBytes: 4, pollIntervalMs: 5, authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live" }) });
++  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }));
++  const unsubscribe = channel.subscribeBackpressuredOutput(async (actual, actualBytes) => {
++    entered = true;
++    assert.deepEqual(actual, metadata);
++    assert.equal(Buffer.from(actualBytes).toString(), "held");
++    await barrier;
++    return actual;
++  });
++  try {
++    await waitFor(() => entered);
++    assert.deepEqual(readdirSync(join(root, "channel/ack")), []);
++    assert.equal(readdirSync(join(root, "channel/output")).length, 1);
++    release();
++    await waitFor(() => readdirSync(join(root, "channel/ack")).length === 1);
++  } finally {
++    release(); unsubscribe(); await channel.detach(); rmSync(root, { recursive: true, force: true });
++  }
++});
++
++test("real portable channel preserves ordered duplex bytes and exact acknowledgement metadata", async () => {
++  if (process.platform !== "win32") return;
++  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-channel-"));
++  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, replayCapacityChunks: 2, replayCapacityBytes: 32 });
++  const launch = parseProcessLaunchResult(await backend.launch(request([
++    "-e",
++    "process.stdin.on('data',b=>{process.stdout.write(b);process.stderr.write(Buffer.from(b).reverse())});process.stdin.on('end',()=>process.exit(0))",
++  ])));
++  const binding = bindingFor(launch);
++  const provider = backend.backpressuredChannelProvider();
++  const channel = await provider.acquire(binding);
++  const seen: Array<{ metadata: BackpressuredOutputMetadata; bytes: Buffer }> = [];
++  const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
++    seen.push({ metadata, bytes: Buffer.from(bytes) });
++    return metadata;
++  });
++  try {
++    for (const [sequence, text] of [[1, "abc"], [2, "def"]] as const) {
++      const payload = Buffer.from(text);
++      assert.deepEqual(await channel.write({
++        sequence,
++        byteLength: payload.byteLength,
++        digest: createHash("sha256").update(payload).digest("hex"),
++        timeoutMs: 2_000,
++      }, payload), { acknowledged: true, sequence });
++    }
++    await channel.closeInput();
++    const terminal = await channel.waitForTerminal() as { state: string };
++    assert.equal(terminal.state, "exited");
++    await waitFor(() => seen.some((entry) => entry.metadata.stream === "stdout") && seen.some((entry) => entry.metadata.stream === "stderr"));
++    assert.equal(Buffer.concat(seen.filter((entry) => entry.metadata.stream === "stdout").map((entry) => entry.bytes)).toString(), "abcdef");
++    assert.equal(Buffer.concat(seen.filter((entry) => entry.metadata.stream === "stderr").map((entry) => entry.bytes)).toString(), "cbafed");
++    for (const stream of ["stdout", "stderr"] as const) {
++      const entries = seen.filter((entry) => entry.metadata.stream === stream);
++      assert.deepEqual(entries.map((entry) => entry.metadata.sequence), entries.map((_, index) => index + 1));
++      assert.ok(entries.every(({ metadata, bytes }) => metadata.byteLength === bytes.byteLength && metadata.digest === createHash("sha256").update(bytes).digest("hex")));
++    }
++  } finally {
++    unsubscribe();
++    await channel.detach();
++    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
++    await backend.release(binding, fence).catch(() => undefined);
++    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
++  }
++});
++
++test("portable retained window backpressures output and replays it after exact reattach", async () => {
++  if (process.platform !== "win32") return;
++  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-replay-"));
++  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10, replayCapacityChunks: 2, replayCapacityBytes: 32 });
++  const launch = parseProcessLaunchResult(await backend.launch(request([
++    "-e",
++    "process.stdout.write('x'.repeat(96));process.stdin.resume();process.stdin.on('end',()=>process.exit(0))",
++  ])));
++  const binding = bindingFor(launch);
++  const identity = JSON.parse(Buffer.from(launch.opaqueIdentity, "base64url").toString("utf8")) as { directory: string };
++  const provider = backend.backpressuredChannelProvider();
++  const first = await provider.acquire(binding);
++  try {
++    await waitFor(() => readdirSync(join(identity.directory, "channel", "output")).some((name) => name.endsWith(".json")));
++    const retained = readdirSync(join(identity.directory, "channel", "output")).filter((name) => name.endsWith(".json"));
++    const retainedBytes = retained.reduce((total, name) => total + Buffer.from(JSON.parse(readFileSync(join(identity.directory, "channel", "output", name), "utf8")).bytes, "base64").byteLength, 0);
++    assert.ok(retained.length <= 2);
++    assert.ok(retainedBytes <= 32);
++    await first.detach();
++
++    const reattached = await provider.reattach(binding);
++    assert.ok(reattached.retainedWindow.length > 0);
++    const replayed: Buffer[] = [];
++    const unsubscribe = reattached.channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
++      if (metadata.stream === "stdout") replayed.push(Buffer.from(bytes));
++      return metadata;
++    });
++    await reattached.channel.closeInput();
++    assert.equal((await reattached.channel.waitForTerminal() as { state: string }).state, "exited");
++    await waitFor(() => Buffer.concat(replayed).byteLength === 96);
++    assert.equal(Buffer.concat(replayed).toString(), "x".repeat(96));
++    unsubscribe();
++    await reattached.channel.detach();
++  } finally {
++    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
++    await backend.release(binding, fence).catch(() => undefined);
++    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
++  }
++});
++
++test("portable control and channel acquisition reject a stale writer fence before effects", async () => {
++  if (process.platform !== "win32") return;
++  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-stale-fence-"));
++  const backend = new WindowsProcessBackend({ stateDirectory: root, pollIntervalMs: 10 });
++  const launch = parseProcessLaunchResult(await backend.launch(request(["-e", "setInterval(()=>{},1000)"])));
++  const binding = bindingFor(launch);
++  const staleFence = { ownerId: fence.ownerId, fencingToken: fence.fencingToken - 1 };
++  try {
++    await assert.rejects(backend.signal(binding, "terminate", staleFence), /fence|identity/i);
++    const identity = JSON.parse(Buffer.from(binding.opaqueIdentity, "base64url").toString("utf8"));
++    identity.fence = staleFence;
++    const staleBinding = { ...binding, opaqueIdentity: Buffer.from(JSON.stringify(identity)).toString("base64url") };
++    await assert.rejects(backend.backpressuredChannelProvider().acquire(staleBinding), /birth|identity|fence/i);
++  } finally {
++    await backend.signal(binding, "force_terminate", fence).catch(() => undefined);
++    await backend.release(binding, fence).catch(() => undefined);
++    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
++  }
++});
++
++const fence = { ownerId: "portable-channel-owner", fencingToken: 7 } as const;
++function request(args: string[]) {
++  return {
++    intent: { invocationId: "portable-channel", runId: "run", kind: "command" as const, executable: process.execPath, arguments: args, workingDirectory: process.cwd(), requestedCapabilities: ["tree_termination"] as const },
++    grant: { grantId: "grant", runId: "run", invocationId: "portable-channel", issuedAt: new Date().toISOString(), access: [] },
++    environment: { ...process.env } as Record<string, string>, outputOwnerId: "output", fence,
++  };
++}
++function bindingFor(launch: ReturnType<typeof parseProcessLaunchResult>): ProcessBackendBinding {
++  return { registryId: "registry", backendId: "runner-windows-supervisor-v1", implementationGeneration: "generation", implementationDigest: "1".repeat(64), attestationVersion: 1, attestationDigest: "2".repeat(64), ...launch };
++}
++async function waitFor(predicate: () => boolean): Promise<void> {
++  const deadline = Date.now() + 5_000;
++  while (!predicate()) {
++    if (Date.now() >= deadline) throw new Error("portable output did not arrive");
++    await new Promise((resolve) => setTimeout(resolve, 10));
++  }
++}
+diff --git a/runner-v2/test/process-backend-contract.test.ts b/runner-v2/test/process-backend-contract.test.ts
+index d9d1eed5..fa9bc724 100644
+--- a/runner-v2/test/process-backend-contract.test.ts
++++ b/runner-v2/test/process-backend-contract.test.ts
+@@ -372,18 +372,18 @@ test("portable Windows baseline is available without Job Objects but strict guar
+       configDigest: "a".repeat(64),
+       backend: new WindowsJobObjectProcessBackend(jobService(false)),
+     }),
+   ]);
+   await assert.rejects(selectProcessBackend(unavailableJob, ["crash_cleanup"]), /required semantic capabilities/i);
+ });
+ 
+ function jobService(available: boolean): WindowsJobProcessService {
+   const unavailable = async (): Promise<never> => { throw new Error("fixture operation is unavailable"); };
+   return {
+-    probeJobObjectAvailability: async () => available,
+-    start: unavailable,
+-    signal: unavailable,
+-    reconcileOwnership: unavailable,
+-    releaseOwnership: unavailable,
+-    readOutputSince: () => { throw new Error("fixture operation is unavailable"); },
++    probeActiveJobCreateClose: async () => available,
++    launchOwned: unavailable,
++    signalOwned: unavailable,
++    reconcileOwned: unavailable,
++    releaseOwned: unavailable,
++    readOwnedOutput: () => { throw new Error("fixture operation is unavailable"); },
+   };
+ }
+diff --git a/runner-v2/test/process-host-semantic-probes.test.ts b/runner-v2/test/process-host-semantic-probes.test.ts
+new file mode 100644
+index 00000000..8deee26b
+--- /dev/null
++++ b/runner-v2/test/process-host-semantic-probes.test.ts
+@@ -0,0 +1,87 @@
++import assert from "node:assert/strict";
++import { readFileSync } from "node:fs";
++import test from "node:test";
++
++import {
++  probeProcessHostSemantics,
++  type ProcessHostSemanticProbeSource,
++} from "../src/process-host-semantic-probes.js";
++import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
++
++function source(
++  values: Partial<Record<keyof ProcessHostSemanticProbeSource, boolean | "partial">> = {},
++): ProcessHostSemanticProbeSource {
++  return {
++    portableDuplex: async () => values.portableDuplex ?? true,
++    windowsBatchArgv: async () => values.windowsBatchArgv ?? true,
++    exactTreeBirth: async () => values.exactTreeBirth ?? true,
++    activeJobCreateClose: async () => values.activeJobCreateClose ?? false,
++  };
++}
++
++test("process host semantic facts are independent, immutable, and preserve partial states", async () => {
++  const facts = await probeProcessHostSemantics(source({
++    portableDuplex: true,
++    windowsBatchArgv: "partial",
++    exactTreeBirth: false,
++    activeJobCreateClose: true,
++  }));
++
++  assert.deepEqual(facts, {
++    portableDuplex: "verified",
++    windowsBatchArgv: "partial",
++    exactTreeBirth: "unavailable",
++    jobContainment: "verified",
++  });
++  assert.equal(Object.isFrozen(facts), true);
++});
++
++test("Job unavailability never disables independently verified portable or batch semantics", async () => {
++  const facts = await probeProcessHostSemantics(source({ activeJobCreateClose: false }));
++  assert.equal(facts.portableDuplex, "verified");
++  assert.equal(facts.windowsBatchArgv, "verified");
++  assert.equal(facts.jobContainment, "unavailable");
++});
++
++test("Job verification requires the active create-and-close probe result", async () => {
++  let activeCalls = 0;
++  const facts = await probeProcessHostSemantics({
++    ...source(),
++    activeJobCreateClose: async () => {
++      activeCalls += 1;
++      return false;
++    },
++  });
++  assert.equal(activeCalls, 1);
++  assert.equal(facts.jobContainment, "unavailable");
++});
++
++test("Windows Job backend source cannot depend on managed facade or agent/model contracts", () => {
++  const sourceText = readFileSync(
++    new URL("../src/windows-process-backend.ts", import.meta.url),
++    "utf8",
++  );
++  assert.doesNotMatch(sourceText, /managed-process(?:\.js)?/);
++  assert.doesNotMatch(sourceText, /agent-contracts|AgentActor|role:\s*["']worker["']/);
++});
++
++test("extracted Windows Job host exposes only the actor-free low-level contract", async () => {
++  const calls: string[] = [];
++  const host = createWindowsJobProcessHost({
++    launchOwned: async (request) => { calls.push(`launch:${request.sessionId}`); return hostSnapshot(); },
++    signalOwned: async (_id, _signal, owner) => { calls.push(`signal:${owner.sessionId}`); return hostSnapshot(); },
++    reconcileOwned: async () => ({ ...hostSnapshot(), ownershipReleased: false }),
++    releaseOwned: async () => ({ ...hostSnapshot(), ownershipReleased: true }),
++    readOwnedOutput: () => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: { stdout: 0, stderr: 0 } }),
++    probeActiveJobCreateClose: async () => true,
++  });
++  await host.launchOwned({ runId: "run", sessionId: "session", command: "tool", args: [], workingDirectory: ".", environment: {} });
++  await host.signalOwned("process", "SIGTERM", { runId: "run", sessionId: "session" });
++  assert.deepEqual(calls, ["launch:session", "signal:session"]);
++  assert.equal(Object.isFrozen(host), true);
++  assert.deepEqual(Object.keys(host).sort(), ["launchOwned", "probeActiveJobCreateClose", "readOwnedOutput", "reconcileOwned", "releaseOwned", "signalOwned"]);
++});
++
++function hostSnapshot() {
++  return { processId: "process", pid: 1, status: "running" as const, exitCode: null, signal: null, startedAt: "now", updatedAt: "now", stdout: "", stderr: "" };
++}
+diff --git a/runner-v2/test/windows-process-backend.test.ts b/runner-v2/test/windows-process-backend.test.ts
+index aeca5cec..7e13ff79 100644
+--- a/runner-v2/test/windows-process-backend.test.ts
++++ b/runner-v2/test/windows-process-backend.test.ts
+@@ -377,20 +377,24 @@ test("optional Windows Job adapter terminates and verifies a TERM-ignoring desce
+     ...jobRequest,
+     intent: {
+       ...jobRequest.intent,
+       invocationId: "windows-job-native",
+       workingDirectory: workspace,
+     },
+     grant: { ...jobRequest.grant, invocationId: "windows-job-native" },
+   }));
+   const binding = { ...bindingFor(launch), backendId: "runner-windows-job-v1" };
+   try {
++    await assert.rejects(
++      backend.signal(binding, "terminate", { ...fence, fencingToken: fence.fencingToken + 1 }),
++      /fence|identity/i,
++    );
+     assert.deepEqual(
+       parseProcessReconciliation(await backend.reconcile({
+         ...binding,
+         birthFingerprint: { ...binding.birthFingerprint, discriminator: "0".repeat(64) },
+       }, fence)),
+       { state: "identity_mismatch" },
+     );
+     assert.deepEqual(
+       parseProcessReconciliation(await backend.reconcile({ ...binding, opaqueIdentity: "missing" }, fence)),
+       { state: "outcome_unknown" },
+@@ -444,37 +448,37 @@ test("Windows Job observation uses absolute durable offsets beyond the configure
+     service.close();
+     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+   }
+ });
+ 
+ test("Windows Job observation advances absolute offsets across incremental durable reads", async () => {
+   const durable = Buffer.from("first-second-third");
+   const requestedOffsets: number[] = [];
+   let deliveredThrough = 0;
+   const service: WindowsJobProcessService = {
+-    probeJobObjectAvailability: async () => true,
+-    start: async () => { throw new Error("fixture does not launch"); },
+-    signal: async () => { throw new Error("fixture does not signal"); },
+-    releaseOwnership: async (processId) => stoppedJobSnapshot(processId),
+-    readOutputSince: (_processId, _context, offsets) => {
++    probeActiveJobCreateClose: async () => true,
++    launchOwned: async () => { throw new Error("fixture does not launch"); },
++    signalOwned: async () => { throw new Error("fixture does not signal"); },
++    releaseOwned: async (processId) => stoppedJobSnapshot(processId),
++    readOwnedOutput: (_processId, _context, offsets) => {
+       requestedOffsets.push(offsets.stdout);
+       if (requestedOffsets.length > 4) throw new Error("absolute output offset did not advance");
+       const end = Math.min(offsets.stdout + 6, durable.byteLength);
+       const stdout = durable.subarray(offsets.stdout, end);
+       deliveredThrough = end;
+       return {
+         stdout,
+         stderr: new Uint8Array(),
+         next: { stdout: end, stderr: offsets.stderr },
+       };
+     },
+-    reconcileOwnership: async () => ({
++    reconcileOwned: async () => ({
+       processId: "job-output-contract",
+       pid: 9001,
+       status: deliveredThrough === durable.byteLength ? "stopped" : "running",
+       exitCode: deliveredThrough === durable.byteLength ? 0 : null,
+       signal: null,
+       startedAt: "2026-01-01T00:00:00.000Z",
+       updatedAt: "2026-01-01T00:00:00.000Z",
+       stdout: "",
+       stderr: "",
+       ownershipReleased: deliveredThrough === durable.byteLength,
+@@ -504,46 +508,46 @@ test("Windows Job serializes ownership observation with cancellation control", a
+     status: running ? "running" as const : "stopped" as const,
+     exitCode: running ? null : 143,
+     signal: running ? null : "SIGTERM" as const,
+     startedAt: "2026-01-01T00:00:00.000Z",
+     updatedAt: "2026-01-01T00:00:00.000Z",
+     stdout: "",
+     stderr: "",
+     ownershipReleased: !running,
+   });
+   const service: WindowsJobProcessService = {
+-    probeJobObjectAvailability: async () => true,
+-    start: async () => { throw new Error("fixture does not launch"); },
+-    readOutputSince: (_processId, _context, offsets) => ({
++    probeActiveJobCreateClose: async () => true,
++    launchOwned: async () => { throw new Error("fixture does not launch"); },
++    readOwnedOutput: (_processId, _context, offsets) => ({
+       stdout: new Uint8Array(),
+       stderr: new Uint8Array(),
+       next: offsets,
+     }),
+-    reconcileOwnership: async () => {
++    reconcileOwned: async () => {
+       if (running) {
+         reconciliationActive = true;
+         await reconciliationBarrier;
+         reconciliationActive = false;
+       }
+       return snapshot();
+     },
+-    signal: async () => {
++    signalOwned: async () => {
+       signalCalls += 1;
+       if (reconciliationActive) {
+         const error = new Error("read ECONNRESET") as Error & { code: string };
+         error.code = "ECONNRESET";
+         throw error;
+       }
+       running = false;
+       return snapshot();
+     },
+-    releaseOwnership: async () => snapshot(),
++    releaseOwned: async () => snapshot(),
+   };
+   const backend = new WindowsJobObjectProcessBackend(service);
+   const binding = jobBinding("job-control-serialization");
+ 
+   const observation = backend.observe(binding, async () => undefined, fence);
+   while (!reconciliationActive) await new Promise((resolve) => setImmediate(resolve));
+   const cancellation = backend.signal(binding, "terminate");
+   await new Promise((resolve) => setImmediate(resolve));
+   assert.equal(signalCalls, 0, "cancellation must queue behind the in-flight authenticated ownership observation");
+ 
+@@ -554,30 +558,30 @@ test("Windows Job serializes ownership observation with cancellation control", a
+ 
+ test("Windows Job shared activation rejects a different exact birth before service action", async () => {
+   let entered!: () => void;
+   let resume!: () => void;
+   const activationEntered = new Promise<void>((resolve) => { entered = resolve; });
+   const activationBarrier = new Promise<void>((resolve) => { resume = resolve; });
+   let reconciliations = 0;
+   let signalCalls = 0;
+   const processId = "job-shared-activation-identity";
+   const service: WindowsJobProcessService = {
+-    probeJobObjectAvailability: async () => true,
+-    start: async () => { throw new Error("fixture does not launch"); },
+-    readOutputSince: (_processId, _context, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+-    reconcileOwnership: async () => {
++    probeActiveJobCreateClose: async () => true,
++    launchOwned: async () => { throw new Error("fixture does not launch"); },
++    readOwnedOutput: (_processId, _context, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
++    reconcileOwned: async () => {
+       reconciliations += 1;
+       if (reconciliations === 1) { entered(); await activationBarrier; }
+       return stoppedJobSnapshot(processId);
+     },
+-    signal: async () => { signalCalls += 1; return stoppedJobSnapshot(processId); },
+-    releaseOwnership: async () => stoppedJobSnapshot(processId),
++    signalOwned: async () => { signalCalls += 1; return stoppedJobSnapshot(processId); },
++    releaseOwned: async () => stoppedJobSnapshot(processId),
+   };
+   const backend = new WindowsJobObjectProcessBackend(service);
+   const firstBirth = jobBindingAt(processId, "2026-01-01T00:00:00.000Z");
+   const secondBirth = jobBindingAt(processId, "2026-01-02T00:00:00.000Z");
+ 
+   const firstVerification = backend.verifyEmpty(firstBirth);
+   await activationEntered;
+   const wrongBirthSignal = backend.signal(secondBirth, "terminate");
+   resume();
+ 
+@@ -587,31 +591,31 @@ test("Windows Job shared activation rejects a different exact birth before servi
+   assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(firstBirth)).empty, true, "the valid lane must not be poisoned");
+ });
+ 
+ test("Windows Job release waits for active output delivery and closes later observation", async () => {
+   let releaseOutput!: () => void;
+   const barrier = new Promise<void>((resolve) => { releaseOutput = resolve; });
+   let outputActive = false;
+   let reads = 0;
+   let released = false;
+   const service: WindowsJobProcessService = {
+-    probeJobObjectAvailability: async () => true,
+-    start: async () => { throw new Error("fixture does not launch"); },
+-    readOutputSince: (_processId, _context, offsets) => ++reads === 1
++    probeActiveJobCreateClose: async () => true,
++    launchOwned: async () => { throw new Error("fixture does not launch"); },
++    readOwnedOutput: (_processId, _context, offsets) => ++reads === 1
+       ? { stdout: Buffer.from("held output"), stderr: new Uint8Array(), next: { stdout: 11, stderr: offsets.stderr } }
+       : { stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets },
+-    reconcileOwnership: async () => {
++    reconcileOwned: async () => {
+       if (released) throw new Error("backend ownership was released");
+       return stoppedJobSnapshot("job-release-lane");
+     },
+-    signal: async () => stoppedJobSnapshot("job-release-lane"),
+-    releaseOwnership: async () => { released = true; return stoppedJobSnapshot("job-release-lane"); },
++    signalOwned: async () => stoppedJobSnapshot("job-release-lane"),
++    releaseOwned: async () => { released = true; return stoppedJobSnapshot("job-release-lane"); },
+   };
+   const backend = new WindowsJobObjectProcessBackend(service);
+   const binding = jobBinding("job-release-lane");
+   const observation = backend.observe(binding, async () => {
+     outputActive = true;
+     await barrier;
+     outputActive = false;
+   }, fence);
+   while (!outputActive) await new Promise((resolve) => setImmediate(resolve));
+ 
+@@ -632,121 +636,121 @@ test("Windows Job release waits for active output delivery and closes later obse
+ test("Windows Job release drains callback and reconcile errors without retaining offsets", async (t) => {
+   for (const mode of ["callback", "reconcile"] as const) {
+     await t.test(mode, async () => {
+       let entered!: () => void;
+       let resume!: () => void;
+       const active = new Promise<void>((resolve) => { entered = resolve; });
+       const barrier = new Promise<void>((resolve) => { resume = resolve; });
+       const processId = `job-release-${mode}-error`;
+       let reconciliations = 0;
+       const service: WindowsJobProcessService = {
+-        probeJobObjectAvailability: async () => true,
+-        start: async () => { throw new Error("fixture does not launch"); },
+-        readOutputSince: (_processId, _context, offsets) => ({
++        probeActiveJobCreateClose: async () => true,
++        launchOwned: async () => { throw new Error("fixture does not launch"); },
++        readOwnedOutput: (_processId, _context, offsets) => ({
+           stdout: Buffer.from("fault output"), stderr: new Uint8Array(), next: { stdout: 12, stderr: offsets.stderr },
+         }),
+-        reconcileOwnership: async () => {
++        reconcileOwned: async () => {
+           reconciliations += 1;
+           if (mode === "reconcile" && reconciliations > 1) { entered(); await barrier; throw new Error("injected reconcile failure"); }
+           return stoppedJobSnapshot(processId);
+         },
+-        signal: async () => stoppedJobSnapshot(processId),
+-        releaseOwnership: async () => stoppedJobSnapshot(processId),
++        signalOwned: async () => stoppedJobSnapshot(processId),
++        releaseOwned: async () => stoppedJobSnapshot(processId),
+       };
+       const backend = new WindowsJobObjectProcessBackend(service);
+       const observation = backend.observe(jobBinding(processId), async () => {
+         if (mode === "callback") { entered(); await barrier; throw new Error("injected callback failure"); }
+       }, fence);
+       await active;
+       const releasing = backend.release(jobBinding(processId));
+       resume();
+       await assert.rejects(observation, new RegExp(`injected ${mode} failure`));
+       assert.deepEqual(await releasing, { released: true });
+       assert.equal((backend as unknown as { offsets: Map<string, unknown> }).offsets.has(processId), false);
+     });
+   }
+ });
+ 
+ test("Windows Job control lane advances after an operation error and still releases", async () => {
+   let fail = true;
+   let signalCalls = 0;
+   let releaseCalls = 0;
+   const service: WindowsJobProcessService = {
+-    probeJobObjectAvailability: async () => true,
+-    start: async () => { throw new Error("fixture does not launch"); },
+-    readOutputSince: (_processId, _context, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
+-    reconcileOwnership: async () => {
++    probeActiveJobCreateClose: async () => true,
++    launchOwned: async () => { throw new Error("fixture does not launch"); },
++    readOwnedOutput: (_processId, _context, offsets) => ({ stdout: new Uint8Array(), stderr: new Uint8Array(), next: offsets }),
++    reconcileOwned: async () => {
+       if (fail) { fail = false; throw new Error("injected ownership failure"); }
+       return stoppedJobSnapshot("job-release-error");
+     },
+-    signal: async () => { signalCalls += 1; return stoppedJobSnapshot("job-release-error"); },
+-    releaseOwnership: async () => {
++    signalOwned: async () => { signalCalls += 1; return stoppedJobSnapshot("job-release-error"); },
++    releaseOwned: async () => {
+       releaseCalls += 1;
+       if (releaseCalls === 1) throw new Error("injected durable release failure");
+       return stoppedJobSnapshot("job-release-error");
+     },
+   };
+   const backend = new WindowsJobObjectProcessBackend(service);
+   const binding = jobBinding("job-release-error");
+   await assert.rejects(backend.observe(binding, async () => undefined, fence), /injected ownership failure/);
+   assert.equal(parseProcessSignalResult(await backend.signal(binding, "terminate")).state, "exited");
+   assert.equal(signalCalls, 1);
+   await assert.rejects(backend.release(binding), /injected durable release failure/);
+   await assert.rejects(backend.verifyEmpty(binding), /release is pending/i);
+   assert.deepEqual(await backend.release(binding), { released: true });
+   assert.equal(releaseCalls, 2);
+ });
+ 
+ test("Windows Job durable release authority rejects stale identities beyond prior cache capacity", async () => {
+   const released = new Map<string, string>();
+   let releasedReattestations = 0;
+   const service: WindowsJobProcessService = {
+-    probeJobObjectAvailability: async () => true,
+-    start: async () => { throw new Error("fixture does not launch"); },
+-    signal: async () => { throw new Error("released identity reached signal"); },
+-    readOutputSince: () => { throw new Error("released identity reached output"); },
+-    reconcileOwnership: async (processId, _context) => {
++    probeActiveJobCreateClose: async () => true,
++    launchOwned: async () => { throw new Error("fixture does not launch"); },
++    signalOwned: async () => { throw new Error("released identity reached signal"); },
++    readOwnedOutput: () => { throw new Error("released identity reached output"); },
++    reconcileOwned: async (processId, _context) => {
+       if (released.has(processId)) {
+         releasedReattestations += 1;
+         throw new Error("durable backend ownership was released");
+       }
+       return stoppedJobSnapshot(processId);
+     },
+-    releaseOwnership: async (processId, _context, expectedStartedAt) => {
++    releaseOwned: async (processId, _context, expectedStartedAt) => {
+       assert.equal(expectedStartedAt, "2026-01-01T00:00:00.000Z");
+       released.set(processId, expectedStartedAt);
+       return stoppedJobSnapshot(processId);
+     },
+   };
+   const backend = new WindowsJobObjectProcessBackend(service);
+   const first = jobBinding("job-release-churn-0");
+   for (let index = 0; index < 4_097; index += 1) {
+     await backend.release(jobBinding(`job-release-churn-${index}`));
+   }
+ 
+   await assert.rejects(backend.verifyEmpty({ ...first }), /released/i);
+   assert.equal(releasedReattestations, 1, "stale clone must fail during exact durable re-attestation");
+   assert.equal((backend as unknown as { controls: Map<string, unknown> }).controls.size, 0);
+ });
+ 
+ test("Windows Job durable release rejects a stale clone after adapter restart and startedAt mismatch", async () => {
+   const released = new Map<string, string>();
+   const service: WindowsJobProcessService = {
+-    probeJobObjectAvailability: async () => true,
+-    start: async () => { throw new Error("fixture does not launch"); },
+-    signal: async () => { throw new Error("fixture does not signal"); },
+-    readOutputSince: () => { throw new Error("fixture does not read"); },
+-    reconcileOwnership: async (processId) => {
++    probeActiveJobCreateClose: async () => true,
++    launchOwned: async () => { throw new Error("fixture does not launch"); },
++    signalOwned: async () => { throw new Error("fixture does not signal"); },
++    readOwnedOutput: () => { throw new Error("fixture does not read"); },
++    reconcileOwned: async (processId) => {
+       if (released.has(processId)) throw new Error("durable backend ownership was released");
+       return stoppedJobSnapshot(processId);
+     },
+-    releaseOwnership: async (processId, _context, expectedStartedAt) => {
++    releaseOwned: async (processId, _context, expectedStartedAt) => {
+       if (expectedStartedAt !== "2026-01-01T00:00:00.000Z") throw new Error("exact startedAt mismatch");
+       released.set(processId, expectedStartedAt);
+       return stoppedJobSnapshot(processId);
+     },
+   };
+   const binding = jobBinding("job-release-restart");
+   const first = new WindowsJobObjectProcessBackend(service);
+   assert.deepEqual(await Promise.all([first.release(binding), first.release({ ...binding })]), [{ released: true }, { released: true }]);
+ 
+   const restarted = new WindowsJobObjectProcessBackend(service);

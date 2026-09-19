@@ -1,0 +1,32 @@
+{
+  "pid": 80252,
+  "identity": {
+    "Id": 80252,
+    "StartTimeUtc": "2026-09-12T17:26:10.1928810Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-12T17:26:10.225Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\continue-20260912\\gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\continue-20260912\\fault-logical-frame-interleaving-red.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/lsp-transport-framing.test.ts"
+  ],
+  "spec": {
+    "id": "fault-logical-frame-interleaving-red",
+    "tests": [
+      "runner-v2/test/lsp-transport-framing.test.ts"
+    ]
+  }
+}

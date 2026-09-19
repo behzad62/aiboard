@@ -1,0 +1,11 @@
+{
+  "id": "finish-diff",
+  "args": [
+    "--input-type=module",
+    "-e",
+    "import {spawnSync} from 'node:child_process';const r=spawnSync('git',['diff','--check','--','runner-v2'],{stdio:'inherit',windowsHide:true});if(r.error)throw r.error;process.exitCode=r.status??1;"
+  ],
+  "inputPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/finish-source-freeze.json"
+  ]
+}

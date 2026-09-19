@@ -1,0 +1,16 @@
+{
+  "pid": 57396,
+  "identity": {
+    "Id": 57396,
+    "StartTimeUtc": "2026-09-15T14:33:32.1250118Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 53328,
+  "spawnedAt": "2026-09-15T14:33:32.429Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-client.mts"
+  ]
+}

@@ -1,0 +1,287 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IqbE8x"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-IqbE8x
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-PIqafz"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-PIqafz
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9ZmiWX"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-9ZmiWX
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-929Hvi"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-929Hvi
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-MDh8Hd"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-MDh8Hd
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-bB62cf"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-bB62cf
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-urtdg9"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-urtdg9
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-RaV94A"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-RaV94A
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-FwAKVF"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-FwAKVF
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-5flfPB"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-5flfPB
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-cI1AdA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1ly1VY"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-1ly1VY
+# Subtest: process recovery: changed runId is rejected before execution
+not ok 1 - process recovery: changed runId is rejected before execution
+  ---
+  duration_ms: 29.1032
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+    + Comparison {}
+    - Comparison {
+    -   code: 'recovery_scope_mismatch'
+    - }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  actual:
+  error: 'Recovery event belongs to a different run.'
+  stack: |-
+    reduceSchedulerEvent (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\scheduler-store.ts:1561:53)
+    SqliteSchedulerStore.append (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\sqlite-scheduler-store.ts:175:7)
+    ProcessRecoveryController.append (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\process-recovery.ts:246:24)
+    ProcessRecoveryController.submit (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\process-recovery.ts:131:10)
+    assert.rejects.code (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:43)
+    waitForActual (node:assert:632:21)
+    strict.rejects (node:assert:769:31)
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:18)
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:17)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Subtest: process recovery: changed taskId is rejected before execution
+not ok 2 - process recovery: changed taskId is rejected before execution
+  ---
+  duration_ms: 22.3604
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed sessionId is rejected before execution
+not ok 3 - process recovery: changed sessionId is rejected before execution
+  ---
+  duration_ms: 23.4216
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed invocationId is rejected before execution
+not ok 4 - process recovery: changed invocationId is rejected before execution
+  ---
+  duration_ms: 24.8717
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed logicalProcessId is rejected before execution
+not ok 5 - process recovery: changed logicalProcessId is rejected before execution
+  ---
+  duration_ms: 24.434
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed ownerId is rejected before execution
+not ok 6 - process recovery: changed ownerId is rejected before execution
+  ---
+  duration_ms: 22.7457
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed revision is rejected before execution
+not ok 7 - process recovery: changed revision is rejected before execution
+  ---
+  duration_ms: 21.2343
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed fencingToken is rejected before execution
+not ok 8 - process recovery: changed fencingToken is rejected before execution
+  ---
+  duration_ms: 21.2502
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed backendIdentity is rejected before execution
+not ok 9 - process recovery: changed backendIdentity is rejected before execution
+  ---
+  duration_ms: 21.2495
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed birthFingerprint is rejected before execution
+not ok 10 - process recovery: changed birthFingerprint is rejected before execution
+  ---
+  duration_ms: 22.4883
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'recovery_scope_mismatch'
+  operator: 'rejects'
+  stack: |-
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:60:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: changed rootPid is rejected before execution
+ok 11 - process recovery: changed rootPid is rejected before execution
+  ---
+  duration_ms: 18.6203
+  type: 'test'
+  ...
+# Subtest: process recovery: same PID with recycled birth invalidates an authorized action
+not ok 12 - process recovery: same PID with recycled birth invalidates an authorized action
+  ---
+  duration_ms: 30.0387
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'executed'
+    - 'rejected'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'rejected'
+  actual: 'executed'
+  operator: 'strictEqual'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:65:10)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:38:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IqbE8x","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-PIqafz","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9ZmiWX","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-929Hvi","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-MDh8Hd","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-bB62cf","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-urtdg9","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-RaV94A","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-FwAKVF","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-5flfPB","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-cI1AdA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1ly1VY","existsAtExit":true}
+1..12
+# tests 12
+# suites 0
+# pass 1
+# fail 11
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 569.6153

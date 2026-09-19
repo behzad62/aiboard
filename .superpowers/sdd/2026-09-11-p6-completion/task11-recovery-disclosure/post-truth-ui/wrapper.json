@@ -1,0 +1,34 @@
+{
+  "pid": 4632,
+  "identity": {
+    "Id": 4632,
+    "StartTimeUtc": "2026-09-15T14:56:35.5965627Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T14:56:35.633Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\post-truth-ui.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-observability.mts"
+  ],
+  "spec": {
+    "id": "post-truth-ui",
+    "args": [
+      "--import",
+      "tsx",
+      "scripts/test-runner-v2-observability.mts"
+    ],
+    "inputPaths": [
+      "components/RunnerV2ObservabilityPanel.tsx",
+      "lib/client/runner-v2.ts",
+      "scripts/test-runner-v2-observability.mts"
+    ]
+  }
+}

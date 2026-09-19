@@ -3,35 +3,92 @@ import type {
   BuildObservabilitySnapshot,
   BuildTranscriptPage,
 } from "./build-observability.js";
-import type { BuildControlPlane } from "./build-runtime-registry.js";
+import type {
+  ArchitectQuestionAnswerControlInput,
+  BuildControlPlane,
+  UserGuidanceControlInput,
+} from "./build-runtime-registry.js";
 import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
 import type { NativeBuildUsageProjection } from "./model-usage-projection.js";
 import type {
   ProjectHandoffChoice,
   SchedulerActor,
   SchedulerEvent,
+  FinalVerificationGenerationProjection,
   SchedulerProjection,
 } from "./scheduler-store.js";
+import { assertBuildCompletionReady } from "./scheduler-store.js";
 import type {
   IntegrationFileSnapshot,
   ProjectHandoffResult,
 } from "./integration-manager.js";
+import type { FinalVerificationCleanupController } from "./final-verification-cleanup.js";
+import type { ProcessRecoveryCoordinator, RecoveryAuditRecord } from "./process-recovery.js";
 
 export interface NativeBuildRuntimeHandle {
   runtime: BuildRuntime;
+  /** A durable terminal projection with no mutable runtime authority. */
+  historical?: true;
   usage(): NativeBuildUsageProjection;
   observability(): Promise<BuildObservabilitySnapshot>;
   transcript(afterSequence?: number): Promise<BuildTranscriptPage>;
   files(): Promise<IntegrationFileSnapshot>;
   compact(): void | Promise<void>;
   projectHandoff(choice: ProjectHandoffChoice): Promise<ProjectHandoffResult>;
+  /** Exceptional process recovery exists only on live handles, never historical readers. */
+  processRecovery?: ProcessRecoveryCoordinator;
+  /** Constructed cleanup primitive; lifecycle wiring is owned by the P2.6 manager packet. */
+  finalVerificationCleanup?: FinalVerificationCleanupController;
+  retireInvalidatedFinalVerification?(
+    generation: FinalVerificationGenerationProjection,
+    currentGeneration?: FinalVerificationGenerationProjection,
+  ): Promise<void>;
   cleanup(): void | Promise<void>;
   close(): void | Promise<void>;
+}
+
+/** Authoritative lifecycle states that may be projected by a terminal reader. */
+export type HistoricalTerminalState = "completed" | "failed" | "stopped";
+
+export type NativeBuildRecoveryFailureStage =
+  | "spec_validation"
+  | "runtime_construction"
+  | "quiescence"
+  | "settled_cleanup";
+
+export interface NativeBuildRecoveryFailure {
+  readonly runId: string;
+  readonly stage: NativeBuildRecoveryFailureStage;
+  readonly error: unknown;
+}
+
+export interface NativeBuildRecoveryReport {
+  readonly failures: readonly NativeBuildRecoveryFailure[];
 }
 
 export interface NativeBuildManagerOptions {
   specs: BuildSpecStore;
   createRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
+  /** Stamps runner-owned durable identity before a new Build spec is persisted. */
+  prepareSpec?(spec: NativeBuildSpec): Promise<NativeBuildSpec>;
+  /** Rejects a stored spec before recovery can construct its runtime or model clients. */
+  validateRecoveredSpec?(spec: NativeBuildSpec): Promise<void>;
+  /** Allows callers with an authoritative lifecycle store to omit settled runs from recovery. */
+  shouldRecoverSpec?(spec: NativeBuildSpec): boolean | Promise<boolean>;
+  /** Opens storage-backed terminal projections without constructing a live runtime. */
+  createHistoricalRuntime?(
+    spec: NativeBuildSpec,
+    terminalState: HistoricalTerminalState,
+  ): Promise<NativeBuildRuntimeHandle>;
+  /**
+   * The RunSupervisor-derived terminal state. Historical Build reads must not
+   * infer completion from an incomplete or absent scheduler log.
+   */
+  terminalStateForHistoricalSpec?(
+    spec: NativeBuildSpec,
+  ): HistoricalTerminalState | undefined | Promise<HistoricalTerminalState | undefined>;
+  /** Records a durable recovery validation failure without starting the rejected Build. */
+  onRecoverySpecError?(runId: string, error: unknown): void;
   shouldAutoRun?(runId: string): boolean;
   onPumpResult?(runId: string, result: BuildStepResult): void;
   onPumpError?(runId: string, error: unknown): void;
@@ -39,8 +96,19 @@ export interface NativeBuildManagerOptions {
   prepareArtifactCleanup?(): Promise<void>;
 }
 
+type NativeBuildHandleShutdownPhase =
+  | "status_pending"
+  | "settled_cleanup_pending"
+  | "ready_for_teardown"
+  | "teardown_started";
+
+interface NativeBuildHandleShutdownState {
+  phase: NativeBuildHandleShutdownPhase;
+}
+
 export class NativeBuildManager implements BuildControlPlane {
   private readonly handles = new Map<string, NativeBuildRuntimeHandle>();
+  private readonly handleShutdown = new Map<string, NativeBuildHandleShutdownState>();
   private readonly pumps = new Map<string, Promise<void>>();
   private readonly settledRuns = new Set<string>();
   private operationQueue = Promise.resolve();
@@ -55,20 +123,101 @@ export class NativeBuildManager implements BuildControlPlane {
   private closePromise: Promise<void> | undefined;
   private closing = false;
   private closed = false;
+  private specsClosed = false;
 
   constructor(private readonly options: NativeBuildManagerOptions) {}
 
-  async recover(): Promise<void> {
+  async recover(): Promise<NativeBuildRecoveryReport> {
     const active: string[] = [];
     const settled: Array<[string, NativeBuildRuntimeHandle]> = [];
+    const quiesceFailed = new Set<string>();
+    const failures: NativeBuildRecoveryFailure[] = [];
     await this.serialized(async () => {
       for (const spec of this.options.specs.list()) {
-        const handle = await this.ensureRuntime(spec);
+        let shouldRecover = true;
+        try {
+          shouldRecover = !this.options.shouldRecoverSpec || await this.options.shouldRecoverSpec(spec);
+        } catch (error) {
+          failures.push({ runId: spec.runId, stage: "spec_validation", error });
+          this.options.onRecoverySpecError?.(spec.runId, error);
+          this.options.onPumpError?.(spec.runId, error);
+          continue;
+        }
+        if (!shouldRecover) {
+          try {
+            await this.ensureHistoricalRuntime(spec);
+          } catch (error) {
+            this.options.onPumpError?.(spec.runId, error);
+          }
+          continue;
+        }
+        try {
+          await this.options.validateRecoveredSpec?.(spec);
+        } catch (error) {
+          failures.push({ runId: spec.runId, stage: "spec_validation", error });
+          this.options.onRecoverySpecError?.(spec.runId, error);
+          this.options.onPumpError?.(spec.runId, error);
+          continue;
+        }
+        let handle: NativeBuildRuntimeHandle;
+        try {
+          handle = await this.ensureRuntime(spec);
+        } catch (error) {
+          failures.push({ runId: spec.runId, stage: "runtime_construction", error });
+          this.options.onRecoverySpecError?.(spec.runId, error);
+          this.options.onPumpError?.(spec.runId, error);
+          continue;
+        }
+        try {
+          const projection = handle.runtime.projection();
+          const pendingInterruptions = Object.values(projection.userGuidance ?? {})
+            .filter((guidance) => guidance.interruptionStatus !== "completed")
+            .sort((left, right) => left.version - right.version);
+          const orphanedInvalidations = (projection.finalVerification?.history ?? [])
+            .filter((generation) =>
+              generation.invalidatedByGuidanceId &&
+              !projection.userGuidance?.[generation.invalidatedByGuidanceId]
+            );
+          if (pendingInterruptions.length === 0 && orphanedInvalidations.length === 0) {
+            await handle.finalVerificationCleanup?.quiesceRun();
+          } else {
+            for (const guidance of pendingInterruptions) {
+              const interrupted = (projection.finalVerification?.history ?? [])
+                .filter((generation) =>
+                  generation.invalidatedByGuidanceId === guidance.guidanceId
+                );
+              if (interrupted.length > 0 && handle.retireInvalidatedFinalVerification) {
+                for (const generation of interrupted) {
+                  await handle.retireInvalidatedFinalVerification(
+                    generation,
+                    projection.finalVerification?.current,
+                  );
+                }
+              } else {
+                await handle.finalVerificationCleanup?.quiesceRun();
+              }
+              handle.runtime.completeManagedUserGuidanceInterruption(
+                guidance.guidanceId,
+                guidance.version,
+              );
+            }
+            for (const generation of orphanedInvalidations) {
+              await handle.retireInvalidatedFinalVerification?.(
+                generation,
+                projection.finalVerification?.current,
+              );
+            }
+          }
+        } catch (error) {
+          quiesceFailed.add(spec.runId);
+          failures.push({ runId: spec.runId, stage: "quiescence", error });
+          this.options.onPumpError?.(spec.runId, error);
+        }
         const status = handle.runtime.projection().status;
-        if (status === "completed") {
+        if (status === "completed" && !quiesceFailed.has(spec.runId)) {
           settled.push([spec.runId, handle]);
         }
-        if (this.options.shouldAutoRun?.(spec.runId)) active.push(spec.runId);
+        if (!quiesceFailed.has(spec.runId) && this.options.shouldAutoRun?.(spec.runId)) active.push(spec.runId);
       }
     });
     const compactAndCleanup = async () => {
@@ -82,7 +231,12 @@ export class NativeBuildManager implements BuildControlPlane {
         }
       }
       for (const [runId, handle] of settled) {
-        await this.tryCleanupSettledRun(runId, handle);
+        try {
+          await this.cleanupSettledRun(runId, handle);
+        } catch (error) {
+          failures.push({ runId, stage: "settled_cleanup", error });
+          this.options.onPumpError?.(runId, error);
+        }
       }
     };
     if (this.options.runArtifactCompaction) {
@@ -90,21 +244,28 @@ export class NativeBuildManager implements BuildControlPlane {
     } else {
       await compactAndCleanup();
     }
-    for (const runId of active) {
-      if (this.require(runId).runtime.projection().status === "completed") {
-        this.options.onPumpResult?.(runId, {
-          status: "completed",
-          action: "recovered_settled_build",
-        });
-      } else {
-        this.activate(runId);
+    // Readiness is global: no recovered run may resume effects until every blocking startup owner has reconciled.
+    if (failures.length === 0) {
+      for (const runId of active) {
+        if (this.require(runId).runtime.projection().status === "completed") {
+          this.options.onPumpResult?.(runId, {
+            status: "completed",
+            action: "recovered_settled_build",
+          });
+        } else {
+          this.activate(runId);
+        }
       }
     }
+    return { failures: Object.freeze([...failures]) };
   }
 
   async create(spec: NativeBuildSpec): Promise<SchedulerProjection> {
     return await this.serialized(async () => {
-      const saved = this.options.specs.save(spec);
+      const prepared = this.options.prepareSpec
+        ? await this.options.prepareSpec(spec)
+        : spec;
+      const saved = this.options.specs.save(prepared);
       const handle = await this.ensureRuntime(saved);
       return handle.runtime.projection();
     });
@@ -140,8 +301,25 @@ export class NativeBuildManager implements BuildControlPlane {
     return this.require(runId).runtime.events(afterSequence);
   }
 
-  async step(runId: string): Promise<BuildStepResult> {
+  processRecoveryRecords(runId: string): Readonly<Record<string, RecoveryAuditRecord>> {
     const handle = this.require(runId);
+    return handle.processRecovery?.records() ?? handle.runtime.projection().processRecovery ?? {};
+  }
+
+  async generateProcessRecovery(runId: string, invocationId: string, proposalId: string): Promise<RecoveryAuditRecord> {
+    return await this.withRuntimeActivity(() => this.requireRecovery(runId).generate(invocationId, proposalId));
+  }
+
+  async decideProcessRecovery(runId: string, proposalId: string, fingerprint: string, decision: "approve" | "reject"): Promise<RecoveryAuditRecord> {
+    return await this.withRuntimeActivity(() => this.requireRecovery(runId).decide(proposalId, fingerprint, decision));
+  }
+
+  async executeProcessRecovery(runId: string, proposalId: string, fingerprint: string): Promise<RecoveryAuditRecord> {
+    return await this.withRuntimeActivity(() => this.requireRecovery(runId).execute(proposalId, fingerprint));
+  }
+
+  async step(runId: string): Promise<BuildStepResult> {
+    const handle = this.requireMutable(runId);
     return await this.executeWithFinalization(
       runId,
       handle,
@@ -150,7 +328,7 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async runUntilBlocked(runId: string, maxSteps?: number): Promise<BuildStepResult> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     return await this.executeWithFinalization(
       runId,
       handle,
@@ -160,8 +338,8 @@ export class NativeBuildManager implements BuildControlPlane {
 
   activate(runId: string): void {
     this.assertOpen();
+    const handle = this.requireMutable(runId);
     if (this.pumps.has(runId)) return;
-    const handle = this.require(runId);
     const projection = handle.runtime.projection();
     if (
       projection.status !== "running" &&
@@ -173,6 +351,61 @@ export class NativeBuildManager implements BuildControlPlane {
     });
     this.pumps.set(runId, pump);
     void pump.catch(() => undefined);
+  }
+
+  async submitUserGuidance(
+    runId: string,
+    input: UserGuidanceControlInput
+  ): Promise<SchedulerProjection> {
+    this.requireMutable(runId);
+    const result = await this.withRuntimeActivity(async () =>
+      this.serialized(async () => {
+        const handle = this.requireMutable(runId);
+        const submitted = typeof handle.runtime.submitManagedUserGuidance === "function"
+          ? handle.runtime.submitManagedUserGuidance(input)
+          : handle.runtime.submitUserGuidance(input);
+        const guidance = submitted.userGuidance?.[input.guidanceId];
+        if (guidance?.interruptionStatus === "completed") {
+          return { projection: submitted, shouldWake: false };
+        }
+        const interrupted = submitted.status === "completed"
+          ? undefined
+          : [...(submitted.finalVerification?.history ?? [])]
+              .reverse()
+              .find((generation) =>
+                generation.invalidatedByGuidanceId === input.guidanceId
+              );
+        if (interrupted && handle.retireInvalidatedFinalVerification) {
+          await handle.retireInvalidatedFinalVerification(
+            interrupted,
+            submitted.finalVerification?.current,
+          );
+        } else {
+          await handle.finalVerificationCleanup?.quiesceRun();
+        }
+        const projection = typeof handle.runtime.completeManagedUserGuidanceInterruption === "function"
+          ? handle.runtime.completeManagedUserGuidanceInterruption(
+              input.guidanceId,
+              input.version,
+            )
+          : submitted;
+        return { projection, shouldWake: true };
+      })
+    );
+    if (result.shouldWake) this.wake(runId);
+    return result.projection;
+  }
+
+  async answerArchitectQuestion(
+    runId: string,
+    input: ArchitectQuestionAnswerControlInput
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.answerArchitectQuestion(input)
+    );
+    this.wake(runId);
+    return projection;
   }
 
   async awaitIdle(runId?: string): Promise<void> {
@@ -189,24 +422,26 @@ export class NativeBuildManager implements BuildControlPlane {
     reason: string,
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
-    const handle = this.require(runId);
-    return await this.withRuntimeActivity(async () =>
-      handle.runtime.pause(reason, idempotencyKey)
-    );
+    const handle = this.requireMutable(runId);
+    return await this.withRuntimeActivity(async () => {
+      const projection = handle.runtime.pause(reason, idempotencyKey);
+      await handle.finalVerificationCleanup?.quiesceRun();
+      return projection;
+    });
   }
 
   async resume(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () =>
       handle.runtime.resume(idempotencyKey)
     );
   }
 
   async continue(runId: string, idempotencyKey: string): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
     if (!this.options.specs.get(runId).benchmark) {
       throw new Error("Non-renewing continuation is restricted to benchmark Builds.");
     }
-    const handle = this.require(runId);
     return await this.withRuntimeActivity(async () =>
       handle.runtime.continue(idempotencyKey)
     );
@@ -217,10 +452,23 @@ export class NativeBuildManager implements BuildControlPlane {
     runtimeId: string,
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
-    const handle = this.require(runId);
+    const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () =>
       handle.runtime.selectArchitectHandoff(runtimeId, idempotencyKey)
     );
+  }
+
+  async selectVerifierRuntime(
+    runId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.selectVerifierRuntime(runtimeId, idempotencyKey)
+    );
+    this.wake(runId);
+    return projection;
   }
 
   async selectProjectHandoff(
@@ -228,6 +476,7 @@ export class NativeBuildManager implements BuildControlPlane {
     choice: ProjectHandoffChoice,
     idempotencyKey: string
   ): Promise<SchedulerProjection> {
+    this.requireMutable(runId);
     return await this.selectProjectHandoffAs(
       runId,
       choice,
@@ -242,6 +491,7 @@ export class NativeBuildManager implements BuildControlPlane {
     idempotencyKey: string,
     actor: SchedulerActor
   ): Promise<SchedulerProjection> {
+    this.requireMutable(runId);
     const releaseActivity = await this.acquireRuntimeActivity();
     const compaction = this.requestLiveCompaction();
     let selected: SchedulerProjection;
@@ -266,8 +516,10 @@ export class NativeBuildManager implements BuildControlPlane {
     actor: SchedulerActor
   ): Promise<SchedulerProjection> {
     return await this.serialized(async () => {
-      const handle = this.handles.get(runId);
-      if (!handle) throw new Error(`Unknown build runtime ${runId}.`);
+      // This path already owns a runtime-activity lease. It must finish an
+      // in-flight automatic handoff when close begins, while still refusing
+      // historical handles without reopening public mutation authority.
+      const handle = this.requireMutableWithinActivity(runId);
       const projection = handle.runtime.projection();
       if (projection.projectHandoff?.status === "selected") {
         if (projection.projectHandoff.choice !== choice) {
@@ -281,6 +533,7 @@ export class NativeBuildManager implements BuildControlPlane {
       if (projection.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");
       }
+      assertBuildCompletionReady(projection);
       const result = await handle.projectHandoff(choice);
       const selected = handle.runtime.selectProjectHandoff(
         choice,
@@ -294,13 +547,18 @@ export class NativeBuildManager implements BuildControlPlane {
   }
 
   async close(): Promise<void> {
-    if (!this.closePromise) {
-      this.closing = true;
-      this.activityGateClosed = true;
-      this.rejectActivityWaiters();
-      this.closePromise = this.closeAfterPumps();
+    if (this.closePromise) return await this.closePromise;
+    this.closing = true;
+    this.activityGateClosed = true;
+    this.rejectActivityWaiters();
+    const attempt = this.closeAfterPumps();
+    this.closePromise = attempt;
+    try {
+      await attempt;
+    } catch (error) {
+      if (this.closePromise === attempt) this.closePromise = undefined;
+      throw error;
     }
-    await this.closePromise;
   }
 
   private async closeAfterPumps(): Promise<void> {
@@ -309,28 +567,63 @@ export class NativeBuildManager implements BuildControlPlane {
     await this.waitForRuntimeActivityIdle();
     this.closed = true;
     await this.serialized(async () => {
-      const handles = [...this.handles.values()];
-      this.handles.clear();
       const failures: unknown[] = [];
-      for (const handle of handles) {
-        if (handle.runtime.projection().status === "completed") {
-          try {
-            await this.cleanupSettledRun(handle.runtime.id, handle);
-          } catch (error) {
-            failures.push(error);
-          }
+      for (const [runId, handle] of [...this.handles.entries()]) {
+        if (await this.closeHandle(runId, handle, failures)) {
+          this.handles.delete(runId);
+          this.handleShutdown.delete(runId);
         }
+      }
+      if (!this.specsClosed) {
         try {
-          await handle.close();
+          this.options.specs.close();
+          this.specsClosed = true;
         } catch (error) {
           failures.push(error);
         }
       }
-      this.options.specs.close();
       if (failures.length > 0) {
         throw new AggregateError(failures, "Could not close native Build resources.");
       }
     });
+  }
+
+  private async closeHandle(
+    runId: string,
+    handle: NativeBuildRuntimeHandle,
+    failures: unknown[],
+  ): Promise<boolean> {
+    const shutdown = this.handleShutdown.get(runId) ?? { phase: "status_pending" };
+    this.handleShutdown.set(runId, shutdown);
+    if (shutdown.phase === "status_pending") {
+      try {
+        shutdown.phase = !handle.historical && handle.runtime.projection().status === "completed"
+          ? "settled_cleanup_pending"
+          : "ready_for_teardown";
+      } catch (error) {
+        failures.push(error);
+        shutdown.phase = "ready_for_teardown";
+      }
+    }
+    if (shutdown.phase === "settled_cleanup_pending") {
+      try {
+        await this.cleanupSettledRun(runId, handle);
+        shutdown.phase = "ready_for_teardown";
+      } catch (error) {
+        failures.push(error);
+        return false;
+      }
+    }
+    if (shutdown.phase === "ready_for_teardown") {
+      shutdown.phase = "teardown_started";
+    }
+    try {
+      await handle.close();
+      return true;
+    } catch (error) {
+      failures.push(error);
+      return false;
+    }
   }
 
   private async ensureRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
@@ -346,10 +639,32 @@ export class NativeBuildManager implements BuildControlPlane {
     return handle;
   }
 
+  private async ensureHistoricalRuntime(
+    spec: NativeBuildSpec,
+  ): Promise<NativeBuildRuntimeHandle | undefined> {
+    const existing = this.handles.get(spec.runId);
+    if (existing) return existing;
+    if (!this.options.createHistoricalRuntime) return undefined;
+    const terminalState = await this.options.terminalStateForHistoricalSpec?.(spec);
+    if (!isHistoricalTerminalState(terminalState)) {
+      throw new Error(
+        `Historical Build ${spec.runId} requires an authoritative terminal RunSupervisor state.`,
+      );
+    }
+    const handle = await this.options.createHistoricalRuntime(spec, terminalState);
+    if (handle.runtime.id !== spec.runId) {
+      await handle.close();
+      throw new Error(`Build runtime identity mismatch for ${spec.runId}.`);
+    }
+    this.handles.set(spec.runId, handle);
+    return handle;
+  }
+
   private async pump(
     runId: string,
     handle: NativeBuildRuntimeHandle
   ): Promise<void> {
+    if (handle.historical) throw historicalReadOnlyError(runId);
     let releaseActivity: (() => void) | undefined;
     try {
       releaseActivity = await this.acquireRuntimeActivity();
@@ -374,8 +689,15 @@ export class NativeBuildManager implements BuildControlPlane {
             "no_mechanical_progress",
             `autonomous-idle:${projection.lastSequence}`
           );
+          await handle.finalVerificationCleanup?.quiesceRun();
         }
         result = { status: "paused", action: "no_mechanical_progress" };
+      }
+      if (
+        result.status === "blocked" &&
+        result.action !== "user_guidance_interruption_pending"
+      ) {
+        await handle.finalVerificationCleanup?.quiesceRun();
       }
       const finalized = await this.finalizeExecutionInsideActivity(
         runId,
@@ -393,7 +715,12 @@ export class NativeBuildManager implements BuildControlPlane {
           `autonomous-error:${projection.lastSequence}`
         );
       }
-      this.options.onPumpError?.(runId, error);
+      let reported = error;
+      try { await handle.finalVerificationCleanup?.quiesceRun(); }
+      catch (quiesceError) {
+        reported = new AggregateError([error, quiesceError], `Build ${runId} failed and could not quiesce owned resources.`);
+      }
+      this.options.onPumpError?.(runId, reported);
       this.options.onPumpResult?.(runId, {
         status: "paused",
         action: "autonomous_pump_error",
@@ -402,6 +729,15 @@ export class NativeBuildManager implements BuildControlPlane {
       releaseActivity();
       if (compaction) await compaction;
     }
+  }
+
+  private wake(runId: string): void {
+    const active = this.pumps.get(runId);
+    if (!active) {
+      this.activate(runId);
+      return;
+    }
+    void active.finally(() => this.activate(runId)).catch(() => undefined);
   }
 
   private async executeWithFinalization(
@@ -418,8 +754,20 @@ export class NativeBuildManager implements BuildControlPlane {
         handle,
         await execute()
       );
+      if (finalized.result.status === "paused" || finalized.result.status === "blocked") {
+        await handle.finalVerificationCleanup?.quiesceRun();
+      }
       result = finalized.result;
       compaction = finalized.compaction;
+    } catch (error) {
+      try { await handle.finalVerificationCleanup?.quiesceRun(); }
+      catch (quiesceError) {
+        throw new AggregateError(
+          [error, quiesceError],
+          `Build ${runId} failed and could not quiesce owned resources.`,
+        );
+      }
+      throw error;
     } finally {
       releaseActivity();
       if (compaction) await compaction;
@@ -595,7 +943,7 @@ export class NativeBuildManager implements BuildControlPlane {
   private async compactEligibleRuns(): Promise<void> {
     await this.compactRuns(
       [...this.handles.entries()].filter(
-        ([, handle]) => handle.runtime.projection().status !== "running"
+        ([, handle]) => !handle.historical && handle.runtime.projection().status !== "running"
       )
     );
   }
@@ -618,6 +966,25 @@ export class NativeBuildManager implements BuildControlPlane {
     return handle;
   }
 
+  private requireRecovery(runId: string): ProcessRecoveryCoordinator {
+    const handle = this.requireMutable(runId);
+    if (!handle.processRecovery) throw new Error(`Exceptional recovery unavailable for build ${runId}.`);
+    return handle.processRecovery;
+  }
+
+  private requireMutable(runId: string): NativeBuildRuntimeHandle {
+    const handle = this.require(runId);
+    if (handle.historical) throw historicalReadOnlyError(runId);
+    return handle;
+  }
+
+  private requireMutableWithinActivity(runId: string): NativeBuildRuntimeHandle {
+    const handle = this.handles.get(runId);
+    if (!handle) throw new Error(`Unknown build runtime ${runId}.`);
+    if (handle.historical) throw historicalReadOnlyError(runId);
+    return handle;
+  }
+
   private assertOpen(): void {
     if (this.closed || this.closing) throw new Error("Native Build manager is closed.");
   }
@@ -635,6 +1002,14 @@ export class NativeBuildManager implements BuildControlPlane {
       release();
     }
   }
+}
+
+function historicalReadOnlyError(runId: string): Error {
+  return new Error(`Historical Build ${runId} is read-only.`);
+}
+
+function isHistoricalTerminalState(value: unknown): value is HistoricalTerminalState {
+  return value === "completed" || value === "failed" || value === "stopped";
 }
 
 function eventLoopYield(): Promise<void> {

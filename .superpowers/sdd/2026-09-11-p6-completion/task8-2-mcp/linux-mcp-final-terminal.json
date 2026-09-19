@@ -1,0 +1,27 @@
+{
+  "startedAt": "2026-09-12T05:49:16.785145+00:00",
+  "finishedAt": "2026-09-12T05:49:38.234495+00:00",
+  "wrapperPid": 46576,
+  "exitCode": 0,
+  "compileExit": 0,
+  "containerId": "a8b524c995b96d1c5b6e110a30fda3058d36eee1c4a840100349751e6d369e71",
+  "imageId": "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+  "containerState": {
+    "Status": "exited",
+    "Running": false,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 0,
+    "ExitCode": 0,
+    "Error": "",
+    "StartedAt": "2026-09-12T05:49:25.146387954Z",
+    "FinishedAt": "2026-09-12T05:49:37.865780652Z"
+  },
+  "containerRemoved": true,
+  "tmpCopyExit": 0,
+  "bundleFiles": 725,
+  "sourcesUnchanged": true,
+  "scope": "Actual Linux MCP portable configuration/protocol/manager/broker/authority and memory/SQLite request contracts, plus native POSIX descendant lifecycle. Native Windows and strict OCI integration is separately verified; no macOS or remote-CI claim."
+}

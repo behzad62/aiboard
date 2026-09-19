@@ -1,0 +1,5696 @@
+{
+  "at": "2026-09-13T19:09:53.996Z",
+  "changedSource": [
+    "runner-v2/src/cli.ts",
+    "runner-v2/src/code-intelligence-tools.ts",
+    "runner-v2/src/filesystem-tools.ts",
+    "runner-v2/src/language-intelligence.ts",
+    "runner-v2/src/language-provider-router.ts",
+    "runner-v2/src/language-server-executable.ts",
+    "runner-v2/src/lsp-client.ts",
+    "runner-v2/src/lsp-language-provider.ts",
+    "runner-v2/src/managed-process-supervisor.mjs",
+    "runner-v2/src/managed-process.ts",
+    "runner-v2/src/native-architect-runtime.ts",
+    "runner-v2/src/native-build-factory.ts",
+    "runner-v2/src/portable-process-supervisor.mjs",
+    "runner-v2/src/runner-internal-execution-context.ts",
+    "runner-v2/src/session-authority.ts",
+    "runner-v2/src/streaming-output-controller.ts",
+    "runner-v2/src/streaming-process-session-runtime.ts",
+    "runner-v2/src/streaming-request-operation.ts",
+    "runner-v2/src/subagent-tools.ts",
+    "runner-v2/src/windows-job-process-channel.ts",
+    "runner-v2/src/windows-job-process-host.ts",
+    "runner-v2/src/worker-runtime.ts",
+    "runner-v2/src/execution-host-lsp-transport.ts",
+    "runner-v2/src/language-agent-lifecycle.ts",
+    "runner-v2/src/lsp-transport.ts"
+  ],
+  "imports": {
+    "runner-v2/src/acceptance-contracts.ts": [
+      {
+        "target": "runner-v2/src/evidence-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/account-runner-model.ts": [
+      {
+        "target": "runner-v2/src/provider-model-utils.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/agent-contracts.ts": [],
+    "runner-v2/src/agent-loop.ts": [
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-call-retry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/agent-prompts.ts": [
+      {
+        "target": "runner-v2/src/context-assembler.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/agent-session-store.ts": [],
+    "runner-v2/src/anthropic-model.ts": [
+      {
+        "target": "runner-v2/src/provider-model-utils.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/reasoning-effort.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/architect-tools.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/acceptance-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-graph.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/artifact-reachability.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/artifact-store.ts": [],
+    "runner-v2/src/artifact-tools.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/benchmark-command-policy.ts": [],
+    "runner-v2/src/bounded-output-spool.ts": [],
+    "runner-v2/src/bounded-protocol-queue.ts": [],
+    "runner-v2/src/browser-tools.ts": [],
+    "runner-v2/src/budget-enforceability.ts": [],
+    "runner-v2/src/budget-ledger.ts": [],
+    "runner-v2/src/budget-policy.ts": [
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/budgeted-model.ts": [],
+    "runner-v2/src/budgeted-tool-runtime.ts": [
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/build-observability.ts": [
+      {
+        "target": "runner-v2/src/sensitive-redaction.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verifier-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/build-runtime-registry.ts": [
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/build-runtime.ts": [
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-submission.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-scheduler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sensitive-redaction.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/risk-policy.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/build-spec.ts": [
+      {
+        "target": "runner-v2/src/budget-policy.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/capability-registry.ts": [
+      {
+        "target": "runner-v2/src/language-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-extension.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/change-set.ts": [
+      {
+        "target": "runner-v2/src/acceptance-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/child-environment.ts": [
+      {
+        "target": "runner-v2/src/sensitive-redaction.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/cli.ts": [
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/control-server.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/encrypted-provider-config-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-bootstrap.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/node-version.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/permission-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-supervisor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-extension.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-resource-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-build-spec-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-event-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/code-intelligence-tools.ts": [
+      {
+        "target": "runner-v2/src/language-intelligence.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/context-assembler.ts": [],
+    "runner-v2/src/contracts.ts": [],
+    "runner-v2/src/control-server.ts": [
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-spec.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budget-policy.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/durable-process-store.ts": [
+      {
+        "target": "runner-v2/src/execution-safety-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/encrypted-provider-config-store.ts": [
+      {
+        "target": "runner-v2/src/provider-config-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/event-store.ts": [],
+    "runner-v2/src/evidence-continuation.ts": [
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/evidence-store.ts": [],
+    "runner-v2/src/evidence-tools.ts": [
+      {
+        "target": "runner-v2/src/benchmark-command-policy.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/execution-grants.ts": [],
+    "runner-v2/src/execution-host-lsp-transport.ts": [
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/execution-host-mcp-transport.ts": [
+      {
+        "target": "runner-v2/src/mcp-executable-digest.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-session-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-rpc-peer.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/execution-host-streaming.ts": [
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-process-session-runtime.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/execution-host.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/child-environment.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-run-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host-streaming.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/posix-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-host-semantic-probes.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-semantic-probes.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-process-kernel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/subprocess-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sensitive-redaction.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/oci-execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/execution-isolation-provider.ts": [
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/owned-fence-lock.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/execution-safety-contracts.ts": [],
+    "runner-v2/src/extension-runtime.ts": [],
+    "runner-v2/src/filesystem-tools.ts": [
+      {
+        "target": "runner-v2/src/language-intelligence.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/final-verification-browser-policy.ts": [],
+    "runner-v2/src/final-verification-cleanup.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sensitive-redaction.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/final-verification-contracts.ts": [],
+    "runner-v2/src/final-verification-port-authority.ts": [],
+    "runner-v2/src/final-verification-profile.ts": [
+      {
+        "target": "runner-v2/src/final-verification-browser-policy.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-port-authority.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/final-verification-runtime.ts": [
+      {
+        "target": "runner-v2/src/final-verification-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-profile.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-browser-policy.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/final-verification-semantics.ts": [
+      {
+        "target": "runner-v2/src/final-verification-browser-policy.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/final-verification-submission.ts": [
+      {
+        "target": "runner-v2/src/evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-profile.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-semantics.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/git-baseline.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-repository.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/git-bootstrap.ts": [
+      {
+        "target": "runner-v2/src/git-baseline.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/git-command.ts": [],
+    "runner-v2/src/git-preflight.ts": [
+      {
+        "target": "runner-v2/src/runner-internal-process-kernel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/git-repository.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/git-run-context.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-runtime-runner.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/git-runtime-runner.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-safety-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/git-tools.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/google-model.ts": [
+      {
+        "target": "runner-v2/src/provider-model-utils.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/reasoning-effort.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/historical-read-provenance.ts": [],
+    "runner-v2/src/integration-manager.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worktree-state.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/interactive-process-channel.ts": [],
+    "runner-v2/src/language-agent-lifecycle.ts": [],
+    "runner-v2/src/language-intelligence.ts": [],
+    "runner-v2/src/language-provider-router.ts": [
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-language-provider.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/language-server-executable.ts": [
+      {
+        "target": "runner-v2/src/mcp-executable-digest.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/lsp-client.ts": [
+      {
+        "target": "runner-v2/src/language-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/lsp-language-provider.ts": [
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/lsp-transport.ts": [],
+    "runner-v2/src/managed-process-supervisor.mjs": [],
+    "runner-v2/src/managed-process-tools.ts": [
+      {
+        "target": "runner-v2/src/managed-process.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/managed-process.ts": [
+      {
+        "target": "runner-v2/src/windows-job-process-host.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/mcp-agent-lifecycle.ts": [],
+    "runner-v2/src/mcp-configuration.ts": [],
+    "runner-v2/src/mcp-executable-digest.ts": [],
+    "runner-v2/src/mcp-rpc-peer.ts": [],
+    "runner-v2/src/mcp-session-manager.ts": [
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-rpc-peer.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/mcp-tools.ts": [
+      {
+        "target": "runner-v2/src/mcp-session-manager.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/memory-tools.ts": [],
+    "runner-v2/src/model-usage-projection.ts": [],
+    "runner-v2/src/native-architect-runtime.ts": [
+      {
+        "target": "runner-v2/src/language-agent-lifecycle.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-agent-lifecycle.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-loop.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-prompts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/browser-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/code-intelligence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-tool-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/context-assembler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/filesystem-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/memory-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/project-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-routing.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/research-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/repository-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/typescript-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/extension-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/native-build-factory.ts": [
+      {
+        "target": "runner-v2/src/execution-host-lsp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/account-runner-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/anthropic-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-reachability.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/capability-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budget-enforceability.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-observability.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/browser-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-spec.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/integration-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-profile.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-port-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/google-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/model-usage-projection.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-architect-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-verifier-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-worker-driver.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/openai-compatible-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/oci-execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host-mcp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/plugin-loader.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-extension.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/repository-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-config-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-call-retry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runtime-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-catalog.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-project-memory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/project-memory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/typescript-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verifier-verdict-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/workspace-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verification-workspace.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/child-environment.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/posix-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-host-semantic-probes.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-semantic-probes.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/subprocess-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/native-build-manager.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/native-process-backend.ts": [
+      {
+        "target": "runner-v2/src/portable-process-channel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-protocol.mjs",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/owned-fence-lock.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/native-verifier-runtime.ts": [
+      {
+        "target": "runner-v2/src/agent-loop.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-prompts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-tool-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/acceptance-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/filesystem-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/repository-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verifier-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verifier-tools.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/native-worker-driver.ts": [
+      {
+        "target": "runner-v2/src/agent-prompts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/context-assembler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/extension-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/project-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-routing.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-identity.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/node-version.ts": [],
+    "runner-v2/src/oci-execution-isolation-provider.ts": [
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/owned-fence-lock.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/one-shot-command-executor.ts": [
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/openai-compatible-model.ts": [
+      {
+        "target": "runner-v2/src/provider-model-utils.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/reasoning-effort.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/owned-fence-lock.mjs": [],
+    "runner-v2/src/permission-store.ts": [],
+    "runner-v2/src/plugin-loader.ts": [
+      {
+        "target": "runner-v2/src/capability-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/portable-process-channel.ts": [
+      {
+        "target": "runner-v2/src/interactive-process-channel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-protocol.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/portable-process-child.mjs": [
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-protocol.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/portable-process-posix-control.mjs": [],
+    "runner-v2/src/portable-process-protocol.mjs": [
+      {
+        "target": "runner-v2/src/owned-fence-lock.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/portable-process-supervisor.mjs": [
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-protocol.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/posix-process-backend.ts": [
+      {
+        "target": "runner-v2/src/native-process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/process-backend.ts": [
+      {
+        "target": "runner-v2/src/execution-safety-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/process-host-semantic-probes.ts": [],
+    "runner-v2/src/process-tools.ts": [
+      {
+        "target": "runner-v2/src/benchmark-command-policy.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/project-context.ts": [],
+    "runner-v2/src/project-memory.ts": [],
+    "runner-v2/src/protocol-evidence-tee.ts": [],
+    "runner-v2/src/provider-call-retry.ts": [
+      {
+        "target": "runner-v2/src/account-runner-model.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/provider-config-store.ts": [],
+    "runner-v2/src/provider-health.ts": [],
+    "runner-v2/src/provider-model-utils.ts": [
+      {
+        "target": "runner-v2/src/account-runner-model.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/reasoning-effort.ts": [],
+    "runner-v2/src/reducer.ts": [],
+    "runner-v2/src/repository-intelligence.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/research-tools.ts": [],
+    "runner-v2/src/risk-policy.ts": [],
+    "runner-v2/src/run-state-identity.ts": [],
+    "runner-v2/src/run-supervisor.ts": [
+      {
+        "target": "runner-v2/src/contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/reducer.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/runner-capabilities-config.ts": [
+      {
+        "target": "runner-v2/src/language-intelligence.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/runner-capability-contract.ts": [
+      {
+        "target": "runner-v2/src/runner-extension.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-safety-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/runner-extension.ts": [],
+    "runner-v2/src/runner-internal-execution-context.ts": [
+      {
+        "target": "runner-v2/src/mcp-executable-digest.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-rpc-peer.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-preflight.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sensitive-redaction.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-process-kernel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/runner-internal-process-kernel.ts": [
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/posix-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/runner-resource-cleanup.ts": [],
+    "runner-v2/src/runtime-router.ts": [
+      {
+        "target": "runner-v2/src/verifier-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/scheduler-store.ts": [
+      {
+        "target": "runner-v2/src/task-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-graph.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/acceptance-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-profile.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-semantics.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/user-steering-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verifier-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/risk-policy.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/sensitive-redaction.ts": [],
+    "runner-v2/src/session-authority.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/session-tools.ts": [],
+    "runner-v2/src/skill-catalog.ts": [],
+    "runner-v2/src/skill-routing.ts": [],
+    "runner-v2/src/skill-tools.ts": [],
+    "runner-v2/src/sqlite-agent-session-store.ts": [],
+    "runner-v2/src/sqlite-budget-ledger.ts": [
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budget-policy.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/sqlite-build-spec-store.ts": [
+      {
+        "target": "runner-v2/src/build-spec.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/sqlite-event-store.ts": [
+      {
+        "target": "runner-v2/src/contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/sqlite-evidence-store.ts": [
+      {
+        "target": "runner-v2/src/evidence-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/sqlite-project-memory.ts": [
+      {
+        "target": "runner-v2/src/project-memory.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/sqlite-scheduler-store.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/sqlite-tool-ledger.ts": [],
+    "runner-v2/src/streaming-output-controller.ts": [
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/streaming-process-session-runtime.ts": [
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-request-operation.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-continuation.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-protocol-queue.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/protocol-evidence-tee.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-output-controller.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/interactive-process-channel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/streaming-request-operation.ts": [],
+    "runner-v2/src/streaming-session-store.ts": [
+      {
+        "target": "runner-v2/src/evidence-continuation.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/subagent-tools.ts": [
+      {
+        "target": "runner-v2/src/language-agent-lifecycle.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-agent-lifecycle.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-loop.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-tool-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/browser-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/code-intelligence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/filesystem-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/memory-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/research-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/repository-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/typescript-intelligence.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/subprocess-runtime.ts": [
+      {
+        "target": "runner-v2/src/execution-safety-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/durable-process-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/task-contracts.ts": [],
+    "runner-v2/src/task-graph.ts": [
+      {
+        "target": "runner-v2/src/task-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/acceptance-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/task-scheduler.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-graph.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-identity.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/tool-broker.ts": [
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-extension.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/tool-ledger.ts": [],
+    "runner-v2/src/tool-registry.ts": [],
+    "runner-v2/src/typescript-intelligence.ts": [
+      {
+        "target": "runner-v2/src/repository-intelligence.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/user-steering-contracts.ts": [],
+    "runner-v2/src/verification-workspace.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worktree-state.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/verifier-contracts.ts": [
+      {
+        "target": "runner-v2/src/task-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/verifier-tools.ts": [
+      {
+        "target": "runner-v2/src/verifier-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/verifier-verdict-authority.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verifier-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/windows-job-process-channel.ts": [
+      {
+        "target": "runner-v2/src/interactive-process-channel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/windows-job-process-host.ts": [
+      {
+        "target": "runner-v2/src/owned-fence-lock.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/windows-process-backend.ts": [
+      {
+        "target": "runner-v2/src/native-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-job-process-channel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/windows-process-semantic-probes.ts": [
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/worker-identity.ts": [],
+    "runner-v2/src/worker-lifecycle-tools.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/worker-runtime.ts": [
+      {
+        "target": "runner-v2/src/language-agent-lifecycle.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-agent-lifecycle.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-loop.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-tool-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/browser-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/code-intelligence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/change-set.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/filesystem-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/research-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/repository-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/subagent-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/project-memory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/memory-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/typescript-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/extension-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/workspace-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-lifecycle-tools.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/workspace-manager.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worktree-state.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/src/worktree-state.ts": [],
+    "runner-v2/test/acceptance-contracts.test.ts": [
+      {
+        "target": "runner-v2/src/acceptance-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/agent-loop.test.ts": [
+      {
+        "target": "runner-v2/src/agent-loop.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-loop.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/account-runner-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/agent-session-store.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/architect-user-steering-tools.test.ts": [
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/artifact-reachability.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-reachability.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/artifact-store.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/artifact-tools.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/b2-residue.test.ts": [
+      {
+        "target": "runner-v2/test/support/b2-residue.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/bounded-output-spool.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/browser-tools.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/browser-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/budget-ledger.test.ts": [
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/budgeted-model.test.ts": [
+      {
+        "target": "runner-v2/src/budgeted-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/budgeted-tool-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/budgeted-tool-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/build-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runtime-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-scheduler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/build-spec-store.test.ts": [
+      {
+        "target": "runner-v2/src/build-spec.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-build-spec-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/capability-fixture-finalizers.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/certified-fixture-cleanup.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/change-set.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/child-environment.test.ts": [
+      {
+        "target": "runner-v2/src/child-environment.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/cli-capabilities-config.test.ts": [
+      {
+        "target": "runner-v2/src/run-supervisor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-build-spec-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-event-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/cli-root-capture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/cli-root-capture-tsx.test.ts": [
+      {
+        "target": "runner-v2/test/support/cli-root-capture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/cli-root-capture.test.ts": [
+      {
+        "target": "runner-v2/test/support/cli-root-capture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/code-intelligence-tools.test.ts": [
+      {
+        "target": "runner-v2/src/code-intelligence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/context-assembler.test.ts": [
+      {
+        "target": "runner-v2/src/context-assembler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-prompts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/contracts.test.ts": [
+      {
+        "target": "runner-v2/src/contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/control-server.test.ts": [
+      {
+        "target": "runner-v2/src/control-server.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-supervisor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/permission-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-event-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/durable-process-store.test.ts": [
+      {
+        "target": "runner-v2/src/durable-process-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/evidence-continuation.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-continuation.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-output-controller.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-protocol-queue.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/evidence-tools.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/execution-command-grant-scope.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/execution-grants.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/execution-host-credential-graph.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/execution-host.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/execution-isolation-provider.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/execution-safety-contracts.test.ts": [
+      {
+        "target": "runner-v2/src/execution-safety-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/extension-contracts.test.ts": [
+      {
+        "target": "runner-v2/src/runner-extension.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-intelligence.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/extension-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/capability-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/context-assembler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/extension-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/permission-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/filesystem-tools.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/filesystem-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-browser-policy.test.ts": [
+      {
+        "target": "runner-v2/src/final-verification-semantics.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-browser.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-cleanup.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-port-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-completion.test.ts": [
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/control-server.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-build-spec-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-event-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-supervisor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-contracts.test.ts": [
+      {
+        "target": "runner-v2/src/final-verification-contracts.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-execution.test.ts": [
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-integrity.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-observability.test.ts": [
+      {
+        "target": "runner-v2/src/build-observability.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-orchestration.test.ts": [
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-prompts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-scheduler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-profile.test.ts": [
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-profile.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-port-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-repair.test.ts": [
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-scheduler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-review.test.ts": [
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-prompts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-runtime-b1.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-scheduler.test.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-graph.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-scheduler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/final-verification-submission.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-submission.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/finite-fixture-child.test.ts": [
+      {
+        "target": "runner-v2/test/support/finite-fixture-child.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/fixtures/credential-graph-child.mjs": [],
+    "runner-v2/test/fixtures/git-preflight-hang.mjs": [],
+    "runner-v2/test/fixtures/git-preflight-tree-hang.mjs": [],
+    "runner-v2/test/fixtures/lsp-server.mjs": [],
+    "runner-v2/test/fixtures/mcp-descendant-server.mjs": [],
+    "runner-v2/test/fixtures/mcp-oversized-server.mjs": [],
+    "runner-v2/test/fixtures/mcp-post-ready-failure-server.mjs": [],
+    "runner-v2/test/fixtures/mcp-server.mjs": [],
+    "runner-v2/test/fixtures/owned-fence-lock-contended-initializer.mjs": [],
+    "runner-v2/test/fixtures/owned-fence-lock-holder.mjs": [
+      {
+        "target": "runner-v2/src/owned-fence-lock.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/fixtures/persistent-output-child.mjs": [],
+    "runner-v2/test/fixtures/persistent-stream-child.mjs": [],
+    "runner-v2/test/git-baseline.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-bootstrap.test.ts": [
+      {
+        "target": "runner-v2/src/git-bootstrap.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-caller-audit.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-caller-audit.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-caller-routing.test.ts": [
+      {
+        "target": "runner-v2/src/git-preflight.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-baseline.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/repository-intelligence.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-control-refusal.test.ts": [
+      {
+        "target": "runner-v2/src/control-server.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-supervisor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-event-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-preflight.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-process-kernel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-preflight.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-production-managers.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-bootstrap.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/workspace-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/integration-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verification-workspace.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/change-set.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-repository.test.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-run-context.test.ts": [
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-run-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-runtime-integration.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-runtime-runner.test.ts": [
+      {
+        "target": "runner-v2/src/git-runtime-runner.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/git-tools.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/guidance-review.test.ts": [
+      {
+        "target": "runner-v2/src/agent-loop.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-lifecycle-tools.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/integration-manager.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/interactive-process-channel.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/interactive-process-channel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/isolation-coordination-locks.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/oci-execution-isolation-provider.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/language-agent-lifecycle.test.ts": [
+      {
+        "target": "runner-v2/src/language-agent-lifecycle.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/language-environment.test.ts": [
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/language-executable-integrity.test.ts": [
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/language-invocation-propagation.test.ts": [
+      {
+        "target": "runner-v2/src/code-intelligence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/filesystem-tools.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/language-provider-compatibility.test.ts": [
+      {
+        "target": "runner-v2/src/code-intelligence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/language-provider-router.test.ts": [
+      {
+        "target": "runner-v2/test/support/lsp-test-scope.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/lsp-language-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/late-birth-clock.test.ts": [
+      {
+        "target": "runner-v2/test/support/late-birth-clock.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/late-birth-fixture-rejection.test.ts": [
+      {
+        "target": "runner-v2/src/native-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/late-birth-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/late-birth-fixture.test.ts": [
+      {
+        "target": "runner-v2/src/native-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/late-birth-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-caller-audit.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-caller-audit.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-client.test.ts": [
+      {
+        "target": "runner-v2/test/support/lsp-owned-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/lsp-test-scope.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-descendant-fixture.test.ts": [],
+    "runner-v2/test/lsp-host-envelope.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host-lsp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-initialize-rejection.test.ts": [
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/lsp-test-scope.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/lsp-owned-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-invocation-lifetime.test.ts": [
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-language-provider.test.ts": [
+      {
+        "target": "runner-v2/test/support/lsp-test-scope.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/lsp-language-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-language-provider.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-real-host.test.ts": [
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/code-intelligence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/filesystem-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/lsp-owned-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-router-authority.test.ts": [
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-server-control.test.ts": [
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-language-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-shared-client.test.ts": [
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-transport-authority.test.ts": [
+      {
+        "target": "runner-v2/src/execution-host-lsp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/lsp-transport-framing.test.ts": [
+      {
+        "target": "runner-v2/src/execution-host-lsp-transport.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/managed-process.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-job-process-host.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-agent-lifecycle.test.ts": [
+      {
+        "target": "runner-v2/src/mcp-agent-lifecycle.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-broker-envelope.test.ts": [
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-caller-audit.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-caller-audit.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-configuration.test.ts": [
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-discovery-lifecycle.test.ts": [
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-discovery-protocol.test.ts": [
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-lazy-manager.test.ts": [
+      {
+        "target": "runner-v2/src/mcp-rpc-peer.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-lazy-native.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host-mcp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-pending-notification.test.ts": [
+      {
+        "target": "runner-v2/src/execution-host-mcp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-rpc-peer.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-rpc-peer.test.ts": [
+      {
+        "target": "runner-v2/src/mcp-rpc-peer.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-tools.test.ts": [
+      {
+        "target": "runner-v2/src/mcp-rpc-peer.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host-mcp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/owned-fence-lock.mjs",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/mcp-transport-authority.test.ts": [
+      {
+        "target": "runner-v2/src/execution-host-mcp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-configuration.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/model-usage-projection.test.ts": [
+      {
+        "target": "runner-v2/src/model-usage-projection.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-architect-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/account-runner-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/agent-prompts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/browser-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/capability-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-architect-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runtime-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-catalog.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-routing.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-project-memory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-build-capabilities.test.ts": [
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-port-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/mcp-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-project-memory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-build-cleanup.test.ts": [
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-build-initialization.test.ts": [
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-build-manager.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-reachability.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/plugin-loader.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-build-spec-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-final-verification-factory.test.ts": [
+      {
+        "target": "runner-v2/src/architect-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-port-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-verifier-factory.test.ts": [
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/risk-policy.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-verifier-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runtime-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/native-worker-driver.test.ts": [
+      {
+        "target": "runner-v2/src/account-runner-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/capability-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-worker-driver.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-routing.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runtime-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-catalog.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-project-memory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "dynamic-import"
+      }
+    ],
+    "runner-v2/test/node-version.test.ts": [
+      {
+        "target": "runner-v2/src/node-version.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/oci-execution-isolation-provider.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/oci-execution-isolation-provider.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/one-shot-command-executor.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/child-environment.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/one-shot-command-family-production-matrix.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/one-shot-command-routing-static.test.ts": [],
+    "runner-v2/test/one-shot-output-capture.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/child-environment.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/owned-fence-lock.test.ts": [
+      {
+        "target": "runner-v2/src/owned-fence-lock.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/permission-store.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/permission-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/plugin-loader.test.ts": [
+      {
+        "target": "runner-v2/src/plugin-loader.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/portable-process-channel.test.ts": [
+      {
+        "target": "runner-v2/src/native-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-channel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-protocol.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/portable-process-protocol.test.ts": [
+      {
+        "target": "runner-v2/src/portable-process-protocol.mjs",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-channel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/portable-supervisor-input.test.ts": [
+      {
+        "target": "runner-v2/src/portable-process-protocol.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/posix-anchor-release-takeover.test.ts": [
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/posix-process-backend.test.ts": [
+      {
+        "target": "runner-v2/src/posix-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-channel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-protocol.mjs",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "dynamic-import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "dynamic-import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "dynamic-import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "dynamic-import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-posix-control.mjs",
+        "kind": "dynamic-import"
+      }
+    ],
+    "runner-v2/test/process-backend-contract.test.ts": [
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/process-host-semantic-probes.test.ts": [
+      {
+        "target": "runner-v2/test/support/finite-fixture-child.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-host-semantic-probes.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-job-process-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-semantic-probes.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/process-output-binary-tail.test.ts": [
+      {
+        "target": "runner-v2/src/execution-safety-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-runtime-runner.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/process-tools.test.ts": [
+      {
+        "target": "runner-v2/src/process-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/project-memory.test.ts": [
+      {
+        "target": "runner-v2/src/memory-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-project-memory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/project-skills.test.ts": [
+      {
+        "target": "runner-v2/src/project-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-catalog.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/skill-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/provider-call-retry.test.ts": [
+      {
+        "target": "runner-v2/src/account-runner-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-call-retry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/provider-transport.test.ts": [
+      {
+        "target": "runner-v2/src/account-runner-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/anthropic-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/encrypted-provider-config-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/google-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/openai-compatible-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-config-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/provider-model-utils.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/real-streaming-crash-lifecycle.test.ts": [
+      {
+        "target": "runner-v2/test/support/real-streaming-crash-lifecycle.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/real-streaming-fixture-finalizer.test.ts": [
+      {
+        "target": "runner-v2/test/support/real-streaming-fixture-finalizer.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/real-streaming-integration.test.ts": [
+      {
+        "target": "runner-v2/test/support/real-streaming-harness.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/real-streaming-fixture-finalizer.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/real-streaming-output-readiness.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/real-streaming-crash-lifecycle.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/recovery-smoke.test.ts": [
+      {
+        "target": "runner-v2/test/support/cli-root-capture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/remaining-fixture-finalizers.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/repository-intelligence.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/research-tools.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/research-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/risk-policy.test.ts": [
+      {
+        "target": "runner-v2/src/risk-policy.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/run-supervisor.test.ts": [
+      {
+        "target": "runner-v2/src/run-supervisor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-event-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/runner-capabilities-config.test.ts": [
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/runner-capability-contract.test.ts": [
+      {
+        "target": "runner-v2/src/runner-capability-contract.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-safety-contracts.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-server-executable.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/runner-internal-execution-context.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-internal-execution-context.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/runner-internal-process-kernel.test.ts": [
+      {
+        "target": "runner-v2/src/runner-internal-process-kernel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/runner-resource-cleanup.test.ts": [
+      {
+        "target": "runner-v2/src/runner-resource-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/runtime-router.test.ts": [
+      {
+        "target": "runner-v2/src/provider-health.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runtime-router.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/scheduler-store.test.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-graph.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/sensitive-redaction.test.ts": [
+      {
+        "target": "runner-v2/src/sensitive-redaction.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/session-authority.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/session-tools.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/sqlite-event-store.test.ts": [
+      {
+        "target": "runner-v2/src/sqlite-event-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/sqlite-evidence-store.test.ts": [
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/staged-launch-kernel.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-expired-host-recovery.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-process-session-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-host-takeover-history.test.ts": [
+      {
+        "target": "runner-v2/src/evidence-continuation.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-language-operation.test.ts": [
+      {
+        "target": "runner-v2/src/streaming-request-operation.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-late-isolation-cleanup.test.ts": [
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-process-session-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-live-open-cancellation.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-process-session-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-output-checkpoint.test.ts": [
+      {
+        "target": "runner-v2/src/bounded-protocol-queue.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-output-controller.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-output-v2.test.ts": [
+      {
+        "target": "runner-v2/src/bounded-protocol-queue.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/protocol-evidence-tee.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-output-controller.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-precheckpoint-recovery.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-continuation.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/portable-process-channel.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-process-session-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-process-session-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/bounded-protocol-queue.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-output-controller.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/bounded-output-spool.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-reachability.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/evidence-continuation.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/real-streaming-output-readiness.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-process-session-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "dynamic-import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "dynamic-import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "dynamic-import"
+      }
+    ],
+    "runner-v2/test/streaming-request-operation.test.ts": [
+      {
+        "target": "runner-v2/src/streaming-request-operation.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-session-store.test.ts": [
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/streaming-unstarted-host-cleanup.test.ts": [
+      {
+        "target": "runner-v2/src/child-environment.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host-streaming.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/session-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/streaming-session-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/subagent-tools.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/budgeted-model.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/subprocess-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/child-environment.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/subprocess-runtime.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/b2-residue.ts": [],
+    "runner-v2/test/support/certified-fixture-cleanup.ts": [],
+    "runner-v2/test/support/cli-root-capture.ts": [],
+    "runner-v2/test/support/cli-root-observer.mjs": [],
+    "runner-v2/test/support/final-verification-profile.ts": [],
+    "runner-v2/test/support/finite-fixture-child.ts": [],
+    "runner-v2/test/support/git-caller-audit.ts": [],
+    "runner-v2/test/support/git-fixture.ts": [
+      {
+        "target": "runner-v2/src/git-command.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/workspace-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/integration-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verification-workspace.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-build-factory.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-worker-driver.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-architect-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-verifier-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/repository-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/typescript-intelligence.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-baseline.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-repository.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/change-set.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/git-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/subagent-tools.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/late-birth-clock.ts": [],
+    "runner-v2/test/support/late-birth-fixture.ts": [
+      {
+        "target": "runner-v2/src/native-process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/lsp-language-fixture.ts": [
+      {
+        "target": "runner-v2/test/support/lsp-owned-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/lsp-test-scope.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-language-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/lsp-owned-fixture.ts": [
+      {
+        "target": "runner-v2/test/support/lsp-test-scope.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host-lsp-transport.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/lsp-client.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/lsp-test-scope.ts": [],
+    "runner-v2/test/support/one-shot-command-executor.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/child-environment.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-isolation-provider.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/one-shot-command-executor.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/posix-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/subprocess-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/real-streaming-crash-lifecycle.ts": [
+      {
+        "target": "runner-v2/test/support/real-streaming-fixture-finalizer.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/real-streaming-fixture-finalizer.ts": [],
+    "runner-v2/test/support/real-streaming-harness.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/runner-capabilities-config.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/run-state-identity.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/real-streaming-crash-lifecycle.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/real-streaming-output-readiness.ts": [],
+    "runner-v2/test/support/windows-fixture-job.ts": [
+      {
+        "target": "runner-v2/src/windows-process-semantic-probes.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/support/windows-fixture-supervisor.mjs": [],
+    "runner-v2/test/task-graph.test.ts": [
+      {
+        "target": "runner-v2/src/task-graph.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/task-scheduler.test.ts": [
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-scheduler.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/tool-broker.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/execution-grants.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-budget-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/tool-ledger.test.ts": [
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-broker.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/tool-ledger.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/tool-registry.test.ts": [
+      {
+        "target": "runner-v2/src/tool-registry.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/typescript-intelligence.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/user-steering-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/user-steering.test.ts": [
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/task-scheduler.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/worker-identity.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/verification-workspace.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/verifier-contracts.test.ts": [
+      {
+        "target": "runner-v2/src/build-runtime.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/risk-policy.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-scheduler-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/verifier-verdict-authority.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/final-verification-profile.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/verifier-observability.test.ts": [
+      {
+        "target": "runner-v2/src/build-observability.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/windows-fixture-birth-protocol.test.ts": [
+      {
+        "target": "runner-v2/test/support/late-birth-fixture.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/windows-fixture-finalizers.test.ts": [
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/windows-fixture-job-owner.test.ts": [
+      {
+        "target": "runner-v2/test/support/windows-fixture-job.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/windows-job-cleanup-bootstrap.test.ts": [
+      {
+        "target": "runner-v2/src/windows-job-process-channel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/windows-job-output-replay.test.ts": [
+      {
+        "target": "runner-v2/src/windows-job-process-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-job-process-channel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/windows-job-process-channel.test.ts": [
+      {
+        "target": "runner-v2/src/windows-job-process-channel.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/windows-job-supervisor-input.test.ts": [],
+    "runner-v2/test/windows-process-backend.test.ts": [
+      {
+        "target": "runner-v2/test/support/windows-fixture-job.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/certified-fixture-cleanup.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/late-birth-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/late-birth-clock.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/windows-job-process-host.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/native-process-backend.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-host-semantic-probes.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/process-backend.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/worker-runtime.test.ts": [
+      {
+        "target": "runner-v2/src/artifact-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/capability-registry.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/language-provider-router.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-agent-session-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-evidence-store.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/sqlite-tool-ledger.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/managed-process.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/one-shot-command-executor.ts",
+        "kind": "import"
+      }
+    ],
+    "runner-v2/test/workspace-manager.test.ts": [
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/src/workspace-manager.ts",
+        "kind": "import"
+      },
+      {
+        "target": "runner-v2/test/support/git-fixture.ts",
+        "kind": "import"
+      }
+    ]
+  },
+  "affectedTests": [
+    "runner-v2/test/build-spec-store.test.ts",
+    "runner-v2/test/change-set.test.ts",
+    "runner-v2/test/cli-capabilities-config.test.ts",
+    "runner-v2/test/code-intelligence-tools.test.ts",
+    "runner-v2/test/control-server.test.ts",
+    "runner-v2/test/evidence-continuation.test.ts",
+    "runner-v2/test/evidence-tools.test.ts",
+    "runner-v2/test/execution-host-credential-graph.test.ts",
+    "runner-v2/test/execution-host.test.ts",
+    "runner-v2/test/execution-isolation-provider.test.ts",
+    "runner-v2/test/extension-contracts.test.ts",
+    "runner-v2/test/extension-runtime.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/final-verification-browser.test.ts",
+    "runner-v2/test/final-verification-cleanup.test.ts",
+    "runner-v2/test/final-verification-completion.test.ts",
+    "runner-v2/test/final-verification-profile.test.ts",
+    "runner-v2/test/final-verification-runtime-b1.test.ts",
+    "runner-v2/test/final-verification-runtime.test.ts",
+    "runner-v2/test/git-baseline.test.ts",
+    "runner-v2/test/git-bootstrap.test.ts",
+    "runner-v2/test/git-caller-routing.test.ts",
+    "runner-v2/test/git-control-refusal.test.ts",
+    "runner-v2/test/git-preflight.test.ts",
+    "runner-v2/test/git-production-managers.test.ts",
+    "runner-v2/test/git-repository.test.ts",
+    "runner-v2/test/git-runtime-integration.test.ts",
+    "runner-v2/test/git-tools.test.ts",
+    "runner-v2/test/integration-manager.test.ts",
+    "runner-v2/test/interactive-process-channel.test.ts",
+    "runner-v2/test/isolation-coordination-locks.test.ts",
+    "runner-v2/test/language-agent-lifecycle.test.ts",
+    "runner-v2/test/language-environment.test.ts",
+    "runner-v2/test/language-executable-integrity.test.ts",
+    "runner-v2/test/language-invocation-propagation.test.ts",
+    "runner-v2/test/language-provider-compatibility.test.ts",
+    "runner-v2/test/language-provider-router.test.ts",
+    "runner-v2/test/late-birth-fixture-rejection.test.ts",
+    "runner-v2/test/late-birth-fixture.test.ts",
+    "runner-v2/test/lsp-client.test.ts",
+    "runner-v2/test/lsp-host-envelope.test.ts",
+    "runner-v2/test/lsp-initialize-rejection.test.ts",
+    "runner-v2/test/lsp-invocation-lifetime.test.ts",
+    "runner-v2/test/lsp-language-provider.test.ts",
+    "runner-v2/test/lsp-real-host.test.ts",
+    "runner-v2/test/lsp-router-authority.test.ts",
+    "runner-v2/test/lsp-server-control.test.ts",
+    "runner-v2/test/lsp-shared-client.test.ts",
+    "runner-v2/test/lsp-transport-authority.test.ts",
+    "runner-v2/test/lsp-transport-framing.test.ts",
+    "runner-v2/test/managed-process.test.ts",
+    "runner-v2/test/mcp-configuration.test.ts",
+    "runner-v2/test/mcp-discovery-lifecycle.test.ts",
+    "runner-v2/test/mcp-discovery-protocol.test.ts",
+    "runner-v2/test/mcp-lazy-native.test.ts",
+    "runner-v2/test/mcp-tools.test.ts",
+    "runner-v2/test/native-architect-runtime.test.ts",
+    "runner-v2/test/native-build-capabilities.test.ts",
+    "runner-v2/test/native-build-cleanup.test.ts",
+    "runner-v2/test/native-build-initialization.test.ts",
+    "runner-v2/test/native-build-manager.test.ts",
+    "runner-v2/test/native-final-verification-factory.test.ts",
+    "runner-v2/test/native-verifier-factory.test.ts",
+    "runner-v2/test/native-verifier-runtime.test.ts",
+    "runner-v2/test/native-worker-driver.test.ts",
+    "runner-v2/test/oci-execution-isolation-provider.test.ts",
+    "runner-v2/test/one-shot-command-executor.test.ts",
+    "runner-v2/test/one-shot-command-family-production-matrix.test.ts",
+    "runner-v2/test/plugin-loader.test.ts",
+    "runner-v2/test/portable-process-channel.test.ts",
+    "runner-v2/test/portable-process-protocol.test.ts",
+    "runner-v2/test/posix-process-backend.test.ts",
+    "runner-v2/test/process-backend-contract.test.ts",
+    "runner-v2/test/process-host-semantic-probes.test.ts",
+    "runner-v2/test/process-tools.test.ts",
+    "runner-v2/test/project-skills.test.ts",
+    "runner-v2/test/provider-transport.test.ts",
+    "runner-v2/test/real-streaming-integration.test.ts",
+    "runner-v2/test/recovery-smoke.test.ts",
+    "runner-v2/test/repository-intelligence.test.ts",
+    "runner-v2/test/runner-capabilities-config.test.ts",
+    "runner-v2/test/runner-capability-contract.test.ts",
+    "runner-v2/test/runner-internal-execution-context.test.ts",
+    "runner-v2/test/runner-internal-process-kernel.test.ts",
+    "runner-v2/test/session-authority.test.ts",
+    "runner-v2/test/staged-launch-kernel.test.ts",
+    "runner-v2/test/streaming-expired-host-recovery.test.ts",
+    "runner-v2/test/streaming-language-operation.test.ts",
+    "runner-v2/test/streaming-late-isolation-cleanup.test.ts",
+    "runner-v2/test/streaming-live-open-cancellation.test.ts",
+    "runner-v2/test/streaming-output-checkpoint.test.ts",
+    "runner-v2/test/streaming-output-v2.test.ts",
+    "runner-v2/test/streaming-precheckpoint-recovery.test.ts",
+    "runner-v2/test/streaming-process-session-runtime.test.ts",
+    "runner-v2/test/streaming-request-operation.test.ts",
+    "runner-v2/test/streaming-unstarted-host-cleanup.test.ts",
+    "runner-v2/test/subagent-tools.test.ts",
+    "runner-v2/test/tool-ledger.test.ts",
+    "runner-v2/test/typescript-intelligence.test.ts",
+    "runner-v2/test/verification-workspace.test.ts",
+    "runner-v2/test/windows-fixture-birth-protocol.test.ts",
+    "runner-v2/test/windows-fixture-job-owner.test.ts",
+    "runner-v2/test/windows-job-cleanup-bootstrap.test.ts",
+    "runner-v2/test/windows-job-output-replay.test.ts",
+    "runner-v2/test/windows-job-process-channel.test.ts",
+    "runner-v2/test/windows-process-backend.test.ts",
+    "runner-v2/test/worker-runtime.test.ts",
+    "runner-v2/test/workspace-manager.test.ts"
+  ],
+  "missingFromPreviousUnion": [],
+  "note": "Live TypeScript AST runtime imports plus explicit supervisor-to-backend launch dependencies; conservatively combined with earlier broader type/dependency closure, not replacing it."
+}

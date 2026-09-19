@@ -1,0 +1,19 @@
+{
+  "id": "static-eslint-final-green",
+  "startedAt": "2026-09-14T19:55:08.202Z",
+  "finishedAt": "2026-09-14T19:55:19.938Z",
+  "wrapperPid": 25944,
+  "testPid": 5488,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/eslint/bin/eslint.js",
+    "runner-v2/src",
+    "runner-v2/test"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

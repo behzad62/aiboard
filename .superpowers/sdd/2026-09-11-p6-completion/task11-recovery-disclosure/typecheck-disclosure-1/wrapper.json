@@ -1,0 +1,32 @@
+{
+  "pid": 49336,
+  "identity": {
+    "Id": 49336,
+    "StartTimeUtc": "2026-09-15T14:24:09.7254437Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T14:24:09.760Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\typecheck-disclosure-1.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "runner-v2/tsconfig.json",
+    "--noEmit"
+  ],
+  "spec": {
+    "id": "typecheck-disclosure-1",
+    "executable": "C:\\Program Files\\nodejs\\node.exe",
+    "args": [
+      "node_modules/typescript/bin/tsc",
+      "-p",
+      "runner-v2/tsconfig.json",
+      "--noEmit"
+    ]
+  }
+}

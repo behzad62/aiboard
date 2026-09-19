@@ -1,0 +1,17 @@
+{
+  "pid": 63596,
+  "wrapperPid": 60136,
+  "spawnedAt": "2026-09-12T15:46:21.352Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^Windows\\ Job\\ reattachment\\ exposes\\ pending\\ replay\\ without\\ starting\\ a\\ reader\\ or\\ ACK$",
+    "runner-v2/test/windows-job-output-replay.test.ts"
+  ]
+}

@@ -1,4 +1,5 @@
 import type { AgentActor } from "./agent-contracts.js";
+import type { ProcessCleanupStatus } from "./execution-safety-contracts.js";
 
 export interface CommandEvidenceFact {
   kind: "command";
@@ -13,6 +14,12 @@ export interface CommandEvidenceFact {
   timedOut: boolean;
   cancelled: boolean;
   outputTruncated: boolean;
+  outputLossy?: boolean;
+  errorCode?: string;
+  cleanup?: ProcessCleanupStatus;
+  enforcement?: "write_confinement_exact_grant" | "unconfined_explicit_full";
+  disclosure?: "provider_specific_not_universal_boundary" | "unconfined_explicit_full";
+  providerId?: string;
   stdoutArtifactHash: string;
   stderrArtifactHash: string;
   repositoryRevision?: string;
@@ -90,6 +97,8 @@ export interface EvidenceRecord {
   fact: EvidenceFact;
   createdAt: string;
   idempotencyKey: string;
+  /** Attempt identity for new records; omitted on legacy evidence rows. */
+  attempt?: number;
 }
 
 export interface RecordEvidenceInput {
@@ -99,6 +108,7 @@ export interface RecordEvidenceInput {
   fact: EvidenceFact;
   createdAt: string;
   idempotencyKey: string;
+  attempt?: number;
 }
 
 export interface ListEvidenceInput {
@@ -107,8 +117,16 @@ export interface ListEvidenceInput {
   limit?: number;
 }
 
+export interface GetEvidenceByIdsInput {
+  runId: string;
+  ids: readonly string[];
+  taskId?: string;
+}
+
 export interface EvidenceStore {
   record(input: RecordEvidenceInput): EvidenceRecord;
   list(input: ListEvidenceInput): EvidenceRecord[];
+  /** Resolve only the requested immutable IDs; missing IDs are omitted. */
+  getByIds(input: GetEvidenceByIdsInput): EvidenceRecord[];
   close(): void;
 }

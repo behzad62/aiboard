@@ -1,0 +1,25 @@
+{
+  "id": "durable-capabilities-red",
+  "startedAt": "2026-09-15T12:41:03.172Z",
+  "finishedAt": "2026-09-15T12:41:04.038Z",
+  "wrapperPid": 20208,
+  "testPid": 65768,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 445,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=durably records the selected backend semantic capabilities",
+    "runner-v2/test/subprocess-runtime.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

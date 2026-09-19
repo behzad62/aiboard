@@ -1,0 +1,10 @@
+{
+  "startedAt": "2026-09-14T07:38:36.285Z",
+  "file": "runner-v2/src/execution-host-managed-transport.ts",
+  "beforeSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d",
+  "faultSha256": "1a01a0a379134514d0189324705e354388b0c08b03f6be05fa7635116887b539",
+  "redExit": 1,
+  "behavioralRed": true,
+  "restoredSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d",
+  "finishedAt": "2026-09-14T07:38:39.105Z"
+}

@@ -10,8 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { captureGitBaseline } from "../src/git-baseline.js";
-import { runGit } from "../src/git-command.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { runGit } from "./support/git-fixture.js";
 
 const identity = {
   GIT_AUTHOR_NAME: "AIBoard Test",

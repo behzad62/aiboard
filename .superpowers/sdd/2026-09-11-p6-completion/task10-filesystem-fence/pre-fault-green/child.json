@@ -1,0 +1,27 @@
+{
+  "pid": 13296,
+  "identity": {
+    "Id": 13296,
+    "StartTimeUtc": "2026-09-14T22:17:45.9534553Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 39008,
+  "spawnedAt": "2026-09-14T22:17:46.256Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-mutation-routing.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "runner-v2/test/language-invocation-propagation.test.ts",
+    "runner-v2/test/execution-grants.test.ts",
+    "runner-v2/test/tool-broker.test.ts"
+  ]
+}

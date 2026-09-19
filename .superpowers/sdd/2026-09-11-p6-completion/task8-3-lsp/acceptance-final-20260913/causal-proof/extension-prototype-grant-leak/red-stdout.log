@@ -1,0 +1,35 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-extension-boundary-zgYqzF"}
+# Subtest: LSP router never forwards opaque grants to an extension object with an LSP prototype
+not ok 1 - LSP router never forwards opaque grants to an extension object with an LSP prototype
+  ---
+  duration_ms: 6.0191
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\lsp-server-control.test.ts:3:1817'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    3 !== 2
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  actual: 3
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-server-control.test.ts:63:12)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# synthetic extension-boundary root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-extension-boundary-zgYqzF
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-extension-boundary-zgYqzF","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 276.994

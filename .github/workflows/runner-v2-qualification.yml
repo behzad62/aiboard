@@ -1,0 +1,161 @@
+name: Runner V2 hosted qualification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * *'
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  native-lifecycle:
+    name: Native lifecycle qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node-version: [24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run Windows native lifecycle qualification
+        if: runner.os == 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/windows-process-backend.test.ts
+          runner-v2/test/windows-job-process-channel.test.ts
+      - name: Run POSIX native lifecycle qualification
+        if: runner.os != 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/posix-process-backend.test.ts
+      - name: Run host-portable managed and MCP lifecycle qualification
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/managed-shared-native.test.ts
+          runner-v2/test/mcp-lazy-native.test.ts
+
+  cli-readiness:
+    name: CLI readiness qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node-version: [24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run real CLI and configuration trust qualification
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/cli-capabilities-config.test.ts
+          runner-v2/test/runner-capabilities-config.test.ts
+          runner-v2/test/runner-capability-contract.test.ts
+          runner-v2/test/plugin-loader.test.ts
+
+  recovery:
+    name: Recovery qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node-version: [24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run restart and recovery qualification
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/recovery-smoke.test.ts
+
+  windows-portable-channel:
+    name: Windows portable channel qualification (Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run real Windows owned-fence protocol and portable-channel qualification serially
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/portable-process-protocol.test.ts
+          runner-v2/test/portable-process-channel.test.ts
+
+  docker-oci-integration:
+    name: Docker OCI qualification (Linux, Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Verify Docker daemon
+        run: docker info
+      - name: Prepare immutable fixture images
+        run: |
+          docker pull alpine:latest
+          docker pull node:24-slim
+      - name: Run attested Docker-provider qualification
+        env:
+          RUNNER_V2_REQUIRE_DOCKER: "1"
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/oci-execution-isolation-provider.test.ts
+          runner-v2/test/managed-strict-oci.test.ts
+          runner-v2/test/mcp-tools.test.ts

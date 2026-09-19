@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: execution disclosure names Full bypass, backend semantics, output loss and unresolved recovery
+ok 1 - execution disclosure names Full bypass, backend semantics, output loss and unresolved recovery
+  ---
+  duration_ms: 1.6064
+  type: 'test'
+  ...
+# Subtest: execution disclosure never upgrades absent or partial facts into confinement
+ok 2 - execution disclosure never upgrades absent or partial facts into confinement
+  ---
+  duration_ms: 0.3839
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 293.4367

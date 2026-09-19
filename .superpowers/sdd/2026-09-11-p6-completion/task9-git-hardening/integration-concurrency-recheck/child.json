@@ -1,0 +1,22 @@
+{
+  "pid": 18056,
+  "identity": {
+    "Id": 18056,
+    "StartTimeUtc": "2026-09-14T15:25:46.0365057Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 47856,
+  "spawnedAt": "2026-09-14T15:25:46.304Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^concurrent managers cannot delete the winning post-ref crash journal$",
+    "runner-v2/test/integration-manager.test.ts"
+  ]
+}

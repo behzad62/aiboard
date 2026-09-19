@@ -5,13 +5,15 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ControlServer } from "../src/control-server.js";
-import type { BuildControlPlane } from "../src/build-runtime-registry.js";
+import { BuildRuntimeRegistry, type BuildControlPlane } from "../src/build-runtime-registry.js";
+import { BuildRuntime } from "../src/build-runtime.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import type { GitPreflightResult } from "../src/git-preflight.js";
 import { RunSupervisor } from "../src/run-supervisor.js";
 import { SqlitePermissionStore } from "../src/permission-store.js";
 import { SqliteEventStore } from "../src/sqlite-event-store.js";
+import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 
 const token = "test-control-token";
 const gitReady: GitPreflightResult = {
@@ -38,6 +40,54 @@ function authorized(init: RequestInit = {}): RequestInit {
 
 async function json(response: Response): Promise<Record<string, unknown>> {
   return (await response.json()) as Record<string, unknown>;
+}
+
+async function createSteeringControlFixture(
+  directory: string,
+  decorateBuilds?: (builds: BuildControlPlane) => BuildControlPlane,
+) {
+  const scheduler = new SqliteSchedulerStore(join(directory, "scheduler.sqlite"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const runtime = new BuildRuntime({
+    runId: "run-steering",
+    initialObjective: "Build exactly this application.\n",
+    store: scheduler,
+    workerDriver: { run: async () => ({ type: "paused" as const, reason: "unused" }) },
+    architectDriver: { run: async () => undefined },
+    integrationDriver: {
+      integrate: async () => ({ status: "integrated" as const, integrationRevision: "unused" }),
+    },
+    maxConcurrency: 1,
+    workspaceFor: async () => "C:/unused",
+    clock: () => "2026-08-27T00:00:00.000Z",
+  });
+  const registry = new BuildRuntimeRegistry();
+  registry.register(runtime);
+  const server = new ControlServer({
+    supervisor,
+    token,
+    bootstrapRun,
+    builds: decorateBuilds?.(registry) ?? registry,
+  });
+  const address = await server.start(0);
+  return {
+    scheduler,
+    server,
+    url: `${address.url}/v2/runs/run-steering/build/user-guidance`,
+    async close() {
+      await server.close();
+      scheduler.close();
+      supervisor.close();
+    },
+  };
+}
+
+function durableGuidanceBody(
+  guidanceId: string,
+  text: string,
+  idempotencyKey: string,
+) {
+  return { guidanceId, text, idempotencyKey };
 }
 
 test("control API authenticates every route and drives durable lifecycle", async () => {
@@ -235,6 +285,8 @@ test("control API stores provider credentials without returning secrets and prov
             objective: "Build the requested feature.",
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            verifierRuntimeIds: ["anthropic:claude-code"],
+            alwaysRequireIndependentVerifier: false,
             maxConcurrency: 2,
             runPolicy: "finish",
             budgetLimits: {},
@@ -245,12 +297,14 @@ test("control API stores provider credentials without returning secrets and prov
     assert.equal(create.status, 201);
     assert.equal(created.length, 1);
     assert.deepEqual(created[0], {
-      version: 1,
+      version: 2,
       runId: "run_native",
       projectId: "project_native",
       objective: "Build the requested feature.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      verifierRuntimeIds: ["anthropic:claude-code"],
+      alwaysRequireIndependentVerifier: false,
       maxConcurrency: 2,
       permissionProfile: "full",
       runPolicy: "finish",
@@ -273,6 +327,8 @@ test("control API stores provider credentials without returning secrets and prov
             objective: "Build within the selected window.",
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+            alwaysRequireIndependentVerifier: true,
             maxConcurrency: 1,
             runPolicy: "budgeted",
             budgetLimits: {
@@ -285,12 +341,14 @@ test("control API stores provider credentials without returning secrets and prov
     );
     assert.equal(createBudgeted.status, 201);
     assert.deepEqual(created[1], {
-      version: 1,
+      version: 2,
       runId: "run_budgeted",
       projectId: "project_native",
       objective: "Build within the selected window.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+      alwaysRequireIndependentVerifier: true,
       maxConcurrency: 1,
       permissionProfile: "guarded",
       runPolicy: "budgeted",
@@ -316,6 +374,8 @@ test("control API stores provider credentials without returning secrets and prov
             objective: "Plan without implementation.",
             architectRuntimeId: "chatgpt:gpt-5.5",
             workerRuntimeIds: ["chatgpt:gpt-5.5"],
+            verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+            alwaysRequireIndependentVerifier: false,
             maxConcurrency: 1,
             runPolicy: "plan_only",
             budgetLimits: {},
@@ -325,12 +385,14 @@ test("control API stores provider credentials without returning secrets and prov
     );
     assert.equal(createPlanOnly.status, 201);
     assert.deepEqual(created[2], {
-      version: 1,
+      version: 2,
       runId: "run_plan_only",
       projectId: "project_native",
       objective: "Plan without implementation.",
       architectRuntimeId: "chatgpt:gpt-5.5",
       workerRuntimeIds: ["chatgpt:gpt-5.5"],
+      verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+      alwaysRequireIndependentVerifier: false,
       maxConcurrency: 1,
       permissionProfile: "guarded",
       runPolicy: "plan_only",
@@ -381,6 +443,8 @@ test("control API stores provider credentials without returning secrets and prov
               objective: "Reject an invalid policy and limit combination.",
               architectRuntimeId: "chatgpt:gpt-5.5",
               workerRuntimeIds: ["chatgpt:gpt-5.5"],
+              verifierRuntimeIds: ["chatgpt:gpt-5.5"],
+              alwaysRequireIndependentVerifier: false,
               maxConcurrency: 1,
               runPolicy: invalid.runPolicy,
               budgetLimits: invalid.budgetLimits,
@@ -393,6 +457,37 @@ test("control API stores provider credentials without returning secrets and prov
         () => supervisor.getRun(invalid.runId),
         new RegExp(`Unknown run ${invalid.runId}`)
       );
+    }
+    for (const [suffix, verifierRuntimeIds] of [
+      ["empty", []],
+      ["blank", [" "]],
+      ["duplicate", ["chatgpt:gpt-5.5", "chatgpt:gpt-5.5"]],
+    ] as const) {
+      const invalidRunId = `run_invalid_verifiers_${suffix}`;
+      const response = await fetch(
+        `${url}/v2/runs`,
+        authorized({
+          method: "POST",
+          body: JSON.stringify({
+            runId: invalidRunId,
+            projectPath: join(directory, "project"),
+            permissionProfile: "guarded",
+            idempotencyKey: `create:${invalidRunId}`,
+            build: {
+              projectId: "project_native",
+              objective: "Reject malformed verifier candidates.",
+              architectRuntimeId: "chatgpt:gpt-5.5",
+              workerRuntimeIds: ["chatgpt:gpt-5.5"],
+              verifierRuntimeIds,
+              maxConcurrency: 1,
+              runPolicy: "finish",
+              budgetLimits: {},
+            },
+          }),
+        })
+      );
+      assert.equal(response.status, 400, suffix);
+      assert.throws(() => supervisor.getRun(invalidRunId), /Unknown run/);
     }
     assert.equal(created.length, 3);
     const references = await json(await fetch(
@@ -564,6 +659,148 @@ test("Git bootstrap failure becomes a durable failed run before model work", asy
   }
 });
 
+test("terminal historical Build reads expose durable provenance through every GET endpoint and audit", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-historical-build-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const runId = "run_historical";
+  supervisor.createRun({
+    runId,
+    projectPath: directory,
+    permissionProfile: "project",
+    idempotencyKey: "create",
+  });
+  supervisor.captureBaseline(runId, "baseline", "a".repeat(40), "refs/aiboard/baseline");
+  supervisor.start(runId, "start");
+  supervisor.requestStop(runId, "stop-request", "Historical restart.");
+  supervisor.confirmStopped(runId, "stopped", "Historical restart.");
+  const projection = {
+    runId,
+    initialObjective: "Historical endpoint coverage.",
+    runPolicy: "finish" as const,
+    status: "stopped" as const,
+    planRevision: 0,
+    tasks: {},
+    guidance: {},
+    userGuidance: {},
+    userGuidanceVersion: 0,
+    architectQuestions: {},
+    architectQuestionVersion: 0,
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 0,
+  };
+  const usage = {
+    scopeId: runId,
+    reservations: {},
+    activeSegments: {},
+    effective: {
+      modelCalls: 0,
+      toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCostMicros: 0,
+      activeMs: 0,
+      artifactBytes: 0,
+    },
+    lifetime: {
+      modelCalls: 0,
+      toolCalls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimatedCostMicros: 0,
+      activeMs: 0,
+      artifactBytes: 0,
+    },
+    window: { index: 1 },
+    lastSequence: 0,
+    attributedModelReservationCount: 0,
+    models: [],
+    historicalProvenance: "unavailable" as const,
+  };
+  const historical = {
+    terminalState: "stopped" as const,
+    provenance: {
+      usage: "unavailable" as const,
+      transcript: "legacy_replay" as const,
+      evidence: "legacy_replay" as const,
+      memories: "unavailable" as const,
+      skills: "durable" as const,
+      processes: "durable" as const,
+      capabilities: "durable" as const,
+      events: "durable" as const,
+      files: "unavailable" as const,
+    },
+  };
+  const builds = {
+    projection: (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return projection;
+    },
+    usage: (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return usage;
+    },
+    observability: async (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return {
+        runId,
+        budget: usage,
+        toolCallCount: 0,
+        agents: [],
+        tools: [],
+        evidence: [],
+        memories: [],
+        skills: [],
+        processes: [],
+        providers: [],
+        events: [],
+        git: { integrationBranch: "", integrationRevision: "", commits: [] },
+        historical,
+      };
+    },
+    transcript: async (requestedRunId: string, afterSequence = 0) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return { turns: [], cursor: afterSequence, historicalProvenance: "legacy_replay" as const };
+    },
+    files: async (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return {
+        source: "integration" as const,
+        revision: "",
+        appliedToProject: false,
+        omittedFileCount: 0,
+        files: [],
+        historicalProvenance: "unavailable" as const,
+      };
+    },
+    events: (requestedRunId: string) => {
+      if (requestedRunId !== runId) throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return [];
+    },
+  } as unknown as BuildControlPlane;
+  const server = new ControlServer({ supervisor, token, bootstrapRun, builds });
+  try {
+    const { url } = await server.start(0);
+    for (const endpoint of ["", "/transcript", "/files", "/usage", "/observability", "/audit"]) {
+      const response = await fetch(`${url}/v2/runs/${runId}/build${endpoint}`, authorized());
+      assert.equal(response.status, 200, endpoint || "/build");
+      const body = await json(response);
+      if (endpoint === "/audit") {
+        assert.equal((body.run as { state: string }).state, "stopped");
+        assert.equal((body.build as { status: string }).status, "stopped");
+        assert.deepEqual(
+          (body.observability as { historical: unknown }).historical,
+          historical,
+        );
+      }
+    }
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("native Build projections and pump controls are runner-owned API routes", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-control-build-"));
   const supervisor = new RunSupervisor(
@@ -594,6 +831,8 @@ test("native Build projections and pump controls are runner-owned API routes", a
         dependencies: [],
         status: "planned" as const,
         requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+        acceptanceCriteriaVersion: 1,
         attempt: 0,
       },
     },
@@ -603,6 +842,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     lastSequence: 1,
   };
   let projectHandoffChoice = "";
+  let verifierRuntimeChoice = "";
   let benchmarkContinuations = 0;
   let buildStatus: "running" | "paused" = "running";
   const builds = {
@@ -708,6 +948,15 @@ test("native Build projections and pump controls are runner-owned API routes", a
       providers: [],
       events: [],
       git: { integrationBranch: "", integrationRevision: "", commits: [] },
+      finalVerification: {
+        canonicalRevision: "revision_final",
+        history: [],
+        current: {
+          generationId: "generation-1", taskId: "verify-1", targetRevision: "revision_final", revisionStatus: "current",
+          categories: ["build", "tests", "runtime_smoke", "browser"].map((category) => ({ category, applicability: "required", status: "pending", evidenceIds: [], issues: [] })),
+          submission: { status: "pending" }, cleanup: { status: "pending", diagnosticsAvailable: false }, review: { status: "pending" }, repairs: [],
+        },
+      },
     }),
     step: async () => {
       steps += 1;
@@ -732,6 +981,10 @@ test("native Build projections and pump controls are runner-owned API routes", a
       return { ...projection, status: buildStatus };
     },
     selectArchitectHandoff: () => projection,
+    selectVerifierRuntime: async (_runId: string, runtimeId: string) => {
+      verifierRuntimeChoice = runtimeId;
+      return projection;
+    },
     selectProjectHandoff: async (_runId: string, choice: "keep_integration_branch" | "apply_to_project") => {
       projectHandoffChoice = choice;
       return {
@@ -803,6 +1056,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
     const observed = await json(observability);
     assert.equal((observed.agents as unknown[]).length, 1);
     assert.equal((observed.tools as unknown[]).length, 1);
+    assert.equal((observed.finalVerification as { current: { generationId: string } }).current.generationId, "generation-1");
 
     const completeTranscript = await fetch(
       `${url}/v2/runs/run_1/build/transcript`,
@@ -869,6 +1123,25 @@ test("native Build projections and pump controls are runner-owned API routes", a
     assert.equal((audit.usage as { effective: { modelCalls: number } }).effective.modelCalls, 9);
     assert.equal((audit.usage as { models: unknown[] }).models.length, 1);
     assert.equal((audit.observability as { toolCallCount: number }).toolCallCount, 1);
+    assert.equal((audit.observability as { finalVerification: { current: { targetRevision: string } } }).finalVerification.current.targetRevision, "revision_final");
+    assert.deepEqual(audit.acceptanceContract, {
+      status: "current",
+      planRevision: 1,
+      tasks: {
+        task_a: {
+          acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+          acceptanceCriteriaVersion: 1,
+          criterionEvidenceLinks: [],
+          criterionVerdicts: [],
+          submissionHistory: [],
+          reviewHistory: [],
+        },
+      },
+    });
+    assert.deepEqual(
+      (audit.build as { tasks: { task_a: { acceptanceCriteria: unknown } } }).tasks.task_a.acceptanceCriteria,
+      (audit.acceptanceContract as { tasks: { task_a: { acceptanceCriteria: unknown } } }).tasks.task_a.acceptanceCriteria
+    );
     assert.equal((audit.runEvents as unknown[]).length, 3);
     assert.deepEqual(audit.buildEvents, []);
     assert.equal(JSON.stringify(audit).includes("provider-secret"), false);
@@ -933,6 +1206,19 @@ test("native Build projections and pump controls are runner-owned API routes", a
     assert.equal(continued.status, 200);
     assert.equal(benchmarkContinuations, 1);
 
+    const verifierSelection = await fetch(
+      `${url}/v2/runs/run_1/build/verifier-handoff`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({
+          runtimeId: "fallback:verifier",
+          idempotencyKey: "verifier:fallback",
+        }),
+      }),
+    );
+    assert.equal(verifierSelection.status, 200);
+    assert.equal(verifierRuntimeChoice, "fallback:verifier");
+
     const handoff = await fetch(
       `${url}/v2/runs/run_1/build/project-handoff`,
       authorized({
@@ -949,6 +1235,298 @@ test("native Build projections and pump controls are runner-owned API routes", a
   } finally {
     await server.close();
     supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("authenticated steering routes enforce validation, unique concurrency, idempotency conflicts, and exact question versions", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-steering-"));
+  const schedulerPath = join(directory, "scheduler.sqlite");
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  let scheduler: SqliteSchedulerStore | undefined;
+  let server: ControlServer | undefined;
+  const createServer = () => {
+    scheduler = new SqliteSchedulerStore(schedulerPath);
+    const runtime = new BuildRuntime({
+      runId: "run-steering",
+      initialObjective: "Build exactly this application.\n",
+      store: scheduler,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-08-27T00:00:00.000Z",
+    });
+    const builds = new BuildRuntimeRegistry();
+    builds.register(runtime);
+    server = new ControlServer({ supervisor, token, bootstrapRun, builds });
+    return server;
+  };
+  const guidanceBody = (version: number, idempotencyKey = `guidance:${version}`) => ({
+    guidanceId: `guidance-${version}`,
+    text: `Durable guidance ${version}.`,
+    idempotencyKey,
+  });
+  try {
+    const control = createServer();
+    const address = await control.start(0);
+    const activeScheduler = scheduler!;
+    const guidanceUrl = `${address.url}/v2/runs/run-steering/build/user-guidance`;
+    assert.equal((await fetch(guidanceUrl, { method: "POST", body: "{}" })).status, 401);
+    assert.equal((await fetch(guidanceUrl, authorized())).status, 404);
+    const invalid = await fetch(guidanceUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ ...guidanceBody(1), text: " " }),
+    }));
+    assert.equal(invalid.status, 400);
+    assert.equal((await json(invalid)).code, "invalid_request");
+    const oversized = await fetch(guidanceUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ ...guidanceBody(1), text: "x".repeat(1024 * 1024) }),
+    }));
+    assert.equal(oversized.status, 413);
+    assert.equal((await json(oversized)).code, "body_too_large");
+
+    const concurrent = await Promise.all([1, 2, 3].map((version) => fetch(
+      guidanceUrl,
+      authorized({ method: "POST", body: JSON.stringify(guidanceBody(version)) }),
+    )));
+    const concurrentBodies = await Promise.all(concurrent.map(async (response) => await response.clone().json()));
+    assert.deepEqual(concurrent.map((response) => response.status), [200, 200, 200], JSON.stringify(concurrentBodies));
+    const eventsAfterConcurrent = activeScheduler.readRun("run-steering");
+    assert.equal(eventsAfterConcurrent.filter((event) => event.type === "user.guidance_submitted").length, 3);
+    assert.equal(eventsAfterConcurrent.find((event) => event.type === "run.initialized")?.payload.objective, "Build exactly this application.\n");
+
+    const duplicate = await fetch(guidanceUrl, authorized({
+      method: "POST",
+      body: JSON.stringify(guidanceBody(1)),
+    }));
+    assert.equal(duplicate.status, 200);
+    const duplicateProjection = await json(duplicate);
+    assert.equal(duplicateProjection.userGuidanceVersion, 3);
+    assert.equal(Object.keys(duplicateProjection.userGuidance as object).length, 3);
+    assert.equal(activeScheduler.readRun("run-steering").filter((event) => event.type === "user.guidance_submitted").length, 3);
+    const conflict = await fetch(guidanceUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ ...guidanceBody(1), text: "Conflicting retry." }),
+    }));
+    assert.equal(conflict.status, 409);
+    assert.equal((await json(conflict)).code, "idempotency_conflict");
+
+    activeScheduler.append({
+      runId: "run-steering",
+      type: "architect.question_requested",
+      occurredAt: "2026-08-27T00:00:01.000Z",
+      actor: { role: "architect", id: "architect-test" },
+      idempotencyKey: "question:1",
+      payload: {
+        questionId: "question-1",
+        version: 1,
+        decisionKind: "authority_decision",
+        question: "Which documented behavior is authoritative?",
+      },
+    });
+    const answerUrl = `${address.url}/v2/runs/run-steering/build/architect-questions/question-1/answer`;
+    const stale = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 2, answer: "Use the public contract.", idempotencyKey: "answer:stale" }),
+    }));
+    assert.equal(stale.status, 409);
+    assert.equal((await json(stale)).code, "invalid_transition");
+    const forged = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({
+        expectedVersion: 1,
+        answer: "Use the public contract.",
+        idempotencyKey: "answer:forged",
+        actor: { role: "worker", id: "worker-1" },
+      }),
+    }));
+    assert.equal(forged.status, 400);
+    const answered = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1, answer: "Use the public contract.", idempotencyKey: "answer:1" }),
+    }));
+    assert.equal(answered.status, 200);
+    const answeredProjection = await json(answered);
+    assert.equal(
+      (answeredProjection.architectQuestions as Record<string, { status: string; version: number }>)["question-1"].status,
+      "answered",
+    );
+    assert.equal(answeredProjection.blockingArchitectQuestionId, undefined);
+    assert.equal(JSON.stringify(answeredProjection).includes(token), false);
+    const retryAnswer = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1, answer: "Use the public contract.", idempotencyKey: "answer:1" }),
+    }));
+    assert.equal(retryAnswer.status, 200);
+    const duplicateAnswer = await fetch(answerUrl, authorized({
+      method: "POST",
+      body: JSON.stringify({ expectedVersion: 1, answer: "Use another contract.", idempotencyKey: "answer:2" }),
+    }));
+    assert.equal(duplicateAnswer.status, 409);
+    assert.equal((await json(duplicateAnswer)).code, "invalid_transition");
+    assert.equal(activeScheduler.readRun("run-steering").filter((event) => event.type === "architect.question_answered").length, 1);
+  } finally {
+    await server?.close();
+    scheduler?.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent identical guidance retries both succeed with one durable event and version", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-guidance-identical-"));
+  let fixture: Awaited<ReturnType<typeof createSteeringControlFixture>> | undefined;
+  try {
+    fixture = await createSteeringControlFixture(directory);
+    const body = durableGuidanceBody(
+      "guidance-concurrent",
+      "Apply the same durable direction.",
+      "guidance:concurrent:same",
+    );
+    const responses = await Promise.all([
+      fetch(fixture.url, authorized({ method: "POST", body: JSON.stringify(body) })),
+      fetch(fixture.url, authorized({ method: "POST", body: JSON.stringify(body) })),
+    ]);
+    assert.deepEqual(responses.map((response) => response.status), [200, 200]);
+    const projections = await Promise.all(responses.map(async (response) => await json(response)));
+    assert.deepEqual(projections.map((projection) => projection.userGuidanceVersion), [1, 1]);
+
+    const events = fixture.scheduler.readRun("run-steering");
+    const guidanceEvents = events.filter((event) => event.type === "user.guidance_submitted");
+    assert.equal(guidanceEvents.length, 1);
+    assert.equal(guidanceEvents[0]?.payload.guidanceId, "guidance-concurrent");
+    assert.equal(guidanceEvents[0]?.payload.version, 1);
+  } finally {
+    await fixture?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("concurrent conflicting guidance retries yield one success, one conflict, and one durable winner", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-guidance-conflict-"));
+  let fixture: Awaited<ReturnType<typeof createSteeringControlFixture>> | undefined;
+  try {
+    fixture = await createSteeringControlFixture(directory);
+    const first = durableGuidanceBody(
+      "guidance-conflict",
+      "Choose the first direction.",
+      "guidance:concurrent:conflict",
+    );
+    const second = durableGuidanceBody(
+      "guidance-conflict",
+      "Choose the second direction.",
+      "guidance:concurrent:conflict",
+    );
+    const responses = await Promise.all([
+      fetch(fixture.url, authorized({ method: "POST", body: JSON.stringify(first) })),
+      fetch(fixture.url, authorized({ method: "POST", body: JSON.stringify(second) })),
+    ]);
+    assert.deepEqual(responses.map((response) => response.status).sort(), [200, 409]);
+    const conflict = responses.find((response) => response.status === 409);
+    assert.ok(conflict);
+    assert.equal((await json(conflict)).code, "idempotency_conflict");
+
+    const guidanceEvents = fixture.scheduler
+      .readRun("run-steering")
+      .filter((event) => event.type === "user.guidance_submitted");
+    assert.equal(guidanceEvents.length, 1);
+    assert.equal(guidanceEvents[0]?.payload.version, 1);
+    assert.ok(
+      guidanceEvents[0]?.payload.text === first.text
+      || guidanceEvents[0]?.payload.text === second.text,
+    );
+  } finally {
+    await fixture?.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("guidance retry after a lost post-append response replays one WAL event without changing the objective", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-guidance-lost-response-"));
+  let releaseResponse!: () => void;
+  const responseReleased = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  let signalAppended!: () => void;
+  const appended = new Promise<void>((resolve) => {
+    signalAppended = resolve;
+  });
+  let signalReturned!: () => void;
+  const returned = new Promise<void>((resolve) => {
+    signalReturned = resolve;
+  });
+  let fixture: Awaited<ReturnType<typeof createSteeringControlFixture>> | undefined;
+  let recovered: Awaited<ReturnType<typeof createSteeringControlFixture>> | undefined;
+  try {
+    fixture = await createSteeringControlFixture(directory, (builds) => new Proxy(builds, {
+      get(target, property, receiver) {
+        if (property === "submitUserGuidance") {
+          return async (
+            runId: Parameters<BuildControlPlane["submitUserGuidance"]>[0],
+            input: Parameters<BuildControlPlane["submitUserGuidance"]>[1],
+          ) => {
+            const projection = await target.submitUserGuidance(runId, input);
+            signalAppended();
+            await responseReleased;
+            signalReturned();
+            return projection;
+          };
+        }
+        const value = Reflect.get(target, property, receiver) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }));
+    const body = durableGuidanceBody(
+      "guidance-lost-response",
+      "Persist this before acknowledging HTTP success.",
+      "guidance:lost-response",
+    );
+    const abortController = new AbortController();
+    const request = fetch(fixture.url, authorized({
+      method: "POST",
+      body: JSON.stringify(body),
+      signal: abortController.signal,
+    })).then(
+      (response) => ({ response }),
+      (error: unknown) => ({ error }),
+    );
+
+    await appended;
+    assert.equal(
+      fixture.scheduler.readRun("run-steering").filter((event) => event.type === "user.guidance_submitted").length,
+      1,
+    );
+    abortController.abort();
+    releaseResponse();
+    const lostResponse = await request;
+    assert.ok("error" in lostResponse);
+    assert.equal((lostResponse.error as Error).name, "AbortError");
+    await returned;
+
+    await fixture.close();
+    fixture = undefined;
+    recovered = await createSteeringControlFixture(directory);
+    const retry = await fetch(recovered.url, authorized({
+      method: "POST",
+      body: JSON.stringify(body),
+    }));
+    assert.equal(retry.status, 200);
+    const retryProjection = await json(retry);
+    assert.equal(retryProjection.userGuidanceVersion, 1);
+
+    const recoveredEvents = recovered.scheduler.readRun("run-steering");
+    assert.equal(recoveredEvents.filter((event) => event.type === "user.guidance_submitted").length, 1);
+    assert.equal(
+      recoveredEvents.find((event) => event.type === "run.initialized")?.payload.objective,
+      "Build exactly this application.\n",
+    );
+  } finally {
+    releaseResponse();
+    await fixture?.close();
+    await recovered?.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

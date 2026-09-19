@@ -3,7 +3,11 @@ import type {
   AgentProviderRetryEvent,
   AgentSuspensionReason,
 } from "./agent-loop.js";
-import { buildWorkerContext, type PromptEvidence } from "./agent-prompts.js";
+import {
+  buildWorkerContext,
+  workerContextSections,
+  type PromptEvidence,
+} from "./agent-prompts.js";
 import { evidenceFactArtifactHashes, evidenceFactSummary } from "./evidence-store.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -17,10 +21,14 @@ import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
-import type { ContextLimits } from "./context-assembler.js";
+import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import type { CapabilityRegistry } from "./capability-registry.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
-import { runGit } from "./git-command.js";
+import { assembleContextWithExtensions } from "./extension-runtime.js";
+import { requireGitRunner } from "./git-command.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
+import type { GitRunner } from "./git-repository.js";
 import type { ProjectMemoryStore } from "./project-memory.js";
 import { discoverProjectInstructions } from "./project-context.js";
 import {
@@ -42,11 +50,16 @@ import type {
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { WorkspaceManager } from "./workspace-manager.js";
 import { runWorkerTask } from "./worker-runtime.js";
+import { resolveWorkerSessionId } from "./worker-identity.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
 import type {
   RunnerProviderRetryRuntime,
 } from "./provider-call-retry.js";
 
 export interface NativeWorkerDriverOptions {
+  git?: RunGitExecutionContext;
   schedulerStore: SchedulerStore;
   router: RuntimeRouter;
   health: ProviderHealthRegistry;
@@ -76,6 +89,10 @@ export interface NativeWorkerDriverOptions {
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
   providerRetryRuntime?: RunnerProviderRetryRuntime;
+  capabilityRegistry?: CapabilityRegistry;
+  language?: LanguageIntelligenceProvider;
+  execution?: OneShotCommandExecutor;
+  executionGrants?: ExecutionGrantAuthority;
 }
 
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
@@ -96,7 +113,15 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
 
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
     let lifecycleContinuations = 0;
-    let runtimeId = this.persistedRuntime(assignment);
+    const persistedAssignment = this.persistedRuntimeAssignment(assignment);
+    let runtimeId = persistedAssignment?.runtimeId;
+    const sessionId = resolveWorkerSessionId(
+      assignment.runId,
+      assignment.task.id,
+      assignment.attempt,
+      assignment.workerId,
+      persistedAssignment?.sessionId
+    );
     if (!runtimeId) {
       const selection = this.options.router.selectWorker(
         assignment.task.requiredCapabilities
@@ -105,7 +130,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         return { type: "paused", reason: "no_healthy_capability_match" };
       }
       runtimeId = selection.runtime.runtimeId;
-      this.assignRuntime(assignment, runtimeId);
+      this.assignRuntime(assignment, runtimeId, sessionId);
     }
 
     for (;;) {
@@ -124,8 +149,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             : {}),
         }
       );
-      const context = await this.workerContext(assignment, workspace.path);
-      const sessionId = `worker:${assignment.runId}:${assignment.task.id}:${assignment.attempt}`;
+      const context = await this.workerContext(
+        assignment,
+        workspace.path,
+        sessionId,
+      );
       const sessionEventCount = this.options.sessions.events(sessionId).length;
       const toolEventCountBefore = this.options.ledger
         .listRun(assignment.runId)
@@ -174,6 +202,13 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         runId: assignment.runId,
         sessionId,
         taskId: assignment.task.id,
+        ...(assignment.task.acceptanceCriteria
+          ? { acceptanceCriteria: assignment.task.acceptanceCriteria }
+          : {}),
+        ...(assignment.task.acceptanceCriteriaVersion !== undefined
+          ? { acceptanceCriteriaVersion: assignment.task.acceptanceCriteriaVersion }
+          : {}),
+        attempt: assignment.attempt,
         actorId: assignment.workerId,
         permissionProfile: this.options.permissionProfile,
         workspace,
@@ -198,6 +233,11 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
               "Batch independent read-only tool calls in one turn when that reduces model round trips.",
               "Keep command output narrow: prefer native search/read tools and targeted ranges over broad file dumps.",
               "Before every submit_task, record task-relevant durable evidence. Use run_evidence_command for command facts; browser snapshot, screenshot, and events tools record browser facts automatically. The Architect decides whether the evidence is sufficient.",
+              ...(assignment.task.acceptanceCriteria
+                ? [
+                    `Submit one criterionEvidenceLinks entry for every acceptance criterion (${assignment.task.acceptanceCriteria.map((criterion) => criterion.id).join(", ")}). Cite the durable evidence ID and only its recorded artifact hashes; the runner binds the mapping to this task attempt.`,
+                  ]
+                : []),
               "Do not submit while your own fresh evidence still shows a known acceptance failure. Continue fixing it; if you are mechanically blocked or the intended resolution is unclear, use ask_architect instead of submitting a known-bad changeset.",
             ].join("\n"),
           },
@@ -245,10 +285,30 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         ...(this.options.managedProcesses
           ? { managedProcesses: this.options.managedProcesses }
           : {}),
+        ...(this.options.execution ? { execution: this.options.execution } : {}),
+        ...(this.options.git ? { git: this.options.git } : {}),
+        ...(this.options.executionGrants
+          ? { executionGrants: this.options.executionGrants }
+          : {}),
+        ...(this.options.capabilityRegistry
+          ? { capabilityRegistry: this.options.capabilityRegistry }
+          : {}),
+        ...(this.options.language ? { language: this.options.language } : {}),
       });
       if (result.loop.status === "submitted") {
         this.recordSuccess(assignment.runId, candidate.providerId);
-        return { type: "submitted", changeSetId: result.loop.changeSetId };
+        return {
+          type: "submitted",
+          changeSetId: result.loop.changeSetId,
+          ...(result.changeSet?.criterionEvidenceLinks
+            ? {
+                criterionEvidenceLinks: result.changeSet.criterionEvidenceLinks.map((link) => ({
+                  ...link,
+                  artifactHashes: [...link.artifactHashes],
+                })),
+              }
+            : {}),
+        };
       }
       if (result.loop.status === "waiting_for_architect") {
         const projection = rebuildSchedulerProjection(
@@ -290,7 +350,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           return { type: "paused", reason: "all_worker_runtimes_unavailable" };
         }
         runtimeId = selection.runtime.runtimeId;
-        this.assignRuntime(assignment, runtimeId);
+        this.assignRuntime(assignment, runtimeId, sessionId);
         continue;
       }
       if (result.loop.status === "suspended") {
@@ -323,15 +383,19 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     }
   }
 
-  private persistedRuntime(assignment: WorkerAssignment): string | undefined {
+  private persistedRuntimeAssignment(assignment: WorkerAssignment) {
     const events = this.options.schedulerStore.readRun(assignment.runId);
     if (events.length === 0) return undefined;
     return rebuildSchedulerProjection(events).runtime.workerAssignments[
       `${assignment.task.id}:${assignment.attempt}`
-    ]?.runtimeId;
+    ];
   }
 
-  private assignRuntime(assignment: WorkerAssignment, runtimeId: string): void {
+  private assignRuntime(
+    assignment: WorkerAssignment,
+    runtimeId: string,
+    sessionId: string
+  ): void {
     const existingCount = this.options.schedulerStore
       .readRun(assignment.runId)
       .filter((event) => event.type === "worker.runtime_assigned").length;
@@ -345,7 +409,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         taskId: assignment.task.id,
         attempt: assignment.attempt,
         runtimeId,
-        sessionId: `worker:${assignment.runId}:${assignment.task.id}:${assignment.attempt}`,
+        sessionId,
       },
     });
   }
@@ -392,7 +456,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
 
   private async workerContext(
     assignment: WorkerAssignment,
-    workspacePath: string
+    workspacePath: string,
+    sessionId: string,
   ) {
     const [instructions, skillMetadata, repositorySnapshot] = await Promise.all([
       discoverProjectInstructions({
@@ -400,7 +465,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         targetPath: workspacePath,
       }),
       this.options.skillCatalog.discover(),
-      snapshotRepository(workspacePath),
+      snapshotRepository(workspacePath, requireGitRunner(this.options.git).lifecycle("inspection").run),
     ]);
     const skills = await selectedSkills(
       this.options.skillCatalog,
@@ -434,7 +499,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         summary: evidenceFactSummary(record.fact),
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
-    return buildWorkerContext({
+    const input = {
       limits: this.contextLimits,
       task: projection.tasks[assignment.task.id],
       guidance,
@@ -444,7 +509,23 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       repositorySnapshot,
       evidence,
       recentHistory: [],
-    });
+    };
+    if (!this.options.capabilityRegistry) return buildWorkerContext(input);
+    return (await assembleContextWithExtensions({
+      registry: this.options.capabilityRegistry,
+      assembler: new ContextAssembler(this.contextLimits),
+      baseSections: workerContextSections(input),
+      request: {
+        runId: assignment.runId,
+        sessionId,
+        actor: { role: "worker", id: assignment.workerId },
+        objective: assignment.task.objective,
+        workspacePath,
+        taskId: assignment.task.id,
+        signal: assignment.signal ?? new AbortController().signal,
+      },
+      artifacts: this.options.artifacts,
+    })).pack;
   }
 }
 
@@ -521,10 +602,10 @@ export function shouldFailoverWorkerFailure(failure: ProviderFailure): boolean {
   return failure.kind !== "invalid_request" && failure.kind !== "cancelled";
 }
 
-async function snapshotRepository(workspacePath: string): Promise<string> {
+async function snapshotRepository(workspacePath: string, execute: GitRunner): Promise<string> {
   const [head, status] = await Promise.all([
-    runGit({ cwd: workspacePath, args: ["rev-parse", "HEAD"] }),
-    runGit({ cwd: workspacePath, args: ["status", "--porcelain=v1"] }),
+    execute({ cwd: workspacePath, args: ["rev-parse", "HEAD"] }),
+    execute({ cwd: workspacePath, args: ["status", "--porcelain=v1"] }),
   ]);
   return `HEAD ${head.stdout.trim()}\n${status.stdout || "working tree clean"}`;
 }

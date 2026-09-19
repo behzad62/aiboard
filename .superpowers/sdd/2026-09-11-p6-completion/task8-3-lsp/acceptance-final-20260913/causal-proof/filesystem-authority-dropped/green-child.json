@@ -1,0 +1,22 @@
+{
+  "pid": 71504,
+  "identity": {
+    "Id": 71504,
+    "StartTimeUtc": "2026-09-12T17:26:14.9009505Z",
+    "Path": null
+  },
+  "wrapperPid": 11856,
+  "spawnedAt": "2026-09-12T17:26:15.981Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP invocation propagates the exact original fs",
+    "runner-v2/test/language-invocation-propagation.test.ts"
+  ]
+}

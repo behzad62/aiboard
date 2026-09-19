@@ -1,6 +1,6 @@
 import type { Browser, BrowserContext, Page } from "playwright";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import type {
@@ -15,6 +15,7 @@ export interface BrowserConsoleEvent {
   type: string;
   text: string;
   occurredAt: string;
+  source?: "console" | "pageerror";
 }
 
 export interface BrowserNetworkEvent {
@@ -26,7 +27,7 @@ export interface BrowserNetworkEvent {
 }
 
 export interface BrowserBackend {
-  open(sessionId: string, input: { url: string; width: number; height: number }): Promise<{ url: string; title: string }>;
+  open(sessionId: string, input: { url: string; width: number; height: number }, ownerRunId: string): Promise<{ url: string; title: string }>;
   navigate(sessionId: string, url: string): Promise<{ url: string; title: string }>;
   snapshot(sessionId: string): Promise<{ url: string; title: string; text: string; html: string }>;
   click(sessionId: string, selector: string): Promise<void>;
@@ -36,6 +37,7 @@ export interface BrowserBackend {
   screenshot(sessionId: string): Promise<Buffer>;
   events(sessionId: string): Promise<{ console: BrowserConsoleEvent[]; network: BrowserNetworkEvent[] }>;
   close(sessionId: string): Promise<void>;
+  closeRun(runId: string): Promise<void>;
   closeAll(): Promise<void>;
 }
 
@@ -54,6 +56,7 @@ export interface BrowserDragInput {
 }
 
 interface BrowserSession {
+  ownerRunId: string;
   context: BrowserContext;
   page: Page;
   console: BrowserConsoleEvent[];
@@ -63,6 +66,9 @@ interface BrowserSession {
 }
 
 interface PersistedBrowserSession {
+  version: 1;
+  sessionId: string;
+  ownerRunId: string;
   url: string;
   width: number;
   height: number;
@@ -74,7 +80,8 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
 
   constructor(private readonly stateDirectory?: string) {}
 
-  async open(sessionId: string, input: { url: string; width: number; height: number }) {
+  async open(sessionId: string, input: { url: string; width: number; height: number }, ownerRunId: string) {
+    if (!ownerRunId.trim()) throw new Error("Browser session requires an explicit run owner.");
     await this.discard(sessionId);
     const browser = await this.browserInstance();
     const context = await browser.newContext({
@@ -82,6 +89,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     });
     const page = await context.newPage();
     const session: BrowserSession = {
+      ownerRunId,
       context,
       page,
       console: [],
@@ -179,11 +187,45 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     await this.discard(sessionId);
   }
 
+  async closeRun(runId: string): Promise<void> {
+    if (!runId.trim()) throw new Error("Browser run owner is required.");
+    const failures: unknown[] = [];
+    for (const [sessionId, session] of [...this.sessions.entries()]) {
+      if (session.ownerRunId !== runId) continue;
+      try {
+        await this.discard(sessionId);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (this.stateDirectory) {
+      await mkdir(resolve(this.stateDirectory), { recursive: true });
+      for (const entry of await readdir(resolve(this.stateDirectory), { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name.endsWith(".storage.json")) continue;
+        const path = join(resolve(this.stateDirectory), entry.name);
+        try {
+          const metadata = parsePersistedBrowserSession(await readFile(path, "utf8"));
+          if (!metadata || metadata.ownerRunId !== runId) continue;
+          if (this.metadataPath(metadata.sessionId) !== path) {
+            throw new Error("Browser session ownership metadata path does not match its session.");
+          }
+          await rm(path, { force: true });
+          await rm(this.storagePath(metadata.sessionId), { force: true });
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(failures, `Could not close all browser sessions owned by run ${runId}.`);
+    }
+  }
+
   private async discard(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session) {
-      this.sessions.delete(sessionId);
       await session.context.close();
+      this.sessions.delete(sessionId);
     }
     if (this.stateDirectory) {
       await rm(this.metadataPath(sessionId), { force: true });
@@ -222,7 +264,11 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     if (!this.stateDirectory) return undefined;
     let metadata: PersistedBrowserSession;
     try {
-      metadata = JSON.parse(await readFile(this.metadataPath(sessionId), "utf8")) as PersistedBrowserSession;
+      const parsed = parsePersistedBrowserSession(await readFile(this.metadataPath(sessionId), "utf8"));
+      if (!parsed || parsed.sessionId !== sessionId) {
+        throw new Error("Browser session ownership metadata is invalid.");
+      }
+      metadata = parsed;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw error;
@@ -234,6 +280,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     });
     const page = await context.newPage();
     const session: BrowserSession = {
+      ownerRunId: metadata.ownerRunId,
       context,
       page,
       console: [],
@@ -258,6 +305,9 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
     const destination = this.metadataPath(sessionId);
     const temporary = `${destination}.${randomUUID()}.tmp`;
     await writeFile(temporary, JSON.stringify({
+      version: 1,
+      sessionId,
+      ownerRunId: session.ownerRunId,
       url: session.page.url(),
       width: session.width,
       height: session.height,
@@ -279,6 +329,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
         type: message.type(),
         text: message.text(),
         occurredAt: new Date().toISOString(),
+        source: "console",
       });
     });
     session.page.on("pageerror", (error) => {
@@ -286,6 +337,7 @@ export class PlaywrightBrowserBackend implements BrowserBackend {
         type: "error",
         text: error.stack || error.message,
         occurredAt: new Date().toISOString(),
+        source: "pageerror",
       });
     });
     session.page.on("response", (response) => {
@@ -322,6 +374,7 @@ export interface BrowserToolsOptions {
   taskId: string;
   maximumDomBytes?: number;
   clock?: () => string;
+  attempt?: number;
 }
 
 export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unknown>[] {
@@ -330,7 +383,7 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
   const clock = options.clock ?? (() => new Date().toISOString());
   return [
     tool("browser.open", "Open a runner-managed browser session", openSchema(), validateOpen, async (input, context) =>
-      json(await options.backend.open(sessionFor(context.runId), input)), external("browser.open"), true),
+      json(await options.backend.open(sessionFor(context.runId), input, context.runId)), external("browser.open"), true),
     tool("browser.navigate", "Navigate the managed browser", urlSchema(), validateUrlOnly, async (input, context) =>
       json(await options.backend.navigate(sessionFor(context.runId), input.url)), external("browser.navigate"), true),
     tool("browser.snapshot", "Capture visible text and DOM from the managed browser", emptySchema(), validateEmpty, async (_input, context) => {
@@ -356,6 +409,7 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         },
         createdAt: capturedAt,
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+        ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
       return json({
         url: snapshot.url,
@@ -400,6 +454,7 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         },
         createdAt: capturedAt,
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+        ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
       return {
         content: [
@@ -447,6 +502,7 @@ export function createBrowserTools(options: BrowserToolsOptions): NativeTool<unk
         },
         createdAt: capturedAt,
         idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+        ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
       });
       return json(events);
     }, external("browser.events"), true),
@@ -570,3 +626,16 @@ function dimension(value: unknown): value is number { return Number.isSafeIntege
 function boundedInteger(value: unknown, minimum: number, maximum: number): value is number { return Number.isSafeInteger(value) && (value as number) >= minimum && (value as number) <= maximum; }
 function pushBounded<T>(items: T[], item: T): void { items.push(item); if (items.length > 1_000) items.shift(); }
 function safeSession(sessionId: string): string { return createHash("sha256").update(sessionId).digest("hex").slice(0, 32); }
+function parsePersistedBrowserSession(raw: string): PersistedBrowserSession | undefined {
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return undefined; }
+  if (!record(value)) return undefined;
+  return value.version === 1 &&
+    nonEmpty(value.sessionId) &&
+    nonEmpty(value.ownerRunId) &&
+    typeof value.url === "string" &&
+    dimension(value.width) &&
+    dimension(value.height)
+    ? value as unknown as PersistedBrowserSession
+    : undefined;
+}

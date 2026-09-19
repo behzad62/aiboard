@@ -1,0 +1,24 @@
+{
+  "id": "mutation-ps1-launcher",
+  "startedAt": "2026-09-14T09:51:03.391Z",
+  "finishedAt": "2026-09-14T09:51:05.528Z",
+  "wrapperPid": 30408,
+  "testPid": 43204,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/task8-raw-launch-closure.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

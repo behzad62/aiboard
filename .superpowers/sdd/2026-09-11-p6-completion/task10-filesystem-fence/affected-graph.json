@@ -1,0 +1,259 @@
+{
+  "createdAt": "2026-09-15T07:21:21.553Z",
+  "groups": {
+    "nativeFenceAndAuthority": [
+      "filesystem-mutation-fence",
+      "filesystem-mutation-routing",
+      "filesystem-tools",
+      "filesystem-bootstrap-fence",
+      "execution-grants",
+      "tool-broker",
+      "tool-ledger"
+    ],
+    "postMutationDiagnostics": [
+      "language-invocation-propagation",
+      "lsp-real-host"
+    ],
+    "gitBootstrapAndWorkspaceConsumers": [
+      "git-baseline",
+      "git-bootstrap",
+      "git-caller-routing",
+      "git-run-context",
+      "git-tools",
+      "change-set",
+      "workspace-manager",
+      "verification-workspace",
+      "integration-manager"
+    ],
+    "workerAndRolePolicyConsumers": [
+      "native-worker-driver",
+      "worker-runtime",
+      "native-architect-runtime",
+      "native-verifier-runtime",
+      "native-build-capabilities",
+      "subagent-tools"
+    ],
+    "baselineFixtureAndVerificationConsumers": [
+      "native-final-verification-factory",
+      "final-verification-profile",
+      "final-verification-cleanup",
+      "final-verification-browser",
+      "final-verification-runtime-b1",
+      "final-verification-runtime"
+    ]
+  },
+  "testFiles": 30,
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-mutation-routing.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "runner-v2/test/execution-grants.test.ts",
+    "runner-v2/test/tool-broker.test.ts",
+    "runner-v2/test/tool-ledger.test.ts",
+    "runner-v2/test/language-invocation-propagation.test.ts",
+    "runner-v2/test/lsp-real-host.test.ts",
+    "runner-v2/test/git-baseline.test.ts",
+    "runner-v2/test/git-bootstrap.test.ts",
+    "runner-v2/test/git-caller-routing.test.ts",
+    "runner-v2/test/git-run-context.test.ts",
+    "runner-v2/test/git-tools.test.ts",
+    "runner-v2/test/change-set.test.ts",
+    "runner-v2/test/workspace-manager.test.ts",
+    "runner-v2/test/verification-workspace.test.ts",
+    "runner-v2/test/integration-manager.test.ts",
+    "runner-v2/test/native-worker-driver.test.ts",
+    "runner-v2/test/worker-runtime.test.ts",
+    "runner-v2/test/native-architect-runtime.test.ts",
+    "runner-v2/test/native-verifier-runtime.test.ts",
+    "runner-v2/test/native-build-capabilities.test.ts",
+    "runner-v2/test/subagent-tools.test.ts",
+    "runner-v2/test/native-final-verification-factory.test.ts",
+    "runner-v2/test/final-verification-profile.test.ts",
+    "runner-v2/test/final-verification-cleanup.test.ts",
+    "runner-v2/test/final-verification-browser.test.ts",
+    "runner-v2/test/final-verification-runtime-b1.test.ts",
+    "runner-v2/test/final-verification-runtime.test.ts"
+  ],
+  "rationale": "Direct native filesystem and new grant-reservation paths; actual post-write diagnostics; all baseline fixture consumers and direct worker/role-policy integrations. No all-Runner or all-P6 suite. Other process/MCP/SQLite/private-state boundaries are unchanged and remain covered by their original gates plus full typecheck and Runner lint.",
+  "frozenProductInputs": [
+    {
+      "path": "runner-v2/src/agent-contracts.ts",
+      "sha256": "44ad2cb6cb6fd3ce4b9ec46f1074d7c324dd418d6dae2b28bb538e53eb85c9d9"
+    },
+    {
+      "path": "runner-v2/src/execution-grants.ts",
+      "sha256": "6f4d505272a4f70ce55c169fe5d466baa99bf9d915c3f511a05f589afa95e00f"
+    },
+    {
+      "path": "runner-v2/src/filesystem-tools.ts",
+      "sha256": "e5194680fb741ba129c1ebfa4bbfa78f66ac83253d81ad1d0a54f7bdb1bef708"
+    },
+    {
+      "path": "runner-v2/src/git-baseline.ts",
+      "sha256": "23facbeac641010c29b0d58a198680de759ec5aec6f902f1eba085c63d3cebed"
+    },
+    {
+      "path": "runner-v2/src/git-bootstrap.ts",
+      "sha256": "0ff927075699c8f0c93288fe995792b5e26e04eb530adc87d0741a7b47b1a7b3"
+    },
+    {
+      "path": "runner-v2/src/tool-broker.ts",
+      "sha256": "e971fa0203e6e6ed76d8be93b7c23717c4cd1a0021e1ca562a20e92c6e88c2ab"
+    },
+    {
+      "path": "runner-v2/test/language-invocation-propagation.test.ts",
+      "sha256": "95545ed952d8391873d09d03be011214cb479778022f940f02a092dd5ec6730a"
+    },
+    {
+      "path": "runner-v2/test/support/git-fixture.ts",
+      "sha256": "92cf67eb8836334c5b98aa24b26c74ceca0b025ffe355335cd2fd027f724d1aa"
+    },
+    {
+      "path": "runner-v2/src/filesystem-mutation-fence.ts",
+      "sha256": "6e41b4fc94a347eaf0bd66e2d51847cef0a85fdd3f8199272f7c8d7f38ee3a7b"
+    },
+    {
+      "path": "runner-v2/test/filesystem-mutation-fence.test.ts",
+      "sha256": "ddf2d21ae415609156303b35eaba64e0f19a930c7dc6ed4037a850ea7c03ad7c"
+    },
+    {
+      "path": "runner-v2/test/filesystem-mutation-routing.test.ts",
+      "sha256": "d6e72af9db5a834167abbd489b500d1a17a2b72b1853794d500265178d6849db"
+    },
+    {
+      "path": "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+      "sha256": "638e7f293782f7882e72bd2d355f61f36b2a3072f9a29991c760357adeb0b09f"
+    },
+    {
+      "path": "runner-v2/test/lsp-real-host.test.ts",
+      "sha256": "9be26dc2315a104f47932e96ffd726c44e0e2aceac98137d8039f1eb874d7654"
+    },
+    {
+      "path": "runner-v2/test/support/lsp-owned-fixture.ts",
+      "sha256": "9baa0062be02bd590adc275211202d22c4e198e4cc5ed53fb6816fffc7a50cd8"
+    }
+  ],
+  "testInputs": [
+    {
+      "path": "runner-v2/test/filesystem-mutation-fence.test.ts",
+      "sha256": "ddf2d21ae415609156303b35eaba64e0f19a930c7dc6ed4037a850ea7c03ad7c"
+    },
+    {
+      "path": "runner-v2/test/filesystem-mutation-routing.test.ts",
+      "sha256": "d6e72af9db5a834167abbd489b500d1a17a2b72b1853794d500265178d6849db"
+    },
+    {
+      "path": "runner-v2/test/filesystem-tools.test.ts",
+      "sha256": "ecc61838aae67db579c3e0e4475ba6a7c2f746abe1aa0577b84ea701c597693f"
+    },
+    {
+      "path": "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+      "sha256": "638e7f293782f7882e72bd2d355f61f36b2a3072f9a29991c760357adeb0b09f"
+    },
+    {
+      "path": "runner-v2/test/execution-grants.test.ts",
+      "sha256": "a61e56ba2adefe89ef87a222e05fe2277f7ffe4a9e49f212f486edc8d940c51d"
+    },
+    {
+      "path": "runner-v2/test/tool-broker.test.ts",
+      "sha256": "8956af8fe37144b293ba056c84ae700cb3a274836cdf1751aa28e8acd25ab6a9"
+    },
+    {
+      "path": "runner-v2/test/tool-ledger.test.ts",
+      "sha256": "c57a4aabe5e08c0716b3659bc5ae28758337a8414cd38bf1cd4476ceeead0f71"
+    },
+    {
+      "path": "runner-v2/test/language-invocation-propagation.test.ts",
+      "sha256": "95545ed952d8391873d09d03be011214cb479778022f940f02a092dd5ec6730a"
+    },
+    {
+      "path": "runner-v2/test/lsp-real-host.test.ts",
+      "sha256": "9be26dc2315a104f47932e96ffd726c44e0e2aceac98137d8039f1eb874d7654"
+    },
+    {
+      "path": "runner-v2/test/git-baseline.test.ts",
+      "sha256": "67824ef0e996d1752fd82a0fa6743dd387da705e0e256977c6ec4dcb90a397b9"
+    },
+    {
+      "path": "runner-v2/test/git-bootstrap.test.ts",
+      "sha256": "312bb90af0e1acdaf62b0a5ff54c0a58e9a140baf2de4b7ff31bd0788ed75e89"
+    },
+    {
+      "path": "runner-v2/test/git-caller-routing.test.ts",
+      "sha256": "b54f1c6682bc064ca5229c2e19b24dbafe027d245d367c3fc5b81d5c0ba16047"
+    },
+    {
+      "path": "runner-v2/test/git-run-context.test.ts",
+      "sha256": "b52b702111bfe95abf76f9d98659aac30d5d89c3f0ec6f585a0a2af05c35ab3c"
+    },
+    {
+      "path": "runner-v2/test/git-tools.test.ts",
+      "sha256": "dd1ff8a158de5c72525113725f828656359c7ca5952cf3d134b8d9630aebe8d8"
+    },
+    {
+      "path": "runner-v2/test/change-set.test.ts",
+      "sha256": "dd2b32115178fc0157a8cc6a0b3511b0abfae9e3197b41885c569a9018a52388"
+    },
+    {
+      "path": "runner-v2/test/workspace-manager.test.ts",
+      "sha256": "b11b0bc3716da0c86acf2bd66863b34632b89f72c3a936af349ef9f68b3aff94"
+    },
+    {
+      "path": "runner-v2/test/verification-workspace.test.ts",
+      "sha256": "58c6bdacf7b9cba275fa84d8932061c9ef67f9be44d8f1341f06d41c20855a08"
+    },
+    {
+      "path": "runner-v2/test/integration-manager.test.ts",
+      "sha256": "923c88bc1de22c4a95844f4a6ad9b5a2ee6dd4c7bd66eb1474a2d026eb800fdb"
+    },
+    {
+      "path": "runner-v2/test/native-worker-driver.test.ts",
+      "sha256": "33996521559efcc0e605067cc892312dc63aad4249b2c478b696f135742a4c00"
+    },
+    {
+      "path": "runner-v2/test/worker-runtime.test.ts",
+      "sha256": "5821de18a5e93b62f07c4bdec3ddffd8509cd07fd5e56508d739877185e45422"
+    },
+    {
+      "path": "runner-v2/test/native-architect-runtime.test.ts",
+      "sha256": "336a05bb5d34de62a0f47792daf17fbe73fcaae22d5616d966cf5dd840cb5552"
+    },
+    {
+      "path": "runner-v2/test/native-verifier-runtime.test.ts",
+      "sha256": "b15aeab94b0aaf1f39688ce32b6b1465c1d23ec0dcaa3bfe6aceb24dad799f31"
+    },
+    {
+      "path": "runner-v2/test/native-build-capabilities.test.ts",
+      "sha256": "cac73dfb22c8e18affabfcc625c6e70775ea85545a56e2ad39ae523120de76b7"
+    },
+    {
+      "path": "runner-v2/test/subagent-tools.test.ts",
+      "sha256": "f3aee9d68a42dc1779e085cf75abc2f6e32c471d1196c7c6fb6b012438d52d93"
+    },
+    {
+      "path": "runner-v2/test/native-final-verification-factory.test.ts",
+      "sha256": "4b7cf08337c8c0d28eee1699afb7bd9d03d5cb7482bb3db4528ce3af076453fa"
+    },
+    {
+      "path": "runner-v2/test/final-verification-profile.test.ts",
+      "sha256": "d76edb4eeb8eadefb6d4a670e932f3ac52318eb82f7e1bad11a3f9811d180b30"
+    },
+    {
+      "path": "runner-v2/test/final-verification-cleanup.test.ts",
+      "sha256": "2a673f7ead1494d8aa9e1624e47c9623b045bb1fd5d7761f63c5a83e491007c3"
+    },
+    {
+      "path": "runner-v2/test/final-verification-browser.test.ts",
+      "sha256": "46c1e00faf2fa8d3df6e0e09d4d7d15a3ca4acd22882dd5e829e2046903dbc91"
+    },
+    {
+      "path": "runner-v2/test/final-verification-runtime-b1.test.ts",
+      "sha256": "5d37fd423e6ecdfd39066102571f2585b4892d7d53cd97de01b86ea2339da8fa"
+    },
+    {
+      "path": "runner-v2/test/final-verification-runtime.test.ts",
+      "sha256": "e4e4cf95fb12336f81ad6a9539a8aa100c391fd877f85d8716c27add76fbb33a"
+    }
+  ]
+}

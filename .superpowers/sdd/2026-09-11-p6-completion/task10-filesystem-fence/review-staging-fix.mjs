@@ -1,0 +1,24 @@
+import fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+const base = '.superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence';
+const dir = base + '/review-4'; fs.mkdirSync(dir);
+const paths = ['runner-v2/src/filesystem-mutation-fence.ts', 'runner-v2/test/filesystem-mutation-fence.test.ts', base + '/review3-staging-green/terminal.json', base + '/review3-focused/terminal.json'];
+const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+const inputs = paths.map(path => ({path, sha256: sha(fs.readFileSync(path))}));
+fs.writeFileSync(dir + '/inputs.json', JSON.stringify(inputs, null, 2) + '\n');
+const prior = JSON.parse(fs.readFileSync(base + '/review-3/stdout.json', 'utf8')).result;
+const prompt = `Independently review the completed correction to the attached third review. No tools, no file writes, source review only. Focus on the must-fix staged-byte tampering, retained descriptor rights/lifetime, explicit-position reads, refusal/cleanup accounting, and whether new checks accidentally weaken target revision verification. Verify from code, not from the implementer's assertions. The new four actual-Windows timing-controlled filesystem fixtures first failed with tampered bytes published, then passed. Initial post-fsync and final pre-publication staged-byte hashes now use wx+ retained handles; final source and staging metadata checks bound intervening changes. Windows replacement/read-handle and non-CAS limitations remain explicit. The former full source review accepted grant/broker policy and called ignore defaults and large-file budgets non-blocking follow-ups; those are not modified here. Report remaining concrete must-fix defects, or accept the correction. Do not claim to run tests. Keep the response focused.\n\nPRIOR REVIEW:\n${prior}\n\n` + paths.map(path => 'FILE '+path+'\n'+fs.readFileSync(path, 'utf8').split('\n').map((line,i)=>(i+1)+': '+line).join('\n')).join('\n\n');
+fs.writeFileSync(dir + '/prompt-sha256.txt', sha(Buffer.from(prompt)) + '\n');
+const startedAt = new Date().toISOString();
+const child = spawn('C:\\Users\\b_a_s\\.local\\bin\\claude.exe', ['--print','--safe-mode','--strict-mcp-config','--tools','','--no-session-persistence','--permission-mode','dontAsk','--effort','medium','--permission-prompts','none','--output-format','json','--max-budget-usd','2','--system-prompt','You are an independent skeptical security code reviewer. Use only the supplied source. Never modify files.'], {cwd:process.cwd(),windowsHide:true,stdio:['pipe','pipe','pipe']});
+let stdout = '', stderr = '';
+child.stdout.on('data', b => stdout += b); child.stderr.on('data', b => stderr += b);
+child.on('error', error => stderr += String(error));
+child.on('close', (exitCode, signal) => {
+  fs.writeFileSync(dir+'/stdout.json',stdout); fs.writeFileSync(dir+'/stderr.log',stderr);
+  const inputsUnchanged = inputs.every(input => sha(fs.readFileSync(input.path)) === input.sha256);
+  const result = {startedAt,finishedAt:new Date().toISOString(),wrapperPid:process.pid,childPid:child.pid,exitCode,signal,inputsUnchanged,tools:[],sessionPersistence:false};
+  fs.writeFileSync(dir+'/terminal.json',JSON.stringify(result,null,2)+'\n'); console.log(JSON.stringify(result)); process.exitCode = inputsUnchanged ? exitCode ?? 98 : 97;
+});
+child.stdin.end(prompt); console.log(JSON.stringify({review:'review-4',childPid:child.pid,promptBytes:Buffer.byteLength(prompt)}));

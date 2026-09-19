@@ -1,0 +1,22 @@
+{
+  "pid": 54752,
+  "identity": {
+    "Id": 54752,
+    "StartTimeUtc": "2026-09-15T13:06:29.6485398Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 67284,
+  "spawnedAt": "2026-09-15T13:06:29.927Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=NativeBuildFactory executes",
+    "runner-v2/test/native-final-verification-factory.test.ts"
+  ]
+}

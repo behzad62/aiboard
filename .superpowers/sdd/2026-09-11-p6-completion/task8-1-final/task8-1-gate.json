@@ -1,0 +1,30 @@
+{
+  "verifiedAt": "2026-09-11T15:00:46.964302+00:00",
+  "status": "TASK 8.1 VERIFIED COMPLETE \u2014 TASK 8.2 MCP MAY BEGIN",
+  "Task81Complete": true,
+  "selfReviewAccepted": true,
+  "independentReviewRequired": false,
+  "baseCommit": "7e81476561daf917b466885c2a2999561200b824",
+  "windowsCounts": {
+    "tests": 605,
+    "pass": 605,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "windowsTestFiles": 56,
+  "frozenSourceInputs": 367,
+  "sourceDrift": [],
+  "linuxContractTestsPassed": 91,
+  "linuxScope": "actual Linux portable authority/output/bootstrap/API contracts and memory/SQLite results; no real Git executable integration or macOS/remote CI claim",
+  "containerRemoved": true,
+  "retainedNativeWorkloads": 0,
+  "retainedNoLaunchDiagnostics": 1,
+  "protectedFilesUnchanged": 222,
+  "P6Complete": false,
+  "nextQueue": "Task8.2 MCP",
+  "laterPhasesStarted": false,
+  "report": ".superpowers/sdd/2026-09-11-p6-completion/task8-1-final/report.md",
+  "P6_5Unlocked": false
+}

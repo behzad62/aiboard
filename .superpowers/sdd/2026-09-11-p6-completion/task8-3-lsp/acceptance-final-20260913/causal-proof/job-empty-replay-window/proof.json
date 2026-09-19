@@ -1,0 +1,133 @@
+{
+  "id": "job-empty-replay-window",
+  "target": "runner-v2/src/windows-job-process-channel.ts",
+  "test": "runner-v2/test/windows-job-output-replay.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-green",
+  "sourceFinalSha256": "a3a7f87848938dd09010886a15ae3d95925af9b92d74ece6cd38bfaed6179fd8",
+  "testFinalSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+  "redReceipt": {
+    "id": "rev-job-empty-replay-window-red",
+    "startedAt": "2026-09-12T15:46:21.028Z",
+    "finishedAt": "2026-09-12T15:46:22.063Z",
+    "wrapperPid": 60136,
+    "testPid": 63596,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^Windows\\ Job\\ reattachment\\ exposes\\ pending\\ replay\\ without\\ starting\\ a\\ reader\\ or\\ ACK$",
+      "runner-v2/test/windows-job-output-replay.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-job-replay-Wlo7Ev"
+    ]
+  },
+  "greenReceipt": {
+    "id": "rev-job-empty-replay-window-green",
+    "startedAt": "2026-09-12T15:46:22.113Z",
+    "finishedAt": "2026-09-12T15:46:23.211Z",
+    "wrapperPid": 45964,
+    "testPid": 56312,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^Windows\\ Job\\ reattachment\\ exposes\\ pending\\ replay\\ without\\ starting\\ a\\ reader\\ or\\ ACK$",
+      "runner-v2/test/windows-job-output-replay.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/red-terminal.json",
+      "sha256": "53218177d4ea8fb93f6de8bc1c9bf63f9ab28cfe2b00901224d539056c06b80b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/red-inputs-before.json",
+      "sha256": "05e7f0035b36b1bdd4d07e39c4b95b084b92785b977218b0f72d4acb1802ee1e"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/red-inputs-after.json",
+      "sha256": "05e7f0035b36b1bdd4d07e39c4b95b084b92785b977218b0f72d4acb1802ee1e"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/red-stdout.log",
+      "sha256": "92d886ea11af4bdba2003567f5bbf377f78f3b649e4ae92439919228f1731d4e"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/red-wrapper.json",
+      "sha256": "e817cd49b580026a6150d8af691c8b8fddaa7d53f8ae12f0b20ec203906901b1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/red-child.json",
+      "sha256": "d9c7b342d2240db81069dde588d2bcf8a8b39c62f5a573268030c4d8a846a59c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/green-terminal.json",
+      "sha256": "88f55a4d3576151ef9d0e80758843c3be816942f4e62646ec6b5a214efc30cd4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/green-inputs-before.json",
+      "sha256": "ed22030b31bebf7c19332b2cecb2b20a4af6b0e64ed88fcdda7dba854179cbb4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/green-inputs-after.json",
+      "sha256": "ed22030b31bebf7c19332b2cecb2b20a4af6b0e64ed88fcdda7dba854179cbb4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/green-stdout.log",
+      "sha256": "9ee06e63c97b5656d6cd65e40ee8ec3b2e30d8db7828b45befb06a9c6a1b2e3e"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/green-wrapper.json",
+      "sha256": "4fc444cf0bb10c5a2117531efb350d42e5e4198c791b2fd9a07c2d5849bdb615"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-empty-replay-window-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-empty-replay-window/green-child.json",
+      "sha256": "6bd003ec1a2213f70b38ab6b8a4b3a913bd830e0630bcd02d83670c6f220e80e"
+    }
+  ]
+}

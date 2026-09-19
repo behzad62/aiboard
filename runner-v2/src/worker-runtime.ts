@@ -1,7 +1,11 @@
+import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
+import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
 } from "./agent-contracts.js";
+import type { AcceptanceCriterion } from "./acceptance-contracts.js";
 import {
   runAgentLoop,
   type AgentLoopResult,
@@ -12,6 +16,7 @@ import { createArtifactTools } from "./artifact-tools.js";
 import type { BudgetLedger } from "./budget-ledger.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import { createBrowserTools, type BrowserBackend } from "./browser-tools.js";
+import type { CapabilityRegistry } from "./capability-registry.js";
 import { createCodeIntelligenceTools } from "./code-intelligence-tools.js";
 import {
   createChangeSet,
@@ -42,6 +47,10 @@ import type { ManagedProcessService } from "./managed-process.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { ExecutionGrantAuthority } from "./execution-grants.js";
+import { registerExtensionCapabilities } from "./extension-runtime.js";
 import type {
   ToolInvocationLedger,
   ToolLedgerEvent,
@@ -58,11 +67,15 @@ import {
 } from "./worker-lifecycle-tools.js";
 
 export interface RunWorkerTaskOptions {
+  git?: RunGitExecutionContext;
   model: AgentModel;
   subagentModelForSession?: (sessionId: string) => AgentModel;
   runId: string;
   sessionId: string;
   taskId: string;
+  acceptanceCriteria?: readonly AcceptanceCriterion[];
+  acceptanceCriteriaVersion?: number;
+  attempt?: number;
   actorId: string;
   permissionProfile: PermissionProfile;
   workspace: TaskWorkspace;
@@ -83,11 +96,15 @@ export interface RunWorkerTaskOptions {
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
+  capabilityRegistry?: CapabilityRegistry;
+  language?: LanguageIntelligenceProvider;
   allowedCommands?: readonly string[];
   hiddenPaths?: readonly string[];
   protectedPaths?: readonly string[];
   providerRetry?: RunAgentLoopOptions["providerRetry"];
   signal?: AbortSignal;
+  execution?: OneShotCommandExecutor;
+  executionGrants?: ExecutionGrantAuthority;
 }
 
 export interface WorkerTaskResult {
@@ -99,6 +116,10 @@ export async function runWorkerTask(
   options: RunWorkerTaskOptions
 ): Promise<WorkerTaskResult> {
   const clock = options.clock ?? (() => new Date().toISOString());
+  const schedulerProjection = schedulerState(options);
+  const taskContract = schedulerProjection?.tasks[options.taskId];
+  const acceptanceCriteria = options.acceptanceCriteria ?? taskContract?.acceptanceCriteria;
+  const attempt = options.attempt ?? taskContract?.attempt;
   let messages = [...options.initialMessages];
   if (options.sessions.events(options.sessionId).length === 0) {
     await options.sessions.create({
@@ -132,6 +153,7 @@ export async function runWorkerTask(
   }
 
   const broker = new ToolBroker({
+    git: options.git,
     permissionProfile: options.permissionProfile,
     workspacePath: options.workspace.path,
     artifacts: options.artifacts,
@@ -139,24 +161,29 @@ export async function runWorkerTask(
     ...(options.permissions
       ? { approve: (request) => options.permissions!.requestTool(request) }
       : {}),
+    ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
   });
-  const repository = new RepositoryIntelligence();
-  const typescript = new TypeScriptIntelligence(repository);
+  const repository = new RepositoryIntelligence(options.git ? (request) => options.git!.current().run(request) : undefined);
+  const language = options.language ?? new TypeScriptIntelligence(repository);
   for (const tool of createFilesystemTools({
     artifacts: options.artifacts,
     repository,
-    diagnostics: typescript,
+    diagnostics: language,
     ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
     ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
   })) {
     broker.register(tool);
   }
-  for (const tool of createCodeIntelligenceTools({ repository, typescript })) {
+  for (const tool of createCodeIntelligenceTools({
+    repository,
+    language,
+  })) {
     broker.register(tool);
   }
   for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
   for (const tool of createSessionTools(options.sessions)) broker.register(tool);
   for (const tool of createProcessTools({
+    ...(options.execution ? { execution: options.execution } : {}),
     ...(options.allowedCommands
       ? { allowedCommands: options.allowedCommands }
       : {}),
@@ -175,6 +202,7 @@ export async function runWorkerTask(
       artifacts: options.artifacts,
       ...(options.evidenceStore ? { evidenceStore: options.evidenceStore } : {}),
       taskId: options.taskId,
+      ...(attempt !== undefined ? { attempt } : {}),
       clock,
       ...(options.allowedCommands
         ? { allowedCommands: options.allowedCommands }
@@ -186,13 +214,16 @@ export async function runWorkerTask(
       broker.register(tool);
     }
   }
-  for (const tool of createGitTools()) broker.register(tool);
+  for (const tool of createGitTools(options.git)) broker.register(tool);
   if (options.evidenceStore) {
     for (const tool of createEvidenceTools({
+      git: options.git,
       store: options.evidenceStore,
       artifacts: options.artifacts,
       taskId: options.taskId,
+      ...(options.execution ? { execution: options.execution } : {}),
       clock,
+      ...(attempt !== undefined ? { attempt } : {}),
       ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
     })) broker.register(tool);
   }
@@ -216,6 +247,7 @@ export async function runWorkerTask(
     })) broker.register(tool);
   }
   for (const tool of createSubagentTools({
+    git: options.git,
     model: options.model,
     ...(options.subagentModelForSession
       ? { subagentModelForSession: options.subagentModelForSession }
@@ -223,6 +255,7 @@ export async function runWorkerTask(
     runId: options.runId,
     parentSessionId: options.sessionId,
     taskId: options.taskId,
+    ...(attempt !== undefined ? { attempt } : {}),
     parentActorId: options.actorId,
     permissionProfile: options.permissionProfile,
     workspacePath: options.workspace.path,
@@ -246,21 +279,44 @@ export async function runWorkerTask(
       : {}),
     ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
     ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
+    ...(options.execution ? { execution: options.execution } : {}),
+    ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
+    language,
   })) broker.register(tool);
 
   let producedChangeSet: ChangeSet | undefined;
-  broker.register(createSubmitTaskTool(async ({ summary, unresolvedConcerns }) => {
-    const evidenceHashes = options.evidenceStore
-      ? evidenceArtifactHashes(
-          options.evidenceStore.list({
+  broker.register(createSubmitTaskTool(async ({
+    summary,
+    unresolvedConcerns,
+    criterionEvidenceLinks,
+  }) => {
+    if (
+      schedulerState(options)?.acceptanceContractStatus ===
+      "acceptance_contract_upgrade_required"
+    ) {
+      throw new Error(
+        "Task submission is blocked until the Architect upgrades the acceptance contract."
+      );
+    }
+    const evidenceRecords = options.evidenceStore
+      ? acceptanceCriteria
+        ? options.evidenceStore.getByIds({
+            runId: options.runId,
+            taskId: options.taskId,
+            ids: [...new Set((criterionEvidenceLinks ?? []).map((link) => link.evidenceId))],
+          })
+        : options.evidenceStore.list({
             runId: options.runId,
             taskId: options.taskId,
             limit: 1_000,
-          }),
-          options.actorId
-        )
+          })
       : [];
-    if (evidenceHashes.length === 0) {
+    const evidenceHashes = evidenceArtifactHashes(
+      evidenceRecords,
+      options.actorId,
+      attempt
+    );
+    if (!acceptanceCriteria && evidenceHashes.length === 0) {
       throw new Error(
         "Task submission requires durable evidence; record command or browser facts first."
       );
@@ -283,10 +339,26 @@ export async function runWorkerTask(
       };
     }
     producedChangeSet = await createChangeSet({
+      execute: options.git?.lifecycle("inspection").run,
       workspacePath: options.workspace.path,
       taskCommit: commit,
       artifacts: options.artifacts,
-      evidenceArtifactHashes: evidenceHashes,
+      ...(acceptanceCriteria
+        ? {
+            acceptanceCriteria,
+            ...(options.acceptanceCriteriaVersion ?? taskContract?.acceptanceCriteriaVersion) !== undefined
+              ? {
+                  acceptanceCriteriaVersion:
+                    options.acceptanceCriteriaVersion ?? taskContract?.acceptanceCriteriaVersion,
+                }
+              : {},
+            criterionEvidenceLinks,
+            evidenceRecords,
+            taskId: options.taskId,
+            attempt,
+            assignedWorkerId: options.actorId,
+          }
+        : { evidenceArtifactHashes: evidenceHashes }),
       externalEffects: externalEffectReferences(
         options.ledger.listRun(options.runId),
         options.sessionId
@@ -296,7 +368,10 @@ export async function runWorkerTask(
       unresolvedConcerns,
     });
     return producedChangeSet;
-  }));
+  }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined }));
+  if (options.capabilityRegistry) {
+    registerExtensionCapabilities(options.capabilityRegistry, broker);
+  }
 
   const toolRuntime = options.budgetLedger
     ? new BudgetedToolRuntime({
@@ -306,7 +381,7 @@ export async function runWorkerTask(
         clock,
       })
     : broker;
-  const loop = await runAgentLoop({
+  const loop = await withLanguageAgentLifecycle(options.language, { runId: options.runId, sessionId: options.sessionId, actor: { role: "worker", id: options.actorId } }, () => withMcpAgentLifecycle(options.mcpManager, { runId: options.runId, sessionId: options.sessionId, actor: { role: "worker", id: options.actorId } }, () => runAgentLoop({
     model: options.model,
     registry: toolRuntime,
     context: {
@@ -322,7 +397,7 @@ export async function runWorkerTask(
     onCheckpoint: async (checkpoint) => {
       await options.sessions.checkpoint(options.sessionId, checkpoint, clock());
     },
-  });
+  })));
 
   if (loop.status === "submitted") {
     producedChangeSet ??= changeSetFromMessages(loop.messages, loop.changeSetId);
@@ -407,7 +482,8 @@ function taskMemoryIds(options: RunWorkerTaskOptions): string[] {
 
 function evidenceArtifactHashes(
   records: ReturnType<EvidenceStore["list"]>,
-  actorId: string
+  actorId: string,
+  attempt?: number
 ): string[] {
   return [
     ...new Set(
@@ -418,9 +494,21 @@ function evidenceArtifactHashes(
             (record.actor.role === "subagent" &&
               record.actor.id.startsWith(`${actorId}:`))
         )
+        .filter((record) =>
+          attempt === undefined ||
+          record.attempt === undefined ||
+          record.attempt === attempt
+        )
         .flatMap((record) => evidenceFactArtifactHashes(record.fact))
     ),
   ];
+}
+
+function schedulerState(options: RunWorkerTaskOptions) {
+  if (!options.schedulerStore) return undefined;
+  const events = options.schedulerStore.readRun(options.runId);
+  if (events.length === 0) return undefined;
+  return rebuildSchedulerProjection(events);
 }
 
 function changeSetFromMessages(

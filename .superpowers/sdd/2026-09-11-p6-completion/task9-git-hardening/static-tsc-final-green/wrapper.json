@@ -1,0 +1,31 @@
+{
+  "pid": 18388,
+  "identity": {
+    "Id": 18388,
+    "StartTimeUtc": "2026-09-14T19:54:55.9750873Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T19:54:56.011Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\gate.mjs",
+    ".\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\static-tsc-final-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "runner-v2/tsconfig.json",
+    "--noEmit"
+  ],
+  "spec": {
+    "id": "static-tsc-final-green",
+    "args": [
+      "node_modules/typescript/bin/tsc",
+      "-p",
+      "runner-v2/tsconfig.json",
+      "--noEmit"
+    ]
+  }
+}

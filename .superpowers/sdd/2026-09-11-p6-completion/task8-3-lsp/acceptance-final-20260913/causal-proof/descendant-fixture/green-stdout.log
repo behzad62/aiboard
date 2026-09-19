@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: LSP native descendant fixture remains in its attested linux ownership domain
+ok 1 - LSP native descendant fixture remains in its attested linux ownership domain
+  ---
+  duration_ms: 1.1961
+  type: 'test'
+  ...
+# Subtest: LSP native descendant fixture remains in its attested win32 ownership domain
+ok 2 - LSP native descendant fixture remains in its attested win32 ownership domain
+  ---
+  duration_ms: 0.5069
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 210.2534

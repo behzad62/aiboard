@@ -1,0 +1,29 @@
+[
+  {
+    "id": "verifier-grant-authority",
+    "file": "runner-v2/src/final-verification-runtime.ts",
+    "beforeSha256": "6b6291898e36d2e023ac2a7ef2ad126a9b6ae9d2b204efa2ff7e776928e27ea7",
+    "faultSha256": "17f9f4dfadc671bd89382202d204b00f9d3ea790320094f9c137badb0145698e",
+    "redExit": 1,
+    "behavioralRed": true,
+    "restoredSha256": "6b6291898e36d2e023ac2a7ef2ad126a9b6ae9d2b204efa2ff7e776928e27ea7"
+  },
+  {
+    "id": "trusted-transitional-observation",
+    "file": "runner-v2/src/execution-host-managed-transport.ts",
+    "beforeSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d",
+    "faultSha256": "922089bfc600c09f195d01896d76b9e7b359b1f08edb9c433bc4ec7c7116eea1",
+    "redExit": 1,
+    "behavioralRed": true,
+    "restoredSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d"
+  },
+  {
+    "id": "terminal-cleanup-join",
+    "file": "runner-v2/src/execution-host-managed-transport.ts",
+    "beforeSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d",
+    "faultSha256": "7f559ba7d147325c67862b9a5e252c1c1fd772e3e336508afb4d948a2072dbbe",
+    "redExit": 1,
+    "behavioralRed": true,
+    "restoredSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d"
+  }
+]

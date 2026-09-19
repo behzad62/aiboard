@@ -1,0 +1,131 @@
+{
+  "id": "private-delivery-drops-authority",
+  "target": "runner-v2/src/streaming-output-controller.ts",
+  "test": "runner-v2/test/streaming-output-v2.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-green",
+  "sourceFinalSha256": "2f79bb2ef0ea682c4925ed6440e746e130b8f9a625df589889ba88740819f2ba",
+  "testFinalSha256": "dceaef541c763dc229e7a0e8f8051ab413d5aab3c1f62c3db366c4d09c302172",
+  "redReceipt": {
+    "id": "rev-private-delivery-drops-authority-red",
+    "startedAt": "2026-09-12T15:46:19.610Z",
+    "finishedAt": "2026-09-12T15:46:20.317Z",
+    "wrapperPid": 6196,
+    "testPid": 25316,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^private\\ cleanup\\ delivery\\ refuses\\ stale\\ authority\\ before\\ effect\\ without\\ poisoning\\ replay$",
+      "runner-v2/test/streaming-output-v2.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "rev-private-delivery-drops-authority-green",
+    "startedAt": "2026-09-12T15:46:20.366Z",
+    "finishedAt": "2026-09-12T15:46:20.977Z",
+    "wrapperPid": 32672,
+    "testPid": 38224,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^private\\ cleanup\\ delivery\\ refuses\\ stale\\ authority\\ before\\ effect\\ without\\ poisoning\\ replay$",
+      "runner-v2/test/streaming-output-v2.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/red-terminal.json",
+      "sha256": "91b57ff334bcf8d15a0a3237e58e15d157033caaf7dca9d976c1ec9888613d59"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/red-inputs-before.json",
+      "sha256": "b31ffec57d601b535e0c0d59d796bc7413ca4e19e540b9c00481f000c30434e4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/red-inputs-after.json",
+      "sha256": "b31ffec57d601b535e0c0d59d796bc7413ca4e19e540b9c00481f000c30434e4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/red-stdout.log",
+      "sha256": "b446bd7bbb16517e040e80922f3cc83d261b204e918fe693733163d28d360773"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/red-wrapper.json",
+      "sha256": "7a79ba701e55acd47e89a782f8d21cfce25a9d8ba4f0ad7698147dfeb9ad4124"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/red-child.json",
+      "sha256": "e1ea0f4c2a45ce257e4b6477ad295af6bdb956723349b3952ed8e739f117836d"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/green-terminal.json",
+      "sha256": "c1e9c18546568681c6440c00c767a77870539c312c69bf311a9c619e5522a404"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/green-inputs-before.json",
+      "sha256": "8f32e3dd5d5caa3dc0b887cb0e712afb482ab6a753a2e878a7d51b0f0daf98c8"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/green-inputs-after.json",
+      "sha256": "8f32e3dd5d5caa3dc0b887cb0e712afb482ab6a753a2e878a7d51b0f0daf98c8"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/green-stdout.log",
+      "sha256": "ba6f148f033ec911f99a9f1e4ab7e0839d8a19a626e9b575570b18ddd0245edc"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/green-wrapper.json",
+      "sha256": "b0258156732369a53fde77871f2456063918d8b8a90523e0a889f68ec7e06d3b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-private-delivery-drops-authority-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/private-delivery-drops-authority/green-child.json",
+      "sha256": "b5fb7bab46ea5de70e21151699f76a3b3eeb03e6c53bddba651903b271ca7858"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "pid": 42088,
+  "identity": {
+    "Id": 42088,
+    "StartTimeUtc": "2026-09-15T07:52:28.6796769Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 52328,
+  "spawnedAt": "2026-09-15T07:52:28.973Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=a new-file parent retarget",
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ]
+}

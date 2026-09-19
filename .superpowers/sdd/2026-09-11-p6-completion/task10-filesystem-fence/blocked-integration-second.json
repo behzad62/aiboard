@@ -1,0 +1,27 @@
+{
+  "time": "2026-09-15T08:03:06.1530181Z",
+  "reason": "Repeated fixture deadlock: winning project ref advanced, loser journal removed; preserve diagnostic root and let parent test runner continue",
+  "process": {
+    "ProcessId": 55812,
+    "ParentProcessId": 50284,
+    "CreationDate": "2026-09-15T11:57:58.892032+04:00",
+    "CommandLine": "\"C:\\Program Files\\nodejs\\node.exe\" --use-largepages=off --trace-event-file-pattern=node_trace.${rotation}.log --v8-pool-size=4 --node-snapshot --cpu-prof-interval=1000 --report-signal=SIGUSR2 --tls-cipher-list=TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA --secure-heap=0 --secure-heap-min=2 --stack-trace-limit=10 --test-isolation=process --network-family-autoselection-attempt-timeout=250 --heapsnapshot-near-heap-limit=0 --heap-prof-interval=524288 --max-http-header-size=16384 --test-concurrency=1 --test-timeout=0 --test-coverage-branches=0 --test-coverage-functions=0 --test-coverage-lines=0 --watch-kill-signal=SIGTERM --import=./runner-v2/test/support/cli-root-observer.mjs --import=tsx --inspect-port=127.0.0.1:9229 --inspect-publish-uid=stderr,http --import ./runner-v2/test/support/cli-root-observer.mjs --import tsx runner-v2\\test\\integration-manager.test.ts"
+  },
+  "descendants": 0,
+  "root": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-SjZKM0",
+  "journals": [
+    {
+      "name": "run-handoff-concurrent-journals-aa54a23735.1edb55b5-20d9-490f-afa9-24a489cfdb9f-ce63b7d0e4.apply.json",
+      "sha256": "259433572F2140DE534346D9BA87C4458BC07181193AEF7C879B10B9F9C4F378",
+      "content": "{\"version\":2,\"state\":\"prepared\",\"runId\":\"run_handoff-concurrent-journals\",\"projectIdentity\":\"c1462062ea73ffb0b2690789624b0ab0460a4129617a7777969468ed90adaf53\",\"projectBranch\":\"refs/heads/main\",\"expectedParent\":\"324990d1e3657d78361646aa198ba77848b05aad\",\"targetCommit\":\"e16e34818e72dd3cb443eb0e8a4140eb50e96889\",\"integrationRevision\":\"bf8a63d7578016213f830585a1cca69a52e6c481\",\"transitionId\":\"1edb55b5-20d9-490f-afa9-24a489cfdb9f\",\"transitionRef\":\"refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/handoff/1edb55b5-20d9-490f-afa9-24a489cfdb9f-ce63b7d0e4\",\"patchFile\":\"run-handoff-concurrent-journals-aa54a23735.1edb55b5-20d9-490f-afa9-24a489cfdb9f-ce63b7d0e4.patch\",\"indexFile\":\"run-handoff-concurrent-journals-aa54a23735.1edb55b5-20d9-490f-afa9-24a489cfdb9f-ce63b7d0e4.index\"}\n"
+    }
+  ],
+  "refs": [
+    "324990d1e3657d78361646aa198ba77848b05aad refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/baseline",
+    "e16e34818e72dd3cb443eb0e8a4140eb50e96889 refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/handoff/1edb55b5-20d9-490f-afa9-24a489cfdb9f-ce63b7d0e4",
+    "bf8a63d7578016213f830585a1cca69a52e6c481 refs/aiboard/runs/run-handoff-concurrent-journals-aa54a23735/integrated/changeset-82bc3c3142995e9241e628dd19e598-a89d18fa7b",
+    "8232eb38250d9aa2d06dfc0bb02a98bd674d1d84 refs/heads/aiboard/run-handoff--aa54a23735/tasks/feature-2ad5623197",
+    "bf8a63d7578016213f830585a1cca69a52e6c481 refs/heads/aiboard/run-handoff-concurrent-journals-aa54a23735/integration",
+    "e16e34818e72dd3cb443eb0e8a4140eb50e96889 refs/heads/main"
+  ]
+}

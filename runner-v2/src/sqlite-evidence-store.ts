@@ -4,11 +4,13 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type { AgentActor } from "./agent-contracts.js";
+import type { HistoricalReadProvenance } from "./historical-read-provenance.js";
 import {
   evidenceFactArtifactHashes,
   type EvidenceFact,
   type EvidenceRecord,
   type EvidenceStore,
+  type GetEvidenceByIdsInput,
   type ListEvidenceInput,
   type RecordEvidenceInput,
 } from "./evidence-store.js";
@@ -21,33 +23,55 @@ interface EvidenceRow {
   fact_json: string;
   created_at: string;
   idempotency_key: string;
+  attempt: number | null;
+}
+
+export interface SqliteEvidenceStoreOptions {
+  /** Opens an existing durable store without schema or migration writes. */
+  readOnly?: boolean;
 }
 
 export class SqliteEvidenceStore implements EvidenceStore {
   private readonly database: DatabaseSync;
+  private readonly readOnly: boolean;
 
-  constructor(databasePath: string) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
-    this.database.exec(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS evidence_records (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        evidence_id TEXT NOT NULL UNIQUE,
-        run_id TEXT NOT NULL,
-        task_id TEXT NOT NULL,
-        actor_json TEXT NOT NULL,
-        fact_json TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        idempotency_key TEXT NOT NULL,
-        UNIQUE(run_id, idempotency_key)
-      );
-      CREATE INDEX IF NOT EXISTS idx_evidence_run_task
-      ON evidence_records(run_id, task_id, sequence);
-    `);
+  constructor(databasePath: string, options: SqliteEvidenceStoreOptions = {}) {
+    this.readOnly = options.readOnly ?? false;
+    if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    if (this.readOnly) return;
+    try {
+      this.database.exec(`
+        PRAGMA journal_mode = WAL;
+        CREATE TABLE IF NOT EXISTS evidence_records (
+          sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+          evidence_id TEXT NOT NULL UNIQUE,
+          run_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          actor_json TEXT NOT NULL,
+          fact_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          UNIQUE(run_id, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_evidence_run_task
+        ON evidence_records(run_id, task_id, sequence);
+      `);
+      this.migrateAttemptColumn();
+    } catch (error) {
+      try {
+        this.database.close();
+      } catch {
+        // The migration fault may already have closed the handle.
+      }
+      throw error;
+    }
   }
 
   record(input: RecordEvidenceInput): EvidenceRecord {
+    if (this.readOnly) {
+      throw new Error("A read-only evidence store cannot record evidence.");
+    }
     validate(input);
     const id = `evidence_${createHash("sha256")
       .update(`${input.runId}\0${input.taskId}\0${input.idempotencyKey}`)
@@ -61,13 +85,13 @@ export class SqliteEvidenceStore implements EvidenceStore {
       fact: cloneFact(input.fact),
       createdAt: input.createdAt,
       idempotencyKey: input.idempotencyKey,
+      ...(input.attempt !== undefined ? { attempt: input.attempt } : {}),
     };
     this.database.exec("BEGIN IMMEDIATE");
     try {
       const existing = this.database
         .prepare(
-          `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                  created_at, idempotency_key
+          `SELECT ${this.selectColumns()}
            FROM evidence_records WHERE run_id = ? AND idempotency_key = ?`
         )
         .get(input.runId, input.idempotencyKey) as EvidenceRow | undefined;
@@ -75,6 +99,7 @@ export class SqliteEvidenceStore implements EvidenceStore {
         const decoded = decode(existing);
         if (
           decoded.taskId !== record.taskId ||
+          decoded.attempt !== record.attempt ||
           JSON.stringify(decoded.actor) !== JSON.stringify(record.actor) ||
           JSON.stringify(decoded.fact) !== JSON.stringify(record.fact)
         ) throw new Error(`Evidence idempotency conflict for ${input.idempotencyKey}.`);
@@ -85,8 +110,8 @@ export class SqliteEvidenceStore implements EvidenceStore {
         .prepare(
           `INSERT INTO evidence_records (
             evidence_id, run_id, task_id, actor_json, fact_json,
-            created_at, idempotency_key
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+            created_at, idempotency_key, attempt
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .run(
           record.id,
@@ -95,7 +120,8 @@ export class SqliteEvidenceStore implements EvidenceStore {
           JSON.stringify(record.actor),
           JSON.stringify(record.fact),
           record.createdAt,
-          record.idempotencyKey
+          record.idempotencyKey,
+          record.attempt ?? null
         );
       this.database.exec("COMMIT");
       return cloneRecord(record);
@@ -113,16 +139,14 @@ export class SqliteEvidenceStore implements EvidenceStore {
     const rows = input.taskId
       ? this.database
           .prepare(
-            `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                    created_at, idempotency_key
+            `SELECT ${this.selectColumns()}
              FROM evidence_records WHERE run_id = ? AND task_id = ?
              ORDER BY sequence LIMIT ?`
           )
           .all(input.runId, input.taskId, limit)
       : this.database
           .prepare(
-            `SELECT evidence_id, run_id, task_id, actor_json, fact_json,
-                    created_at, idempotency_key
+            `SELECT ${this.selectColumns()}
              FROM evidence_records WHERE run_id = ?
              ORDER BY sequence LIMIT ?`
           )
@@ -130,8 +154,94 @@ export class SqliteEvidenceStore implements EvidenceStore {
     return (rows as unknown as EvidenceRow[]).map(decode);
   }
 
+  getByIds(input: GetEvidenceByIdsInput): EvidenceRecord[] {
+    if (!input.runId || !Array.isArray(input.ids)) {
+      throw new Error("Evidence run and IDs are required.");
+    }
+    if (input.ids.some((id) => typeof id !== "string" || !id.trim())) {
+      throw new Error("Evidence IDs must be non-empty strings.");
+    }
+    if (input.ids.length === 0) return [];
+    const byId = new Map<string, EvidenceRecord>();
+    const uniqueIds = [...new Set(input.ids)];
+    for (let offset = 0; offset < uniqueIds.length; offset += 500) {
+      const batch = uniqueIds.slice(offset, offset + 500);
+      const placeholders = batch.map(() => "?").join(", ");
+      const taskClause = input.taskId === undefined ? "" : " AND task_id = ?";
+      const parameters = input.taskId === undefined
+        ? [input.runId, ...batch]
+        : [input.runId, input.taskId, ...batch];
+      const rows = this.database
+        .prepare(
+          `SELECT ${this.selectColumns()}
+           FROM evidence_records
+           WHERE run_id = ?${taskClause} AND evidence_id IN (${placeholders})
+           ORDER BY sequence`
+        )
+        .all(...parameters) as unknown as EvidenceRow[];
+      for (const row of rows) byId.set(row.evidence_id, decode(row));
+    }
+    return input.ids.flatMap((id) => {
+      const record = byId.get(id);
+      return record ? [cloneRecord(record)] : [];
+    });
+  }
+
   close(): void {
     this.database.close();
+  }
+
+  historicalProvenance(): HistoricalReadProvenance {
+    if (!this.readOnly) return "durable";
+    if (!this.hasTable("evidence_records")) return "unavailable";
+    return this.hasAttemptColumn() ? "durable" : "legacy_replay";
+  }
+
+  private migrateAttemptColumn(): void {
+    if (this.hasAttemptColumn()) return;
+
+    let transactionStarted = false;
+    try {
+      this.database.exec("BEGIN IMMEDIATE");
+      transactionStarted = true;
+      this.database.exec("ALTER TABLE evidence_records ADD COLUMN attempt INTEGER");
+      this.database.exec("COMMIT");
+      transactionStarted = false;
+    } catch (error) {
+      if (transactionStarted) {
+        try {
+          this.database.exec("ROLLBACK");
+        } catch {
+          // Preserve the original migration failure if the handle is closed.
+        }
+      }
+      throw error;
+    }
+  }
+
+  private selectColumns(): string {
+    return `evidence_id, run_id, task_id, actor_json, fact_json,
+            created_at, idempotency_key, ${
+              this.hasAttemptColumn() ? "attempt" : "NULL AS attempt"
+            }`;
+  }
+
+  private hasAttemptColumn(): boolean {
+    return (
+      this.database
+        .prepare("PRAGMA table_info(evidence_records)")
+        .all() as Array<{ name?: unknown }>
+    ).some((column) => column.name === "attempt");
+  }
+
+  private hasTable(tableName: string): boolean {
+    return Boolean(
+      this.database
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+        )
+        .get(tableName),
+    );
   }
 }
 
@@ -145,12 +255,21 @@ function decode(row: EvidenceRow): EvidenceRecord {
     fact: JSON.parse(row.fact_json) as EvidenceFact,
     createdAt: row.created_at,
     idempotencyKey: row.idempotency_key,
+    ...(row.attempt !== null && row.attempt !== undefined
+      ? { attempt: row.attempt }
+      : {}),
   };
 }
 
 function validate(input: RecordEvidenceInput): void {
   if (!input.runId || !input.taskId || !input.idempotencyKey) {
     throw new Error("Evidence run, task, and idempotency key are required.");
+  }
+  if (
+    input.attempt !== undefined &&
+    (!Number.isSafeInteger(input.attempt) || input.attempt < 1)
+  ) {
+    throw new Error("Evidence attempt must be a positive integer.");
   }
   const hashes = evidenceFactArtifactHashes(input.fact);
   for (const hash of hashes) {

@@ -1,0 +1,33 @@
+{
+  "pid": 63036,
+  "identity": {
+    "Id": 63036,
+    "StartTimeUtc": "2026-09-15T14:56:33.8989048Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T14:56:33.949Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\post-truth-client.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-client.mts"
+  ],
+  "spec": {
+    "id": "post-truth-client",
+    "args": [
+      "--import",
+      "tsx",
+      "scripts/test-runner-v2-client.mts"
+    ],
+    "inputPaths": [
+      "lib/client/runner-v2.ts",
+      "scripts/test-runner-v2-client.mts"
+    ]
+  }
+}

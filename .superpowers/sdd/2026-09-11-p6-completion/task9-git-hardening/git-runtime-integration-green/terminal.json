@@ -1,0 +1,24 @@
+{
+  "id": "git-runtime-integration-green",
+  "startedAt": "2026-09-14T15:25:18.470Z",
+  "finishedAt": "2026-09-14T15:25:37.412Z",
+  "wrapperPid": 13336,
+  "testPid": 43472,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-runtime-integration.test.ts"
+  ],
+  "rootCount": 4,
+  "retainedRoots": []
+}

@@ -1,0 +1,6 @@
+
+D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\mcp-tools.test.ts
+  3:15  warning  'ToolExecutionContext' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 1 problem (0 errors, 1 warning)
+

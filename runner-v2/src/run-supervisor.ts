@@ -9,6 +9,10 @@ import type {
 import { RUNNER_V2_SCHEMA_VERSION } from "./contracts.js";
 import type { EventStore } from "./event-store.js";
 import { rebuildRunProjection, reduceRunEvent } from "./reducer.js";
+import {
+  buildCompletionReadiness,
+  type SchedulerProjection,
+} from "./scheduler-store.js";
 
 export interface RunSupervisorOptions {
   clock?: () => string;
@@ -97,6 +101,17 @@ export class RunSupervisor {
 
   complete(runId: string, idempotencyKey: string): RunProjection {
     return this.command(runId, "run.completed", idempotencyKey);
+  }
+
+  completeBuild(
+    runId: string,
+    idempotencyKey: string,
+    build: SchedulerProjection,
+  ): RunProjection {
+    if (build.status !== "completed" || !buildCompletionReadiness(build).ready) {
+      return this.getRun(runId);
+    }
+    return this.complete(runId, idempotencyKey);
   }
 
   fail(runId: string, idempotencyKey: string, reason: string): RunProjection {

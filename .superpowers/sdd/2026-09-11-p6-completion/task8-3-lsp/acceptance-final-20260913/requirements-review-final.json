@@ -1,0 +1,494 @@
+{
+  "at": "2026-09-13T19:21:08.744Z",
+  "authority": ".superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8-brief.md, Family 8.3; approved portable-execution-safety plan",
+  "reviewMode": "user-authorized controller self-review",
+  "rows": [
+    {
+      "id": "8.3.1",
+      "requirement": "Original code/filesystem ToolBroker identity reaches only configured LSP; exact agent/run lifecycle joins",
+      "sources": [
+        {
+          "path": "runner-v2/src/code-intelligence-tools.ts",
+          "sha256": "963bb0c0749dfdff1a432627cfefcd9e5c826300181d2489821ee4cabbc6a2b9"
+        },
+        {
+          "path": "runner-v2/src/filesystem-tools.ts",
+          "sha256": "53283532f098fad4c6153ec969eeb5c4e37d8ccaa99fa1f314478101f969a81c"
+        },
+        {
+          "path": "runner-v2/src/language-intelligence.ts",
+          "sha256": "993ceeddd30f61a77b89bb58d01573b57615beaa0fc02e0c8ec770e82b579e44"
+        },
+        {
+          "path": "runner-v2/src/language-provider-router.ts",
+          "sha256": "e9c44f60af7a1e79e8614a04c3d6050837395279880620c481ccf1657c06d7b1"
+        },
+        {
+          "path": "runner-v2/src/language-agent-lifecycle.ts",
+          "sha256": "830c59b1d15888d0d30e7b9e4a7162a334a10208f365ed6f5db36352cbc11389"
+        },
+        {
+          "path": "runner-v2/src/worker-runtime.ts",
+          "sha256": "133df3c2d390e1dac137429763166bb912c8387d6abea4d1f082a8e86f4dcfb5"
+        },
+        {
+          "path": "runner-v2/src/native-architect-runtime.ts",
+          "sha256": "5b039bbfb5907abd3cbb28e4c090780c6b36320784e53ab5525023c23ab271a6"
+        },
+        {
+          "path": "runner-v2/src/subagent-tools.ts",
+          "sha256": "cca09d8821da977ab0ee4a0f36e0648edcc2bd1e4376e00983ff72f491538321"
+        },
+        {
+          "path": "runner-v2/src/native-build-factory.ts",
+          "sha256": "ac2e6d7d0288049296b739644ba4412f1ca109aa040f3dd1cbbded06ad8f16c5"
+        }
+      ],
+      "tests": [
+        {
+          "path": "runner-v2/test/language-invocation-propagation.test.ts",
+          "sha256": "0f84c1f3e3456fefd81e56fb66299b3dd9a5be527e7e118c4c30ec6205f8c6b9"
+        },
+        {
+          "path": "runner-v2/test/lsp-real-host.test.ts",
+          "sha256": "07217ba8e94e9ffa508adb9631a865290e7feb5b1d3525bfe1b8e202714f1d5b"
+        },
+        {
+          "path": "runner-v2/test/lsp-server-control.test.ts",
+          "sha256": "c7c3df8cfa02439dfc0f2f9f003d7912e5c6700f622489c6cd7695b800627e8a"
+        },
+        {
+          "path": "runner-v2/test/lsp-router-authority.test.ts",
+          "sha256": "0ce8999a5147af921b2ef5807e438ee73d3d98113b1d2821960807aca74800db"
+        },
+        {
+          "path": "runner-v2/test/language-agent-lifecycle.test.ts",
+          "sha256": "1a3ada7cd019b223811997f1eb9e76fddfb262890ed1425386d6d26b3aca9a83"
+        },
+        {
+          "path": "runner-v2/test/worker-runtime.test.ts",
+          "sha256": "5821de18a5e93b62f07c4bdec3ddffd8509cd07fd5e56508d739877185e45422"
+        },
+        {
+          "path": "runner-v2/test/native-architect-runtime.test.ts",
+          "sha256": "336a05bb5d34de62a0f47792daf17fbe73fcaae22d5616d966cf5dd840cb5552"
+        },
+        {
+          "path": "runner-v2/test/subagent-tools.test.ts",
+          "sha256": "f3aee9d68a42dc1779e085cf75abc2f6e32c471d1196c7c6fb6b012438d52d93"
+        }
+      ],
+      "review": "Frozen original call/actor context is forwarded by code and post-write diagnostics; the router checks membership in its configured-provider ownership map, not an extension-controlled prototype. Provider cache keys include run, actor, agent session, server and canonical root. All three agent loops join the exact language owner; run close joins the shared run binding.",
+      "status": "VERIFIED"
+    },
+    {
+      "id": "8.3.2",
+      "requirement": "Injected shared ExecutionHost transport, no private OS lifecycle or ambient environment fallback",
+      "sources": [
+        {
+          "path": "runner-v2/src/lsp-client.ts",
+          "sha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c"
+        },
+        {
+          "path": "runner-v2/src/lsp-transport.ts",
+          "sha256": "a48c522020695ea311d0c88263c29e223e024e840b164b82a09ff77036dde01f"
+        },
+        {
+          "path": "runner-v2/src/execution-host-lsp-transport.ts",
+          "sha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576"
+        },
+        {
+          "path": "runner-v2/src/language-server-executable.ts",
+          "sha256": "69b87dd2f216d77bd8737959d44f5106aecad8fb026edd9d83bb57395150c2d6"
+        }
+      ],
+      "tests": [
+        {
+          "path": "runner-v2/test/lsp-caller-audit.test.ts",
+          "sha256": "8f8336c378b90dcf2a5acf03fa2caf92cb52de052c9269bc97c20eefe8c8b785"
+        },
+        {
+          "path": "runner-v2/test/lsp-shared-client.test.ts",
+          "sha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e"
+        },
+        {
+          "path": "runner-v2/test/lsp-transport-authority.test.ts",
+          "sha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd"
+        },
+        {
+          "path": "runner-v2/test/language-environment.test.ts",
+          "sha256": "eea15c89a0b2d62a58c1185c99f467d9aa37b4b97ac0c2211475fe2b0727a007"
+        }
+      ],
+      "review": "LspClient owns protocol/document state only. Its injected transport uses the original openStreaming grant and owned cleanup. AST policy rejects raw launch, signals, shells, ambient environment and invented grant/principal routes. Prepared environment is explicit, never process.env fallback in executable discovery.",
+      "status": "VERIFIED"
+    },
+    {
+      "id": "8.3.3",
+      "requirement": "Preserve framing, typed errors/retryability, diagnostics/freshness, document versions/reopen, stats/bounds and server replies",
+      "sources": [
+        {
+          "path": "runner-v2/src/lsp-client.ts",
+          "sha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c"
+        },
+        {
+          "path": "runner-v2/src/lsp-language-provider.ts",
+          "sha256": "efb8f0d26e91be3308772551e4c8b95c2a4e5de8685f7b7158e34cca24b8844c"
+        },
+        {
+          "path": "runner-v2/src/execution-host-lsp-transport.ts",
+          "sha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576"
+        }
+      ],
+      "tests": [
+        {
+          "path": "runner-v2/test/lsp-client.test.ts",
+          "sha256": "715f938206aba33425444a9515efb61bd9139614fe7679746a1d4369a00c46b8"
+        },
+        {
+          "path": "runner-v2/test/lsp-language-provider.test.ts",
+          "sha256": "1993c635bdecb38d722cb7e46a4791d389fbe7ccd2fa9ecbec4e708acdedaec7"
+        },
+        {
+          "path": "runner-v2/test/language-provider-compatibility.test.ts",
+          "sha256": "83eae154170badb1b9acadf101033535d41c9c226265e07aa91e0a0f23ce1510"
+        },
+        {
+          "path": "runner-v2/test/language-provider-router.test.ts",
+          "sha256": "486052fdb1fabdd7ebd16af559fb7ebddac9c485a35b82097b64f1036a2f65dd"
+        },
+        {
+          "path": "runner-v2/test/lsp-shared-client.test.ts",
+          "sha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e"
+        },
+        {
+          "path": "runner-v2/test/lsp-invocation-lifetime.test.ts",
+          "sha256": "c2bff570653a17ab90dadffa5aaf46917bf2447da6832891479bbc95cbcc71e1"
+        },
+        {
+          "path": "runner-v2/test/lsp-initialize-rejection.test.ts",
+          "sha256": "48430cd8c50ccd0513e50395a6c5db1c56105bf4e3604624e22c27c3a4f295a5"
+        },
+        {
+          "path": "runner-v2/test/lsp-server-control.test.ts",
+          "sha256": "c7c3df8cfa02439dfc0f2f9f003d7912e5c6700f622489c6cd7695b800627e8a"
+        },
+        {
+          "path": "runner-v2/test/lsp-transport-framing.test.ts",
+          "sha256": "7946cf863420ca58dc3b6528546289e0b9fc7f4f40db3740dc48fbe3785bf14f"
+        }
+      ],
+      "review": "Compared the 16-code union, constructor retryability default and available document/diagnostic/stat interfaces against HEAD. Original parser/version/freshness behavior remains exercised through real shared transport. Large frames are split into bounded concrete writes, with one logical-frame deadline and whole-frame serialization against server replies.",
+      "status": "VERIFIED"
+    },
+    {
+      "id": "8.3.4",
+      "requirement": "No replay of an in-flight RPC; only a later fresh authorized call can restart after cleanup within limits",
+      "sources": [
+        {
+          "path": "runner-v2/src/lsp-client.ts",
+          "sha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c"
+        },
+        {
+          "path": "runner-v2/src/execution-host-lsp-transport.ts",
+          "sha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576"
+        },
+        {
+          "path": "runner-v2/src/session-authority.ts",
+          "sha256": "ae2ebec3c601c4f73f21e2802396308bfaa07be87eec10ed55234c06f305120b"
+        }
+      ],
+      "tests": [
+        {
+          "path": "runner-v2/test/lsp-shared-client.test.ts",
+          "sha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e"
+        },
+        {
+          "path": "runner-v2/test/lsp-client.test.ts",
+          "sha256": "715f938206aba33425444a9515efb61bd9139614fe7679746a1d4369a00c46b8"
+        },
+        {
+          "path": "runner-v2/test/lsp-invocation-lifetime.test.ts",
+          "sha256": "c2bff570653a17ab90dadffa5aaf46917bf2447da6832891479bbc95cbcc71e1"
+        },
+        {
+          "path": "runner-v2/test/lsp-transport-authority.test.ts",
+          "sha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd"
+        },
+        {
+          "path": "runner-v2/test/session-authority.test.ts",
+          "sha256": "b960697de42c675b40c49140b0601ad22ddd1256cbc374aa5132a630b71b0df4"
+        },
+        {
+          "path": "runner-v2/test/streaming-request-operation.test.ts",
+          "sha256": "f0e817d0f4d8622e76a851c4a3df846f3ddc5a54c0b47f9e69fa75b2eff89b8e"
+        }
+      ],
+      "review": "request() has no retry/replay path. start/restart is entered from a later explicit context; retained cleanup is joined before a new transport is opened. Reopened documents restore protocol state, never the failed application RPC. The first operation checks the original launch call; subsequent operations use fresh exact grants and a bounded call ledger.",
+      "status": "VERIFIED"
+    },
+    {
+      "id": "8.3.5",
+      "requirement": "Bounded language_request owns notifications plus RPC; same authority rechecked before effects; MCP remains one write",
+      "sources": [
+        {
+          "path": "runner-v2/src/streaming-request-operation.ts",
+          "sha256": "2db57465fe4cd567ababc43031c96d43bd90b24a553d06e26758a4077585c608"
+        },
+        {
+          "path": "runner-v2/src/streaming-process-session-runtime.ts",
+          "sha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b"
+        },
+        {
+          "path": "runner-v2/src/streaming-output-controller.ts",
+          "sha256": "2f79bb2ef0ea682c4925ed6440e746e130b8f9a625df589889ba88740819f2ba"
+        },
+        {
+          "path": "runner-v2/src/session-authority.ts",
+          "sha256": "ae2ebec3c601c4f73f21e2802396308bfaa07be87eec10ed55234c06f305120b"
+        }
+      ],
+      "tests": [
+        {
+          "path": "runner-v2/test/streaming-language-operation.test.ts",
+          "sha256": "acde65962ca2e7c65f90203494d3b6010b75b980e5b6a7d4e7868e5ea9eef831"
+        },
+        {
+          "path": "runner-v2/test/streaming-request-operation.test.ts",
+          "sha256": "f0e817d0f4d8622e76a851c4a3df846f3ddc5a54c0b47f9e69fa75b2eff89b8e"
+        },
+        {
+          "path": "runner-v2/test/session-authority.test.ts",
+          "sha256": "b960697de42c675b40c49140b0601ad22ddd1256cbc374aa5132a630b71b0df4"
+        },
+        {
+          "path": "runner-v2/test/streaming-output-v2.test.ts",
+          "sha256": "dceaef541c763dc229e7a0e8f8051ab413d5aab3c1f62c3db366c4d09c302172"
+        },
+        {
+          "path": "runner-v2/test/streaming-process-session-runtime.test.ts",
+          "sha256": "909b9f3fd8cc3146df5d009e640b9795985df791cb44401d14596261c89dc044"
+        },
+        {
+          "path": "runner-v2/test/mcp-tools.test.ts",
+          "sha256": "0288581f191e41b67465dacecc6331952be307739988c2c2e5b87cc3923aada7"
+        }
+      ],
+      "review": "Separate operation discriminator permits at most 256 LSP concrete writes and exactly one MCP request write, with shared exclusivity. Every write/output delivery invokes the same current-authorization assertion. Queued cancellation cannot borrow an active writer. Already-issued effects remain retained after caller timeout.",
+      "status": "VERIFIED"
+    },
+    {
+      "id": "8.3.6",
+      "requirement": "Family shutdown response then exit, shared bounded escalation and complete six-fact release conjunction, no cleanup grant",
+      "sources": [
+        {
+          "path": "runner-v2/src/lsp-client.ts",
+          "sha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c"
+        },
+        {
+          "path": "runner-v2/src/execution-host-lsp-transport.ts",
+          "sha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576"
+        },
+        {
+          "path": "runner-v2/src/streaming-process-session-runtime.ts",
+          "sha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b"
+        },
+        {
+          "path": "runner-v2/src/streaming-output-controller.ts",
+          "sha256": "2f79bb2ef0ea682c4925ed6440e746e130b8f9a625df589889ba88740819f2ba"
+        },
+        {
+          "path": "runner-v2/src/windows-job-process-host.ts",
+          "sha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998"
+        },
+        {
+          "path": "runner-v2/src/windows-job-process-channel.ts",
+          "sha256": "a3a7f87848938dd09010886a15ae3d95925af9b92d74ece6cd38bfaed6179fd8"
+        },
+        {
+          "path": "runner-v2/src/managed-process-supervisor.mjs",
+          "sha256": "91c31e2cf41f2d52e45535abb9b8e4afcad1beab37724e134f385240ff5a8202"
+        }
+      ],
+      "tests": [
+        {
+          "path": "runner-v2/test/lsp-shared-client.test.ts",
+          "sha256": "2ffae2435614a63b1416e401774de9f042a98fcbb1775273fe2d81d66c35679e"
+        },
+        {
+          "path": "runner-v2/test/lsp-client.test.ts",
+          "sha256": "715f938206aba33425444a9515efb61bd9139614fe7679746a1d4369a00c46b8"
+        },
+        {
+          "path": "runner-v2/test/streaming-process-session-runtime.test.ts",
+          "sha256": "909b9f3fd8cc3146df5d009e640b9795985df791cb44401d14596261c89dc044"
+        },
+        {
+          "path": "runner-v2/test/streaming-output-v2.test.ts",
+          "sha256": "dceaef541c763dc229e7a0e8f8051ab413d5aab3c1f62c3db366c4d09c302172"
+        },
+        {
+          "path": "runner-v2/test/windows-job-output-replay.test.ts",
+          "sha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c"
+        },
+        {
+          "path": "runner-v2/test/windows-job-supervisor-input.test.ts",
+          "sha256": "42a23e7f516a119c84f35188676a8f98dd1fc2ec311097b3aeb5c9c79db5b43e"
+        },
+        {
+          "path": "runner-v2/test/evidence-continuation.test.ts",
+          "sha256": "786ae9bcdd2036f4d66f80ba4535ce62c2bd0581cb55a8d12faa4ffe6ea52799"
+        },
+        {
+          "path": "runner-v2/test/real-streaming-integration.test.ts",
+          "sha256": "154e08302d4d6c8be00a611707d596fe25d0e69f56d2582c0c03104aa8d34044"
+        }
+      ],
+      "review": "Shutdown is sent and its response awaited before exit. Owned cleanup permits only bounded shutdown/exit/cancel frames. The runtime checks exact owner/fence/deadline and joins admitted delivery/write effects before escalation, output/evidence finalization, detach, backend and isolation release. Preeffect authority refusal is distinguished from an uncertain actual callback. Job retained frames authenticate length/digest/sequence and exact ACK across reattachment.",
+      "status": "VERIFIED"
+    },
+    {
+      "id": "8.3.7",
+      "requirement": "Static prepared-environment attestation; exact fixed non-network/non-credential envelope; strict host-only refusal before create; Windows batch semantics",
+      "sources": [
+        {
+          "path": "runner-v2/src/language-server-executable.ts",
+          "sha256": "69b87dd2f216d77bd8737959d44f5106aecad8fb026edd9d83bb57395150c2d6"
+        },
+        {
+          "path": "runner-v2/src/language-provider-router.ts",
+          "sha256": "e9c44f60af7a1e79e8614a04c3d6050837395279880620c481ccf1657c06d7b1"
+        },
+        {
+          "path": "runner-v2/src/native-build-factory.ts",
+          "sha256": "ac2e6d7d0288049296b739644ba4412f1ca109aa040f3dd1cbbded06ad8f16c5"
+        },
+        {
+          "path": "runner-v2/src/runner-internal-execution-context.ts",
+          "sha256": "c77ab779c263b1bd91a42b0dd68602e37a0e30d03276b37ed558c45f1bdc4fa7"
+        },
+        {
+          "path": "runner-v2/src/cli.ts",
+          "sha256": "cb72666b9db03a1399cd57210962b38c035f6d743b7551e81a657dafa36f6725"
+        },
+        {
+          "path": "runner-v2/src/execution-host-lsp-transport.ts",
+          "sha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576"
+        }
+      ],
+      "tests": [
+        {
+          "path": "runner-v2/test/language-environment.test.ts",
+          "sha256": "eea15c89a0b2d62a58c1185c99f467d9aa37b4b97ac0c2211475fe2b0727a007"
+        },
+        {
+          "path": "runner-v2/test/language-executable-integrity.test.ts",
+          "sha256": "8c74be5380bdef6e949dd7805a63d5a52b67ca5f445e0d67da2cb7c3d45f5765"
+        },
+        {
+          "path": "runner-v2/test/lsp-host-envelope.test.ts",
+          "sha256": "b4e31a7b49c97dff542681db849acf73aaf04463e728ca5c9f4e6e46ee07bac7"
+        },
+        {
+          "path": "runner-v2/test/lsp-router-authority.test.ts",
+          "sha256": "0ce8999a5147af921b2ef5807e438ee73d3d98113b1d2821960807aca74800db"
+        },
+        {
+          "path": "runner-v2/test/lsp-transport-authority.test.ts",
+          "sha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd"
+        },
+        {
+          "path": "runner-v2/test/lsp-client.test.ts",
+          "sha256": "715f938206aba33425444a9515efb61bd9139614fe7679746a1d4369a00c46b8"
+        },
+        {
+          "path": "runner-v2/test/execution-host-credential-graph.test.ts",
+          "sha256": "2b1a13b4455cb0cd381d7542d74e28c6ef5b16cb3121a634a901f9fbc38dc230"
+        },
+        {
+          "path": "runner-v2/test/native-build-capabilities.test.ts",
+          "sha256": "81ec482420cdf0ac12c92e7367a314af7d427d4bbde123a4fa8a03315028e4de"
+        },
+        {
+          "path": "runner-v2/test/native-build-initialization.test.ts",
+          "sha256": "eaf5b435b5e2c60ee1269b63da145f5d30eca60c3ff8285431076f827ac37516"
+        },
+        {
+          "path": "runner-v2/test/mcp-tools.test.ts",
+          "sha256": "0288581f191e41b67465dacecc6331952be307739988c2c2e5b87cc3923aada7"
+        },
+        {
+          "path": "runner-v2/test/oci-execution-isolation-provider.test.ts",
+          "sha256": "b64ca88ca43a036105be96582d5f2913787cc8551d08fa1e5fd0f6ad39f5eec4"
+        }
+      ],
+      "review": "Preflight resolves/re-attests bytes only and cannot launch a configured LSP. CLI/factory inject host-filtered environment after the host exists. Fixed envelope has no additional paths, credential names or network approval; Full unconfined disclosure is explicit. Strict host-only LSP fails typed before backend creation; no native fallback or host executable mounting. Native Windows tests exercise attested command-shell shims and byte replacement refusal.",
+      "status": "VERIFIED"
+    },
+    {
+      "id": "8.3.8",
+      "requirement": "Cancellation/recovery cannot orphan late resources or clean an adopted launch through the unstarted path",
+      "sources": [
+        {
+          "path": "runner-v2/src/streaming-process-session-runtime.ts",
+          "sha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b"
+        },
+        {
+          "path": "runner-v2/src/execution-host-lsp-transport.ts",
+          "sha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576"
+        },
+        {
+          "path": "runner-v2/src/lsp-client.ts",
+          "sha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c"
+        },
+        {
+          "path": "runner-v2/src/portable-process-supervisor.mjs",
+          "sha256": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b"
+        }
+      ],
+      "tests": [
+        {
+          "path": "runner-v2/test/streaming-live-open-cancellation.test.ts",
+          "sha256": "c3cca73624b9aff70860f79d1bb8f29e8f491acef037590484979ca72bc693b2"
+        },
+        {
+          "path": "runner-v2/test/streaming-late-isolation-cleanup.test.ts",
+          "sha256": "060d98278946711caaac01908adc5511e5e1acc4c7b4b11ad1ba59364d9022ce"
+        },
+        {
+          "path": "runner-v2/test/streaming-unstarted-host-cleanup.test.ts",
+          "sha256": "4d8b9628176d38dd1015cdce54c3a378ecb702549914c2719cade1ca38ed461c"
+        },
+        {
+          "path": "runner-v2/test/streaming-process-session-runtime.test.ts",
+          "sha256": "909b9f3fd8cc3146df5d009e640b9795985df791cb44401d14596261c89dc044"
+        },
+        {
+          "path": "runner-v2/test/lsp-initialize-rejection.test.ts",
+          "sha256": "48430cd8c50ccd0513e50395a6c5db1c56105bf4e3604624e22c27c3a4f295a5"
+        },
+        {
+          "path": "runner-v2/test/lsp-invocation-lifetime.test.ts",
+          "sha256": "c2bff570653a17ab90dadffa5aaf46917bf2447da6832891479bbc95cbcc71e1"
+        },
+        {
+          "path": "runner-v2/test/portable-supervisor-input.test.ts",
+          "sha256": "bbf09d19a82288bf73d0c31468ba11cd0fd652d0ec9cca13de45dc5fffc5b89f"
+        },
+        {
+          "path": "runner-v2/test/posix-anchor-release-takeover.test.ts",
+          "sha256": "754bd474272f487dfd0a1d94fda000bb99ca548ee5e4fff24a90f52141876511"
+        },
+        {
+          "path": "runner-v2/test/posix-process-backend.test.ts",
+          "sha256": "bbf2dbfa307d0f0ac0dce357c969c37689d284c66059c21bcffac80cc1aae939"
+        }
+      ],
+      "review": "Pre-adoption failures retain and join the exact launch coordinator; handed-off launches reject unstarted cleanup and use the adopted session owner. Late acquisition/close remains joined. Recovery observes/cleans existing exact IDs and cannot relaunch. Portable writes acknowledge actual callbacks without holding the cleanup fence while blocked. Higher-fence POSIX cleanup observes the original authenticated consumed anchor-release receipt rather than issuing a stale release.",
+      "status": "VERIFIED"
+    }
+  ],
+  "verifiedAt": "2026-09-13T19:53:22.717Z",
+  "inputDigest": "ce13787bb2b1af11feb9a49ef8493b5a6171b0fbce47dbffb8a621bd87248987",
+  "acceptance": "acceptance.json"
+}

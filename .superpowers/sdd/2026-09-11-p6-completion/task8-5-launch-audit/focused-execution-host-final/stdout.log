@@ -1,0 +1,32 @@
+TAP version 13
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-646f3d7c-0874-45ec-a565-97e3b40a30d7"}
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-646f3d7c-0874-45ec-a565-97e3b40a30d7"}
+# {"fixture":"execution-host","event":"planned","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-a1eab170-a899-418b-b35f-513464cc5b11"}
+# Subtest: ExecutionHost captures one filtered ambient source and rejects duplicate live run bindings
+ok 1 - ExecutionHost captures one filtered ambient source and rejects duplicate live run bindings
+  ---
+  duration_ms: 75.2478
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-KYl0Ht"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-QiBzgc"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Zbk6w8"}
+# {"fixture":"execution-host","event":"removed","root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-execution-host-a1eab170-a899-418b-b35f-513464cc5b11"}
+# Subtest: two real concurrent run bindings cannot cross grants outputs or cleanup effects
+ok 2 - two real concurrent run bindings cannot cross grants outputs or cleanup effects
+  ---
+  duration_ms: 19995.9505
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-KYl0Ht","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-QiBzgc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Zbk6w8","existsAtExit":false}
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21637.1661

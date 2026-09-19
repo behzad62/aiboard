@@ -1,0 +1,19 @@
+{
+  "id": "ui-disclosure-green-1",
+  "startedAt": "2026-09-15T14:42:52.235Z",
+  "finishedAt": "2026-09-15T14:42:53.203Z",
+  "wrapperPid": 66452,
+  "testPid": 51652,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 450,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-observability.mts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

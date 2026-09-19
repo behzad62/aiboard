@@ -1,14 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
-import {
-  lstat,
-  mkdir,
-  readFile,
-  readdir,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { languageInvocation } from "./language-intelligence.js";
+import { createHash } from "node:crypto";
+import { fencedWrite, fencedPatch, fencedMove, fencedDelete, filesystemMutationFailure,
+  FilesystemMutationError, isFilesystemMutation } from "./filesystem-mutation-fence.js";
+import { lstat, readFile, readdir } from "node:fs/promises";
+import { relative, resolve, sep } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
@@ -17,16 +12,16 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type {
   RepositoryEntry,
   RepositoryIntelligence,
 } from "./repository-intelligence.js";
-import type { TypeScriptIntelligence } from "./typescript-intelligence.js";
 
 export interface FilesystemToolsOptions {
   artifacts?: ArtifactStore;
   repository?: RepositoryIntelligence;
-  diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">;
+  diagnostics?: Pick<LanguageIntelligenceProvider, "diagnostics">;
   maxReadBytes?: number;
   maxEntries?: number;
   maxSearchMatches?: number;
@@ -330,7 +325,7 @@ export function createFilesystemTools(
       },
     },
     {
-      definition: definition("fs.write", "Atomically create or replace a text file", false, "workspace"),
+      definition: definition("fs.write", "Atomically create a new text file only if absent, or replace existing text using the SHA-256 from a prior read/inspection. Replacement without expectedSha256 is refused.", false, "workspace"),
       validate: objectWithStrings("path", "content"),
       assessAccess: (input) => pathAccess(input, "write"),
       execute: async (input, context) =>
@@ -339,11 +334,8 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
-          if (input.createDirectories === true) await mkdir(dirname(path), { recursive: true });
-          const conflict = await checkExpected(context, path, input.expectedSha256);
-          if (conflict) return conflict;
-          const bytes = Buffer.from(input.content as string);
-          await atomicWrite(path, bytes);
+          const bytes = fencedWrite(context, path, Buffer.from(input.content as string),
+            input.expectedSha256, input.createDirectories === true);
           return await successRevision(context, path, bytes, options.diagnostics);
         }),
     },
@@ -362,43 +354,35 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
-          const bytes = await readFile(path);
-          if (sha256(bytes) !== input.expectedSha256) {
-            return revisionConflict(
-              context,
-              path,
-              input.expectedSha256 as string,
-              bytes,
-            );
-          }
-          const original = decodeText(bytes);
-          let nextText = original;
-          const edits = patchEdits(input);
-          for (const [index, edit] of edits.entries()) {
-            const newline = preferredNewline(nextText);
-            const exactCount = occurrences(nextText, edit.search);
-            const adaptedSearch = newline
-              ? normalizeNewlines(edit.search, newline)
-              : edit.search;
-            const search = exactCount === 0 && adaptedSearch !== edit.search
-              ? adaptedSearch
-              : edit.search;
-            const count = exactCount === 0
-              ? occurrences(nextText, search)
-              : exactCount;
-            if (count !== 1) {
-              return error(
-                "ambiguous_patch",
-                `Edit ${index + 1}: expected one match, found ${count}. No changes were written.`,
-              );
+          const next = fencedPatch(context, path, input.expectedSha256, (bytes) => {
+            const original = decodeText(bytes);
+            let nextText = original;
+            const edits = patchEdits(input);
+            for (const [index, edit] of edits.entries()) {
+              const newline = preferredNewline(nextText);
+              const exactCount = occurrences(nextText, edit.search);
+              const adaptedSearch = newline
+                ? normalizeNewlines(edit.search, newline)
+                : edit.search;
+              const search = exactCount === 0 && adaptedSearch !== edit.search
+                ? adaptedSearch
+                : edit.search;
+              const count = exactCount === 0
+                ? occurrences(nextText, search)
+                : exactCount;
+              if (count !== 1) {
+                throw new FilesystemMutationError(
+                  "ambiguous_patch",
+                  `Edit ${index + 1}: expected one match, found ${count}. No changes were written.`,
+                );
+              }
+              const replacement = newline
+                ? normalizeNewlines(edit.replace, newline)
+                : edit.replace;
+              nextText = nextText.replace(search, replacement);
             }
-            const replacement = newline
-              ? normalizeNewlines(edit.replace, newline)
-              : edit.replace;
-            nextText = nextText.replace(search, replacement);
-          }
-          const next = Buffer.from(nextText);
-          await atomicWrite(path, next);
+            return Buffer.from(nextText);
+          });
           return await successRevision(context, path, next, options.diagnostics);
         }),
     },
@@ -422,8 +406,7 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, destination, options.protectedPaths)) {
             return protectedPathError(context, destination);
           }
-          if (input.createDirectories === true) await mkdir(dirname(destination), { recursive: true });
-          await rename(source, destination);
+          fencedMove(context, source, destination, input.createDirectories === true);
           return {
             content: [json({ source: displayPath(context, source), destination: displayPath(context, destination) })],
             isError: false,
@@ -444,12 +427,22 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
-          await rm(path, { recursive: input.recursive === true, force: false });
+          fencedDelete(context, path, input.recursive === true);
           return { content: [json({ path: displayPath(context, path), deleted: true })], isError: false };
         }),
     },
   ];
-  return tools as NativeTool<unknown>[];
+  return tools.map((tool) => !isFilesystemMutation(tool.definition.name) ? tool : {
+    ...tool,
+    execute: async (input: Input, context: ToolExecutionContext) => {
+      try { return await tool.execute(input, context); }
+      catch (error) {
+        const refusal = filesystemMutationFailure(error, context.workspacePath ?? "");
+        if (refusal) return refusal;
+        throw error;
+      }
+    },
+  }) as NativeTool<unknown>[];
 }
 
 function definition(
@@ -644,12 +637,11 @@ function validateRead(input: unknown): ValidationResult<Input> {
 function validatePatch(input: unknown): ValidationResult<Input> {
   if (
     !isObject(input) ||
-    typeof input.path !== "string" ||
-    typeof input.expectedSha256 !== "string"
+    typeof input.path !== "string"
   ) {
     return {
       ok: false,
-      issues: ["path and expectedSha256 must be strings"],
+      issues: ["path must be a string"],
     };
   }
   const hasLegacy = input.search !== undefined || input.replace !== undefined;
@@ -839,68 +831,11 @@ function error(code: string, message: string): ToolExecutionOutput {
   return { content: [{ type: "text", text: message }], isError: true, error: { code, message } };
 }
 
-async function checkExpected(
-  context: ToolExecutionContext,
-  path: string,
-  expected: unknown,
-): Promise<ToolExecutionOutput | null> {
-  if (expected === undefined) return null;
-  if (typeof expected !== "string") return error("invalid_revision", "expectedSha256 must be a string.");
-  try {
-    const bytes = await readFile(path);
-    if (sha256(bytes) !== expected) {
-      return revisionConflict(context, path, expected, bytes);
-    }
-  } catch (cause) {
-    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
-    return revisionConflict(context, path, expected, null);
-  }
-  return null;
-}
-
-function revisionConflict(
-  context: ToolExecutionContext,
-  path: string,
-  expectedSha256: string,
-  currentBytes: Buffer | null,
-): ToolExecutionOutput {
-  const currentSha256 = currentBytes ? sha256(currentBytes) : null;
-  const message = currentSha256
-    ? "File changed since it was read. Use currentSha256 to retry after confirming the replacement still applies."
-    : "Expected file does not exist. Re-inspect the path before retrying.";
-  return {
-    content: [
-      { type: "text", text: message },
-      json({
-        path: displayPath(context, path),
-        expectedSha256,
-        currentSha256,
-        recovery: currentSha256
-          ? "Retry fs.patch with currentSha256 after confirming the replacement still applies."
-          : "Re-inspect the path before retrying.",
-      }),
-    ],
-    isError: true,
-    error: { code: "revision_conflict", message },
-  };
-}
-
-async function atomicWrite(path: string, bytes: Buffer): Promise<void> {
-  const temporary = `${path}.aiboard-${randomUUID()}.tmp`;
-  await writeFile(temporary, bytes, { flag: "wx" });
-  try {
-    await rename(temporary, path);
-  } catch (cause) {
-    await rm(temporary, { force: true });
-    throw cause;
-  }
-}
-
 async function successRevision(
   context: ToolExecutionContext,
   path: string,
   bytes: Buffer,
-  diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">,
+  diagnostics?: Pick<LanguageIntelligenceProvider, "diagnostics">,
 ): Promise<ToolExecutionOutput> {
   const metadata: Record<string, unknown> = {
     path: displayPath(context, path),
@@ -912,7 +847,7 @@ async function successRevision(
       const result = await diagnostics.diagnostics({
         root: context.workspacePath,
         path: displayPath(context, path),
-      }, context.signal);
+      }, context.signal, languageInvocation(context));
       if (result.status === "unsupported_language") {
         metadata.diagnosticsSkipped = "unsupported_language";
       } else {

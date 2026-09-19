@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { TypeScriptIntelligence } from "../src/typescript-intelligence.js";
+import { TypeScriptIntelligence } from "./support/git-fixture.js";
 
 test("TypeScript intelligence resolves symbols, aliases, references, and diagnostics", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-typescript-intelligence-"));

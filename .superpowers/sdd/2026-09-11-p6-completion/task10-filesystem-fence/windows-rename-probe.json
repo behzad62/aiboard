@@ -1,0 +1,28 @@
+{
+  "platform": "win32",
+  "node": "v24.18.0",
+  "root": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-rename-probe-5M1PuO",
+  "rootRemoved": true,
+  "results": [
+    {
+      "targetOpen": false,
+      "temporaryOpen": false,
+      "result": "ok"
+    },
+    {
+      "targetOpen": false,
+      "temporaryOpen": true,
+      "result": "ok"
+    },
+    {
+      "targetOpen": true,
+      "temporaryOpen": false,
+      "result": "EPERM"
+    },
+    {
+      "targetOpen": true,
+      "temporaryOpen": true,
+      "result": "EPERM"
+    }
+  ]
+}

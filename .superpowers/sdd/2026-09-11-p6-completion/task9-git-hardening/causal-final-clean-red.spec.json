@@ -1,0 +1,7 @@
+{
+  "id": "causal-final-clean-red",
+  "tests": [
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ],
+  "pattern": "repository clean filter"
+}

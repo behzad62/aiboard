@@ -1,7 +1,8 @@
 import type { BuildRunPolicy } from "@/lib/db/schema";
 import type { NormalizedBuildSettings } from "@/lib/orchestrator/build-policy";
 import {
-  MINIMUM_NODE_VERSION,
+  NODE_RUNTIME_POLICY_DESCRIPTION,
+  SUPPORTED_NODE_LTS_LINES,
   supportsNodeVersion,
 } from "@/runner-v2/src/node-version";
 export {
@@ -10,7 +11,9 @@ export {
   type NativeBudgetRuntimeCostBasis,
 } from "@/runner-v2/src/budget-enforceability";
 
-export const MINIMUM_NATIVE_RUNNER_NODE_VERSION = MINIMUM_NODE_VERSION;
+export const NATIVE_RUNNER_NODE_POLICY_DESCRIPTION = NODE_RUNTIME_POLICY_DESCRIPTION;
+export const NATIVE_RUNNER_NODE_LTS_LINES = SUPPORTED_NODE_LTS_LINES;
+export const MINIMUM_NATIVE_RUNNER_NODE_VERSION = "24.0.0";
 
 export function nativeProviderBillingBasis(input: {
   hasApiPricing: boolean;
@@ -28,6 +31,7 @@ export interface NativeBuildBudgetLimits {
 export interface EffectiveNativeBuildPolicy {
   runPolicy: BuildRunPolicy;
   budgetLimits: NativeBuildBudgetLimits;
+  alwaysRequireIndependentVerifier: boolean;
 }
 
 export function usesBuildBudgetControls(policy: BuildRunPolicy): boolean {
@@ -42,7 +46,12 @@ export function effectiveNativeBuildPolicy(
   settings: NormalizedBuildSettings
 ): EffectiveNativeBuildPolicy {
   if (!usesBuildBudgetControls(settings.runPolicy)) {
-    return { runPolicy: settings.runPolicy, budgetLimits: {} };
+    return {
+      runPolicy: settings.runPolicy,
+      budgetLimits: {},
+      alwaysRequireIndependentVerifier:
+        settings.alwaysRequireIndependentVerifier,
+    };
   }
   const budgetLimits: NativeBuildBudgetLimits = {};
   if (settings.budgetUsd > 0) {
@@ -58,5 +67,10 @@ export function effectiveNativeBuildPolicy(
   if (Object.keys(budgetLimits).length === 0) {
     throw new Error("Budgeted runs require a USD or time limit.");
   }
-  return { runPolicy: settings.runPolicy, budgetLimits };
+  return {
+    runPolicy: settings.runPolicy,
+    budgetLimits,
+    alwaysRequireIndependentVerifier:
+      settings.alwaysRequireIndependentVerifier,
+  };
 }

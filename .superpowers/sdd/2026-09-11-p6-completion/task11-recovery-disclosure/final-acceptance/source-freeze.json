@@ -1,0 +1,101 @@
+﻿{
+    "head":  "284743e980514ecebc1d3143d427f4f3abf86225",
+    "createdAt":  "2026-09-15T19:06:24.6501786Z",
+    "files":  [
+                  {
+                      "path":  "runner-v2/src/process-recovery-contracts.ts",
+                      "sha256":  "6c714ee96b7ed61ebdede90b8f4728edb7d19b6f3fc92bf851347c5a8356bbad",
+                      "bytes":  14196
+                  },
+                  {
+                      "path":  "runner-v2/src/process-recovery.ts",
+                      "sha256":  "95fa42db36bdf9b52b79f2e58eb07aaa18faf99847e78152f5549d2a6620ce3e",
+                      "bytes":  32491
+                  },
+                  {
+                      "path":  "runner-v2/src/build-observability.ts",
+                      "sha256":  "f842e1d995cd2cbf52e7b2d7eac432eca31d4471606f7303615f10652344c2bc",
+                      "bytes":  20861
+                  },
+                  {
+                      "path":  "runner-v2/src/cli.ts",
+                      "sha256":  "ae9ab3ab161ffb4660aa064b1884906c7b00ee9dc9bd333df341553d1f1c4c26",
+                      "bytes":  22815
+                  },
+                  {
+                      "path":  "runner-v2/src/control-server.ts",
+                      "sha256":  "e49c392da06f7422fbb0ced8be024ec9d6ad32ceb5696e0da06df14b222e1d06",
+                      "bytes":  43736
+                  },
+                  {
+                      "path":  "runner-v2/src/durable-process-store.ts",
+                      "sha256":  "f63159723978018b38472555694dbf721ebcdaedc4b27b6c8670e7c34d42f8b3",
+                      "bytes":  91957
+                  },
+                  {
+                      "path":  "runner-v2/src/execution-grants.ts",
+                      "sha256":  "36c678cc487677655f987dfc1694ed8db74b6c8bc3604a916086019fb85ee6d6",
+                      "bytes":  27126
+                  },
+                  {
+                      "path":  "runner-v2/src/execution-host.ts",
+                      "sha256":  "17d5786b8d33fce5cc1305fc68cf84adf0e0125026de9e8a31aeb6caa999b2c9",
+                      "bytes":  36650
+                  },
+                  {
+                      "path":  "runner-v2/src/execution-host-streaming.ts",
+                      "sha256":  "297fd8914d708e03cbf7c387ab2c611ae3bddfd11d84702967dedd9e17924d2b",
+                      "bytes":  20503
+                  },
+                  {
+                      "path":  "runner-v2/src/native-build-factory.ts",
+                      "sha256":  "8115c0aec3bf3e05c9a289eb7c9b1280f9de6f07a8224bda8e2a3850ede60380",
+                      "bytes":  122708
+                  },
+                  {
+                      "path":  "runner-v2/src/native-build-manager.ts",
+                      "sha256":  "f4f43ceec6cb9635807032d0200e3ae3a706f67e328ae7abab5c096ab60cf9cd",
+                      "bytes":  34235
+                  },
+                  {
+                      "path":  "runner-v2/src/scheduler-store.ts",
+                      "sha256":  "f383a4fb55b3221c11e1b87f92d9ecee2a4215abef5d863c2ff295e08b94458f",
+                      "bytes":  190315
+                  },
+                  {
+                      "path":  "runner-v2/src/streaming-process-session-runtime.ts",
+                      "sha256":  "721d053500208f8b21f4216a98afecab20e3d86e014f3dde0b656def565d0aa6",
+                      "bytes":  129211
+                  },
+                  {
+                      "path":  "runner-v2/src/streaming-session-store.ts",
+                      "sha256":  "4a7f0d2e30700bb0fa51389524ab04299161372cd1db99627325c2ee34ecc547",
+                      "bytes":  214578
+                  },
+                  {
+                      "path":  "runner-v2/src/subprocess-runtime.ts",
+                      "sha256":  "83e3e77ae740d4f1c5a70db46b4f200441bfb7b7767d61b63d70bdf26c5228f3",
+                      "bytes":  88547
+                  },
+                  {
+                      "path":  "lib/client/runner-v2.ts",
+                      "sha256":  "199a4e8f25d6cb9d1dcf8598d9af35081939654f25acdf2b7a6ec815d7f54b37",
+                      "bytes":  49407
+                  },
+                  {
+                      "path":  "components/RunnerV2ObservabilityPanel.tsx",
+                      "sha256":  "ae1e492dbff3ba741d4c4a2a7978ae9244b8662b3fefec80321601ea731b114d",
+                      "bytes":  72575
+                  },
+                  {
+                      "path":  "scripts/test-runner-v2-client.mts",
+                      "sha256":  "b15c72708e532c2040a81ff12a7d4bff9a2c933a144b6dbdca2da743371169d8",
+                      "bytes":  32035
+                  },
+                  {
+                      "path":  "scripts/test-runner-v2-observability.mts",
+                      "sha256":  "2ac98af3d740ffeae2c1db8cf4e2432f31ab35e74cf13a22b697496387552a0a",
+                      "bytes":  33225
+                  }
+              ]
+}

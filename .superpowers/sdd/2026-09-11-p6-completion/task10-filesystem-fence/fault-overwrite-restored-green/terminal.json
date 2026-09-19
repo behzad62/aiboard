@@ -1,0 +1,25 @@
+{
+  "id": "fault-overwrite-restored-green",
+  "startedAt": "2026-09-15T07:19:56.077Z",
+  "finishedAt": "2026-09-15T07:19:56.741Z",
+  "wrapperPid": 47496,
+  "testPid": 320,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 442,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=publication is create-if-absent",
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

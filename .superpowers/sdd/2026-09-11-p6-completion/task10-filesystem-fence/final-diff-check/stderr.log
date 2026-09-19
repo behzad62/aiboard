@@ -1,0 +1,9 @@
+warning: in the working copy of 'runner-v2/src/agent-contracts.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/src/execution-grants.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/src/filesystem-tools.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/src/git-baseline.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/src/git-bootstrap.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/src/tool-broker.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/test/language-invocation-propagation.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/test/support/git-fixture.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'runner-v2/test/support/lsp-owned-fixture.ts', LF will be replaced by CRLF the next time Git touches it

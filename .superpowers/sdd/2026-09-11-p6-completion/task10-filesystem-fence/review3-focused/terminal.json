@@ -1,0 +1,27 @@
+{
+  "id": "review3-focused",
+  "startedAt": "2026-09-15T07:43:04.534Z",
+  "finishedAt": "2026-09-15T07:43:11.797Z",
+  "wrapperPid": 54424,
+  "testPid": 54832,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 441,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/filesystem-mutation-routing.test.ts"
+  ],
+  "rootCount": 73,
+  "retainedRoots": []
+}

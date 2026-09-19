@@ -1,0 +1,131 @@
+{
+  "id": "worker-lifecycle-join-removed",
+  "target": "runner-v2/src/worker-runtime.ts",
+  "test": "runner-v2/test/lsp-caller-audit.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-green",
+  "sourceFinalSha256": "133df3c2d390e1dac137429763166bb912c8387d6abea4d1f082a8e86f4dcfb5",
+  "testFinalSha256": "8f8336c378b90dcf2a5acf03fa2caf92cb52de052c9269bc97c20eefe8c8b785",
+  "redReceipt": {
+    "id": "fault-worker-lifecycle-join-removed-red",
+    "startedAt": "2026-09-12T17:26:25.329Z",
+    "finishedAt": "2026-09-12T17:26:26.349Z",
+    "wrapperPid": 104476,
+    "testPid": 71332,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP worker architect",
+      "runner-v2/test/lsp-caller-audit.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "fault-worker-lifecycle-join-removed-green",
+    "startedAt": "2026-09-12T17:26:26.393Z",
+    "finishedAt": "2026-09-12T17:26:27.395Z",
+    "wrapperPid": 108712,
+    "testPid": 115844,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP worker architect",
+      "runner-v2/test/lsp-caller-audit.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/red-terminal.json",
+      "sha256": "fe61e9f708e2d0ffae84c9966bfbd89e19f78fb195558c1047883c14af80ec72"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/red-inputs-before.json",
+      "sha256": "dff88d0b2c42180ab422f898b5ef7163086a37c513e457d1bf933819f0ea81ad"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/red-inputs-after.json",
+      "sha256": "dff88d0b2c42180ab422f898b5ef7163086a37c513e457d1bf933819f0ea81ad"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/red-stdout.log",
+      "sha256": "1e29939decc4ed33ff038951c992103cfa8c9466ffe00d53a295b1afb593762a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/red-wrapper.json",
+      "sha256": "3a724454ec47da2cd4fd81f43649193519393fc54cdc0e21227992234b3f6c10"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/red-child.json",
+      "sha256": "d8a030bb4904bf97618cda9d9097ee4ce91eaa6d7a692e156b2caa5e36b700b9"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/green-terminal.json",
+      "sha256": "595cc0cf78aabd5c3874ff7688b3a8a3748dcea431458bcc61895fa97f14e7c9"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/green-inputs-before.json",
+      "sha256": "a87734e7d11d37b8323d441ccb2c227c903fe52ed250515e99d981d7cabc85e1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/green-inputs-after.json",
+      "sha256": "a87734e7d11d37b8323d441ccb2c227c903fe52ed250515e99d981d7cabc85e1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/green-stdout.log",
+      "sha256": "85b0c2127f90e2b4f06ab91df38b303d0e099de309d22469bfb8307d31f41a07"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/green-wrapper.json",
+      "sha256": "e63bb2781743a1853423c35746a427ad38dda54aac6d32b99fadd40fc64704a9"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-worker-lifecycle-join-removed-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/worker-lifecycle-join-removed/green-child.json",
+      "sha256": "57a90ae6aedc97bbeeebef47940ae581214e929e8c652e0b4676041a897d8d2b"
+    }
+  ]
+}

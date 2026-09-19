@@ -1,0 +1,1 @@
+{"id":"typecheck-disclosure-1","executable":"C:\\Program Files\\nodejs\\node.exe","args":["node_modules/typescript/bin/tsc","-p","runner-v2/tsconfig.json","--noEmit"]}

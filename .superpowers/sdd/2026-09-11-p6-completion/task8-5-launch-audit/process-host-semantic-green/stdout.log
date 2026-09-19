@@ -1,0 +1,240 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-probe-watchdog-0uMfbv"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-probe-healthy-Cc3p3U"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-TcINYG"}
+# Subtest: process host semantic facts are independent, immutable, and preserve partial states
+ok 1 - process host semantic facts are independent, immutable, and preserve partial states
+  ---
+  duration_ms: 1.5301
+  type: 'test'
+  ...
+# Subtest: Job unavailability never disables independently verified portable or batch semantics
+ok 2 - Job unavailability never disables independently verified portable or batch semantics
+  ---
+  duration_ms: 0.1793
+  type: 'test'
+  ...
+# Subtest: each Windows semantic fact toggles only its own backend or launch consumer
+ok 3 - each Windows semantic fact toggles only its own backend or launch consumer
+  ---
+  duration_ms: 0.1925
+  type: 'test'
+  ...
+# Subtest: Job verification requires the active create-and-close probe result
+ok 4 - Job verification requires the active create-and-close probe result
+  ---
+  duration_ms: 0.1456
+  type: 'test'
+  ...
+# Subtest: a hung optional active Job probe is killed without blocking verified portable facts
+ok 5 - a hung optional active Job probe is killed without blocking verified portable facts
+  ---
+  duration_ms: 115.5914
+  type: 'test'
+  ...
+# Subtest: the healthy active Job probe still verifies real create-and-close semantics
+ok 6 - the healthy active Job probe still verifies real create-and-close semantics
+  ---
+  duration_ms: 266.8431
+  type: 'test'
+  ...
+# Subtest: live Windows construction consumes semantic facts and keeps portable fallback after active Job failure
+ok 7 - live Windows construction consumes semantic facts and keeps portable fallback after active Job failure
+  ---
+  duration_ms: 0.7301
+  type: 'test'
+  ...
+# Subtest: Windows semantic probes exclude unrelated ambient credentials from the encoded target environment
+ok 8 - Windows semantic probes exclude unrelated ambient credentials from the encoded target environment
+  ---
+  duration_ms: 0.4471
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-btfb7F"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-cbAXCs"}
+# Subtest: live Windows portable probes actively attest duplex, argv boundaries, and birth-tagged tree behavior
+ok 9 - live Windows portable probes actively attest duplex, argv boundaries, and birth-tagged tree behavior
+  ---
+  duration_ms: 12286.8451
+  type: 'test'
+  ...
+# Subtest: semantic probe polling stops permanently on timeout or cancellation
+ok 10 - semantic probe polling stops permanently on timeout or cancellation
+  ---
+  duration_ms: 138.9367
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-cleanup-KeTqeW"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-cleanup-outside-JyvB48"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-cleanup-malformed-prUtx5"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-cleanup-container-wvbObE"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-temporal-mismatch-mKpEF2"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-timeout-13sfyz"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-truncated-uAQYZX"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-malformed-cNO77k"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-inaccessible-old-kAaT8x"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-inaccessible-equal-NXyDKk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-inaccessible-newer-TykQbx"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-inaccessible-owned-stop-YvRy2n"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-corrupt-descendant-stop-0nlcC4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-executable-xH1QVi"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-option-ds1sTO"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-quoted-uO16Yq"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-alphabet-prefix-geZGGu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-alphabet-suffix-1Ccodp"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-alphabet-wrap-GVi6zt"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-standard-base64-fvSwoy"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-standard-base64-mixed-wrapper-sMRMqQ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-mixed-wrapper-WLzDhj"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-encoded-bound-fHlBJN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-budget-success-GYPbHW"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-budget-exhausted-fsiSnA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-V5KzIy"}
+# Subtest: a timed-out live duplex probe tears down its channel, process, and owned root before rejection
+ok 11 - a timed-out live duplex probe tears down its channel, process, and owned root before rejection
+  ---
+  duration_ms: 201.6623
+  type: 'test'
+  ...
+# Subtest: failed semantic-probe release removes evidence only after exact owner identities are absent
+ok 12 - failed semantic-probe release removes evidence only after exact owner identities are absent
+  ---
+  duration_ms: 220.3238
+  type: 'test'
+  ...
+# Subtest: semantic cleanup ignores a recorded descendant whose birth predates the exact root
+ok 13 - semantic cleanup ignores a recorded descendant whose birth predates the exact root
+  ---
+  duration_ms: 3.5551
+  type: 'test'
+  ...
+# Subtest: semantic cleanup preserves evidence when global inventory is unavailable or malformed
+ok 14 - semantic cleanup preserves evidence when global inventory is unavailable or malformed
+  ---
+  duration_ms: 7.7788
+  type: 'test'
+  ...
+# Subtest: semantic cleanup resolves only inaccessible processes born strictly before the exact root
+ok 15 - semantic cleanup resolves only inaccessible processes born strictly before the exact root
+  ---
+  duration_ms: 9.8142
+  type: 'test'
+  ...
+# Subtest: semantic cleanup stops an exact supervisor while inaccessible global evidence preserves the root
+ok 16 - semantic cleanup stops an exact supervisor while inaccessible global evidence preserves the root
+  ---
+  duration_ms: 4.9355
+  type: 'test'
+  ...
+# Subtest: semantic cleanup stops an exact authenticated supervisor when descendant evidence is corrupt
+ok 17 - semantic cleanup stops an exact authenticated supervisor when descendant evidence is corrupt
+  ---
+  duration_ms: 6.2336
+  type: 'test'
+  ...
+# Subtest: semantic cleanup detects executable and embedded strict base64 root references
+ok 18 - semantic cleanup detects executable and embedded strict base64 root references
+  ---
+  duration_ms: 32.4035
+  type: 'test'
+  ...
+# Subtest: semantic cleanup fails closed when encoded-reference scanning exceeds its bound
+ok 19 - semantic cleanup fails closed when encoded-reference scanning exceeds its bound
+  ---
+  duration_ms: 3.0002
+  type: 'test'
+  ...
+# Subtest: semantic cleanup spends one caller-configured absolute budget across every host effect
+ok 20 - semantic cleanup spends one caller-configured absolute budget across every host effect
+  ---
+  duration_ms: 6.3054
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-global-reference-HYCfZV"}
+# Subtest: semantic cleanup stops only the exact authenticated supervisor when the recorded child PID was replaced
+ok 21 - semantic cleanup stops only the exact authenticated supervisor when the recorded child PID was replaced
+  ---
+  duration_ms: 2185.9937
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-unbound-qBWxw4"}
+# Subtest: semantic cleanup preserves an unlisted process that references the exact root until global closure
+ok 22 - semantic cleanup preserves an unlisted process that references the exact root until global closure
+  ---
+  duration_ms: 5078.471
+  type: 'test'
+  ...
+# Subtest: unbound semantic-probe cleanup preserves any owned launch evidence
+ok 23 - unbound semantic-probe cleanup preserves any owned launch evidence
+  ---
+  duration_ms: 2.2025
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-job-host-5ZyQzN"}
+# Subtest: semantic probe release retries a transient stable-emptiness refusal within its existing deadline
+ok 24 - semantic probe release retries a transient stable-emptiness refusal within its existing deadline
+  ---
+  duration_ms: 29.3641
+  type: 'test'
+  ...
+# Subtest: Windows Job backend source cannot depend on managed facade or agent/model contracts
+ok 25 - Windows Job backend source cannot depend on managed facade or agent/model contracts
+  ---
+  duration_ms: 0.724
+  type: 'test'
+  ...
+# Subtest: extracted Windows Job host is concrete and the transitive backend path is actor-free
+ok 26 - extracted Windows Job host is concrete and the transitive backend path is actor-free
+  ---
+  duration_ms: 0.9253
+  type: 'test'
+  ...
+# Subtest: concrete Windows Job host rejects launch before spawning off Windows
+ok 27 - concrete Windows Job host rejects launch before spawning off Windows
+  ---
+  duration_ms: 1.351
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-probe-watchdog-0uMfbv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-probe-healthy-Cc3p3U","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-TcINYG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-btfb7F","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-cbAXCs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-cleanup-KeTqeW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-cleanup-outside-JyvB48","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-cleanup-malformed-prUtx5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-cleanup-container-wvbObE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-temporal-mismatch-mKpEF2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-timeout-13sfyz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-truncated-uAQYZX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-malformed-cNO77k","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-inaccessible-old-kAaT8x","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-inaccessible-equal-NXyDKk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-inaccessible-newer-TykQbx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-inaccessible-owned-stop-YvRy2n","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-corrupt-descendant-stop-0nlcC4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-executable-xH1QVi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-option-ds1sTO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-quoted-uO16Yq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-alphabet-prefix-geZGGu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-alphabet-suffix-1Ccodp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-alphabet-wrap-GVi6zt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-standard-base64-fvSwoy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-standard-base64-mixed-wrapper-sMRMqQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-embedded-base64url-mixed-wrapper-WLzDhj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-encoded-bound-fHlBJN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-budget-success-GYPbHW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-budget-exhausted-fsiSnA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-V5KzIy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-global-reference-HYCfZV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-unbound-qBWxw4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-job-host-5ZyQzN","existsAtExit":false}
+1..27
+# tests 27
+# suites 0
+# pass 27
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 21908.7199

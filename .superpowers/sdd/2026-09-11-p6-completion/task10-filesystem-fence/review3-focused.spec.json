@@ -1,0 +1,9 @@
+{
+  "id": "review3-focused",
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/filesystem-mutation-routing.test.ts"
+  ]
+}

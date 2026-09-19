@@ -22,6 +22,7 @@ export interface ToolLedgerEvent {
   sessionId?: string;
   callId?: string;
   toolName?: string;
+  extensionId?: string;
   effect?: ToolEffect;
   access?: ToolAccessRequest;
   outsideWorkspace?: boolean;
@@ -32,6 +33,7 @@ export interface BeginToolInvocation {
   fingerprint: string;
   callId: string;
   toolName: string;
+  extensionId?: string;
   runId: string;
   sessionId: string;
   replaySafe: boolean;

@@ -4,7 +4,8 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
-import { runGit } from "./git-command.js";
+import { requireGitRunner } from "./git-command.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
 
 type Input = Record<string, unknown>;
 
@@ -15,14 +16,14 @@ const WORKER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_COMMITTER_EMAIL: "worker@aiboard.local",
 };
 
-export function createGitTools(): NativeTool<unknown>[] {
+export function createGitTools(runContext?: Pick<RunGitExecutionContext, "forCall">): NativeTool<unknown>[] {
   const tools: NativeTool<Input>[] = [
     {
       definition: definition("git.status", "Inspect exact Git worktree state", true),
       validate: objectInput,
       assessAccess: () => readAccess("git.status"),
       execute: async (_input, context) => {
-        const output = await git(context, [
+        const output = await git(runContext, context, [
           "status",
           "--porcelain=v1",
           "-z",
@@ -51,7 +52,7 @@ export function createGitTools(): NativeTool<unknown>[] {
           args.push(input.base);
         }
         args.push("--");
-        const output = await git(context, args, false, 64 * 1024 * 1024);
+        const output = await git(runContext, context, args, false, 64 * 1024 * 1024);
         return { content: [{ type: "text", text: output.stdout }], isError: false };
       },
     },
@@ -63,7 +64,7 @@ export function createGitTools(): NativeTool<unknown>[] {
         const limit = Number.isSafeInteger(input.limit)
           ? Math.min(100, Math.max(1, input.limit as number))
           : 20;
-        const output = await git(context, [
+        const output = await git(runContext, context, [
           "log",
           `--max-count=${limit}`,
           "--format=%H%x1f%P%x1f%an%x1f%aI%x1f%s%x1e",
@@ -93,7 +94,7 @@ export function createGitTools(): NativeTool<unknown>[] {
         const revision = input.revision ?? "HEAD";
         if (!validRevision(revision)) return invalidRevision();
         const output = await git(
-          context,
+          runContext, context,
           ["show", "--no-ext-diff", "--format=fuller", revision, "--"],
           false,
           64 * 1024 * 1024
@@ -106,15 +107,15 @@ export function createGitTools(): NativeTool<unknown>[] {
       validate: objectInput,
       assessAccess: () => readAccess("git.remotes"),
       execute: async (_input, context) => {
-        const names = (await git(context, ["remote"]))
+        const names = (await git(runContext, context, ["remote"]))
           .stdout.split(/\r?\n/)
           .map((name) => name.trim())
           .filter(Boolean);
         const remotes = await Promise.all(names.map(async (name) => ({
           name,
-          fetchUrl: (await git(context, ["remote", "get-url", name])).stdout.trim(),
+          fetchUrl: (await git(runContext, context, ["remote", "get-url", name])).stdout.trim(),
           pushUrl: (
-            await git(context, ["remote", "get-url", "--push", name])
+            await git(runContext, context, ["remote", "get-url", "--push", name])
           ).stdout.trim(),
         })));
         return okJson({ remotes });
@@ -135,8 +136,8 @@ export function createGitTools(): NativeTool<unknown>[] {
         if (input.forceWithLease === true) args.push("--force-with-lease");
         if (input.setUpstream === true) args.push("--set-upstream");
         args.push(remote, `${source}:${destination}`);
-        const output = await git(context, args);
-        const revision = (await git(context, ["rev-parse", source])).stdout.trim();
+        const output = await git(runContext, context, args);
+        const revision = (await git(runContext, context, ["rev-parse", source])).stdout.trim();
         return okJson({
           remote,
           source,
@@ -161,7 +162,7 @@ export function createGitTools(): NativeTool<unknown>[] {
       }),
       execute: async (input, context) => {
         const branch = await git(
-          context,
+          runContext, context,
           ["symbolic-ref", "--quiet", "HEAD"],
           true
         );
@@ -176,20 +177,20 @@ export function createGitTools(): NativeTool<unknown>[] {
             "Workers may commit only to runner-owned task branches."
           );
         }
-        await git(context, ["add", "-A"]);
-        const changed = await git(context, ["diff", "--cached", "--quiet"], true);
+        await git(runContext, context, ["add", "-A"]);
+        const changed = await git(runContext, context, ["diff", "--cached", "--quiet"], true);
         if (changed.exitCode === 0) {
           return failure("nothing_to_commit", "Task workspace has no staged changes.");
         }
         if (changed.exitCode !== 1) {
           return failure("git_state_error", changed.stderr || "Could not inspect staged changes.");
         }
-        await runGit({
+        await requireGitRunner(runContext).forCall(context).run({
           cwd: workspace(context),
           args: ["commit", "-m", (input.message as string).trim()],
           env: WORKER_IDENTITY,
         });
-        const revision = (await git(context, ["rev-parse", "HEAD"])).stdout.trim();
+        const revision = (await git(runContext, context, ["rev-parse", "HEAD"])).stdout.trim();
         return okJson({ revision, ref });
       },
     },
@@ -305,12 +306,13 @@ function workspace(context: ToolExecutionContext): string {
 }
 
 async function git(
+  runContext: Pick<RunGitExecutionContext, "forCall"> | undefined,
   context: ToolExecutionContext,
   args: readonly string[],
   allowFailure = false,
   maxOutputBytes?: number
 ) {
-  return await runGit({
+  return await requireGitRunner(runContext).forCall(context).run({
     cwd: workspace(context),
     args,
     allowFailure,

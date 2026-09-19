@@ -1,0 +1,16 @@
+TAP version 13
+# Subtest: LSP worker architect and subagent loops join their language ownership boundary
+ok 1 - LSP worker architect and subagent loops join their language ownership boundary
+  ---
+  duration_ms: 28.3067
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 583.3338

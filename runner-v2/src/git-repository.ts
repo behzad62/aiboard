@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 
-import { runGit, type GitCommandOptions } from "./git-command.js";
+import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
 
 export interface RepositoryDirtyState {
   staged: boolean;
@@ -28,7 +28,7 @@ const clean: RepositoryDirtyState = {
 
 export async function inspectRepository(
   path: string,
-  execute: GitRunner = runGit
+  execute: GitRunner = unavailableGitRunner
 ): Promise<RepositoryInspection> {
   const inside = await execute({
     cwd: path,

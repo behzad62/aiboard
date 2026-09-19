@@ -8,15 +8,10 @@ import test from "node:test";
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import { ProviderTransportError } from "../src/account-runner-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
-import { captureGitBaseline } from "../src/git-baseline.js";
-import {
-  NativeWorkerDriver,
-  recoverableWorkerSuspension,
-  workerContinuationMessages,
-  shouldFailoverWorkerFailure,
-  shouldAutoContinueWorker,
-  workerModelAttribution,
-} from "../src/native-worker-driver.js";
+import { CapabilityRegistry } from "../src/capability-registry.js";
+import { captureGitBaseline } from "./support/git-fixture.js";
+import { recoverableWorkerSuspension, workerContinuationMessages, shouldFailoverWorkerFailure, shouldAutoContinueWorker, workerModelAttribution } from "../src/native-worker-driver.js";
+import { NativeWorkerDriver } from "./support/git-fixture.js";
 import { rankSkillsForTask } from "../src/skill-routing.js";
 import type { SkillMetadata } from "../src/skill-catalog.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
@@ -28,7 +23,14 @@ import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { WorkerAssignment } from "../src/task-scheduler.js";
-import { WorkspaceManager } from "../src/workspace-manager.js";
+import { WorkspaceManager } from "./support/git-fixture.js";
+import {
+  resolveWorkerSessionId,
+  standardWorkerId,
+  steeringReassignedWorkerId,
+  workerSessionId,
+} from "../src/worker-identity.js";
+import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -59,6 +61,24 @@ test("worker model calls carry direct durable role and task attribution", () => 
       sessionId: "worker:run_1:task_1:1",
       taskId: "task_1",
     }
+  );
+});
+
+test("steering reassignment gets a distinct session while ordinary and recovered sessions stay compatible", () => {
+  const ordinaryWorker = standardWorkerId("task_1", 2);
+  const revisedWorker = steeringReassignedWorkerId("task_1", 2, 4);
+  const ordinarySession = workerSessionId("run_1", "task_1", 2, ordinaryWorker);
+  const revisedSession = workerSessionId("run_1", "task_1", 2, revisedWorker);
+  assert.equal(ordinarySession, "worker:run_1:task_1:2");
+  assert.notEqual(revisedSession, ordinarySession);
+  assert.match(revisedSession, /worker_task_1_2_plan_4$/);
+  assert.equal(
+    resolveWorkerSessionId("run_1", "task_1", 2, revisedWorker, revisedSession),
+    revisedSession
+  );
+  assert.equal(
+    resolveWorkerSessionId("run_1", "task_1", 2, ordinaryWorker, "legacy:persisted:session"),
+    "legacy:persisted:session"
   );
 });
 
@@ -121,7 +141,7 @@ test("worker lifecycle no-ops preserve the attempt and receive a fresh resume re
   assert.doesNotMatch(String(resumed[1].content), /request_guidance/);
 });
 
-test("native worker fails over with the same session, context, tools, and evidence", async () => {
+test("native worker fails over with the same session, context, tools, and evidence", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-"));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -189,12 +209,42 @@ test("native worker fails over with the same session, context, tools, and eviden
       toolTurn("submit", "submit_task", {
         summary: "Change value to two",
         readiness: "ready_for_architect_review",
+        criterionEvidenceLinks: [{
+          criterionId: "value",
+          evidenceId: expectedEvidenceId("run_1", "task_a", "worker:run_1:task_a:1", "evidence"),
+          artifactHashes: [emptyArtifactHash()],
+        }],
       }),
     ]);
     const candidates: AgentRuntimeCandidate[] = [
       { runtimeId: "primary:code", providerId: "primary", modelId: "code", capabilities: ["code"], priority: 1 },
       { runtimeId: "fallback:code", providerId: "fallback", modelId: "code", capabilities: ["code"], priority: 2 },
     ];
+    const capabilityRegistry = new CapabilityRegistry([{
+      manifest: {
+        apiVersion: 1,
+        id: "fixture.native-worker-context",
+        name: "Native Worker Context Fixture",
+        version: "1.0.0",
+        entry: "index.mjs",
+        capabilities: ["context"],
+      },
+      instance: {
+        capabilities: () => ({
+          tools: [],
+          contextContributors: [{
+            id: "native-worker-context",
+            kind: "fixture",
+            priority: 850,
+            maxBytes: 1_024,
+            contribute: async () => ({ content: "EXTENSION_NATIVE_WORKER_CONTEXT" }),
+          }],
+          languageProviders: [],
+        }),
+        start: async () => undefined,
+        close: async () => undefined,
+      },
+    }]);
     const health = new ProviderHealthRegistry();
     const driver = new NativeWorkerDriver({
       schedulerStore: scheduler,
@@ -220,6 +270,8 @@ test("native worker fails over with the same session, context, tools, and eviden
       memoryStore: memory,
       projectId: "project_1",
       projectRoot: project,
+      capabilityRegistry,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
       providerRetryRuntime: {
         now: () => 0,
         random: () => 0.5,
@@ -269,6 +321,7 @@ test("native worker fails over with the same session, context, tools, and eviden
     assert.match(contextText, /Run focused tests first/);
     assert.match(contextText, /focused testing evidence/);
     assert.match(contextText, /newline-terminated text/);
+    assert.match(contextText, /EXTENSION_NATIVE_WORKER_CONTEXT/);
     assert.equal(evidence.list({ runId: "run_1", taskId: "task_a" }).length, 1);
   } finally {
     sessions?.close();
@@ -447,7 +500,19 @@ function seedRunningTask(store: SqliteSchedulerStore): void {
   store.append({
     runId: "run_1", type: "plan.created", occurredAt: "2026-07-12T00:00:00.000Z",
     actor: { role: "architect", id: "architect_1" }, idempotencyKey: "plan:1",
-    payload: { revision: 1, tasks: [{ id: "task_a", objective: "Change the value and create testing evidence", dependencies: [], status: "planned", requiredCapabilities: ["code"], attempt: 0 }] },
+    payload: { revision: 1, tasks: [{
+      id: "task_a",
+      objective: "Change the value and create testing evidence",
+      dependencies: [],
+      acceptanceCriteria: [{
+        id: "value",
+        text: "The value is changed to two and testing evidence is recorded.",
+      }],
+      acceptanceCriteriaVersion: 1,
+      status: "planned",
+      requiredCapabilities: ["code"],
+      attempt: 0,
+    }] },
   });
   store.append({
     runId: "run_1", type: "task.transitioned", occurredAt: "2026-07-12T00:00:00.000Z",
@@ -470,4 +535,19 @@ function rebuildTask(store: SqliteSchedulerStore) {
 
 function toolTurn(callId: string, name: string, args: unknown): ModelTurn {
   return { blocks: [{ type: "tool_call", callId, name, arguments: args }], stopReason: "tool_calls" };
+}
+
+function expectedEvidenceId(
+  runId: string,
+  taskId: string,
+  sessionId: string,
+  callId: string
+): string {
+  return `evidence_${createHash("sha256")
+    .update(`${runId}\0${taskId}\0evidence:${sessionId}:${callId}`)
+    .digest("hex")}`;
+}
+
+function emptyArtifactHash(): string {
+  return createHash("sha256").update(Buffer.alloc(0)).digest("hex");
 }

@@ -1,0 +1,34 @@
+{
+  "pid": 60252,
+  "identity": {
+    "Id": 60252,
+    "StartTimeUtc": "2026-09-15T12:59:26.0317528Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T12:59:26.069Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task11-recovery-disclosure/model-generator-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=model generator",
+    "runner-v2/test/process-recovery.test.ts"
+  ],
+  "spec": {
+    "id": "model-generator-green",
+    "pattern": "model generator",
+    "tests": [
+      "runner-v2/test/process-recovery.test.ts"
+    ]
+  }
+}

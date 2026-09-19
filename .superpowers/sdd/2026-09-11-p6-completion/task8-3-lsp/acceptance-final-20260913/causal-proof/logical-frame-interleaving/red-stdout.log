@@ -1,0 +1,76 @@
+TAP version 13
+# Subtest: LSP shared chunking serializes whole frames against concurrent server-control replies
+not ok 1 - LSP shared chunking serializes whole frames against concurrent server-control replies
+  ---
+  duration_ms: 171.3056
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\lsp-transport-framing.test.ts:1:1547'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        1048576,
+    +   13,
+        1048576,
+        17,
+    -   13
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 1048576
+    1: 1048576
+    2: 17
+    3: 13
+  actual:
+    0: 1048576
+    1: 13
+    2: 1048576
+    3: 17
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-transport-framing.test.ts:34:12)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Subtest: LSP shared chunking never issues a queued frame after a failed predecessor
+not ok 2 - LSP shared chunking never issues a queued frame after a failed predecessor
+  ---
+  duration_ms: 158.7854
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\lsp-transport-framing.test.ts:1:2285'
+  failureType: 'testCodeFailure'
+  error: |-
+    an uncertain prefix forbids both its suffix and any later frame
+    + actual - expected
+    
+      [
+        1048576,
+    +   5
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 1048576
+  actual:
+    0: 1048576
+    1: 5
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-transport-framing.test.ts:46:12)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 584.1193

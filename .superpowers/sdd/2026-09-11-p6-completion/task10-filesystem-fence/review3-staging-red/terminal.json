@@ -1,0 +1,29 @@
+{
+  "id": "review3-staging-red",
+  "startedAt": "2026-09-15T07:30:00.728Z",
+  "finishedAt": "2026-09-15T07:30:01.577Z",
+  "wrapperPid": 36064,
+  "testPid": 37200,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 443,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/review3-staging.probe.test.ts"
+  ],
+  "rootCount": 4,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-kB24w7",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-kcweiR",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bouWOo",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-yRLu1v"
+  ]
+}

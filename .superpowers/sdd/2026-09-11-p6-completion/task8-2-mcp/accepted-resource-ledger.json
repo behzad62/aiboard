@@ -1,0 +1,1224 @@
+{
+  "observedAt": "2026-09-12T05:55:32.292754+00:00",
+  "finalWindows": {
+    "created": 518,
+    "absent": 518,
+    "retained": 0,
+    "authority": "successful tests verify owned cleanup before removal; observer/current absence is supplementary, never sole proof"
+  },
+  "broadRunRetainedDiagnostics": [
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-cli-capability-recovery-snapshot-start-5Ma2S6",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 19,
+      "databases": [
+        {
+          "path": "state/build-specs.sqlite",
+          "tables": {},
+          "states": {}
+        },
+        {
+          "path": "state/events.sqlite",
+          "tables": {},
+          "states": {}
+        },
+        {
+          "path": "state/permissions.sqlite",
+          "tables": {},
+          "states": {}
+        },
+        {
+          "path": "state/builds/snapshot-start-capability-contract-b3afbd8bf9/streaming-sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 0,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {}
+        },
+        {
+          "path": "state/builds/snapshot-start-capability-contract-b3afbd8bf9/subprocess-runtime.sqlite",
+          "tables": {
+            "durable_processes": 0
+          },
+          "states": {}
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "closed no-public-launch diagnostic; read-only process/session tables empty; not a cleanup-by-PID inference"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-git-inspection-q5JYNZ",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 4,
+      "databases": [
+        {
+          "path": "runtime/streaming-sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 0,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {}
+        },
+        {
+          "path": "runtime/subprocess-runtime.sqlite",
+          "tables": {
+            "durable_processes": 0
+          },
+          "states": {}
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "closed no-public-launch diagnostic; read-only process/session tables empty; not a cleanup-by-PID inference"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-KM3vck",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 12,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-SuYYaI",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 12,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-DZUPkN",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Vd45Yb",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Bcoqm3",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-2lheYx",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-ZW9WCq",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-EROyEP",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-o76rKv",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-sgS11o",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-yfbWD8",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-kaaxwz",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 8,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-0P91PX",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-uKNqbA",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-3SiHIc",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-x4akfd",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 12,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-nle1yy",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 12,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-w1xiVo",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-EiKtKk",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-vRcjcD",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 13,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "released": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-0fu14V",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 13,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "released": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-QbXift",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-6RWLJm",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-OUWCDf",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-sYIB9E",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-Yjwt2m",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-q8O8KZ",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-5gQtIC",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-PKh4ec",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-sDEj6v",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-3YDvV3",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 9,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-My427s",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-RtKK7u",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-yBBJo1",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-yHKA25",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 13,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "released": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-TblDSl",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 13,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "released": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-rQBVB0",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-ZKClo7",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-s-sUMDHi",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 0,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-s-bLf74l",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-m8OAU3",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-F01YqF",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-IOKwAs",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-t-a9sC76",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-GEPa4i",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 3,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-nQtpIP",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 3,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-FbFyr4",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 4,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-mQAIWN",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 2,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-j53Lik",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-p-rU2THE",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 3,
+      "databases": [],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-l-IJNxbd",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_blocked": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-S9xvGJ",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-8gwmRS",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-ycQuNF",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 0,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r9-c-jqz7hQ",
+      "creationObserved": true,
+      "exitObserved": true,
+      "existsAtExit": true,
+      "existsNow": true,
+      "files": 1,
+      "databases": [
+        {
+          "path": "sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 1,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 0
+          },
+          "states": {
+            "streaming_sessions": {
+              "active": 1
+            },
+            "streaming_host_launches": {
+              "cleanup_pending": 1
+            }
+          }
+        }
+      ],
+      "backendWitnesses": [],
+      "classification": "unchanged C2 round9 synthetic/no-native-execution fixture; intentionally retained by that test"
+    }
+  ],
+  "priorFailedRoots": 33,
+  "priorNativeWitnesses": [
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-mcp-owned-state-2wBwHA",
+      "existsNow": true,
+      "files": 30,
+      "databases": [
+        {
+          "path": "builds/mcp-owned-test-3-a31450bd58/streaming-sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 1,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_sessions": {
+              "cleanup_blocked": 1
+            },
+            "streaming_host_launches": {
+              "handed_off": 1
+            }
+          }
+        },
+        {
+          "path": "builds/mcp-owned-test-3-a31450bd58/subprocess-runtime.sqlite",
+          "tables": {
+            "durable_processes": 0
+          },
+          "states": {}
+        }
+      ],
+      "backendWitnesses": [
+        {
+          "path": "builds/mcp-owned-test-3-a31450bd58/process-backend/owned-a5298a7b-ead1-4dcf-8f83-0a71b1633d00/state.json",
+          "status": "stopped",
+          "launchEffect": "started",
+          "hasKnownProcessBirths": true
+        }
+      ],
+      "sourceGates": [
+        "task82-native-round3"
+      ]
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-mcp-strict-state-LSEPnd",
+      "existsNow": true,
+      "files": 32,
+      "databases": [
+        {
+          "path": "builds/sp-158d9630f5424f6982518cd7dd2b4350-6de120a652/streaming-sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 1,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_sessions": {
+              "cleanup_blocked": 1
+            },
+            "streaming_host_launches": {
+              "handed_off": 1
+            }
+          }
+        },
+        {
+          "path": "builds/sp-158d9630f5424f6982518cd7dd2b4350-6de120a652/subprocess-runtime.sqlite",
+          "tables": {
+            "durable_processes": 0
+          },
+          "states": {}
+        }
+      ],
+      "backendWitnesses": [
+        {
+          "path": "builds/sp-158d9630f5424f6982518cd7dd2b4350-6de120a652/process-backend/owned-8f7438e2-ff2b-4979-8e7e-704118c4f59b/state.json",
+          "status": "stopped",
+          "launchEffect": "started",
+          "hasKnownProcessBirths": true
+        }
+      ],
+      "sourceGates": [
+        "task82-native-round3"
+      ]
+    },
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-mcp-owned-state-vNUzt1",
+      "existsNow": true,
+      "files": 31,
+      "databases": [
+        {
+          "path": "builds/mcp-owned-test-5-a4e85a2d12/streaming-sessions.sqlite",
+          "tables": {
+            "streaming_sessions": 1,
+            "streaming_host_launches": 1,
+            "streaming_output_checkpoints": 1
+          },
+          "states": {
+            "streaming_sessions": {
+              "cleanup_blocked": 1
+            },
+            "streaming_host_launches": {
+              "handed_off": 1
+            }
+          }
+        },
+        {
+          "path": "builds/mcp-owned-test-5-a4e85a2d12/subprocess-runtime.sqlite",
+          "tables": {
+            "durable_processes": 0
+          },
+          "states": {}
+        }
+      ],
+      "backendWitnesses": [
+        {
+          "path": "builds/mcp-owned-test-5-a4e85a2d12/process-backend/owned-fdbebb5a-c45b-414c-a702-55d352616c68/state.json",
+          "status": "stopped",
+          "launchEffect": "started",
+          "hasKnownProcessBirths": true
+        }
+      ],
+      "sourceGates": [
+        "task82-native-round3"
+      ]
+    }
+  ],
+  "historicalDisposition": "Preserve original failed gates and exact roots. Three older cleanup-blocked native sessions have stopped durable workload state but are NOT claimed released; no historical signals, deletion, retries or state rewriting performed.",
+  "linuxContainerRemoved": true
+}

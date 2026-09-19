@@ -2,6 +2,7 @@ import type {
   ProviderFailure,
   ProviderHealthRegistry,
 } from "./provider-health.js";
+import { canonicalModelIdentity } from "./verifier-contracts.js";
 
 export interface AgentRuntimeCandidate {
   runtimeId: string;
@@ -40,6 +41,26 @@ export interface WorkerFailureRouteInput {
   failure: ProviderFailure;
   handoff: WorkerHandoffPackage;
 }
+
+export interface VerifierSelectionInput {
+  requiredCapabilities: readonly string[];
+  candidateRuntimeIds: readonly string[];
+  architectRuntimeId: string;
+  acceptedChangeAuthorRuntimeIds: readonly string[];
+  excludedRuntimeIds?: ReadonlySet<string>;
+}
+
+export type VerifierSelection =
+  | {
+      status: "assigned";
+      runtime: AgentRuntimeCandidate;
+    }
+  | {
+      status: "unavailable";
+      reason: "no_independent_healthy_capability_match";
+      requiredCapabilities: string[];
+      runtime?: undefined;
+    };
 
 export interface RuntimeRouterDecision {
   type: "worker_handoff" | "worker_unavailable";
@@ -148,6 +169,43 @@ export class RuntimeRouter {
         .map(cloneCandidate),
       requiredCapabilities: required,
     };
+  }
+
+  selectVerifier(input: VerifierSelectionInput): VerifierSelection {
+    const required = unique(input.requiredCapabilities);
+    const allowedRuntimeIds = new Set(input.candidateRuntimeIds);
+    for (const runtimeId of allowedRuntimeIds) {
+      if (!this.byId.has(runtimeId)) {
+        throw new Error(`Unknown verifier candidate runtime ${runtimeId}.`);
+      }
+    }
+    const architect = this.byId.get(input.architectRuntimeId);
+    if (!architect) {
+      throw new Error(`Unknown Architect runtime ${input.architectRuntimeId}.`);
+    }
+    const excludedModelIdentities = new Set([
+      canonicalModelIdentity(architect.modelId),
+    ]);
+    for (const runtimeId of new Set(input.acceptedChangeAuthorRuntimeIds)) {
+      const author = this.byId.get(runtimeId);
+      if (!author) {
+        throw new Error(`Unknown accepted change author runtime ${runtimeId}.`);
+      }
+      excludedModelIdentities.add(canonicalModelIdentity(author.modelId));
+    }
+    const runtime = this.eligible(required).find(
+      (candidate) =>
+        allowedRuntimeIds.has(candidate.runtimeId) &&
+        !input.excludedRuntimeIds?.has(candidate.runtimeId) &&
+        !excludedModelIdentities.has(canonicalModelIdentity(candidate.modelId))
+    );
+    return runtime
+      ? { status: "assigned", runtime: cloneCandidate(runtime) }
+      : {
+          status: "unavailable",
+          reason: "no_independent_healthy_capability_match",
+          requiredCapabilities: required,
+        };
   }
 
   confirmArchitectHandoff(

@@ -5,33 +5,44 @@ import type { ToolExecutionContext } from "./agent-contracts.js";
 import { createArchitectTools } from "./architect-tools.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
+  BuildRiskAssessmentProjection,
   ProjectHandoffChoice,
   SchedulerActor,
+  SchedulerEvent,
   SchedulerProjection,
   SchedulerStore,
 } from "./scheduler-store.js";
-import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import {
+  architectLifecycleEventMatchesReason,
+  deriveFinalVerificationFailure,
+  rebuildSchedulerProjection,
+} from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
+import type { EvidenceStore } from "./evidence-store.js";
+import type {
+  FinalVerificationCategory,
+  FinalVerificationPlan,
+} from "./final-verification-contracts.js";
+import type {
+  FinalVerificationCheckResult,
+  FinalVerificationRun,
+} from "./final-verification-runtime.js";
+import { submitFinalVerification } from "./final-verification-submission.js";
 import {
   TaskScheduler,
   type TaskSchedulerOptions,
   type WorkerRuntimeDriver,
 } from "./task-scheduler.js";
 import { ToolRegistry } from "./tool-registry.js";
-
-export type ArchitectActionReason =
-  | { type: "plan_required" }
-  | { type: "guidance_required"; requestId: string; taskId: string }
-  | { type: "review_required"; taskId: string; changeSetId: string }
-  | { type: "integration_approval_required"; taskId: string; changeSetId: string }
-  | { type: "completion_decision_required"; runPolicy?: "plan_only" }
-  | {
-      type: "task_failure_resolution_required";
-      taskId: string;
-      attempt: number;
-      failureReason: string;
-    }
-  | { type: "integration_resolution_required"; taskId: string };
+import { redactSensitiveText } from "./sensitive-redaction.js";
+import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
+import type { ArtifactStore } from "./artifact-store.js";
+import type { ArchitectActionReason } from "./user-steering-contracts.js";
+import {
+  assessBuildRisk,
+  type BuildRiskAssessmentInput,
+} from "./risk-policy.js";
+export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
   runId: string;
@@ -62,8 +73,84 @@ export interface IntegrationRuntimeDriver {
   }): Promise<IntegrationRuntimeResult>;
 }
 
+export interface FinalVerificationCheckDriverInput {
+  runId: string;
+  taskId: string;
+  generationId: string;
+  targetRevision: string;
+  attempt: number;
+  plan: FinalVerificationPlan;
+  category: FinalVerificationCategory;
+  executionProfile: FinalVerificationExecutionProfile;
+  signal?: AbortSignal;
+}
+
+export interface FinalVerificationCheckExecution {
+  workspacePath: string;
+  startedAt: string;
+  finishedAt: string;
+  check: FinalVerificationCheckResult;
+}
+
+export interface FinalVerificationCheckDriver {
+  executeCheck(input: FinalVerificationCheckDriverInput): Promise<FinalVerificationCheckExecution>;
+}
+
+export interface FinalVerificationCleanupDriver {
+  cleanup(input: {
+    runId: string;
+    generationId: string;
+    taskId: string;
+    targetRevision: string;
+    attempt: number;
+    failed?: {
+      generationId: string;
+      taskId: string;
+      targetRevision: string;
+      checks: readonly unknown[];
+      evidenceReferences: readonly string[];
+      logs?: readonly string[];
+    };
+  }): Promise<{ diagnosticsPath?: string }>;
+}
+
+export interface IndependentVerifierRequest {
+  runId: string;
+  projection: SchedulerProjection;
+  risk: BuildRiskAssessmentProjection;
+  preferredRuntimeId?: string;
+  signal?: AbortSignal;
+}
+
+export type IndependentVerifierResult =
+  | { status: "verdict_submitted" }
+  | {
+      status: "unavailable";
+      reason:
+        | "no_independent_healthy_capability_match"
+        | "runtime_unavailable";
+    }
+  | {
+      status: "suspended";
+      reason: string;
+      runtimeId?: string;
+      error?: string;
+    };
+
+export interface IndependentVerifierDriver {
+  candidateRuntimeIds: readonly string[];
+  /** Optional only for legacy/test drivers; production always supplies it. */
+  alwaysRequireIndependentVerifier?: boolean;
+  assessRisk(input: {
+    runId: string;
+    projection: SchedulerProjection;
+  }): Promise<BuildRiskAssessmentInput>;
+  verify(input: IndependentVerifierRequest): Promise<IndependentVerifierResult>;
+}
+
 export interface BuildRuntimeOptions {
   runId: string;
+  initialObjective?: string;
   runPolicy?: NativeBuildRunPolicy;
   store: SchedulerStore;
   workerDriver: WorkerRuntimeDriver;
@@ -76,16 +163,24 @@ export interface BuildRuntimeOptions {
   clock?: () => string;
   renewBudgetWindow?: (idempotencyKey: string, occurredAt: string) => void;
   providerRetryDeadlineMs?: () => number | undefined;
+  evidenceStore?: EvidenceStore;
+  artifacts?: ArtifactStore;
+  finalVerificationDriver?: FinalVerificationCheckDriver;
+  finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
+  finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
+  discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
+  independentVerifier?: IndependentVerifierDriver;
 }
 
 export interface BuildStepResult {
-  status: "progressed" | "paused" | "completed" | "idle";
+  status: "progressed" | "paused" | "completed" | "idle" | "blocked";
   action?: string;
 }
 
 export class BuildRuntime {
   readonly id: string;
   private readonly runId: string;
+  private readonly initialObjective?: string;
   private readonly store: SchedulerStore;
   private readonly scheduler: TaskScheduler;
   private readonly architectDriver: ArchitectRuntimeDriver;
@@ -96,12 +191,20 @@ export class BuildRuntime {
   private readonly clock: () => string;
   private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
+  private readonly evidenceStore?: EvidenceStore;
+  private readonly artifacts?: ArtifactStore;
+  private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
+  private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
+  private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
+  private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
+  private readonly independentVerifier?: IndependentVerifierDriver;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
   constructor(options: BuildRuntimeOptions) {
     this.id = options.runId;
     this.runId = options.runId;
+    this.initialObjective = options.initialObjective;
     this.store = options.store;
     this.architectDriver = options.architectDriver;
     this.integrationDriver = options.integrationDriver;
@@ -111,7 +214,29 @@ export class BuildRuntime {
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.renewBudgetWindow = options.renewBudgetWindow;
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
+    this.evidenceStore = options.evidenceStore;
+    this.artifacts = options.artifacts;
+    this.finalVerificationDriver = options.finalVerificationDriver;
+    this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
+    this.finalVerificationProfileFor = options.finalVerificationProfileFor;
+    this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
+    this.independentVerifier = options.independentVerifier;
+    if (
+      this.independentVerifier &&
+      (
+        this.independentVerifier.candidateRuntimeIds.length === 0 ||
+        new Set(this.independentVerifier.candidateRuntimeIds).size !==
+          this.independentVerifier.candidateRuntimeIds.length ||
+        this.independentVerifier.candidateRuntimeIds.some((runtimeId) => !runtimeId.trim())
+      )
+    ) {
+      throw new Error(
+        "Independent verifier requires unique non-empty candidate runtime IDs.",
+      );
+    }
+    this.initializeRun();
     this.configureRunPolicy();
+    this.configureVerifierPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
       store: options.store,
@@ -184,6 +309,11 @@ export class BuildRuntime {
         "This Build is awaiting the user's final project handoff selection."
       );
     }
+    if (projection.verifierSelection?.status === "required") {
+      throw new Error(
+        "This Build is awaiting the user's independent verifier selection."
+      );
+    }
     const occurredAt = this.clock();
     if (
       renewBudgetWindow &&
@@ -214,6 +344,102 @@ export class BuildRuntime {
       actor: { role: "user", id: "local-user" },
       idempotencyKey,
       payload: { runtimeId },
+    });
+    return this.projection();
+  }
+
+  selectVerifierRuntime(
+    runtimeId: string,
+    idempotencyKey: string,
+  ): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "verifier.selection_selected",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { runtimeId },
+    });
+    return this.projection();
+  }
+
+  submitUserGuidance(input: {
+    guidanceId: string;
+    text: string;
+    version: number;
+    idempotencyKey: string;
+  }): SchedulerProjection {
+    const submitted = this.submitManagedUserGuidance(input);
+    const guidance = submitted.userGuidance[input.guidanceId];
+    if (guidance?.interruptionStatus === "pending") {
+      return this.completeManagedUserGuidanceInterruption(
+        input.guidanceId,
+        input.version,
+      );
+    }
+    return submitted;
+  }
+
+  submitManagedUserGuidance(input: {
+    guidanceId: string;
+    text: string;
+    version: number;
+    idempotencyKey: string;
+  }): SchedulerProjection {
+    const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
+    const appended = this.store.append({
+      runId: this.runId,
+      type: "user.guidance_submitted",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: input.idempotencyKey,
+      payload: {
+        guidanceId: input.guidanceId,
+        text: input.text,
+        version: input.version,
+        interruptionProtocolVersion: 1,
+      },
+    });
+    if (appended.sequence > sequenceBefore) {
+      this.lifecycleController.abort(
+        new DOMException(`Build ${this.runId} received user guidance.`, "AbortError")
+      );
+    }
+    return this.projection();
+  }
+
+  completeManagedUserGuidanceInterruption(
+    guidanceId: string,
+    expectedVersion: number,
+  ): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "user.guidance_interruption_completed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-manager" },
+      idempotencyKey: `guidance-interruption:${guidanceId}:version:${expectedVersion}`,
+      payload: { guidanceId, expectedVersion },
+    });
+    return this.projection();
+  }
+
+  answerArchitectQuestion(input: {
+    questionId: string;
+    expectedVersion: number;
+    answer: string;
+    idempotencyKey: string;
+  }): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "architect.question_answered",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: input.idempotencyKey,
+      payload: {
+        questionId: input.questionId,
+        expectedVersion: input.expectedVersion,
+        answer: input.answer,
+      },
     });
     return this.projection();
   }
@@ -276,6 +502,76 @@ export class BuildRuntime {
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
     if (projection.status === "paused") return { status: "paused" };
+    const pendingInterruption = Object.values(projection.userGuidance)
+      .filter((guidance) => guidance.interruptionStatus !== "completed")
+      .sort((left, right) => left.version - right.version)[0];
+    if (pendingInterruption) {
+      return { status: "blocked", action: "user_guidance_interruption_pending" };
+    }
+    if (projection.blockingArchitectQuestionId) {
+      return { status: "blocked", action: "architect_question_pending" };
+    }
+    const pendingQuestionResume = Object.values(projection.architectQuestions)
+      .filter((question) =>
+        question.status === "answered" &&
+        question.checkpoint !== undefined &&
+        (question.resumeStatus === "pending" || question.resumeStatus === "started")
+      )
+      .sort((left, right) => left.version - right.version)[0];
+    if (projection.planRevision > 0) {
+      const pendingGuidance = firstPendingUserGuidance(projection);
+      if (pendingGuidance) {
+        const resumeReason = pendingQuestionResume?.checkpoint?.reason;
+        if (
+          resumeReason?.type === "user_guidance_required" &&
+          resumeReason.guidanceId === pendingGuidance.guidanceId &&
+          resumeReason.version === pendingGuidance.version
+        ) {
+          return await this.resumeArchitectQuestion(pendingQuestionResume.questionId);
+        }
+        await this.runArchitect({
+          type: "user_guidance_required",
+          guidanceId: pendingGuidance.guidanceId,
+          version: pendingGuidance.version,
+        }, projection);
+        return this.afterArchitect("user_guidance_required");
+      }
+    }
+    if (pendingQuestionResume?.checkpoint) {
+      return await this.resumeArchitectQuestion(pendingQuestionResume.questionId);
+    }
+    if (
+      projection.acceptanceContractStatus ===
+      "acceptance_contract_upgrade_required"
+    ) {
+      if (
+        !events.some((event) => event.type === "acceptance_contract.upgrade_required")
+      ) {
+        this.store.append({
+          runId: this.runId,
+          type: "acceptance_contract.upgrade_required",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: "acceptance-contract-upgrade-required",
+          payload: {
+            taskIds: Object.values(projection.tasks)
+              .filter(
+                (task) =>
+                  task.status !== "cancelled" &&
+                  task.acceptanceCriteria === undefined
+              )
+              .map((task) => task.id)
+              .sort(),
+          },
+        });
+        projection = this.projection();
+      }
+      await this.runArchitect(
+        { type: "acceptance_contract_upgrade_required" },
+        projection
+      );
+      return this.afterArchitect("acceptance_contract_upgrade_required");
+    }
     if (projection.planRevision === 0) {
       await this.runArchitect({ type: "plan_required" }, projection);
       return this.afterArchitect("plan_required");
@@ -415,7 +711,35 @@ export class BuildRuntime {
     }
 
     projection = this.projection();
+    const finalVerification = projection.finalVerification?.current;
+    if (finalVerification) {
+      const result = await this.advanceFinalVerification(finalVerification);
+      if (result) return result;
+    }
     const tasks = Object.values(projection.tasks);
+    const implementationTasks = tasks.filter(
+      (task) => task.kind !== "final_verification"
+    );
+    const implementationTasksTerminal = implementationTasks.every(
+      (task) => task.status === "integrated" || task.status === "cancelled"
+    );
+    if (
+      implementationTasksTerminal &&
+      projection.integrationRevision &&
+      !projection.finalVerification?.current
+    ) {
+      await this.runArchitect({
+        type: "final_verification_plan_required",
+        integrationRevision: projection.integrationRevision,
+      }, projection);
+      const planned = this.projection().finalVerification?.current;
+      if (!planned || planned.targetRevision !== projection.integrationRevision) {
+        throw new Error(
+          "Architect returned from final_verification_plan_required without a typed action."
+        );
+      }
+      return this.afterArchitect("final_verification_plan_required");
+    }
     if (
       tasks.every(
         (task) => task.status === "integrated" || task.status === "cancelled"
@@ -441,16 +765,543 @@ export class BuildRuntime {
     return { status: "idle", action: "no_mechanical_progress" };
   }
 
-  private ensureInitialized(): void {
-    if (this.store.readRun(this.runId).length > 0) return;
+  private async advanceFinalVerification(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+  ): Promise<BuildStepResult | undefined> {
+    if (generation.submission) {
+      if (!generation.submissionResult) {
+        return { status: "idle", action: "final_verification_submission_unvalidated" };
+      }
+      if (generation.cleanup?.status !== "succeeded") {
+        return await this.advanceFinalVerificationCleanup(generation);
+      }
+      if (generation.review?.status === "approved") {
+        const verifierResult = await this.advanceIndependentVerification();
+        if (verifierResult) return verifierResult;
+        await this.runArchitect(
+          { type: "completion_decision_required" },
+          this.projection(),
+        );
+        const completed = this.projection();
+        if (completed.projectHandoff?.status !== "requested") {
+          throw new Error(
+            "Architect returned from completion_decision_required without a typed action.",
+          );
+        }
+        return this.afterArchitect("completion_decision_required");
+      }
+      if (
+        generation.review?.status === "repair_required" ||
+        generation.review?.status === "rejected"
+      ) {
+        if (generation.review.status === "rejected") {
+          return { status: "idle", action: "final_verification_repair_required" };
+        }
+        if (generation.repairTaskIds?.length) return undefined;
+        const decision = generation.review.decision;
+        if (!decision) {
+          throw new Error("Final verification repair review lacks a structured decision.");
+        }
+        await this.runArchitect({
+          type: "final_verification_repair_plan_required",
+          finalVerificationTaskId: generation.taskId,
+          generationId: generation.generationId,
+          targetRevision: generation.targetRevision,
+          source: {
+            type: "semantic_review",
+            submissionId: generation.submission.submissionId,
+            reviewId: generation.review.reviewId,
+          },
+          failedCategories: [...decision.failedCategories],
+          evidenceIds: [...new Set(decision.categoryReviews.flatMap(
+            (review) => review.verdict === "repair_required" ? review.evidenceIds : [],
+          ))],
+        }, this.projection());
+        const repaired = this.projection().finalVerification?.current;
+        if (
+          repaired?.generationId !== generation.generationId ||
+          !repaired.repairTaskIds?.length
+        ) {
+          throw new Error(
+            "Architect returned from final_verification_repair_plan_required without a typed action.",
+          );
+        }
+        return this.afterArchitect("final_verification_repair_plan_required");
+      }
+      const reviewId = `final-verification-review:${generation.generationId}`;
+      if (!generation.review) {
+        this.store.append({
+          runId: this.runId,
+          type: "final_verification.review_requested",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `${generation.generationId}:review-request`,
+          payload: {
+            taskId: generation.taskId,
+            generationId: generation.generationId,
+            targetRevision: generation.targetRevision,
+            submissionId: generation.submission.submissionId,
+            reviewId,
+            attempt: generation.submission.attempt,
+          },
+        });
+      }
+      const current = this.projection().finalVerification?.current;
+      if (!current?.submission || current.review?.status !== "requested") {
+        throw new Error("Final verification review request was not durably recorded.");
+      }
+      await this.runArchitect({
+        type: "final_verification_review_required",
+        taskId: current.taskId,
+        generationId: current.generationId,
+        submissionId: current.submission.submissionId,
+        targetRevision: current.targetRevision,
+      }, this.projection());
+      const reviewed = this.projection().finalVerification?.current;
+      if (
+        reviewed?.generationId !== current.generationId ||
+        reviewed.review?.status === "requested" ||
+        !reviewed.review
+      ) {
+        throw new Error(
+          "Architect returned from final_verification_review_required without a typed action.",
+        );
+      }
+      return this.afterArchitect("final_verification_review_required");
+    }
+    if (generation.completedChecks?.some((check) => !check.green)) {
+      if (!generation.failure) {
+        const failure = deriveFinalVerificationFailure(generation, 1);
+        this.store.append({
+          runId: this.runId,
+          type: "final_verification.failure_reported",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `${generation.generationId}:failure:${failure.failureId}`,
+          payload: failure,
+        });
+        return { status: "progressed", action: "final_verification_failure_reported" };
+      }
+      if (generation.cleanup?.status !== "succeeded") {
+        return await this.advanceFinalVerificationCleanup(generation);
+      }
+      if (generation.repairTaskIds?.length) return undefined;
+      await this.runArchitect({
+        type: "final_verification_repair_plan_required",
+        finalVerificationTaskId: generation.taskId,
+        generationId: generation.generationId,
+        targetRevision: generation.targetRevision,
+        source: {
+          type: "mechanical_failure",
+          failureId: generation.failure.failureId,
+          issueIds: [...generation.failure.issueIds],
+          factIds: [...generation.failure.factIds],
+        },
+        failedCategories: [...generation.failure.failedCategories],
+        evidenceIds: [...generation.failure.evidenceIds],
+      }, this.projection());
+      const repaired = this.projection().finalVerification?.current;
+      if (repaired?.generationId !== generation.generationId || !repaired.repairTaskIds?.length) {
+        throw new Error(
+          "Architect returned from final_verification_repair_plan_required without a typed action.",
+        );
+      }
+      return this.afterArchitect("final_verification_repair_plan_required");
+    }
+    const pending = generation.plan.checks.find(
+      (planned) => !generation.completedChecks?.some(
+        (completed) => completed.category === planned.category,
+      ),
+    );
+    if (pending) {
+      if (!this.finalVerificationDriver) {
+        throw new Error("Final verification execution requires a FinalVerificationCheckDriver.");
+      }
+      let result: FinalVerificationCheckExecution;
+      const signal = this.activeLifecycleSignal();
+      try {
+        result = await this.finalVerificationDriver.executeCheck({
+          runId: this.runId,
+          taskId: generation.taskId,
+          generationId: generation.generationId,
+          targetRevision: generation.targetRevision,
+          attempt: 1,
+          plan: generation.plan,
+          category: pending.category,
+          executionProfile: generation.executionProfile,
+          signal,
+        });
+        if (signal.aborted) {
+          return {
+            status: this.projection().status === "paused" ? "paused" : "progressed",
+            action: "final_verification_interrupted",
+          };
+        }
+      } catch (error) {
+        if (signal.aborted) {
+          return {
+            status: this.projection().status === "paused" ? "paused" : "progressed",
+            action: "final_verification_interrupted",
+          };
+        }
+        if (!this.isCurrentGeneration(generation)) {
+          return { status: "progressed", action: "final_verification_invalidated" };
+        }
+        throw error;
+      }
+      if (!this.isCurrentGeneration(generation)) {
+        return { status: "progressed", action: "final_verification_invalidated" };
+      }
+      if (result.check.category !== pending.category) {
+        throw new Error(
+          `Final verification driver returned ${result.check.category} for ${pending.category}.`,
+        );
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "final_verification.check_completed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `${generation.generationId}:check:${pending.category}`,
+        payload: {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          attempt: 1,
+          workspacePath: result.workspacePath,
+          startedAt: result.startedAt,
+          finishedAt: result.finishedAt,
+          result: result.check,
+        },
+      });
+      const status = this.projection().status === "paused" ? "paused" : "progressed";
+      return {
+        status,
+        action: result.check.green
+          ? "final_verification_check_completed"
+          : "final_verification_check_non_green",
+      };
+    }
+    if (!this.evidenceStore) {
+      throw new Error("Final verification submission requires an EvidenceStore.");
+    }
+    const completed = generation.completedChecks ?? [];
+    const run: FinalVerificationRun = {
+      generationId: generation.generationId,
+      runId: this.runId,
+      taskId: generation.taskId,
+      attempt: 1,
+      plan: generation.plan,
+      executionProfile: generation.executionProfile,
+      targetRevision: generation.targetRevision,
+      workspacePath: completed[0]!.workspacePath,
+      startedAt: completed[0]!.startedAt,
+      finishedAt: completed.at(-1)!.finishedAt,
+      checks: completed.map(({ attempt: _attempt, workspacePath: _workspacePath,
+        startedAt: _startedAt, finishedAt: _finishedAt, ...check }) => check),
+      green: true,
+    };
+    const submission = await submitFinalVerification(
+      { plan: generation.plan, run },
+      {
+        evidenceStore: this.evidenceStore,
+        artifacts: this.artifacts,
+        currentIntegrationRevision: () => this.projection().integrationRevision ?? "",
+        clock: this.clock,
+      },
+    );
+    if (!this.isCurrentGeneration(generation)) {
+      return { status: "progressed", action: "final_verification_invalidated" };
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "final_verification.submitted",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `${generation.generationId}:submission`,
+      payload: {
+        generationId: generation.generationId,
+        taskId: generation.taskId,
+        targetRevision: generation.targetRevision,
+        submissionId: `final-verification-submission:${generation.generationId}`,
+        attempt: 1,
+        submissionResult: submission,
+      },
+    });
+    return { status: "progressed", action: "final_verification_submitted" };
+  }
+
+  private async advanceIndependentVerification(): Promise<BuildStepResult | undefined> {
+    const driver = this.independentVerifier;
+    if (!driver) return undefined;
+    let projection = this.projection();
+    const targetRevision = projection.integrationRevision;
+    const finalVerification = projection.finalVerification?.current;
+    if (!targetRevision || !finalVerification) {
+      throw new Error("Independent verification requires a current integrated revision.");
+    }
+    const risk = projection.buildRisk?.current;
+    if (
+      !risk || risk.state !== "current" ||
+      risk.targetRevision !== targetRevision
+    ) {
+      const assessed = await driver.assessRisk({ runId: this.runId, projection });
+      const input: BuildRiskAssessmentInput = {
+        ...assessed,
+        stricterQualification:
+          driver.alwaysRequireIndependentVerifier === true,
+      };
+      projection = this.projection();
+      if (
+        projection.integrationRevision !== targetRevision ||
+        projection.finalVerification?.current?.generationId !==
+          finalVerification.generationId
+      ) {
+        return { status: "progressed", action: "build_risk_assessment_invalidated" };
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "build.risk_assessed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `build-risk:${targetRevision}`,
+        payload: {
+          targetRevision,
+          input,
+          assessment: assessBuildRisk(input),
+        },
+      });
+      return { status: "progressed", action: "build_risk_assessed" };
+    }
+    if (risk.assessment.risk === "low") return undefined;
+
+    const currentReview = projection.verifier?.current;
+    if (
+      currentReview?.status === "submitted" &&
+      currentReview.verdict?.satisfied === true
+    ) {
+      return undefined;
+    }
+    if (
+      currentReview?.status === "submitted" &&
+      currentReview.verdict?.satisfied === false
+    ) {
+      if (currentReview.repairTaskIds?.length) return undefined;
+      const unsatisfiedCriteria = currentReview.verdict.criterionVerdicts
+        .filter((criterion) => criterion.verdict === "unsatisfied")
+        .map((criterion) => ({
+          taskId: criterion.taskId,
+          criterionId: criterion.criterionId,
+          rationale: criterion.rationale,
+          evidenceIds: [...criterion.evidenceIds],
+        }));
+      await this.runArchitect({
+        type: "verifier_repair_plan_required",
+        reviewId: currentReview.reviewId,
+        targetRevision: currentReview.targetRevision,
+        unsatisfiedCriteria,
+      }, projection);
+      const repaired = this.projection().verifier?.current;
+      if (
+        repaired?.reviewId !== currentReview.reviewId ||
+        !repaired.repairTaskIds?.length
+      ) {
+        throw new Error(
+          "Architect returned from verifier_repair_plan_required without a typed action.",
+        );
+      }
+      return this.afterArchitect("verifier_repair_plan_required");
+    }
+
+    const result = await driver.verify({
+      runId: this.runId,
+      projection,
+      risk,
+      ...(projection.verifierSelection?.status === "selected" &&
+          projection.verifierSelection.selectedRuntimeId
+        ? { preferredRuntimeId: projection.verifierSelection.selectedRuntimeId }
+        : {}),
+      signal: this.activeLifecycleSignal(),
+    });
+    const afterVerification = this.projection();
+    if (
+      afterVerification.integrationRevision !== targetRevision ||
+      afterVerification.finalVerification?.current?.generationId !==
+        finalVerification.generationId ||
+      afterVerification.buildRisk?.current?.targetRevision !== targetRevision ||
+      Object.values(afterVerification.userGuidance).some(
+        (guidance) => guidance.status === "submitted",
+      )
+    ) {
+      return { status: "progressed", action: "verifier_invalidated" };
+    }
+    if (result.status === "verdict_submitted") {
+      const durable = this.projection().verifier?.current;
+      if (
+        durable?.status !== "submitted" || !durable.verdict ||
+        durable.targetRevision !== targetRevision
+      ) {
+        throw new Error(
+          "Verifier returned before its revision-bound verdict was durable.",
+        );
+      }
+      return { status: "progressed", action: "verifier_verdict_submitted" };
+    }
+    if (result.status === "suspended" && result.reason === "provider_error") {
+      return { status: "progressed", action: "verifier_provider_failed" };
+    }
+    if (
+      result.status === "suspended" && result.reason === "cancelled" &&
+      this.projection().status === "paused"
+    ) {
+      return { status: "paused", action: "verifier_interrupted" };
+    }
+    const reason = result.status === "unavailable"
+      ? result.reason
+      : result.reason || "verifier_suspended";
+    this.store.append({
+      runId: this.runId,
+      type: "verifier.selection_required",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `verifier-selection:${targetRevision}:${reason}`,
+      payload: {
+        reason,
+        requiredCapabilities: ["code"],
+        candidateRuntimeIds: [...driver.candidateRuntimeIds],
+      },
+    });
+    return { status: "paused", action: "verifier_selection_required" };
+  }
+
+  private async advanceFinalVerificationCleanup(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+  ): Promise<BuildStepResult> {
+    if (!this.finalVerificationCleanupDriver) {
+      throw new Error("Final verification cleanup requires an exact-owned cleanup driver.");
+    }
+    let cleanup = generation.cleanup;
+    if (!cleanup || cleanup.status === "failed") {
+      const attempt = (cleanup?.attempt ?? 0) + 1;
+      this.store.append({
+        runId: this.runId,
+        type: "final_verification.cleanup_started",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `${generation.generationId}:cleanup:${attempt}:started`,
+        payload: {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          attempt,
+        },
+      });
+      cleanup = this.projection().finalVerification?.current?.cleanup;
+    }
+    if (!cleanup || cleanup.status !== "started") {
+      throw new Error("Final verification cleanup start was not durably recorded.");
+    }
+    try {
+      const result = await this.finalVerificationCleanupDriver.cleanup({
+        runId: this.runId,
+        generationId: generation.generationId,
+        taskId: generation.taskId,
+        targetRevision: generation.targetRevision,
+        attempt: cleanup.attempt,
+        ...(generation.failure ? {
+          failed: {
+            generationId: generation.generationId,
+            taskId: generation.taskId,
+            targetRevision: generation.targetRevision,
+            checks: [...(generation.completedChecks ?? [])],
+            evidenceReferences: [...generation.failure.evidenceIds],
+            logs: (generation.completedChecks ?? [])
+              .filter((check) => !check.green)
+              .flatMap((check) => check.issues),
+          },
+        } : {}),
+      });
+      if (!this.isCurrentGeneration(generation)) {
+        return { status: "progressed", action: "final_verification_invalidated" };
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "final_verification.cleanup_succeeded",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `${generation.generationId}:cleanup:${cleanup.attempt}:succeeded`,
+        payload: {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          attempt: cleanup.attempt,
+          ...(result.diagnosticsPath ? { diagnosticsPath: result.diagnosticsPath } : {}),
+        },
+      });
+      return { status: "progressed", action: "final_verification_cleanup_succeeded" };
+    } catch (error) {
+      if (!this.isCurrentGeneration(generation)) {
+        return { status: "progressed", action: "final_verification_invalidated" };
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "final_verification.cleanup_failed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `${generation.generationId}:cleanup:${cleanup.attempt}:failed`,
+        payload: {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          attempt: cleanup.attempt,
+          error: boundedCleanupError(error),
+        },
+      });
+      return { status: "idle", action: "final_verification_cleanup_failed" };
+    }
+  }
+
+  private isCurrentGeneration(
+    generation: NonNullable<SchedulerProjection["finalVerification"]>["current"] & {},
+  ): boolean {
+    const projection = this.projection();
+    const current = projection.finalVerification?.current;
+    return projection.integrationRevision === generation.targetRevision &&
+      current?.generationId === generation.generationId &&
+      current.targetRevision === generation.targetRevision;
+  }
+
+  private initializeRun(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.length > 0) {
+      const durableObjective = rebuildSchedulerProjection(events).initialObjective;
+      if (
+        durableObjective !== undefined &&
+        this.initialObjective !== undefined &&
+        durableObjective !== this.initialObjective
+      ) {
+        throw new Error(
+          "The durable initial objective does not match the Build specification."
+        );
+      }
+      return;
+    }
     this.store.append({
       runId: this.runId,
       type: "run.initialized",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
       idempotencyKey: "run-initialized",
-      payload: {},
+      payload: {
+        ...(this.initialObjective !== undefined
+          ? { objective: this.initialObjective }
+          : {}),
+      },
     });
+  }
+
+  private ensureInitialized(): void {
+    this.initializeRun();
   }
 
   private async runArchitect(
@@ -468,6 +1319,25 @@ export class BuildRuntime {
         this.runPolicy === "plan_only" &&
         reason.type === "completion_decision_required" &&
         projection.planRevision > 0,
+      finalVerificationPlanAvailable:
+        reason.type === "final_verification_plan_required",
+      finalVerificationReviewAvailable:
+        reason.type === "final_verification_review_required",
+      finalVerificationRepairPlanAvailable:
+        reason.type === "final_verification_repair_plan_required",
+      verifierRepairPlanAvailable:
+        reason.type === "verifier_repair_plan_required",
+      architectAction: {
+        reason,
+        sequence: projection.lastSequence,
+      },
+      ...(this.finalVerificationProfileFor
+        ? { finalVerificationProfileFor: this.finalVerificationProfileFor }
+        : {}),
+      ...(this.discardFinalVerificationProfile
+        ? { discardFinalVerificationProfile: this.discardFinalVerificationProfile }
+        : {}),
+      ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
     })) {
       tools.register(tool);
     }
@@ -483,7 +1353,7 @@ export class BuildRuntime {
         runId: this.runId,
         sessionId: `architect:${this.runId}`,
         actor: { role: "architect", id: this.architectId },
-        signal: this.activeLifecycleSignal(),
+        signal: this.activeLifecycleSignal(true),
       },
     });
     const sequenceAfter = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
@@ -494,10 +1364,76 @@ export class BuildRuntime {
     }
   }
 
-  private activeLifecycleSignal(): AbortSignal {
+  private async resumeArchitectQuestion(questionId: string): Promise<BuildStepResult> {
+    let events = this.store.readRun(this.runId);
+    let projection = rebuildSchedulerProjection(events);
+    let question = projection.architectQuestions[questionId];
+    if (
+      !question ||
+      question.status !== "answered" ||
+      !question.checkpoint ||
+      (question.resumeStatus !== "pending" && question.resumeStatus !== "started")
+    ) {
+      return { status: "idle" };
+    }
+    const checkpoint = question.checkpoint;
+    let actionEvent = question.resumeStartedSequence === undefined
+      ? undefined
+      : firstMatchingArchitectActionEvent(
+          events,
+          question.resumeStartedSequence,
+          checkpoint.reason
+        );
+    if (!actionEvent) {
+      if (question.resumeStatus === "pending") {
+        this.store.append({
+          runId: this.runId,
+          type: "architect.question_resume_started",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `architect-question-resume-started:${question.questionId}:${question.version}`,
+          payload: { questionId: question.questionId, expectedVersion: question.version },
+        });
+        events = this.store.readRun(this.runId);
+        projection = rebuildSchedulerProjection(events);
+        question = projection.architectQuestions[questionId];
+      }
+      const startedSequence = question.resumeStartedSequence;
+      if (startedSequence === undefined) {
+        throw new Error(`Architect question ${questionId} has no durable resume start.`);
+      }
+      await this.runArchitect(checkpoint.reason, projection);
+      events = this.store.readRun(this.runId);
+      actionEvent = firstMatchingArchitectActionEvent(
+        events,
+        startedSequence,
+        checkpoint.reason
+      );
+      if (!actionEvent) {
+        return { status: "progressed", action: "architect_question_interrupted" };
+      }
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "architect.question_resume_consumed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `architect-question-resume-consumed:${question.questionId}:${question.version}`,
+      payload: {
+        questionId: question.questionId,
+        expectedVersion: question.version,
+        actionEventSequence: actionEvent.sequence,
+      },
+    });
+    return this.afterArchitect("architect_question_resumed");
+  }
+
+  private activeLifecycleSignal(allowPendingGuidanceReset = false): AbortSignal {
+    const projection = this.projection();
     if (
       this.lifecycleController.signal.aborted &&
-      this.projection().status === "running"
+      projection.status === "running" &&
+      (allowPendingGuidanceReset || !firstPendingUserGuidance(projection))
     ) {
       this.lifecycleController = new AbortController();
     }
@@ -536,6 +1472,45 @@ export class BuildRuntime {
       payload: { runPolicy: this.runPolicy },
     });
   }
+
+  private configureVerifierPolicy(): void {
+    if (!this.independentVerifier || this.runPolicy === "plan_only") return;
+    const expected = {
+      mode: "risk_based" as const,
+      candidateRuntimeIds: [...this.independentVerifier.candidateRuntimeIds],
+      alwaysRequireIndependentVerifier:
+        this.independentVerifier.alwaysRequireIndependentVerifier === true,
+    };
+    const recovered = this.projection().verifierPolicy;
+    if (recovered) {
+      if (
+        recovered.mode !== expected.mode ||
+        recovered.alwaysRequireIndependentVerifier !==
+          expected.alwaysRequireIndependentVerifier ||
+        recovered.candidateRuntimeIds.length !==
+          expected.candidateRuntimeIds.length ||
+        recovered.candidateRuntimeIds.some(
+          (runtimeId, index) =>
+            runtimeId !== expected.candidateRuntimeIds[index],
+        )
+      ) {
+        throw new Error(
+          "Scheduler independent verifier policy is already configured differently.",
+        );
+      }
+      return;
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "verifier.policy_configured",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "verifier-policy-configured",
+      payload: {
+        ...expected,
+      },
+    });
+  }
 }
 
 function firstTask(
@@ -547,13 +1522,35 @@ function firstTask(
     .sort((left, right) => left.id.localeCompare(right.id))[0];
 }
 
+function firstMatchingArchitectActionEvent(
+  events: readonly SchedulerEvent[],
+  afterSequence: number,
+  reason: ArchitectActionReason,
+): SchedulerEvent | undefined {
+  return events.find((event) =>
+    event.sequence > afterSequence && architectLifecycleEventMatchesReason(event, reason)
+  );
+}
+
+function firstPendingUserGuidance(projection: SchedulerProjection) {
+  return Object.values(projection.userGuidance)
+    .filter((guidance) => guidance.status === "submitted")
+    .sort((left, right) => left.version - right.version)[0];
+}
+
 function emptyProjection(runId: string): SchedulerProjection {
   return {
     runId,
     status: "running",
+    acceptanceContractStatus: "current",
+    acceptanceUpgradeRequiredEventRecorded: false,
     planRevision: 0,
     tasks: {},
     guidance: {},
+    userGuidance: {},
+    userGuidanceVersion: 0,
+    architectQuestions: {},
+    architectQuestionVersion: 0,
     reviews: {},
     runtime: {
       providerHealth: {},
@@ -562,4 +1559,9 @@ function emptyProjection(runId: string): SchedulerProjection {
     },
     lastSequence: 0,
   };
+}
+
+function boundedCleanupError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return redactSensitiveText(message, 4_096) || "Final verification cleanup failed.";
 }

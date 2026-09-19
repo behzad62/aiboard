@@ -1,0 +1,24 @@
+{
+  "id": "runtime-current-red",
+  "startedAt": "2026-09-14T14:40:36.843Z",
+  "finishedAt": "2026-09-14T14:40:37.713Z",
+  "wrapperPid": 22800,
+  "testPid": 43452,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 436,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-runtime-runner.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

@@ -1,0 +1,26 @@
+{
+  "id": "final-posix-regressions2",
+  "startedAt": "2026-09-14T09:16:38.674Z",
+  "finishedAt": "2026-09-14T09:16:40.841Z",
+  "wrapperPid": 43316,
+  "testPid": 32172,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 433,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=C4 POSIX (supervisor treats readable EOF|output pump probes a zero-length readable)|portable supervisor observes input stream errors without fabricating terminal ownership",
+    "runner-v2/test/posix-process-backend.test.ts",
+    "runner-v2/test/portable-supervisor-input.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

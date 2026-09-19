@@ -1,0 +1,32 @@
+Task11 RED root retained: C:\Users\b_a_s\AppData\Local\Temp\aiboard-task11-recovery-vR5WVC
+✖ process recovery: same PID with recycled birth invalidates an authorized action (47.2189ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 304.964
+
+✖ failing tests:
+
+test at runner-v2\test\process-recovery.test.ts:1:1541
+✖ process recovery: same PID with recycled birth invalidates an authorized action (47.2189ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'executed'
+  - 'rejected'
+  
+      at <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:68:10)
+      at async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:41:11)
+      at async Test.run (node:internal/test_runner/test:1332:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'executed',
+    expected: 'rejected',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

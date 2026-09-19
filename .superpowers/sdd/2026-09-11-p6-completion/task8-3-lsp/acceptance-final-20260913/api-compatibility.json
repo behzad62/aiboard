@@ -1,0 +1,115 @@
+{
+  "at": "2026-09-13T19:18:41.086Z",
+  "base": "ccbbb0eeabc9f1543270d5e2abfb10b65c8d3c87",
+  "file": "runner-v2/src/lsp-client.ts",
+  "sourceSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+  "before": {
+    "errorCodes": [
+      "client_closed",
+      "document_already_open",
+      "document_not_open",
+      "frame_too_large",
+      "invalid_configuration",
+      "path_outside_workspace",
+      "process_error",
+      "process_exited",
+      "protocol_error",
+      "request_cancelled",
+      "request_timeout",
+      "response_error",
+      "spawn_failed",
+      "stale_document_version",
+      "too_many_pending_requests",
+      "write_failed"
+    ],
+    "errorConstructor": [
+      {
+        "name": "code",
+        "type": "LspClientErrorCode"
+      },
+      {
+        "name": "message",
+        "type": "string"
+      },
+      {
+        "name": "retryable",
+        "default": "false"
+      },
+      {
+        "name": "options",
+        "type": "ErrorOptions"
+      }
+    ],
+    "LspDocumentInput": [
+      "path: string;",
+      "languageId: string;",
+      "version: number;",
+      "text: string;"
+    ],
+    "LspClientStats": [
+      "starts: number;",
+      "restarts: number;",
+      "state: \"idle\" | \"starting\" | \"running\" | \"restarting\" | \"failed\" | \"closing\" | \"closed\";",
+      "openDocuments: number;"
+    ],
+    "LspDiagnosticSupport": [
+      "textDocumentPull: boolean;",
+      "workspacePull: boolean;"
+    ]
+  },
+  "after": {
+    "errorCodes": [
+      "client_closed",
+      "document_already_open",
+      "document_not_open",
+      "frame_too_large",
+      "invalid_configuration",
+      "path_outside_workspace",
+      "process_error",
+      "process_exited",
+      "protocol_error",
+      "request_cancelled",
+      "request_timeout",
+      "response_error",
+      "spawn_failed",
+      "stale_document_version",
+      "too_many_pending_requests",
+      "write_failed"
+    ],
+    "errorConstructor": [
+      {
+        "name": "code",
+        "type": "LspClientErrorCode"
+      },
+      {
+        "name": "message",
+        "type": "string"
+      },
+      {
+        "name": "retryable",
+        "default": "false"
+      },
+      {
+        "name": "options",
+        "type": "ErrorOptions"
+      }
+    ],
+    "LspDocumentInput": [
+      "path: string;",
+      "languageId: string;",
+      "version: number;",
+      "text: string;"
+    ],
+    "LspClientStats": [
+      "starts: number;",
+      "restarts: number;",
+      "state: \"idle\" | \"starting\" | \"running\" | \"restarting\" | \"failed\" | \"closing\" | \"closed\";",
+      "openDocuments: number;"
+    ],
+    "LspDiagnosticSupport": [
+      "textDocumentPull: boolean;",
+      "workspacePull: boolean;"
+    ]
+  },
+  "unchanged": true
+}

@@ -1,0 +1,34 @@
+{
+  "pid": 61004,
+  "identity": {
+    "Id": 61004,
+    "StartTimeUtc": "2026-09-15T09:25:17.5043330Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-15T09:25:17.536Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task11-recovery-disclosure\\gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task11-recovery-disclosure/reversal-pid.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=changed |recycled birth",
+    "runner-v2/test/process-recovery.test.ts"
+  ],
+  "spec": {
+    "id": "reversal-pid",
+    "tests": [
+      "runner-v2/test/process-recovery.test.ts"
+    ],
+    "pattern": "changed |recycled birth"
+  }
+}

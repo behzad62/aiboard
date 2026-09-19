@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -61,6 +61,7 @@ class FakeBrowserBackend implements BrowserBackend {
   async close(sessionId: string) {
     this.calls.push({ operation: "close", sessionId });
   }
+  async closeRun() {}
   async closeAll() {}
 }
 
@@ -238,7 +239,7 @@ test("Playwright task session rehydrates URL and storage after runner restart", 
     assert.ok(address && typeof address !== "string");
     const url = `http://127.0.0.1:${address.port}/state`;
     const first = new PlaywrightBrowserBackend(join(root, "sessions"));
-    assert.equal((await first.open("run:task", { url, width: 800, height: 600 })).url, url);
+    assert.equal((await first.open("run:task", { url, width: 800, height: 600 }, "run")).url, url);
     assert.equal((await first.snapshot("run:task")).text, "first");
     await first.closeAll();
 
@@ -248,6 +249,64 @@ test("Playwright task session rehydrates URL and storage after runner restart", 
     assert.equal(snapshot.text, "restored");
     await recovered.close("run:task");
     await recovered.closeAll();
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("closeRun removes only exact persisted browser ownership across restart", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-browser-run-owner-"));
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end("<body>owned</body>");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const url = `http://127.0.0.1:${address.port}/`;
+    const sessions = join(root, "sessions");
+    const first = new PlaywrightBrowserBackend(sessions);
+    await first.open("run-a:same-task", { url, width: 800, height: 600 }, "run-a");
+    await first.open("run-b:same-task", { url, width: 800, height: 600 }, "run-b");
+    await first.closeAll();
+
+    const reopened = new PlaywrightBrowserBackend(sessions);
+    await reopened.closeRun("run-a");
+    await assert.rejects(reopened.snapshot("run-a:same-task"), /not open/i);
+    assert.equal((await reopened.snapshot("run-b:same-task")).text, "owned");
+    await reopened.closeAll();
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("closeRun refuses foreign browser metadata and cannot delete its files", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-browser-owner-tamper-"));
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end("<body>owned</body>");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const url = `http://127.0.0.1:${address.port}/`;
+    const sessions = join(root, "sessions");
+    const first = new PlaywrightBrowserBackend(sessions);
+    await first.open("run-a:task", { url, width: 800, height: 600 }, "run-a");
+    await first.closeAll();
+    const metadataPath = join(sessions, readdirSync(sessions).find((name) => name.endsWith(".json") && !name.endsWith(".storage.json"))!);
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(metadataPath, JSON.stringify({ ...metadata, ownerRunId: "run-b" }));
+
+    const reopened = new PlaywrightBrowserBackend(sessions);
+    await reopened.closeRun("run-a");
+    assert.equal(existsSync(metadataPath), true);
+    assert.equal((await reopened.snapshot("run-a:task")).text, "owned");
+    await reopened.closeAll();
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
@@ -278,7 +337,7 @@ test("Playwright open settles delayed dynamic imports before acceptance tools co
       url: `http://127.0.0.1:${address.port}/`,
       width: 800,
       height: 600,
-    });
+    }, "run");
     const events = await backend.events("run:settle");
     assert.equal(
       events.console.some((event) => event.text.includes("late dynamic import failure")),
@@ -310,7 +369,7 @@ test("Playwright events captures uncaught page exceptions", async () => {
       url: `http://127.0.0.1:${address.port}/`,
       width: 800,
       height: 600,
-    });
+    }, "run");
     const events = await backend.events("run:pageerror");
     const pageError = events.console.find(
       (event) => event.type === "error" && event.text.includes("uncaught render failure")

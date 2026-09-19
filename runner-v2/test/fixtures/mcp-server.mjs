@@ -1,8 +1,14 @@
 import { createInterface } from "node:readline";
+import { appendFileSync, writeFileSync } from "node:fs";
+
+const markerPath = process.argv[2];
+const methodLogPath = process.argv[3];
+if (markerPath) writeFileSync(markerPath, String(process.pid), { flag: "wx" });
 
 const lines = createInterface({ input: process.stdin });
 lines.on("line", (line) => {
   const message = JSON.parse(line);
+  if (methodLogPath) appendFileSync(methodLogPath, `${message.method}\n`);
   if (message.method === "initialize") {
     reply(message.id, {
       protocolVersion: "2024-11-05",

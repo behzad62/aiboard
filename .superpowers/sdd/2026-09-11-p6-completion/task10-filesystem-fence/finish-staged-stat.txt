@@ -1,0 +1,619 @@
+ .superpowers/sdd/2026-09-11-p6-completion/plan.md  |     7 +-
+ .../task10-filesystem-fence/acceptance-audit.mjs   |    51 +
+ .../acceptance-bootstrap.spec.json                 |    10 +
+ .../acceptance-bootstrap/child.json                |    22 +
+ .../acceptance-bootstrap/inputs-after.json         |  1770 ++
+ .../acceptance-bootstrap/inputs-before.json        |  1770 ++
+ .../acceptance-bootstrap/roots.json                |    46 +
+ .../acceptance-bootstrap/stderr.log                |     0
+ .../acceptance-bootstrap/stdout.log                |    40 +
+ .../acceptance-bootstrap/terminal.json             |    25 +
+ .../acceptance-bootstrap/wrapper.json              |    37 +
+ .../acceptance-diff.spec.json                      |     8 +
+ .../acceptance-diff/child.json                     |    15 +
+ .../acceptance-diff/inputs-after.json              |  1766 ++
+ .../acceptance-diff/inputs-before.json             |  1766 ++
+ .../acceptance-diff/roots.json                     |     5 +
+ .../acceptance-diff/stderr.log                     |    10 +
+ .../acceptance-diff/stdout.log                     |     0
+ .../acceptance-diff/terminal.json                  |    19 +
+ .../acceptance-diff/wrapper.json                   |    29 +
+ .../acceptance-eslint.spec.json                    |     8 +
+ .../acceptance-eslint/child.json                   |    16 +
+ .../acceptance-eslint/inputs-after.json            |  1766 ++
+ .../acceptance-eslint/inputs-before.json           |  1766 ++
+ .../acceptance-eslint/roots.json                   |     5 +
+ .../acceptance-eslint/stderr.log                   |     0
+ .../acceptance-eslint/stdout.log                   |     6 +
+ .../acceptance-eslint/terminal.json                |    19 +
+ .../acceptance-eslint/wrapper.json                 |    29 +
+ .../acceptance-main.spec.json                      |    37 +
+ .../acceptance-main/child.json                     |    49 +
+ .../acceptance-main/inputs-after.json              |  1770 ++
+ .../acceptance-main/inputs-before.json             |  1770 ++
+ .../acceptance-main/roots.json                     |  5815 ++++
+ .../acceptance-main/stderr.log                     |     0
+ .../acceptance-main/stdout.log                     |  2652 ++
+ .../acceptance-main/terminal.json                  |    54 +
+ .../acceptance-main/wrapper.json                   |    91 +
+ .../acceptance-typescript.spec.json                |     9 +
+ .../acceptance-typescript/child.json               |    17 +
+ .../acceptance-typescript/inputs-after.json        |  1766 ++
+ .../acceptance-typescript/inputs-before.json       |  1766 ++
+ .../acceptance-typescript/roots.json               |     5 +
+ .../acceptance-typescript/stderr.log               |     0
+ .../acceptance-typescript/stdout.log               |     0
+ .../acceptance-typescript/terminal.json            |    20 +
+ .../acceptance-typescript/wrapper.json             |    31 +
+ .../task10-filesystem-fence/affected-graph.json    |   259 +
+ .../task10-filesystem-fence/audit.mjs              |    47 +
+ .../task10-filesystem-fence/baseline.json          | 27206 +++++++++++++++++++
+ .../blocked-integration-process-tree.json          |     7 +
+ .../blocked-integration-second.json                |    27 +
+ .../blocked-integration-stop.json                  |     8 +
+ .../bootstrap-green-1.spec.json                    |     9 +
+ .../bootstrap-green-1/child.json                   |    24 +
+ .../bootstrap-green-1/inputs-after.json            |  1762 ++
+ .../bootstrap-green-1/inputs-before.json           |  1762 ++
+ .../bootstrap-green-1/roots.json                   |   189 +
+ .../bootstrap-green-1/stderr.log                   |     0
+ .../bootstrap-green-1/stdout.log                   |   140 +
+ .../bootstrap-green-1/terminal.json                |    29 +
+ .../bootstrap-green-1/wrapper.json                 |    38 +
+ .../bootstrap-red.spec.json                        |     4 +
+ .../bootstrap-red/child.json                       |    21 +
+ .../bootstrap-red/inputs-after.json                |  1762 ++
+ .../bootstrap-red/inputs-before.json               |  1762 ++
+ .../bootstrap-red/roots.json                       |    33 +
+ .../bootstrap-red/stderr.log                       |     0
+ .../bootstrap-red/stdout.log                       |    52 +
+ .../bootstrap-red/terminal.json                    |    27 +
+ .../bootstrap-red/wrapper.json                     |    32 +
+ .../causal-reverse-fault.json                      |    33 +
+ .../task10-filesystem-fence/edge-green-1.spec.json |     8 +
+ .../edge-green-1/child.json                        |    23 +
+ .../edge-green-1/inputs-after.json                 |  1762 ++
+ .../edge-green-1/inputs-before.json                |  1762 ++
+ .../edge-green-1/roots.json                        |   605 +
+ .../edge-green-1/stderr.log                        |     0
+ .../edge-green-1/stdout.log                        |   388 +
+ .../edge-green-1/terminal.json                     |    26 +
+ .../edge-green-1/wrapper.json                      |    36 +
+ .../task10-filesystem-fence/edge-red.spec.json     |     7 +
+ .../task10-filesystem-fence/edge-red/child.json    |    22 +
+ .../edge-red/inputs-after.json                     |  1762 ++
+ .../edge-red/inputs-before.json                    |  1762 ++
+ .../task10-filesystem-fence/edge-red/roots.json    |   514 +
+ .../task10-filesystem-fence/edge-red/stderr.log    |     0
+ .../task10-filesystem-fence/edge-red/stdout.log    |   361 +
+ .../task10-filesystem-fence/edge-red/terminal.json |    28 +
+ .../task10-filesystem-fence/edge-red/wrapper.json  |    34 +
+ .../task10-filesystem-fence/eslint-1.spec.json     |     8 +
+ .../task10-filesystem-fence/eslint-1/child.json    |    16 +
+ .../eslint-1/inputs-after.json                     |  1766 ++
+ .../eslint-1/inputs-before.json                    |  1766 ++
+ .../task10-filesystem-fence/eslint-1/roots.json    |     5 +
+ .../task10-filesystem-fence/eslint-1/stderr.log    |     0
+ .../task10-filesystem-fence/eslint-1/stdout.log    |     6 +
+ .../task10-filesystem-fence/eslint-1/terminal.json |    19 +
+ .../task10-filesystem-fence/eslint-1/wrapper.json  |    29 +
+ .../fault-canonicalization-red.spec.json           |    10 +
+ .../fault-canonicalization-red/child.json          |    22 +
+ .../fault-canonicalization-red/inputs-after.json   |  1770 ++
+ .../fault-canonicalization-red/inputs-before.json  |  1770 ++
+ .../fault-canonicalization-red/roots.json          |    20 +
+ .../fault-canonicalization-red/stderr.log          |     0
+ .../fault-canonicalization-red/stdout.log          |    43 +
+ .../fault-canonicalization-red/terminal.json       |    27 +
+ .../fault-canonicalization-red/wrapper.json        |    37 +
+ ...fault-canonicalization-restored-green.spec.json |    10 +
+ .../child.json                                     |    22 +
+ .../inputs-after.json                              |  1770 ++
+ .../inputs-before.json                             |  1770 ++
+ .../roots.json                                     |    20 +
+ .../stderr.log                                     |     0
+ .../stdout.log                                     |    18 +
+ .../terminal.json                                  |    25 +
+ .../wrapper.json                                   |    37 +
+ .../fault-canonicalization-source.snapshot         |   453 +
+ .../fault-controls-green.spec.json                 |     7 +
+ .../fault-controls-green/child.json                |    22 +
+ .../fault-controls-green/inputs-after.json         |  1766 ++
+ .../fault-controls-green/inputs-before.json        |  1766 ++
+ .../fault-controls-green/roots.json                |    33 +
+ .../fault-controls-green/stderr.log                |     0
+ .../fault-controls-green/stdout.log                |    26 +
+ .../fault-controls-green/terminal.json             |    25 +
+ .../fault-controls-green/wrapper.json              |    34 +
+ .../fault-final-controls-green.spec.json           |    10 +
+ .../fault-final-controls-green/child.json          |    22 +
+ .../fault-final-controls-green/inputs-after.json   |  1770 ++
+ .../fault-final-controls-green/inputs-before.json  |  1770 ++
+ .../fault-final-controls-green/roots.json          |    33 +
+ .../fault-final-controls-green/stderr.log          |     0
+ .../fault-final-controls-green/stdout.log          |    26 +
+ .../fault-final-controls-green/terminal.json       |    25 +
+ .../fault-final-controls-green/wrapper.json        |    37 +
+ .../fault-overwrite-red.spec.json                  |    10 +
+ .../fault-overwrite-red/child.json                 |    22 +
+ .../fault-overwrite-red/inputs-after.json          |  1770 ++
+ .../fault-overwrite-red/inputs-before.json         |  1770 ++
+ .../fault-overwrite-red/roots.json                 |    20 +
+ .../fault-overwrite-red/stderr.log                 |     0
+ .../fault-overwrite-red/stdout.log                 |    38 +
+ .../fault-overwrite-red/terminal.json              |    27 +
+ .../fault-overwrite-red/wrapper.json               |    37 +
+ .../fault-overwrite-restored-green.spec.json       |    10 +
+ .../fault-overwrite-restored-green/child.json      |    22 +
+ .../inputs-after.json                              |  1770 ++
+ .../inputs-before.json                             |  1770 ++
+ .../fault-overwrite-restored-green/roots.json      |    20 +
+ .../fault-overwrite-restored-green/stderr.log      |     0
+ .../fault-overwrite-restored-green/stdout.log      |    18 +
+ .../fault-overwrite-restored-green/terminal.json   |    25 +
+ .../fault-overwrite-restored-green/wrapper.json    |    37 +
+ .../fault-overwrite-source.snapshot                |   461 +
+ .../final-affected-graph.json                      |   107 +
+ .../final-affected.spec.json                       |    38 +
+ .../final-affected/child.json                      |    50 +
+ .../final-affected/inputs-after.json               |  1770 ++
+ .../final-affected/inputs-before.json              |  1770 ++
+ .../final-affected/roots.json                      |  5854 ++++
+ .../final-affected/stderr.log                      |     0
+ .../final-affected/stdout.log                      |  2698 ++
+ .../final-affected/terminal.json                   |    68 +
+ .../final-affected/wrapper.json                    |    93 +
+ .../final-causal/causal-reverse-fault.json         |    33 +
+ .../fault-canonicalization-red.spec.json           |    10 +
+ .../fault-canonicalization-red/child.json          |    22 +
+ .../fault-canonicalization-red/inputs-after.json   |  1770 ++
+ .../fault-canonicalization-red/inputs-before.json  |  1770 ++
+ .../fault-canonicalization-red/roots.json          |    20 +
+ .../fault-canonicalization-red/stderr.log          |     0
+ .../fault-canonicalization-red/stdout.log          |    43 +
+ .../fault-canonicalization-red/terminal.json       |    27 +
+ .../fault-canonicalization-red/wrapper.json        |    37 +
+ ...fault-canonicalization-restored-green.spec.json |    10 +
+ .../child.json                                     |    22 +
+ .../inputs-after.json                              |  1770 ++
+ .../inputs-before.json                             |  1770 ++
+ .../roots.json                                     |    20 +
+ .../stderr.log                                     |     0
+ .../stdout.log                                     |    18 +
+ .../terminal.json                                  |    25 +
+ .../wrapper.json                                   |    37 +
+ .../fault-canonicalization-source.snapshot         |   469 +
+ .../fault-final-controls-green.spec.json           |    10 +
+ .../fault-final-controls-green/child.json          |    22 +
+ .../fault-final-controls-green/inputs-after.json   |  1770 ++
+ .../fault-final-controls-green/inputs-before.json  |  1770 ++
+ .../fault-final-controls-green/roots.json          |    33 +
+ .../fault-final-controls-green/stderr.log          |     0
+ .../fault-final-controls-green/stdout.log          |    26 +
+ .../fault-final-controls-green/terminal.json       |    25 +
+ .../fault-final-controls-green/wrapper.json        |    37 +
+ .../final-causal/fault-overwrite-red.spec.json     |    10 +
+ .../final-causal/fault-overwrite-red/child.json    |    22 +
+ .../fault-overwrite-red/inputs-after.json          |  1770 ++
+ .../fault-overwrite-red/inputs-before.json         |  1770 ++
+ .../final-causal/fault-overwrite-red/roots.json    |    20 +
+ .../final-causal/fault-overwrite-red/stderr.log    |     0
+ .../final-causal/fault-overwrite-red/stdout.log    |    38 +
+ .../final-causal/fault-overwrite-red/terminal.json |    27 +
+ .../final-causal/fault-overwrite-red/wrapper.json  |    37 +
+ .../fault-overwrite-restored-green.spec.json       |    10 +
+ .../fault-overwrite-restored-green/child.json      |    22 +
+ .../inputs-after.json                              |  1770 ++
+ .../inputs-before.json                             |  1770 ++
+ .../fault-overwrite-restored-green/roots.json      |    20 +
+ .../fault-overwrite-restored-green/stderr.log      |     0
+ .../fault-overwrite-restored-green/stdout.log      |    18 +
+ .../fault-overwrite-restored-green/terminal.json   |    25 +
+ .../fault-overwrite-restored-green/wrapper.json    |    37 +
+ .../final-causal/fault-overwrite-source.snapshot   |   477 +
+ .../task10-filesystem-fence/final-causal/gate.mjs  |    33 +
+ .../reverse-fault-accepted-source.snapshot         |   475 +
+ .../final-causal/reverse-fault.mjs                 |    69 +
+ .../final-diff-check.spec.json                     |     8 +
+ .../final-diff-check/child.json                    |    15 +
+ .../final-diff-check/inputs-after.json             |  1766 ++
+ .../final-diff-check/inputs-before.json            |  1766 ++
+ .../final-diff-check/roots.json                    |     5 +
+ .../final-diff-check/stderr.log                    |     9 +
+ .../final-diff-check/stdout.log                    |     0
+ .../final-diff-check/terminal.json                 |    19 +
+ .../final-diff-check/wrapper.json                  |    29 +
+ .../task10-filesystem-fence/final-eslint.spec.json |     8 +
+ .../final-eslint/child.json                        |    16 +
+ .../final-eslint/inputs-after.json                 |  1766 ++
+ .../final-eslint/inputs-before.json                |  1766 ++
+ .../final-eslint/roots.json                        |     5 +
+ .../final-eslint/stderr.log                        |     0
+ .../final-eslint/stdout.log                        |     6 +
+ .../final-eslint/terminal.json                     |    19 +
+ .../final-eslint/wrapper.json                      |    29 +
+ .../final-source-freeze.json                       |    75 +
+ .../final-typecheck.spec.json                      |     9 +
+ .../final-typecheck/child.json                     |    17 +
+ .../final-typecheck/inputs-after.json              |  1766 ++
+ .../final-typecheck/inputs-before.json             |  1766 ++
+ .../final-typecheck/roots.json                     |     5 +
+ .../final-typecheck/stderr.log                     |     0
+ .../final-typecheck/stdout.log                     |     0
+ .../final-typecheck/terminal.json                  |    20 +
+ .../final-typecheck/wrapper.json                   |    31 +
+ .../finish-acceptance-audit.json                   |  3127 +++
+ .../finish-acceptance-audit.mjs                    |    70 +
+ .../finish-affected-graph.json                     |   118 +
+ .../finish-bootstrap.spec.json                     |    11 +
+ .../finish-bootstrap/child.json                    |    22 +
+ .../finish-bootstrap/inputs-after.json             |  1774 ++
+ .../finish-bootstrap/inputs-before.json            |  1774 ++
+ .../finish-bootstrap/roots.json                    |    46 +
+ .../finish-bootstrap/stderr.log                    |     0
+ .../finish-bootstrap/stdout.log                    |    40 +
+ .../finish-bootstrap/terminal.json                 |    25 +
+ .../finish-bootstrap/wrapper.json                  |    38 +
+ .../task10-filesystem-fence/finish-diff.spec.json  |    11 +
+ .../task10-filesystem-fence/finish-diff/child.json |    15 +
+ .../finish-diff/inputs-after.json                  |  1770 ++
+ .../finish-diff/inputs-before.json                 |  1770 ++
+ .../task10-filesystem-fence/finish-diff/roots.json |     5 +
+ .../task10-filesystem-fence/finish-diff/stderr.log |    11 +
+ .../task10-filesystem-fence/finish-diff/stdout.log |     0
+ .../finish-diff/terminal.json                      |    19 +
+ .../finish-diff/wrapper.json                       |    32 +
+ .../finish-eslint.spec.json                        |    11 +
+ .../finish-eslint/child.json                       |    16 +
+ .../finish-eslint/inputs-after.json                |  1770 ++
+ .../finish-eslint/inputs-before.json               |  1770 ++
+ .../finish-eslint/roots.json                       |     5 +
+ .../finish-eslint/stderr.log                       |     0
+ .../finish-eslint/stdout.log                       |     6 +
+ .../finish-eslint/terminal.json                    |    19 +
+ .../finish-eslint/wrapper.json                     |    32 +
+ .../finish-fixture-regression.spec.json            |     7 +
+ .../finish-fixture-regression/child.json           |    22 +
+ .../finish-fixture-regression/inputs-after.json    |  1766 ++
+ .../finish-fixture-regression/inputs-before.json   |  1766 ++
+ .../finish-fixture-regression/roots.json           |    33 +
+ .../finish-fixture-regression/stderr.log           |     0
+ .../finish-fixture-regression/stdout.log           |    26 +
+ .../finish-fixture-regression/terminal.json        |    25 +
+ .../finish-fixture-regression/wrapper.json         |    34 +
+ .../task10-filesystem-fence/finish-ledger.md       |    12 +
+ .../task10-filesystem-fence/finish-main.spec.json  |    38 +
+ .../task10-filesystem-fence/finish-main/child.json |    49 +
+ .../finish-main/inputs-after.json                  |  1774 ++
+ .../finish-main/inputs-before.json                 |  1774 ++
+ .../task10-filesystem-fence/finish-main/roots.json |  6208 +++++
+ .../task10-filesystem-fence/finish-main/stderr.log |     0
+ .../task10-filesystem-fence/finish-main/stdout.log |  2865 ++
+ .../finish-main/terminal.json                      |    52 +
+ .../finish-main/wrapper.json                       |    92 +
+ .../finish-prestage-protected.json                 |    79 +
+ .../finish-process-audit.ps1                       |    42 +
+ .../finish-process-proof.json                      |    10 +
+ .../finish-remote-refs-before.txt                  |     2 +
+ .../finish-resume-audit.json                       |    75 +
+ .../finish-source-freeze.json                      |    79 +
+ .../finish-staging-recovery.json                   |    24 +
+ .../finish-typescript.spec.json                    |    12 +
+ .../finish-typescript/child.json                   |    17 +
+ .../finish-typescript/inputs-after.json            |  1770 ++
+ .../finish-typescript/inputs-before.json           |  1770 ++
+ .../finish-typescript/roots.json                   |     5 +
+ .../finish-typescript/stderr.log                   |     0
+ .../finish-typescript/stdout.log                   |     0
+ .../finish-typescript/terminal.json                |    20 +
+ .../finish-typescript/wrapper.json                 |    34 +
+ .../focused-green-1.spec.json                      |     9 +
+ .../focused-green-1/child.json                     |    24 +
+ .../focused-green-1/inputs-after.json              |  1758 ++
+ .../focused-green-1/inputs-before.json             |  1758 ++
+ .../focused-green-1/roots.json                     |   540 +
+ .../focused-green-1/stderr.log                     |     0
+ .../focused-green-1/stdout.log                     |   338 +
+ .../focused-green-1/terminal.json                  |    27 +
+ .../focused-green-1/wrapper.json                   |    38 +
+ .../task10-filesystem-fence/gate.mjs               |    33 +
+ .../implementation-1.spec.json                     |     9 +
+ .../implementation-1/child.json                    |    24 +
+ .../implementation-1/inputs-after.json             |  1758 ++
+ .../implementation-1/inputs-before.json            |  1758 ++
+ .../implementation-1/roots.json                    |   540 +
+ .../implementation-1/stderr.log                    |     0
+ .../implementation-1/stdout.log                    |   448 +
+ .../implementation-1/terminal.json                 |    30 +
+ .../implementation-1/wrapper.json                  |    38 +
+ .../independent-live-review-20260915-0803.md       |    21 +
+ .../independent-resume-audit-20260915-0802.json    |    75 +
+ .../task10-filesystem-fence/initial-red.spec.json  |     6 +
+ .../task10-filesystem-fence/initial-red/child.json |    21 +
+ .../initial-red/inputs-after.json                  |  1754 ++
+ .../initial-red/inputs-before.json                 |  1754 ++
+ .../task10-filesystem-fence/initial-red/roots.json |   254 +
+ .../task10-filesystem-fence/initial-red/stderr.log |     0
+ .../task10-filesystem-fence/initial-red/stdout.log |   475 +
+ .../initial-red/terminal.json                      |    42 +
+ .../initial-red/wrapper.json                       |    32 +
+ .../integration-concurrency-diagnostic.spec.json   |    16 +
+ .../integration-concurrency-diagnostic/child.json  |    21 +
+ .../inputs-after.json                              |  1770 ++
+ .../inputs-before.json                             |  1770 ++
+ .../integration-concurrency-diagnostic/roots.json  |    20 +
+ .../integration-concurrency-diagnostic/stderr.log  |     0
+ .../integration-concurrency-diagnostic/stdout.log  |    77 +
+ .../terminal.json                                  |    24 +
+ .../wrapper.json                                   |    42 +
+ .../integration-concurrency.probe.test.ts          |  1702 ++
+ .../integration-early-loser-red.spec.json          |    16 +
+ .../integration-early-loser-red/child.json         |    21 +
+ .../integration-early-loser-red/inputs-after.json  |  1770 ++
+ .../integration-early-loser-red/inputs-before.json |  1770 ++
+ .../integration-early-loser-red/roots.json         |    20 +
+ .../integration-early-loser-red/stderr.log         |     0
+ .../integration-early-loser-red/stdout.log         |    18 +
+ .../integration-early-loser-red/terminal.json      |    26 +
+ .../integration-early-loser-red/wrapper.json       |    42 +
+ .../integration-early-loser.probe.test.ts          |  1704 ++
+ .../integration-fixture-green.probe.test.ts        |  1712 ++
+ .../integration-fixture-green.spec.json            |    11 +
+ .../integration-fixture-green/child.json           |    22 +
+ .../integration-fixture-green/inputs-after.json    |  1774 ++
+ .../integration-fixture-green/inputs-before.json   |  1774 ++
+ .../integration-fixture-green/roots.json           |    33 +
+ .../integration-fixture-green/stderr.log           |     0
+ .../integration-fixture-green/stdout.log           |    26 +
+ .../integration-fixture-green/terminal.json        |    25 +
+ .../integration-fixture-green/wrapper.json         |    38 +
+ .../integration-fixture-repair.json                |     6 +
+ .../integration-fixture-repaired.snapshot          |  1712 ++
+ .../language-migration.spec.json                   |     4 +
+ .../language-migration/child.json                  |    21 +
+ .../language-migration/inputs-after.json           |  1762 ++
+ .../language-migration/inputs-before.json          |  1762 ++
+ .../language-migration/roots.json                  |    72 +
+ .../language-migration/stderr.log                  |     0
+ .../language-migration/stdout.log                  |    76 +
+ .../language-migration/terminal.json               |    26 +
+ .../language-migration/wrapper.json                |    32 +
+ .../lsp-migration-green.spec.json                  |     6 +
+ .../lsp-migration-green/child.json                 |    21 +
+ .../lsp-migration-green/inputs-after.json          |  1766 ++
+ .../lsp-migration-green/inputs-before.json         |  1766 ++
+ .../lsp-migration-green/roots.json                 |    59 +
+ .../lsp-migration-green/stderr.log                 |     0
+ .../lsp-migration-green/stdout.log                 |    27 +
+ .../lsp-migration-green/terminal.json              |    24 +
+ .../lsp-migration-green/wrapper.json               |    32 +
+ .../lsp-migration-red.spec.json                    |     6 +
+ .../lsp-migration-red/child.json                   |    21 +
+ .../lsp-migration-red/inputs-after.json            |  1766 ++
+ .../lsp-migration-red/inputs-before.json           |  1766 ++
+ .../lsp-migration-red/roots.json                   |    59 +
+ .../lsp-migration-red/stderr.log                   |     0
+ .../lsp-migration-red/stdout.log                   |    41 +
+ .../lsp-migration-red/terminal.json                |    29 +
+ .../lsp-migration-red/wrapper.json                 |    32 +
+ .../lsp-revision-red.spec.json                     |     6 +
+ .../lsp-revision-red/child.json                    |    21 +
+ .../lsp-revision-red/inputs-after.json             |  1766 ++
+ .../lsp-revision-red/inputs-before.json            |  1766 ++
+ .../lsp-revision-red/roots.json                    |    59 +
+ .../lsp-revision-red/stderr.log                    |     0
+ .../lsp-revision-red/stdout.log                    |    41 +
+ .../lsp-revision-red/terminal.json                 |    26 +
+ .../lsp-revision-red/wrapper.json                  |    32 +
+ .../mutation-import-inventory.json                 |   365 +
+ .../task10-filesystem-fence/plan.md                |    31 +
+ .../posix-generation-red.spec.json                 |     7 +
+ .../posix-generation-red/child.json                |    22 +
+ .../posix-generation-red/inputs-after.json         |  1762 ++
+ .../posix-generation-red/inputs-before.json        |  1762 ++
+ .../posix-generation-red/roots.json                |    33 +
+ .../posix-generation-red/stderr.log                |     0
+ .../posix-generation-red/stdout.log                |    45 +
+ .../posix-generation-red/terminal.json             |    27 +
+ .../posix-generation-red/wrapper.json              |    34 +
+ .../pre-fault-green.spec.json                      |    12 +
+ .../pre-fault-green/child.json                     |    27 +
+ .../pre-fault-green/inputs-after.json              |  1766 ++
+ .../pre-fault-green/inputs-before.json             |  1766 ++
+ .../pre-fault-green/roots.json                     |  1021 +
+ .../pre-fault-green/stderr.log                     |     0
+ .../pre-fault-green/stdout.log                     |   656 +
+ .../pre-fault-green/terminal.json                  |    30 +
+ .../pre-fault-green/wrapper.json                   |    44 +
+ .../pre-final-review-audit.json                    |    71 +
+ .../prepare-final-gates.mjs                        |    24 +
+ .../task10-filesystem-fence/process-audit.ps1      |    43 +
+ .../reconnected-checkpoint.json                    |    63 +
+ .../task10-filesystem-fence/red.spec.json          |     4 +
+ .../task10-filesystem-fence/red/child.json         |    21 +
+ .../task10-filesystem-fence/red/inputs-after.json  |  1754 ++
+ .../task10-filesystem-fence/red/inputs-before.json |  1754 ++
+ .../task10-filesystem-fence/red/roots.json         |   254 +
+ .../task10-filesystem-fence/red/stderr.log         |     0
+ .../task10-filesystem-fence/red/stdout.log         |   457 +
+ .../task10-filesystem-fence/red/terminal.json      |    41 +
+ .../task10-filesystem-fence/red/wrapper.json       |    32 +
+ .../task10-filesystem-fence/report.md              |    94 +
+ .../task10-filesystem-fence/requirements-review.md |    29 +
+ .../reverse-fault-accepted-source.snapshot         |   459 +
+ .../task10-filesystem-fence/reverse-fault.mjs      |    69 +
+ .../task10-filesystem-fence/review-1/inputs.json   |    42 +
+ .../review-1/prompt-sha256.txt                     |     1 +
+ .../task10-filesystem-fence/review-1/reviewer.mjs  |    26 +
+ .../task10-filesystem-fence/review-1/stdout.json   |     1 +
+ .../task10-filesystem-fence/review-1/terminal.json |    10 +
+ .../task10-filesystem-fence/review-2/inputs.json   |    50 +
+ .../review-2/prompt-sha256.txt                     |     1 +
+ .../task10-filesystem-fence/review-2/stdout.json   |     1 +
+ .../task10-filesystem-fence/review-2/terminal.json |    10 +
+ .../task10-filesystem-fence/review-3/inputs.json   |    62 +
+ .../review-3/prompt-sha256.txt                     |     1 +
+ .../task10-filesystem-fence/review-3/stdout.json   |     1 +
+ .../task10-filesystem-fence/review-3/terminal.json |    10 +
+ .../task10-filesystem-fence/review-4/inputs.json   |    18 +
+ .../review-4/prompt-sha256.txt                     |     1 +
+ .../task10-filesystem-fence/review-4/stderr.log    |     0
+ .../task10-filesystem-fence/review-4/stdout.json   |     1 +
+ .../task10-filesystem-fence/review-4/terminal.json |    11 +
+ .../task10-filesystem-fence/review-final.mjs       |    26 +
+ .../review-fixes-green-1.spec.json                 |     9 +
+ .../review-fixes-green-1/child.json                |    24 +
+ .../review-fixes-green-1/inputs-after.json         |  1762 ++
+ .../review-fixes-green-1/inputs-before.json        |  1762 ++
+ .../review-fixes-green-1/roots.json                |   722 +
+ .../review-fixes-green-1/stderr.log                |     0
+ .../review-fixes-green-1/stdout.log                |   478 +
+ .../review-fixes-green-1/terminal.json             |    29 +
+ .../review-fixes-green-1/wrapper.json              |    38 +
+ .../review-fixes-green-2.spec.json                 |     6 +
+ .../review-fixes-green-2/child.json                |    21 +
+ .../review-fixes-green-2/inputs-after.json         |  1762 ++
+ .../review-fixes-green-2/inputs-before.json        |  1762 ++
+ .../review-fixes-green-2/roots.json                |   540 +
+ .../review-fixes-green-2/stderr.log                |     0
+ .../review-fixes-green-2/stdout.log                |   338 +
+ .../review-fixes-green-2/terminal.json             |    24 +
+ .../review-fixes-green-2/wrapper.json              |    32 +
+ .../task10-filesystem-fence/review-fixture.mjs     |    15 +
+ .../review-fixture/inputs.json                     |    22 +
+ .../review-fixture/prompt-sha256.txt               |     1 +
+ .../review-fixture/stderr.log                      |     0
+ .../review-fixture/stdout.json                     |     1 +
+ .../review-fixture/terminal.json                   |    11 +
+ .../review-protected-audit.json                    |     7 +
+ .../review-regression-red.spec.json                |     6 +
+ .../review-regression-red/child.json               |    21 +
+ .../review-regression-red/inputs-after.json        |  1762 ++
+ .../review-regression-red/inputs-before.json       |  1762 ++
+ .../review-regression-red/roots.json               |   540 +
+ .../review-regression-red/stderr.log               |     0
+ .../review-regression-red/stdout.log               |   422 +
+ .../review-regression-red/terminal.json            |    30 +
+ .../review-regression-red/wrapper.json             |    32 +
+ .../task10-filesystem-fence/review-resolution.md   |    96 +
+ .../task10-filesystem-fence/review-staging-fix.mjs |    24 +
+ .../task10-filesystem-fence/review.mjs             |    26 +
+ .../review2-focused.spec.json                      |     8 +
+ .../review2-focused/child.json                     |    23 +
+ .../review2-focused/inputs-after.json              |  1766 ++
+ .../review2-focused/inputs-before.json             |  1766 ++
+ .../review2-focused/roots.json                     |   813 +
+ .../review2-focused/stderr.log                     |     0
+ .../review2-focused/stdout.log                     |   518 +
+ .../review2-focused/terminal.json                  |    26 +
+ .../review2-focused/wrapper.json                   |    36 +
+ .../review2-green.spec.json                        |     7 +
+ .../review2-green/child.json                       |    22 +
+ .../review2-green/inputs-after.json                |  1766 ++
+ .../review2-green/inputs-before.json               |  1766 ++
+ .../review2-green/roots.json                       |    72 +
+ .../review2-green/stderr.log                       |     0
+ .../review2-green/stdout.log                       |    50 +
+ .../review2-green/terminal.json                    |    25 +
+ .../review2-green/wrapper.json                     |    34 +
+ .../task10-filesystem-fence/review2-red.spec.json  |     5 +
+ .../task10-filesystem-fence/review2-red/child.json |    22 +
+ .../review2-red/inputs-after.json                  |  1766 ++
+ .../review2-red/inputs-before.json                 |  1766 ++
+ .../task10-filesystem-fence/review2-red/roots.json |    72 +
+ .../task10-filesystem-fence/review2-red/stderr.log |     0
+ .../task10-filesystem-fence/review2-red/stdout.log |   128 +
+ .../review2-red/terminal.json                      |    31 +
+ .../review2-red/wrapper.json                       |    34 +
+ .../review3-focused.spec.json                      |     9 +
+ .../review3-focused/child.json                     |    24 +
+ .../review3-focused/inputs-after.json              |  1766 ++
+ .../review3-focused/inputs-before.json             |  1766 ++
+ .../review3-focused/roots.json                     |   956 +
+ .../review3-focused/stderr.log                     |     0
+ .../review3-focused/stdout.log                     |   606 +
+ .../review3-focused/terminal.json                  |    27 +
+ .../review3-focused/wrapper.json                   |    38 +
+ .../review3-staging-green.spec.json                |     7 +
+ .../review3-staging-green/child.json               |    22 +
+ .../review3-staging-green/inputs-after.json        |  1766 ++
+ .../review3-staging-green/inputs-before.json       |  1766 ++
+ .../review3-staging-green/roots.json               |    59 +
+ .../review3-staging-green/stderr.log               |     0
+ .../review3-staging-green/stdout.log               |    42 +
+ .../review3-staging-green/terminal.json            |    25 +
+ .../review3-staging-green/wrapper.json             |    34 +
+ .../review3-staging-red.spec.json                  |    10 +
+ .../review3-staging-red/child.json                 |    21 +
+ .../review3-staging-red/inputs-after.json          |  1774 ++
+ .../review3-staging-red/inputs-before.json         |  1774 ++
+ .../review3-staging-red/roots.json                 |    59 +
+ .../review3-staging-red/stderr.log                 |     0
+ .../review3-staging-red/stdout.log                 |   118 +
+ .../review3-staging-red/terminal.json              |    29 +
+ .../review3-staging-red/wrapper.json               |    36 +
+ .../review3-staging.probe.test.ts                  |    92 +
+ .../review3-tests.pending.txt                      |    30 +
+ .../review3-typecheck.spec.json                    |     9 +
+ .../review3-typecheck/child.json                   |    17 +
+ .../review3-typecheck/inputs-after.json            |  1766 ++
+ .../review3-typecheck/inputs-before.json           |  1766 ++
+ .../review3-typecheck/roots.json                   |     5 +
+ .../review3-typecheck/stderr.log                   |     0
+ .../review3-typecheck/stdout.log                   |     0
+ .../review3-typecheck/terminal.json                |    20 +
+ .../review3-typecheck/wrapper.json                 |    31 +
+ .../root-policy-red.spec.json                      |     7 +
+ .../root-policy-red/child.json                     |    22 +
+ .../root-policy-red/inputs-after.json              |  1766 ++
+ .../root-policy-red/inputs-before.json             |  1766 ++
+ .../root-policy-red/roots.json                     |    20 +
+ .../root-policy-red/stderr.log                     |     0
+ .../root-policy-red/stdout.log                     |    37 +
+ .../root-policy-red/terminal.json                  |    27 +
+ .../root-policy-red/wrapper.json                   |    34 +
+ .../smoke-environment-green.spec.json              |     6 +
+ .../smoke-environment-green/child.json             |    21 +
+ .../smoke-environment-green/inputs-after.json      |  1766 ++
+ .../smoke-environment-green/inputs-before.json     |  1766 ++
+ .../smoke-environment-green/roots.json             |   267 +
+ .../smoke-environment-green/stderr.log             |     0
+ .../smoke-environment-green/stdout.log             |    74 +
+ .../smoke-environment-green/terminal.json          |    24 +
+ .../smoke-environment-green/wrapper.json           |    32 +
+ .../task10-filesystem-fence/typecheck-1.spec.json  |     9 +
+ .../task10-filesystem-fence/typecheck-1/child.json |    17 +
+ .../typecheck-1/inputs-after.json                  |  1766 ++
+ .../typecheck-1/inputs-before.json                 |  1766 ++
+ .../task10-filesystem-fence/typecheck-1/roots.json |     5 +
+ .../task10-filesystem-fence/typecheck-1/stderr.log |     0
+ .../task10-filesystem-fence/typecheck-1/stdout.log |     0
+ .../typecheck-1/terminal.json                      |    20 +
+ .../typecheck-1/wrapper.json                       |    31 +
+ .../typecheck-review2.spec.json                    |     9 +
+ .../typecheck-review2/child.json                   |    17 +
+ .../typecheck-review2/inputs-after.json            |  1766 ++
+ .../typecheck-review2/inputs-before.json           |  1766 ++
+ .../typecheck-review2/roots.json                   |     5 +
+ .../typecheck-review2/stderr.log                   |     0
+ .../typecheck-review2/stdout.log                   |     0
+ .../typecheck-review2/terminal.json                |    20 +
+ .../typecheck-review2/wrapper.json                 |    31 +
+ .../windows-rename-probe.json                      |    28 +
+ runner-v2/src/agent-contracts.ts                   |     3 +
+ runner-v2/src/execution-grants.ts                  |    29 +
+ runner-v2/src/filesystem-mutation-fence.ts         |   475 +
+ runner-v2/src/filesystem-tools.ts                  |   168 +-
+ runner-v2/src/git-baseline.ts                      |    45 +-
+ runner-v2/src/git-bootstrap.ts                     |     3 +-
+ runner-v2/src/tool-broker.ts                       |    34 +-
+ runner-v2/test/filesystem-bootstrap-fence.test.ts  |    56 +
+ runner-v2/test/filesystem-mutation-fence.test.ts   |   547 +
+ runner-v2/test/filesystem-mutation-routing.test.ts |    56 +
+ .../test/final-verification-runtime-b1.test.ts     |     2 +
+ runner-v2/test/integration-manager.test.ts         |    16 +-
+ .../test/language-invocation-propagation.test.ts   |    38 +-
+ runner-v2/test/lsp-real-host.test.ts               |    15 +-
+ runner-v2/test/support/git-fixture.ts              |     9 +-
+ runner-v2/test/support/lsp-owned-fixture.ts        |     5 +-
+ 618 files changed, 296558 insertions(+), 162 deletions(-)

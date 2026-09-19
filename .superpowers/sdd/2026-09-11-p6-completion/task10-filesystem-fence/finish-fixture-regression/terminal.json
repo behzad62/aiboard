@@ -1,0 +1,25 @@
+{
+  "id": "finish-fixture-regression",
+  "startedAt": "2026-09-15T08:14:48.751Z",
+  "finishedAt": "2026-09-15T08:15:06.686Z",
+  "wrapperPid": 28576,
+  "testPid": 33040,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 441,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=concurrent managers cannot delete",
+    "runner-v2/test/integration-manager.test.ts"
+  ],
+  "rootCount": 2,
+  "retainedRoots": []
+}

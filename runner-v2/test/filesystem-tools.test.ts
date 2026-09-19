@@ -16,9 +16,9 @@ import test from "node:test";
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { ToolCallBlock, ToolResult } from "../src/agent-contracts.js";
 import { createFilesystemTools } from "../src/filesystem-tools.js";
-import { RepositoryIntelligence } from "../src/repository-intelligence.js";
+import { RepositoryIntelligence } from "./support/git-fixture.js";
 import { ToolBroker } from "../src/tool-broker.js";
-import { TypeScriptIntelligence } from "../src/typescript-intelligence.js";
+import { TypeScriptIntelligence } from "./support/git-fixture.js";
 
 test("filesystem tools read, inspect, list, search, and preserve CRLF edits", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-fs-tools-"));
@@ -491,7 +491,7 @@ test("benchmark filesystem policy hides oracle files and protects verifier asset
   writeFileSync(join(workspace, "visible.txt"), "public\n");
   const artifacts = new ArtifactStore(join(root, "artifacts"));
   const broker = new ToolBroker({
-    permissionProfile: "project",
+    permissionProfile: "full",
     workspacePath: workspace,
     artifacts,
   });
@@ -543,7 +543,7 @@ function brokerWithFilesystem(
   diagnostics?: Pick<TypeScriptIntelligence, "diagnostics">,
 ): ToolBroker {
   const broker = new ToolBroker({
-    permissionProfile: "project",
+    permissionProfile: "full",
     workspacePath: workspace,
     artifacts,
   });

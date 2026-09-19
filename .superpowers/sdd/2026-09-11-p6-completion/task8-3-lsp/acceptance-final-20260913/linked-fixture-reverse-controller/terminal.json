@@ -1,0 +1,17 @@
+{
+  "id": "linked-fixture-reverse-controller",
+  "startedAt": "2026-09-13T19:43:43.199Z",
+  "finishedAt": "2026-09-13T19:43:54.713Z",
+  "wrapperPid": 2012,
+  "testPid": 12928,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 419,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linked-reverse.mjs"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

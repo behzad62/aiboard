@@ -1,0 +1,9 @@
+{
+  "id": "implementation-1",
+  "tests": [
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/tool-broker.test.ts",
+    "runner-v2/test/execution-grants.test.ts"
+  ]
+}

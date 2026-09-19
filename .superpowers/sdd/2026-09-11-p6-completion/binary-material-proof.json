@@ -1,0 +1,48 @@
+{
+  "at": "2026-09-11T11:45:12.559483+00:00",
+  "faults": [
+    {
+      "fault": "normalization-keeps-bytes",
+      "redExit": 1,
+      "exactRestoredSHA256": "1e42012720b2f509ff8182aa421f2f126a4928e91c630a06d3aea833f85942c3",
+      "pattern": "subprocess (memory|sqlite) preserves exact binary"
+    },
+    {
+      "fault": "durable-parser-keeps-bytes",
+      "redExit": 1,
+      "exactRestoredSHA256": "65123ccafe1753174e8b4f6d78bab3365951d2a23a1e2fd06e8f71857b8a530a",
+      "pattern": "subprocess (memory|sqlite) preserves exact binary"
+    },
+    {
+      "fault": "canonical-base64",
+      "redExit": 1,
+      "exactRestoredSHA256": "d5832ca4472cc874b9f17e10ed39943c8a9026b01be628231a8257103d5f150d",
+      "pattern": "noncanonical-padding"
+    },
+    {
+      "fault": "bounded-decode",
+      "redExit": 1,
+      "exactRestoredSHA256": "d5832ca4472cc874b9f17e10ed39943c8a9026b01be628231a8257103d5f150d",
+      "pattern": "oversized-tail"
+    },
+    {
+      "fault": "complete-not-suffix",
+      "redExit": 1,
+      "exactRestoredSHA256": "266a0acf67764cf4779556f0a541b8754593c9a2273c10648f86ac3c2ffdbeef",
+      "pattern": "incomplete-suffix"
+    },
+    {
+      "fault": "bytes-not-display",
+      "redExit": 1,
+      "exactRestoredSHA256": "266a0acf67764cf4779556f0a541b8754593c9a2273c10648f86ac3c2ffdbeef",
+      "pattern": "Git returns a complete exact binary"
+    },
+    {
+      "fault": "tail-not-artifact-only",
+      "redExit": 1,
+      "exactRestoredSHA256": "266a0acf67764cf4779556f0a541b8754593c9a2273c10648f86ac3c2ffdbeef",
+      "pattern": "Git returns a complete exact binary"
+    }
+  ],
+  "restoredExit": 0
+}

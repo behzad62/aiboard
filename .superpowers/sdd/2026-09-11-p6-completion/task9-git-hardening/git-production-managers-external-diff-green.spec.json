@@ -1,0 +1,6 @@
+{
+  "id": "git-production-managers-external-diff-green",
+  "tests": [
+    "runner-v2/test/git-production-managers.test.ts"
+  ]
+}

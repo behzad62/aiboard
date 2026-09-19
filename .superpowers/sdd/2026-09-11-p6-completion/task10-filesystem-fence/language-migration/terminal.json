@@ -1,0 +1,26 @@
+{
+  "id": "language-migration",
+  "startedAt": "2026-09-14T21:46:18.946Z",
+  "finishedAt": "2026-09-14T21:46:19.640Z",
+  "wrapperPid": 7224,
+  "testPid": 46624,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 440,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/language-invocation-propagation.test.ts"
+  ],
+  "rootCount": 5,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-zfB99C"
+  ]
+}

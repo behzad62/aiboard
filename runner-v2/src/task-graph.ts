@@ -4,6 +4,9 @@ import type {
   TaskGraphValidation,
   TaskStatus,
 } from "./task-contracts.js";
+import { isFinalVerificationTask } from "./task-contracts.js";
+import { validateAcceptanceCriteria } from "./acceptance-contracts.js";
+import { planFinalVerification } from "./final-verification-contracts.js";
 
 const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
   planned: ["assigned", "cancelled"],
@@ -22,7 +25,8 @@ const TRANSITIONS: Record<TaskStatus, readonly TaskStatus[]> = {
 };
 
 export function validateTaskGraph(
-  tasks: readonly BuildTask[]
+  tasks: readonly BuildTask[],
+  options: { requireAcceptanceCriteria?: boolean } = {}
 ): TaskGraphValidation {
   const issues: TaskGraphIssue[] = [];
   const counts = new Map<string, number>();
@@ -38,6 +42,105 @@ export function validateTaskGraph(
   }
 
   const ids = new Set(tasks.map((task) => task.id));
+  for (const task of tasks) {
+    if (isFinalVerificationTask(task)) {
+      try {
+        if (!task.generationId.trim() || !task.targetRevision.trim()) {
+          throw new Error("generation and target revision are required");
+        }
+        if (!Number.isSafeInteger(task.planVersion) || task.planVersion < 1) {
+          throw new Error("plan version must be a positive integer");
+        }
+        if (Object.hasOwn(task, "changeSetId") && task.changeSetId !== undefined) {
+          throw new Error("final verification tasks cannot carry a ChangeSet");
+        }
+        planFinalVerification(task.verificationPlan);
+      } catch (error) {
+        issues.push({
+          code: "invalid_final_verification_task",
+          taskId: task.id,
+          message: `Final verification task ${task.id} is invalid: ${
+            error instanceof Error ? error.message : String(error)
+          }.`,
+        });
+      }
+      continue;
+    }
+    if (task.kind === "verification_repair") {
+      const hasFinalProvenance = Boolean(
+        task.verificationRepair &&
+        !task.verifierRepair &&
+        task.verificationRepair.sourceGenerationId.trim() &&
+        task.verificationRepair.finalVerificationTaskId.trim() &&
+        validVerificationRepairSource(task.verificationRepair.source) &&
+        task.verificationRepair.targetRevision.trim() &&
+        task.verificationRepair.categories.length > 0 &&
+        new Set(task.verificationRepair.categories).size ===
+          task.verificationRepair.categories.length,
+      );
+      const hasVerifierProvenance = Boolean(
+        task.verifierRepair &&
+        !task.verificationRepair &&
+        validVerifierRepairProvenance(task.verifierRepair),
+      );
+      if (!hasFinalProvenance && !hasVerifierProvenance) {
+        issues.push({
+          code: "invalid_final_verification_task",
+          taskId: task.id,
+          message: `Verification repair task ${task.id} has invalid provenance.`,
+        });
+      }
+    } else if (
+      task.verificationRepair !== undefined ||
+      task.verifierRepair !== undefined
+    ) {
+      issues.push({
+        code: "invalid_final_verification_task",
+        taskId: task.id,
+        message: `Implementation task ${task.id} cannot carry verification repair provenance.`,
+      });
+    }
+    if (
+      task.generationId !== undefined ||
+      task.targetRevision !== undefined ||
+      task.planVersion !== undefined ||
+      task.verificationPlan !== undefined ||
+      task.verificationSubmissionId !== undefined ||
+      task.verificationReviewId !== undefined
+    ) {
+      issues.push({
+        code: "invalid_final_verification_task",
+        taskId: task.id,
+        message: `Implementation task ${task.id} cannot carry final verification metadata.`,
+      });
+    }
+  }
+  const strictCriteria = options.requireAcceptanceCriteria === true ||
+    tasks.some((task) => task.acceptanceCriteria !== undefined);
+  if (strictCriteria) {
+    for (const task of tasks) {
+      if (isFinalVerificationTask(task)) continue;
+      if (task.status === "cancelled") continue;
+      if (!task.acceptanceCriteria) {
+        issues.push({
+          code: "missing_acceptance_criteria",
+          taskId: task.id,
+          message: `Task ${task.id} requires at least one acceptance criterion.`,
+        });
+        continue;
+      }
+      const criteria = validateAcceptanceCriteria(task.acceptanceCriteria);
+      for (const issue of criteria.issues) {
+        issues.push({
+          code: issue.toLowerCase().includes("duplicate")
+            ? "duplicate_acceptance_criterion_id"
+            : "invalid_acceptance_criterion",
+          taskId: task.id,
+          message: `Task ${task.id}: ${issue}`,
+        });
+      }
+    }
+  }
   const missing = new Set<string>();
   for (const task of tasks) {
     for (const dependency of task.dependencies) {
@@ -71,6 +174,7 @@ export function readyTaskIds(tasks: readonly BuildTask[]): string[] {
   return tasks
     .filter(
       (task) =>
+        !isFinalVerificationTask(task) &&
         task.status === "planned" &&
         task.dependencies.every(
           (dependency) => byId.get(dependency)?.status === "integrated"
@@ -84,12 +188,116 @@ export function applyTaskTransition(
   status: TaskStatus,
   patch: Partial<Omit<BuildTask, "id" | "status">> = {}
 ): BuildTask {
+  if (
+    task.kind === "verification_repair" &&
+    (
+      Object.hasOwn(patch, "verificationRepair") ||
+      Object.hasOwn(patch, "verifierRepair") ||
+      Object.hasOwn(patch, "kind")
+    )
+  ) {
+    throw new Error("Verification repair provenance and kind are immutable.");
+  }
+  if (isFinalVerificationTask(task)) {
+    if (status !== "cancelled") {
+      throw new Error(
+        `Kernel-owned final verification task ${task.id} cannot be scheduled as a worker task.`
+      );
+    }
+    if (Object.hasOwn(patch, "changeSetId") && patch.changeSetId !== undefined) {
+      throw new Error("Final verification tasks cannot produce a ChangeSet.");
+    }
+    for (const field of [
+      "kind",
+      "generationId",
+      "targetRevision",
+      "planVersion",
+      "verificationPlan",
+    ] as const) {
+      if (Object.hasOwn(patch, field)) {
+        throw new Error(`Final verification task ${field} is immutable.`);
+      }
+    }
+  }
   if (!TRANSITIONS[task.status].includes(status)) {
     throw new Error(
       `Task ${task.id} cannot transition from ${task.status} to ${status}.`
     );
   }
-  return { ...task, ...patch, status };
+  if (Object.hasOwn(patch, "acceptanceCriteria")) {
+    throw new Error("Acceptance criteria cannot mutate through a task transition.");
+  }
+  if (Object.hasOwn(patch, "criterionEvidenceLinks") && status !== "submitted") {
+    throw new Error("Criterion evidence links may only be recorded when submitting a task.");
+  }
+  const startsRetry =
+    status === "planned" && (task.status === "rejected" || task.status === "failed");
+  return {
+    ...task,
+    ...patch,
+    ...(task.acceptanceCriteria
+      ? { acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
+      : {}),
+    ...(task.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: task.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
+      : {}),
+    ...(patch.criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks: patch.criterionEvidenceLinks.map((link) => ({
+            ...link,
+            artifactHashes: [...link.artifactHashes],
+          })),
+        }
+      : {}),
+    ...(startsRetry
+      ? {
+          assignedWorkerId: undefined,
+          changeSetId: undefined,
+          criterionEvidenceLinks: undefined,
+          failureReason: undefined,
+        }
+      : {}),
+    status,
+  };
+}
+
+function validVerifierRepairProvenance(
+  provenance: import("./task-contracts.js").VerifierRepairProvenance,
+): boolean {
+  const criterionKeys = provenance.criteria.map(
+    (criterion) => `${criterion.taskId}\u0000${criterion.criterionId}`,
+  );
+  return Boolean(
+    provenance.sourceReviewId.trim() &&
+    provenance.targetRevision.trim() &&
+    provenance.criteria.length > 0 &&
+    provenance.criteria.every(
+      (criterion) => criterion.taskId.trim() && criterion.criterionId.trim(),
+    ) &&
+    new Set(criterionKeys).size === criterionKeys.length &&
+    provenance.evidenceIds.length > 0 &&
+    provenance.evidenceIds.every((evidenceId) => evidenceId.trim()) &&
+    new Set(provenance.evidenceIds).size === provenance.evidenceIds.length
+  );
+}
+
+function validVerificationRepairSource(
+  source: import("./task-contracts.js").VerificationRepairProvenance["source"],
+): boolean {
+  if (source.type === "semantic_review") {
+    return Boolean(source.submissionId.trim() && source.reviewId.trim());
+  }
+  return Boolean(
+    source.failureId.trim() &&
+    source.issueIds.length > 0 &&
+    new Set(source.issueIds).size === source.issueIds.length &&
+    new Set(source.factIds).size === source.factIds.length
+  );
 }
 
 function findCycle(byId: ReadonlyMap<string, BuildTask>): string[] | null {

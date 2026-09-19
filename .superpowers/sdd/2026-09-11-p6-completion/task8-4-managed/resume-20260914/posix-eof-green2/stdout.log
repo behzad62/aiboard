@@ -1,0 +1,22 @@
+TAP version 13
+# Subtest: C4 POSIX supervisor treats readable EOF as exact pipe completion even when stream close is delayed
+ok 1 - C4 POSIX supervisor treats readable EOF as exact pipe completion even when stream close is delayed
+  ---
+  duration_ms: 45.2818
+  type: 'test'
+  ...
+# Subtest: C4 POSIX output pump probes a zero-length readable so pending EOF can retire the exact pipe
+ok 2 - C4 POSIX output pump probes a zero-length readable so pending EOF can retire the exact pipe
+  ---
+  duration_ms: 28.306
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1063.493
