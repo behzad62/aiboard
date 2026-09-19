@@ -67,6 +67,43 @@ for (const mode of ["replacement", "removal", "detach"] as const) {
   });
 }
 
+test("portable output polling re-attests only the durable fence before retained delivery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-output-read-reattest-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
+  const bytes = Buffer.from("retained-output");
+  const metadata: BackpressuredOutputMetadata = { stream: "stdout", sequence: 1, startOffset: 0, endOffset: bytes.length,
+    byteLength: bytes.length, digest: createHash("sha256").update(bytes).digest("hex") };
+  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  let acquisitionComplete = false;
+  let fenceChecks = 0;
+  let terminalResult: unknown;
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 2, replayCapacityBytes: 1024, pollIntervalMs: 5,
+    authority: () => ({ directory: root, nonce: "nonce", fence,
+      reattest: () => { if (acquisitionComplete) throw new Error("synthetic transient process-birth uncertainty"); return "live"; },
+      reattestFence: () => { fenceChecks++; },
+      reattestObservation: async () => "live",
+      effect: async (_kind, effect) => effect(), snapshot: (read) => ({ status: "applied", value: read() }),
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  acquisitionComplete = true;
+  let delivered = false;
+  const removeTerminal = channel.observeTerminal((result) => { terminalResult = result; });
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (actual, actualBytes) => {
+    assert.deepEqual(actual, metadata); assert.deepEqual(Buffer.from(actualBytes), bytes); delivered = true; return actual;
+  });
+  try {
+    await waitFor(() => delivered || terminalResult !== undefined, 500);
+    assert.equal(delivered, true, "transient process-birth uncertainty must not poison retained output delivery");
+    assert.equal(terminalResult, undefined, "healthy output observation must not publish a terminal failure");
+    assert.ok(fenceChecks > 0, "output polling must re-attest the durable fence before retained delivery");
+  } finally {
+    unsubscribe(); removeTerminal(); await channel.detach(); rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("C1 round5 terminal dispatch skips a subscriber removed by an earlier callback", async () => {
   const fixture = await round4ObserverFixture(async () => ({ state: "absent" }));
   const calls: string[] = [];

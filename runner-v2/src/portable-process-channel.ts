@@ -347,7 +347,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       const sink = this.outputSink;
       if (!sink || this.detached) return;
       this.assertOutputDeadline();
-      this.reattest(false);
+      if (this.authority.reattestFence) this.authority.reattestFence();
+      else this.reattest(false);
       const snapshot = this.outputSnapshot();
       if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return;
       const entries = this.requireSnapshot(snapshot).output;
