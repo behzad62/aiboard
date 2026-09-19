@@ -1013,8 +1013,12 @@ async function osProcessBirthAsync(pid: number, platform: "posix" | "windows", s
       maxBuffer: 64 * 1024, signal,
     }, (error, stdout) => {
       if (signal.aborted) return;
-      if (!error) inspection = parseBirthInspection(stdout.trim(), platform);
-      else if (platform === "posix" && !pidAlive(pid)) inspection = { state: "absent" };
+      if (!error) {
+        const result = stdout.trim();
+        inspection = platform === "posix" && result.length === 0 && pidAlive(pid)
+          ? { state: "unknown" }
+          : parseBirthInspection(result, platform);
+      } else if (platform === "posix" && !pidAlive(pid)) inspection = { state: "absent" };
     });
     // Abort emits an early error callback. Retain the owned child until close,
     // so cancellation cannot leave inspection work outside the channel task.
@@ -1066,7 +1070,8 @@ function osProcessBirth(
       }
     }
     const result = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: boundedDeadlineMs }).trim();
-    return result ? { state: "present", fingerprint: result } : { state: "absent" };
+    if (result) return { state: "present", fingerprint: result };
+    return pidAlive(pid) ? { state: "unknown" } : { state: "absent" };
   } catch {
     return platform === "posix" && !pidAlive(pid) ? { state: "absent" } : { state: "unknown" };
   }

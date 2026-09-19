@@ -118,6 +118,33 @@ test("generic POSIX birth probes classify a failed ps after exact exit as absent
   );
 });
 
+test("generic POSIX birth probes treat empty ps for a still-live pid as retryable unknown", async () => {
+  const source = readFileSync(new URL("../src/native-process-backend.ts", import.meta.url), "utf8");
+  const syncContext = vm.createContext({
+    PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS: 2_000,
+    WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS: 15_000,
+    process: { platform: "darwin" },
+    execFileSync: () => "",
+    pidAlive: () => true,
+  });
+  vm.runInContext(extractNamedTsFunction(source, "osProcessBirth"), syncContext);
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(osProcessBirth(4242, 'posix'))", syncContext)), { state: "unknown" });
+
+  const asyncContext = vm.createContext({
+    PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS: 2_000,
+    process: { platform: "darwin" },
+    pidAlive: () => true,
+    parseBirthInspection: (value: string) => value ? { state: "present", fingerprint: value } : { state: "absent" },
+    execFile: (_command: unknown, _args: unknown, _options: unknown, callback: (error: Error | null, stdout: string) => void) => {
+      queueMicrotask(() => callback(null, ""));
+      return { once: (_event: string, handler: () => void) => { queueMicrotask(handler); } };
+    },
+    queueMicrotask,
+  });
+  vm.runInContext(extractNamedTsFunction(source, "osProcessBirthAsync"), asyncContext);
+  assert.deepEqual(JSON.parse(await vm.runInContext("osProcessBirthAsync(4242, 'posix', { aborted: false }).then(JSON.stringify)", asyncContext)), { state: "unknown" });
+});
+
 test("POSIX channel re-attestation observes the durable fence without reclaiming the writer lock", async (t) => {
   if (process.platform === "win32") {
     t.skip("POSIX fence observation requires a POSIX host.");
