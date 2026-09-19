@@ -50,10 +50,15 @@ export function createBoundedProcessOutputFactory(input: {
 }): ProcessOutputFactory {
   const sessions = new Map<string, ProcessOutputSession>();
   const create = (ownerId: string): ProcessOutputSession => {
+    const ownerDigest = createHash("sha256").update(ownerId).digest("hex");
     const spool = new BoundedOutputSpool({
-      spillRoot: input.spillRoot,
+      // A durable output owner must have an independently claimable root. A
+      // shared physical root races both directory creation and ownership-marker
+      // validation when one-shot commands execute concurrently. The owner digest
+      // is stable across restart, so reopen reaches the exact same private root.
+      spillRoot: `${input.spillRoot}-${ownerDigest.slice(0, 20)}`,
       projectRoot: input.projectRoot,
-      ownershipId: `process-output-${createHash("sha256").update(ownerId).digest("hex")}`,
+      ownershipId: `process-output-${ownerDigest}`,
       artifactStore: input.artifacts,
     });
     const session: ProcessOutputSession = Object.freeze({

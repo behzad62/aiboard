@@ -14,6 +14,7 @@ import type { ExecutionInvocationIntent } from "../src/execution-safety-contract
 import {
   createProcessBackendRegistration,
   createProcessBackendRegistry,
+  ProcessReleasePendingError,
   type ProcessBackend,
   type ProcessBackendBinding,
   type ProcessLaunchRequest,
@@ -186,6 +187,7 @@ class Backend implements ProcessBackend {
   verifyValue: unknown = { empty: true, proofArtifactId: "proof" };
   reconcileValue: unknown = { state: "exited", exitCode: 0 };
   releaseValue: unknown = { released: true };
+  releasePendingFailures = 0;
   signalValues: unknown[] = [{ state: "exited" }];
   launchGate?: Promise<void>;
   launchError?: unknown;
@@ -255,6 +257,10 @@ class Backend implements ProcessBackend {
     this.fences.push(fence);
     this.onRelease?.();
     await this.releaseGate;
+    if (this.releasePendingFailures > 0) {
+      this.releasePendingFailures -= 1;
+      throw new ProcessReleasePendingError("terminal witness is still alive");
+    }
     return this.releaseValue;
   };
 }
@@ -514,6 +520,52 @@ for (const mode of ["memory", "sqlite"] as const) test(`subprocess ${mode} prese
     if (succeeded) { await rm(root, { recursive: true }); t.diagnostic(`closed synthetic store/output; removed exact fixture: ${root}`); }
     else t.diagnostic(`closed store; diagnostic evidence retained: ${root}`);
   }
+});
+
+test("bounded process output factory isolates concurrent owner spill roots", { skip: process.platform === "win32" }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "runner-v2-concurrent-output-"));
+  const project = join(root, "project");
+  await mkdir(project);
+  t.after(async () => await rm(root, { recursive: true, force: true }));
+  const factory = createBoundedProcessOutputFactory({
+    spillRoot: join(root, "spool"),
+    projectRoot: project,
+    artifacts: new ArtifactStore(join(root, "artifacts")),
+  });
+  const fence = { ownerId: "owner", fencingToken: 1 };
+  const first = await factory.prepare("output-owner-a", fence);
+  const second = await factory.prepare("output-owner-b", fence);
+  await first.write("stdout", Buffer.from("first"), fence);
+  await second.write("stdout", Buffer.from("second"), fence);
+  const [firstResult, secondResult] = await Promise.all([first.finalize(fence), second.finalize(fence)]);
+  const firstStdout = firstResult.streams.find((stream) => stream.stream === "stdout")!;
+  const secondStdout = secondResult.streams.find((stream) => stream.stream === "stdout")!;
+  assert.equal(firstStdout.lossyBytes, 0);
+  assert.equal(secondStdout.lossyBytes, 0);
+  assert.equal(firstStdout.spillBytes, 5);
+  assert.equal(secondStdout.spillBytes, 6);
+  assert.match(firstStdout.spillArtifactId ?? "", /^[a-f0-9]{64}$/);
+  assert.match(secondStdout.spillArtifactId ?? "", /^[a-f0-9]{64}$/);
+});
+
+test("subprocess keeps typed pending release retries inside one durable release effect", async () => {
+  const f = fixture();
+  f.backend.releasePendingFailures = 2;
+
+  const result = await f.runtime.invoke({
+    intent: intent(),
+    grantId: "grant-invoke-1",
+    ambientEnvironment: {},
+  });
+
+  assert.equal(result.outcome, "exited");
+  assert.equal(result.cleanup.state, "verified_empty");
+  assert.equal(f.backend.calls.filter((call) => call === "release").length, 3);
+  const record = f.store.readByInvocation("invoke-1")!;
+  assert.equal(record.pendingEffects.length, 0,
+    "successful typed release retries must not leave an ambiguous durable effect");
+  assert.equal(record.history.filter((entry) => entry.reason === "effect_backend_release_started").length, 1);
+  assert.equal(record.history.filter((entry) => entry.reason === "effect_backend_release_completed").length, 1);
 });
 
 test("caller can provide only an opaque grant id and forged grant/result fields are rejected", async () => {

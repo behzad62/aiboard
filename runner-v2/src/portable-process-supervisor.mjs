@@ -307,7 +307,7 @@ function tickPosix() {
     publish("outcome_unknown", "POSIX workload identity was not captured before executable release.");
     return;
   }
-  refreshPosixChildStatus();
+  const childStatusRefresh = refreshPosixChildStatus();
   // Retirement is authoritative for workload quiescence. Do not let a stale or
   // newly published control request block terminal output settlement and exit.
   if (posixWorkloadRetirement.state === "retired") {
@@ -331,6 +331,10 @@ function tickPosix() {
   const exhaustedControlInspection = posixControlInspectionDeferred &&
     posixControlInspectionFailures >= POSIX_CONTROL_INSPECTION_FAILURE_LIMIT;
   if (posixAnchorExited) {
+    if (childStatusRefresh === "release_deferred") {
+      publish("running");
+      return;
+    }
     const members = listOwnedPosixGroupMembers(posixWorkloadGroup.groupId);
     if (members === undefined) {
       publish("outcome_unknown", "POSIX workload group could not be enumerated after anchor exit.");
@@ -392,7 +396,12 @@ function tickPosix() {
     return;
   }
   if (targetExited && anchor.members.length === 1 && anchor.members[0] === posixWorkloadGroup.leaderPid) {
-    if (!requestPosixAnchorRelease()) {
+    const release = requestPosixAnchorRelease();
+    if (release === "deferred") {
+      publish("running");
+      return;
+    }
+    if (release !== "requested") {
       publish("outcome_unknown", "POSIX anchor release could not be committed under the current fence.");
       return;
     }
@@ -787,40 +796,42 @@ function readPosixChildStatus() {
 
 function refreshPosixChildStatus() {
   const value = readPosixChildStatus();
-  if (!value) return;
+  if (!value) return "unchanged";
   const signature = JSON.stringify(value);
-  if (signature === posixChildStatusSignature) return;
+  if (signature === posixChildStatusSignature) return "unchanged";
+  if (value.status === "released") {
+    const release = recordCausalPosixAnchorRelease(value.anchorRelease);
+    if (release === "recorded") posixChildStatusSignature = signature;
+    return release === "deferred" ? "release_deferred" : release === "recorded" ? "updated" : "release_invalid";
+  }
   posixChildStatusSignature = signature;
   if (value.status === "started") {
     launchEffect = "started";
-    return;
+    return "updated";
   }
   if (value.status === "exited") {
     launchEffect = "started";
     targetExited = true;
     targetExitCode = value.exitCode;
     targetSignal = value.signal;
-    return;
-  }
-  if (value.status === "released") {
-    recordCausalPosixAnchorRelease(value.anchorRelease);
-    return;
+    return "updated";
   }
   if (value.status === "error") {
     launchEffect = "started";
     targetExited = true;
     posixTerminalError = value.error;
   }
+  return "updated";
 }
 
 function recordCausalPosixAnchorRelease(release) {
-  if (!posixAnchorReleaseRequested || !posixAnchorReleaseAuthority || !posixSupervisorBirth) return false;
+  if (!posixAnchorReleaseRequested || !posixAnchorReleaseAuthority || !posixSupervisorBirth) return "invalid";
   const expectedSupervisor = { supervisorPid: process.pid, supervisorBirth: posixSupervisorBirth };
   // This is observation of a previously fenced, consumed release, not a new
   // release effect. A higher-fence cleanup owner may join its exact receipt.
   const current = readCurrentFence();
   if (!current || current.fencingToken < posixAnchorReleaseAuthority.fencingToken ||
-      (current.fencingToken === posixAnchorReleaseAuthority.fencingToken && current.ownerId !== posixAnchorReleaseAuthority.ownerId)) return false;
+      (current.fencingToken === posixAnchorReleaseAuthority.fencingToken && current.ownerId !== posixAnchorReleaseAuthority.ownerId)) return "invalid";
   const outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
     const latestRelease = readJson(anchorReleasePath);
     if (!isExactPosixAnchorRelease(release, config.nonce, posixWorkloadGroup, expectedSupervisor, posixAnchorReleaseAuthority) ||
@@ -828,7 +839,9 @@ function recordCausalPosixAnchorRelease(release) {
     posixChildReleasedAnchorRelease = release;
     return true;
   });
-  return outcome.status === "applied" && outcome.value === true;
+  if (outcome.status === "applied") return outcome.value === true ? "recorded" : "invalid";
+  if (outcome.status === "stale" || outcome.status === "unavailable" && outcome.cause === "coordination") return "deferred";
+  return "invalid";
 }
 
 function hasCausalPosixAnchorRelease() {
@@ -837,8 +850,8 @@ function hasCausalPosixAnchorRelease() {
 
 function requestPosixAnchorRelease() {
   const current = readCurrentFence();
-  if (!current || !Number.isSafeInteger(current.fencingToken) || current.fencingToken < 1) return false;
-  if (samePosixFenceAuthority(posixAnchorReleaseAuthority, current)) return true;
+  if (!current || !Number.isSafeInteger(current.fencingToken) || current.fencingToken < 1) return "invalid";
+  if (samePosixFenceAuthority(posixAnchorReleaseAuthority, current)) return "requested";
   const outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
     const anchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
     if (anchor.state !== "ready" || anchor.members.length !== 1 || anchor.members[0] !== posixWorkloadGroup.leaderPid)
@@ -853,10 +866,13 @@ function requestPosixAnchorRelease() {
       workloadGroup: posixWorkloadGroup,
     }));
   });
-  if (outcome.status !== "applied") return false;
+  if (outcome.status !== "applied")
+    return outcome.status === "stale" || outcome.status === "unavailable" && outcome.cause === "coordination"
+      ? "deferred"
+      : "invalid";
   posixAnchorReleaseRequested = true;
   posixAnchorReleaseAuthority = { ownerId: current.ownerId, fencingToken: current.fencingToken };
-  return true;
+  return "requested";
 }
 
 function hasCurrentPosixAnchorReleaseAuthority() {

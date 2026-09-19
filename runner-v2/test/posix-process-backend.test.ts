@@ -30,6 +30,7 @@ import {
   type ProcessLaunchResult,
 } from "../src/process-backend.js";
 import type { NativeProcessOperations } from "../src/native-process-backend.js";
+import { withOwnedFenceLock } from "../src/owned-fence-lock.mjs";
 
 test("POSIX backend attests session ownership without claiming host-crash cleanup", async () => {
   const backend = createPosixProcessBackend();
@@ -43,6 +44,22 @@ test("POSIX backend attests session ownership without claiming host-crash cleanu
   assert.equal(probe.capabilities.tree_termination, "enforced");
   assert.equal(probe.capabilities.verified_emptiness, "enforced");
   assert.equal(probe.capabilities.crash_cleanup, "unavailable");
+});
+
+test("POSIX launch acceptance preserves a process that retires before the caller samples running", () => {
+  const backend = createPosixProcessBackend();
+  const accepts = (backend as unknown as { launchStateProvesAccepted(state: unknown): boolean }).launchStateProvesAccepted.bind(backend);
+  const terminal = {
+    protocol: "aiboard-portable-process/v2", nonce: "n", supervisorPid: 10, supervisorBirth: "birth",
+    workloadGroup: { groupId: 11, leaderPid: 11, leaderBirth: "anchor" },
+    workloadGroupRetirement: { state: "retired", cause: "anchor_release", at: "2026-09-18T00:00:00.000Z" },
+    launchEffect: "started", rootProcess: null, revision: 3, handledControl: 0, status: "stopped",
+    exitCode: 0, signal: null, knownProcesses: [], error: null, updatedAt: "2026-09-18T00:00:01.000Z",
+  };
+  assert.equal(accepts(terminal), true);
+  assert.equal(accepts({ ...terminal, launchEffect: "unknown" }), false);
+  assert.equal(accepts({ ...terminal, workloadGroupRetirement: { state: "active" } }), false);
+  assert.equal(accepts({ ...terminal, status: "outcome_unknown" }), false);
 });
 
 test("generic POSIX birth discovery keeps its one-second absolute envelope", { timeout: 5_000 }, async () => {
@@ -99,6 +116,70 @@ test("generic POSIX birth probes classify a failed ps after exact exit as absent
     JSON.parse(await vm.runInContext("osProcessBirthAsync(4242, 'posix', { aborted: false }).then(JSON.stringify)", asyncContext)),
     { state: "absent" },
   );
+});
+
+test("POSIX channel re-attestation observes the durable fence without reclaiming the writer lock", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX fence observation requires a POSIX host.");
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-reattest-lock-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "reattest-lock-nonce";
+  const supervisorBirth = "supervisor-birth";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  for (const path of [directory, join(directory, "channel/output"), join(directory, "channel/input"), join(directory, "channel/ack")])
+    mkdirSync(path, { recursive: true });
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...fence }));
+  writeFileSync(join(directory, "channel/output-checkpoint.json"), JSON.stringify({
+    nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 },
+  }));
+  writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v2", nonce, supervisorPid: 9001, supervisorBirth, workloadGroup,
+    workloadGroupRetirement: { state: "active" }, launchEffect: "started", rootProcess: null,
+    handledControl: 0, status: "running", exitCode: null, signal: null, knownProcesses: [], error: null,
+    revision: 1, updatedAt: "2026-09-19T00:00:00.000Z",
+  }));
+  const backend = createPosixProcessBackend({
+    stateDirectory: root,
+    operations: {
+      inspectProcessBirth: (pid) => pid === 9001
+        ? { state: "present", fingerprint: supervisorBirth }
+        : { state: "present", fingerprint: workloadGroup.leaderBirth },
+      listPosixGroup: () => [workloadGroup.leaderPid],
+      signal: () => undefined,
+    },
+  });
+  const channel = await backend.backpressuredChannelProvider().acquire(
+    portableV2Binding(directory, nonce, supervisorBirth, workloadGroup), fence,
+  );
+  const authority = Reflect.get(channel, "authority") as { reattest(): "live" | "exited" };
+  let entered!: () => void;
+  let release!: () => void;
+  const atLock = new Promise<void>((resolve) => { entered = resolve; });
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const heldLock = withOwnedFenceLock(join(directory, ".fence.lock"), async () => {
+    entered();
+    await gate;
+  });
+  try {
+    await atLock;
+    const started = Date.now();
+    assert.equal(authority.reattest(), "live");
+    assert.ok(Date.now() - started < 250,
+      "read-side re-attestation must not contend on the writer lock after channel acquisition");
+    const reconcileStarted = Date.now();
+    assert.deepEqual(parseProcessReconciliation(await backend.reconcile(
+      portableV2Binding(directory, nonce, supervisorBirth, workloadGroup), fence,
+    )), { state: "running" });
+    assert.ok(Date.now() - reconcileStarted < 250,
+      "same-fence reconciliation must observe without reclaiming the writer lock");
+  } finally {
+    release();
+    await heldLock;
+    await channel.detach();
+    removeFixtureRoot(root);
+  }
 });
 
 test("POSIX native session fixture owns descendants after launcher exit", async (t) => {
@@ -1976,6 +2057,7 @@ test("C4 POSIX supervisor releases an exact lone anchor only after executable ex
   };
   let exits = 0;
   let intervalsCleared = 0;
+  let receiptPromotionAttempts = 0;
   const context = vm.createContext({
     Array,
     child: { stdout: { readableLength: 0 }, stderr: { readableLength: 0 } },
@@ -2034,7 +2116,15 @@ test("C4 POSIX supervisor releases an exact lone anchor only after executable ex
       throw new Error(`unexpected synthetic listing ${path}`);
     },
     retained: new Map(),
-    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => {
+      if ((childStatus as { status?: unknown }).status === "released") {
+        receiptPromotionAttempts += 1;
+        if (receiptPromotionAttempts === 1) {
+          return { status: "unavailable", cause: "coordination", error: new Error("synthetic receipt lock contention") };
+        }
+      }
+      return { status: "applied", value: options.effect() };
+    },
     isExactPosixAnchorRelease,
     stdoutPath: "root/stdout.log",
     stderrPath: "root/stderr.log",
@@ -2112,11 +2202,18 @@ test("C4 POSIX supervisor releases an exact lone anchor only after executable ex
     workloadGroup,
     anchorRelease,
   }, "the actual child fence effect must publish the consumed exact marker before its clean exit");
-  vm.runInContext("tickPosix()", context);
-  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(posixChildReleasedAnchorRelease)", context)), anchorRelease);
-
   groupMembers = [];
   vm.runInContext("handlePosixAnchorExit(0, null); tickPosix()", context);
+  assert.equal(receiptPromotionAttempts, 1, "the first durable receipt join is intentionally coordination-blocked");
+  assert.equal(vm.runInContext("posixChildReleasedAnchorRelease", context), null,
+    "a coordination miss must not fabricate receipt promotion");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(posixWorkloadRetirement)", context)), { state: "active" },
+    "anchor exit must remain pending while exact receipt observation is retryable");
+  assert.equal(publications.at(-1)?.status, "running", "retryable receipt observation must not become outcome_unknown");
+
+  vm.runInContext("tickPosix()", context);
+  assert.equal(receiptPromotionAttempts, 2, "the unchanged released-child receipt must be retried after coordination contention");
+  assert.deepEqual(JSON.parse(vm.runInContext("JSON.stringify(posixChildReleasedAnchorRelease)", context)), anchorRelease);
   const retirement = JSON.parse(vm.runInContext("JSON.stringify(posixWorkloadRetirement)", context));
   assert.equal(retirement.state, "retired");
   assert.equal(retirement.cause, "anchor_release");
@@ -2206,6 +2303,46 @@ test("C4 POSIX supervisor refuses anchor release when membership changes inside 
   assert.deepEqual(writes, [], "a descendant that appears inside the fence must block release publication");
   assert.equal(vm.runInContext("posixAnchorReleaseRequested", context), false);
   assert.equal(publications.at(-1)?.status, "outcome_unknown");
+});
+
+test("C4 POSIX supervisor retries transient coordination while publishing anchor release", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const nonce = "anchor-release-coordination-retry";
+  const writes: Array<{ path: string; value: unknown }> = [];
+  const publications: Array<{ status: string; error?: string }> = [];
+  let fenceEffects = 0;
+  const context = vm.createContext({
+    child: { stdout: { readableLength: 0 }, stderr: { readableLength: 0 } }, Error, JSON, Number, PortableAuthorityUnavailableError: Error,
+    anchorReleasePath: "root/anchor-release.json", channelAckDirectory: "root/channel/ack", channelDirectory: "root/channel", channelOutputDirectory: "root/channel/output",
+    config: { directory: "root", nonce, platform: "posix" }, fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json", join,
+    handleChannelAcks: () => undefined, handleChannelInput: () => undefined, handleControl: () => undefined, launchEffect: "started",
+    posixAnchorExited: false, posixControlInspectionDeferred: false, posixControlInspectionFailures: 0, posixControlInspectionDetail: "", posixDeferredControlSignature: null, POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixAnchorReleaseAuthority: null, posixAnchorReleaseRequested: false, posixForceControlApplied: false, posixStderrClosed: false, posixStdoutClosed: false,
+    posixSupervisorBirth: "supervisor-birth", posixTerminalError: null, posixWorkloadGroup: workloadGroup, posixWorkloadRetirement: { state: "active" },
+    process: { pid: 9001, exit: () => assert.fail("retryable anchor release must retain the supervisor") },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ({ state: "ready", members: [workloadGroup.leaderPid] }),
+    readFileSync: (path: string) => { const normalized = path.replace(/\\/g, "/"); if (normalized === "root/fence.json") return JSON.stringify({ nonce, ownerId: "owner", fencingToken: 1 }); if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce, holderPid: 9001, holderBirth: "supervisor-birth" }); throw new Error(`unexpected synthetic read ${path}`); },
+    readdirSync: () => [], retained: new Map(),
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ++fenceEffects === 1 ? { status: "unavailable", cause: "coordination" } : { status: "applied", value: options.effect() },
+    stdoutPath: "root/stdout.log", stderrPath: "root/stderr.log", targetExited: true, targetExitCode: 0, targetSignal: null, timer: "synthetic-timer",
+    clearInterval: () => assert.fail("retryable anchor release must retain the supervisor"), drainOutput: () => undefined, refreshPosixChildStatus: () => undefined,
+    writeAtomic: (path: string, value: string) => { writes.push({ path, value: JSON.parse(value) }); }, existsSync: () => false,
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractFenceEffectFunctions(supervisorSource)}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractTickPosix(supervisorSource)}`, context);
+
+  vm.runInContext("tickPosix()", context);
+  assert.equal(fenceEffects, 1);
+  assert.deepEqual(writes, []);
+  assert.equal(vm.runInContext("posixAnchorReleaseRequested", context), false);
+  assert.equal(publications.at(-1)?.status, "running", "transient coordination must remain retryable");
+
+  vm.runInContext("tickPosix()", context);
+  assert.equal(fenceEffects, 2);
+  assert.equal(writes.length, 1);
+  assert.equal(vm.runInContext("posixAnchorReleaseRequested", context), true);
+  assert.equal(publications.at(-1)?.status, "running");
 });
 
 test("C4 POSIX supervisor replaces an unconsumed anchor release marker after a higher-fence takeover", () => {

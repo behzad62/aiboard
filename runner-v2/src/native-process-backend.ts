@@ -251,7 +251,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         };
       }
       if (!identity) throw new Error("Portable supervisor identity is unavailable.");
-      if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
+      if (!this.launchStateProvesAccepted(state)) throw new Error(state.error ?? "Portable process launch failed.");
       const startedAt = state.updatedAt;
       return launchResult(identity, startedAt);
     } catch (error) {
@@ -293,6 +293,13 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
   }
 
+  private launchStateProvesAccepted(state: SupervisorState): boolean {
+    if (state.status === "running") return true;
+    return this.options.platform === "posix" && state.protocol === "aiboard-portable-process/v2" &&
+      state.status === "stopped" && state.launchEffect === "started" &&
+      state.workloadGroupRetirement.state === "retired";
+  }
+
   backpressuredChannelProvider() {
     return createPortableProcessChannelProvider({
       replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
@@ -307,7 +314,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           fence,
           supervisorPid: identity.supervisorPid,
           reattest: () => {
-            this.assertFence(identity, fence);
+            this.assertDurableFence(identity, fence);
             const state = this.validate(identity);
             if (state === "mismatch" || state === "unknown") throw new Error("Portable channel identity re-attestation failed.");
             return state === "live" ? "live" : "exited";
@@ -472,7 +479,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     try { identity = this.identity(binding); } catch (error) {
       return { state: error instanceof OwnedProcessIdentityMismatchError ? "identity_mismatch" : "outcome_unknown" };
     }
-    try { this.assertFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
+    try { this.assertObservationFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
     const validation = this.validate(identity);
     if (validation === "mismatch") return { state: "identity_mismatch" };
     if (validation === "unknown") return { state: "outcome_unknown" };
@@ -501,7 +508,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     try { assertPortableOutputSettledAtFence(identity, _fence); }
     catch { return { state: "outcome_unknown" }; }
-    try { this.assertFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
+    try { this.assertObservationFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
     const finalValidation = this.validate(identity);
     const finalState = readState(identity.directory);
     if ((finalValidation !== "live" && finalValidation !== "exited") || !finalState || finalState.nonce !== identity.nonce ||
@@ -605,6 +612,20 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const current = readOwnedFence(join(identity.directory, "fence.json"), identity);
     if (fence.ownerId !== current.ownerId || fence.fencingToken !== current.fencingToken)
       throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+  }
+  private assertObservationFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
+    if (!fence) {
+      if (!identity.fence) return;
+      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
+    }
+    try {
+      const current = readOwnedFence(join(identity.directory, "fence.json"), identity);
+      if (current.ownerId === fence.ownerId && current.fencingToken === fence.fencingToken) return;
+    } catch {
+      // Preserve the existing claim path for missing/corrupt evidence so it
+      // retains its fail-closed behavior and legacy initialization rules.
+    }
+    this.assertFence(identity, fence);
   }
   private validate(identity: Identity): "live" | "exited" | "mismatch" | "unknown" {
     if (identity.version === 2) {

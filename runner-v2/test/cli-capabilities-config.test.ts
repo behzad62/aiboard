@@ -22,6 +22,10 @@ import { runnerRunStateSegment } from "../src/run-state-identity.js";
 import { openSqliteStreamingSessionStore } from "../src/streaming-session-store.js";
 import { cliRootCaptureArgs, forwardCliRootRecords } from "./support/cli-root-capture.js";
 
+// Outer test-process budget only: the portable contract runs test files concurrently.
+// Product startup, Git, MCP, and cleanup deadlines remain unchanged.
+const CLI_STARTUP_FIXTURE_BUDGET_MS = 30_000;
+
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxPath = fileURLToPath(
   new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url),
@@ -293,7 +297,7 @@ test("CLI accepts a valid external capability configuration before listening", a
           throw new Error(`Runner exited before readiness (${String(code)}): ${diagnostics.join("")}`);
         }),
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), 10_000);
+          timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), CLI_STARTUP_FIXTURE_BUDGET_MS);
         }),
       ]);
       assert.equal(readiness.protocolVersion, 2);
@@ -905,7 +909,7 @@ async function awaitCliReadiness(
         );
       }),
       new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), 10_000);
+        timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), CLI_STARTUP_FIXTURE_BUDGET_MS);
       }),
     ]);
   } finally {
@@ -991,7 +995,7 @@ async function runCliToExit(
   config: string,
   token: string,
   extraArgs: readonly string[] = [],
-  startupDeadlineMs = 10_000,
+  startupDeadlineMs = CLI_STARTUP_FIXTURE_BUDGET_MS,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const runner = spawnCli(project, state, config, token, extraArgs);
   const { child } = runner;

@@ -6,6 +6,7 @@ import type {
   OutputStream,
 } from "./bounded-output-spool.js";
 import type { ChildEnvironmentFactory } from "./child-environment.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import {
   parseExecutionInvocationIntent,
   parseProcessOutputDisposition,
@@ -39,6 +40,7 @@ import {
   parseProcessReconciliation,
   parseProcessReleaseResult,
   parseProcessSignalResult,
+  ProcessReleasePendingError,
   reattestProcessBackend,
   selectProcessBackend,
   type ConsumedExecutionGrant,
@@ -1066,13 +1068,25 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     assertAuthority();
     let releaseEffectId: string;
     try {
-      const fresh = await this.fencedEffect(record.invocationId, (fence) =>
+      let fresh = await this.fencedEffect(record.invocationId, (fence) =>
         reattestProcessBackend(this.options.registry, binding, fence),
       );
       const released = await this.journaledEffect(
         record.invocationId,
         "backend_release",
-        (fence) => { assertAuthority(); return fresh.backend.release(binding, fence); },
+        async (fence) => {
+          assertAuthority();
+          const deadline = this.options.clock.now().getTime() + AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
+          for (;;) {
+            try { return await fresh.backend.release(binding, fence); }
+            catch (error) {
+              if (!(error instanceof ProcessReleasePendingError) || this.options.clock.now().getTime() >= deadline) throw error;
+              await this.options.clock.sleep(Math.min(25, Math.max(1, deadline - this.options.clock.now().getTime())));
+              assertAuthority();
+              fresh = await reattestProcessBackend(this.options.registry, binding, fence);
+            }
+          }
+        },
       );
       parseProcessReleaseResult(released.result);
       releaseEffectId = released.effectId;

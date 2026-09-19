@@ -93,6 +93,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   private outputTasks = 0;
   private outputSettlementDeadlineAt?: number;
   private outputSettlement?: Promise<BackpressuredOutputSettlement>;
+  private liveStoppedObserved = false;
 
   constructor(private readonly authority: PortableChannelAuthority, private readonly pollIntervalMs: number, private readonly clock: () => number) {
     this.channelDirectory = join(authority.directory, "channel");
@@ -293,7 +294,9 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         return { status: "settled" };
       }
       coordinationBlocked = false;
-      if (this.outputTasks === 0 && output.output.some((entry) => !this.deliveredOutput.has(entry.name))) this.scheduleOutput();
+      if (this.outputTasks === 0 && output.output.some((entry) =>
+        !this.deliveredOutput.has(entry.name) || !this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)
+      )) this.scheduleOutput();
       await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
     }
   }
@@ -335,6 +338,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   }
 
   private scheduleOutput(): void {
+    if (this.outputTasks > 0) return;
     this.outputTasks++;
     this.outputTail = this.outputTail.then(async () => {
       const sink = this.outputSink;
@@ -346,16 +350,8 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       const entries = this.requireSnapshot(snapshot).output;
       const present = new Set(entries.map((entry) => entry.name));
       for (const name of this.deliveredOutput) if (!present.has(name)) this.deliveredOutput.delete(name);
-      for (const entry of entries) {
-        if (sink !== this.outputSink || this.detached) return;
-        if (this.deliveredOutput.has(entry.name)) continue;
-        this.assertOutputDeadline();
-        let acknowledgement: BackpressuredOutputAcknowledgement;
-        try { acknowledgement = await sink(entry.metadata, entry.bytes); }
-        catch (error) { throw this.outputSettlementDeadlineAt === undefined ? error : new PortableOutputSettlementFailure("output_unaccounted"); }
-        if (JSON.stringify(acknowledgement) !== JSON.stringify(entry.metadata))
-          throw new Error("Portable output acknowledgement metadata mismatch.");
-        if (this.detached || sink !== this.outputSink) return;
+      const acknowledgeOutput = async (entry: (typeof entries)[number]) => {
+        if (this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) return;
         this.assertOutputDeadline();
         try {
           await this.authority.effect("output_ack", () => {
@@ -368,13 +364,30 @@ class PortableProcessChannel implements InteractiveProcessChannel {
             }));
           });
         } catch (error) {
-          if (isRetryablePortableCoordination(error) && this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) {
-            this.deliveredOutput.add(entry.name);
-            continue;
-          }
+          if (isRetryablePortableCoordination(error) && this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) return;
           throw error;
         }
+      };
+      for (const entry of entries) {
+        if (sink !== this.outputSink || this.detached) return;
+        if (this.deliveredOutput.has(entry.name)) {
+          await acknowledgeOutput(entry);
+          continue;
+        }
+        this.assertOutputDeadline();
+        let acknowledgement: BackpressuredOutputAcknowledgement;
+        try { acknowledgement = await sink(entry.metadata, entry.bytes); }
+        catch (error) { throw this.outputSettlementDeadlineAt === undefined ? error : new PortableOutputSettlementFailure("output_unaccounted"); }
+        if (JSON.stringify(acknowledgement) !== JSON.stringify(entry.metadata))
+          throw new Error("Portable output acknowledgement metadata mismatch.");
+        if (this.detached || sink !== this.outputSink) return;
+        // The sink has accepted this exact retained chunk. Preserve that fact
+        // in-memory before publishing its durable ACK so transient fence
+        // contention retries only ACK publication, never sink delivery. A new
+        // channel intentionally starts without this set and therefore retains
+        // at-least-once replay after detach/restart when no ACK survived.
         this.deliveredOutput.add(entry.name);
+        await acknowledgeOutput(entry);
       }
     }).catch((error) => {
       if (isRetryablePortableCoordination(error)) return;
@@ -483,6 +496,14 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       if (state.nonce !== this.authority.nonce) throw new Error("Portable channel identity mismatch.");
       if (!["running", "stopping", "stopped", "outcome_unknown"].includes(state.status)) return { state: "outcome_unknown" };
       if (birth === "exited" && state.status !== "stopped") return { state: "outcome_unknown" };
+      if (this.liveStoppedObserved && state.status !== "stopped") return { state: "outcome_unknown" };
+      // A live supervisor with durable stopped state still owns fenced output
+      // retirement. Yield without taking its writer fence; after supervisor exit
+      // the existing snapshots below authenticate the fully retired output.
+      if (state.status === "stopped" && birth === "live") {
+        this.liveStoppedObserved = true;
+        return undefined;
+      }
       if (state.status === "stopped") {
         const snapshot = this.outputSnapshot();
         if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return undefined;

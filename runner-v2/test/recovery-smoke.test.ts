@@ -21,6 +21,9 @@ interface Readiness {
   stateDirectory: string;
 }
 
+// Outer readiness guard only: this file runs concurrently in the portable contract.
+// Product process and cleanup deadlines are unchanged.
+const CLI_STARTUP_FIXTURE_BUDGET_MS = 30_000;
 const token = "recovery-test-token";
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxPath = fileURLToPath(
@@ -177,7 +180,7 @@ async function startRunner(
       new Promise<never>((_, reject) => {
         timeout = setTimeout(
           () => reject(new Error("Runner readiness timed out.")),
-          10_000
+          CLI_STARTUP_FIXTURE_BUDGET_MS
         );
       }),
     ]);

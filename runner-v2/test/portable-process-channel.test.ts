@@ -357,6 +357,33 @@ async function round4ObserverFixture(inspect: (signal: AbortSignal) => Promise<P
   };
 }
 
+test("live stopped supervisor yields terminal snapshots until output retirement can finish", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-live-stopped-terminal-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0, signal: null }));
+  let supervisorLive = true;
+  let snapshotCalls = 0;
+  const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 4, replayCapacityBytes: 1024, pollIntervalMs: 5,
+    authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live",
+      reattestObservation: async () => supervisorLive ? "live" : "exited",
+      effect: async (_kind, effect) => effect(),
+      snapshot: (read) => { snapshotCalls++; return { status: "applied", value: read() }; },
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
+  let settled = false;
+  const terminal = channel.waitForTerminal().then((result) => { settled = true; return result; });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(settled, false, "a live stopped supervisor still owns output retirement");
+    assert.equal(snapshotCalls, 0, "terminal polling must not contend for the output-retirement writer fence");
+    supervisorLive = false;
+    assert.deepEqual(await round4Within(terminal), { state: "exited", exitCode: 0 });
+    assert.ok(snapshotCalls > 0, "terminal proof is fenced after the supervisor exits");
+  } finally { await channel.detach(); rmSync(root, { recursive: true, force: true }); }
+});
+
 test("round5 portable settlement waits through sink ACK publication retirement and terminal", async () => {
   const fixture = await settlementFixture();
   let sinkCalls = 0;
@@ -452,6 +479,7 @@ test("round5 portable output ACK retries transient owned-fence contention withou
   writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
   writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "running" }));
   let ackContention = 2;
+  let sinkCalls = 0;
   const provider = createPortableProcessChannelProvider({
     replayCapacityChunks: 4, replayCapacityBytes: 16, pollIntervalMs: 5,
     authority: () => ({
@@ -466,7 +494,7 @@ test("round5 portable output ACK retries transient owned-fence contention withou
     }),
   });
   const channel = await provider.acquire(bindingFor({ opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now" }), fence);
-  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => entry);
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (entry) => { sinkCalls += 1; return entry; });
   const settlement = channel.settleBackpressuredOutput(Date.now() + 2_000);
   try {
     await waitFor(() => readdirSync(join(root, "channel/ack")).length === 1);
@@ -474,6 +502,7 @@ test("round5 portable output ACK retries transient owned-fence contention withou
       name: "stdout-000000000001.json", metadata });
     writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0 }));
     assert.deepEqual(await settlement, { status: "settled" });
+    assert.equal(sinkCalls, 1, "transient ACK contention must retry ACK publication without replaying accepted bytes");
   } finally {
     unsubscribe();
     await channel.detach();
@@ -824,6 +853,54 @@ test("portable write returns its durable acknowledged outcome when takeover wins
     assert.equal(existsSync(join(root, "channel/ack/input-000000000001.json")), true,
       "the durable acknowledgement must remain when its prior owner cannot consume it");
   } finally {
+    await channel.detach();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("portable output polling coalesces while one backpressured delivery is in flight", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-portable-output-coalesce-"));
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
+  const bytes = Buffer.from("held");
+  const metadata: BackpressuredOutputMetadata = {
+    stream: "stdout", sequence: 1, startOffset: 0, endOffset: bytes.length, byteLength: bytes.length,
+    digest: createHash("sha256").update(bytes).digest("hex"),
+  };
+  writeFileSync(join(root, "channel/output/stdout-000000000001.json"), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  writeOutputCheckpoint(root);
+  writeFileSync(join(root, "channel/client-state.json"), JSON.stringify({
+    nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken,
+    nextCommand: 1, nextWrite: 1, inputClosed: false,
+  }));
+  let entered!: () => void;
+  let release!: () => void;
+  const atSink = new Promise<void>((resolve) => { entered = resolve; });
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const provider = createPortableProcessChannelProvider({
+    replayCapacityChunks: 1, replayCapacityBytes: 8, pollIntervalMs: 1,
+    authority: () => ({
+      directory: root, nonce: "nonce", fence,
+      reattest: () => "live",
+      effect: async (_kind, effect) => effect(),
+      snapshot: immediateSnapshot,
+    }),
+  });
+  const channel = await provider.acquire(bindingFor({
+    opaqueIdentity: "opaque", birthFingerprint: { observedAt: "now", discriminator: "birth" }, rootPid: 1, startedAt: "now",
+  }), fence);
+  const unsubscribe = channel.subscribeBackpressuredOutput(async (actual) => {
+    entered();
+    await held;
+    return actual;
+  });
+  try {
+    await atSink;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const outputTasks = Reflect.get(channel, "outputTasks") as number;
+    assert.equal(outputTasks, 1, "the poll timer must not queue duplicate output tasks behind one backpressured delivery");
+  } finally {
+    release();
+    unsubscribe();
     await channel.detach();
     rmSync(root, { recursive: true, force: true });
   }
