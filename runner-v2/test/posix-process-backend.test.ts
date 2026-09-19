@@ -683,6 +683,59 @@ test("C4 POSIX v2 launch rollback queues workload control without signalling the
   }
 });
 
+test("C4 POSIX v2 launch rollback waits for durable retirement after exact force makes the anchor temporarily absent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-c4-v2-rollback-retirement-race-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "c4-rollback-retirement-race-nonce";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const running = {
+    protocol: "aiboard-portable-process/v2", nonce, supervisorPid: 9001, supervisorBirth: "supervisor-birth",
+    workloadGroup, workloadGroupRetirement: { state: "active" }, launchEffect: "started", rootProcess: null,
+    revision: 1, handledControl: 0, status: "running", exitCode: null, signal: null, knownProcesses: [], error: null,
+    updatedAt: "2026-09-19T00:00:00.000Z",
+  } as const;
+  for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(directory, path), { recursive: true });
+  writeFileSync(join(directory, "stdout.log"), "");
+  writeFileSync(join(directory, "stderr.log"), "");
+  writeFileSync(join(directory, "channel", "output-checkpoint.json"), JSON.stringify({
+    nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 },
+  }));
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...fence }));
+  writeFileSync(join(directory, "state.json"), JSON.stringify(running));
+  const controlPath = join(directory, "control.json");
+  let supervisorAlive = true;
+  let anchorInspectionsAfterControl = 0;
+  const backend = createPosixProcessBackend({
+    stateDirectory: root, pollIntervalMs: 1,
+    operations: {
+      inspectProcessBirth: (pid) => {
+        if (pid === 9001) return supervisorAlive ? { state: "present", fingerprint: "supervisor-birth" } : { state: "absent" };
+        if (pid !== 9002) return { state: "absent" };
+        if (!existsSync(controlPath)) return { state: "present", fingerprint: "anchor-birth" };
+        anchorInspectionsAfterControl += 1;
+        if (anchorInspectionsAfterControl === 2) {
+          supervisorAlive = false;
+          writeFileSync(join(directory, "state.json"), JSON.stringify({
+            ...running, workloadGroupRetirement: { state: "retired", cause: "force_terminate", at: "2026-09-19T00:00:01.000Z" },
+            revision: 2, status: "stopped",
+          }));
+        }
+        return { state: "absent" };
+      },
+      listPosixGroup: () => [],
+      signal: () => { throw new Error("rollback must not directly signal outside the supervisor"); },
+    },
+  });
+  const rollback = backend as unknown as { cleanupFailedLaunch(identity: { version: 2; backendId: string; nonce: string; directory: string; supervisorPid: number; supervisorBirth: string; workloadGroup: typeof workloadGroup; fence: typeof fence }): Promise<void> };
+  try {
+    await rollback.cleanupFailedLaunch({ version: 2, backendId: "runner-posix-process-group-v1", nonce, directory, supervisorPid: 9001, supervisorBirth: "supervisor-birth", workloadGroup, fence });
+    assert.ok(existsSync(controlPath), "rollback must first queue the exact fenced force request");
+    assert.ok(anchorInspectionsAfterControl >= 2, "rollback must tolerate the post-force gap until durable retirement is published");
+  } finally {
+    removeFixtureRoot(root);
+  }
+});
+
 test("C4 POSIX parses a detached anchor's birth and group from synthetic proc state", async () => {
   const control = await import("../src/portable-process-posix-control.mjs");
   const fields = ["S", "1", "9002", ...Array.from({ length: 16 }, () => "0"), "712345", "0"];

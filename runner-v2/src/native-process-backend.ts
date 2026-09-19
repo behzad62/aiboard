@@ -751,6 +751,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const initial = this.posixWorkloadSnapshot(identity);
       if (initial.state === "identity_mismatch") throw new Error("Launch cleanup refused a changed POSIX workload identity.");
       if (initial.state === "outcome_unknown") throw launchBlocker(identity, "Launch cleanup could not read the durable POSIX workload identity.");
+      let awaitingQueuedForceRetirement = false;
       if (initial.value.workloadGroupRetirement.state === "active") {
         if (validation !== "live") throw launchBlocker(identity, "Launch cleanup preserved POSIX authority because its supervisor exited before workload retirement proof.");
         this.cleanupFenceEffect(identity, () => {
@@ -765,6 +766,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
             action: "force_terminate",
           });
         });
+        awaitingQueuedForceRetirement = true;
       }
       let emptySince: number | undefined;
       while (Date.now() < deadline) {
@@ -773,7 +775,13 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         if (snapshot.state === "outcome_unknown") throw launchBlocker(identity, "Launch cleanup lost durable POSIX workload retirement evidence.");
         const emptiness = await this.emptiness(identity);
         if (emptiness === "identity_mismatch") throw new Error("Launch cleanup observed a recycled owned identity.");
-        if (emptiness === "outcome_unknown") throw launchBlocker(identity, "Launch cleanup lost POSIX workload membership verification.");
+        if (emptiness === "outcome_unknown") {
+          if (awaitingQueuedForceRetirement && snapshot.value.workloadGroupRetirement.state === "active") {
+            await delay(this.pollIntervalMs);
+            continue;
+          }
+          throw launchBlocker(identity, "Launch cleanup lost POSIX workload membership verification.");
+        }
         validation = this.validate(identity);
         if (validation === "mismatch") throw new Error("Launch cleanup observed a recycled supervisor identity.");
         if (validation === "unknown") throw launchBlocker(identity, "Launch cleanup lost its supervisor birth inspection.");
