@@ -12,6 +12,7 @@ import {
 } from "./interactive-process-channel.js";
 import type { ProcessBackendBinding, ProcessEffectFence } from "./process-backend.js";
 import {
+  PortableOutputRetirementBlockedError,
   readPortableOutputSnapshot,
   validatePortableAcknowledgements,
   type PortableFenceSnapshotOutcome,
@@ -26,6 +27,8 @@ export interface PortableChannelAuthority {
   /** Exact durable supervisor PID; authenticates its atomic publication names. */
   readonly supervisorPid?: number;
   reattest(): "live" | "exited";
+  /** Read-side exact-fence check; unlike a writer claim it must not contend with output retirement. */
+  reattestFence?(): void;
   /** Observation only; never authorizes a protected effect. Must settle after cancellation. */
   reattestObservation?(signal: AbortSignal): Promise<"live" | "exited">;
   effect<T>(kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume", effect: () => T): Promise<T>;
@@ -497,12 +500,27 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       if (!["running", "stopping", "stopped", "outcome_unknown"].includes(state.status)) return { state: "outcome_unknown" };
       if (birth === "exited" && state.status !== "stopped") return { state: "outcome_unknown" };
       if (this.liveStoppedObserved && state.status !== "stopped") return { state: "outcome_unknown" };
-      // A live supervisor with durable stopped state still owns fenced output
-      // retirement. Yield without taking its writer fence; after supervisor exit
-      // the existing snapshots below authenticate the fully retired output.
+      // A live supervisor with durable stopped state may still own output
+      // retirement. Inspect that protocol read-only so terminal polling never
+      // competes for the writer lock. Once the retained window is fully retired,
+      // re-attest identity and the exact durable fence without waiting for the
+      // supervisor process itself to disappear.
       if (state.status === "stopped" && birth === "live") {
         this.liveStoppedObserved = true;
-        return undefined;
+        const pending = this.readLiveStoppedOutput();
+        if (!pending || this.hasPendingOutput(pending)) return undefined;
+        await this.reattestObservation(signal);
+        state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
+        if (state.nonce !== this.authority.nonce || state.status !== "stopped") return { state: "outcome_unknown" };
+        const finalOutput = this.readLiveStoppedOutput();
+        if (!finalOutput || this.hasPendingOutput(finalOutput)) return undefined;
+        if (this.authority.reattestFence) this.authority.reattestFence();
+        else {
+          const finalFence = this.authority.snapshot(() => true);
+          if (finalFence.status === "unavailable" && finalFence.cause === "coordination") return undefined;
+          if (finalFence.status !== "applied") throw new Error("Portable terminal fence is unavailable.");
+        }
+        return { state: "exited", ...(state.exitCode === null ? {} : { exitCode: state.exitCode }), ...(state.signal ? { signal: state.signal } : {}) };
       }
       if (state.status === "stopped") {
         const snapshot = this.outputSnapshot();
@@ -526,6 +544,19 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         ? { state: "exited", ...(state.exitCode === null ? {} : { exitCode: state.exitCode }), ...(state.signal ? { signal: state.signal } : {}) }
         : state.status === "outcome_unknown" ? { state: "outcome_unknown" } : undefined;
     } catch { return { state: "outcome_unknown" }; }
+  }
+
+  private readLiveStoppedOutput(): PortableOutputSnapshot | undefined {
+    try { return this.readOutputSnapshot(); }
+    catch (error) {
+      if (error instanceof PortableOutputRetirementBlockedError) return undefined;
+      throw error;
+    }
+  }
+
+  private hasPendingOutput(output: PortableOutputSnapshot): boolean {
+    return output.output.length > 0 ||
+      output.acknowledgements.some((name) => /^(stdout|stderr)-/.test(name));
   }
 
   private async reattestObservation(signal: AbortSignal): Promise<"live" | "exited"> {

@@ -313,6 +313,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           nonce: identity.nonce,
           fence,
           supervisorPid: identity.supervisorPid,
+          reattestFence: () => this.assertDurableFence(identity, fence),
           reattest: () => {
             this.assertDurableFence(identity, fence);
             const state = this.validate(identity);

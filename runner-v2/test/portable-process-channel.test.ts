@@ -357,16 +357,21 @@ async function round4ObserverFixture(inspect: (signal: AbortSignal) => Promise<P
   };
 }
 
-test("live stopped supervisor yields terminal snapshots until output retirement can finish", async () => {
+test("live stopped supervisor yields while output retirement is pending then settles lock-free", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-live-stopped-terminal-"));
   for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
   writeOutputCheckpoint(root);
+  const bytes = Buffer.from("retained");
+  const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: bytes.length, byteLength: bytes.length,
+    digest: createHash("sha256").update(bytes).digest("hex") };
+  const name = "stdout-000000000001.json";
+  writeFileSync(join(root, "channel/output", name), JSON.stringify({ nonce: "nonce", metadata, bytes: bytes.toString("base64") }));
+  writeFileSync(join(root, "channel/ack", name), JSON.stringify({ nonce: "nonce", ownerId: fence.ownerId, fencingToken: fence.fencingToken, metadata }));
   writeFileSync(join(root, "state.json"), JSON.stringify({ nonce: "nonce", status: "stopped", exitCode: 0, signal: null }));
-  let supervisorLive = true;
   let snapshotCalls = 0;
   const provider = createPortableProcessChannelProvider({ replayCapacityChunks: 4, replayCapacityBytes: 1024, pollIntervalMs: 5,
     authority: () => ({ directory: root, nonce: "nonce", fence, reattest: () => "live",
-      reattestObservation: async () => supervisorLive ? "live" : "exited",
+      reattestObservation: async () => "live", reattestFence: () => undefined,
       effect: async (_kind, effect) => effect(),
       snapshot: (read) => { snapshotCalls++; return { status: "applied", value: read() }; },
     }),
@@ -376,11 +381,11 @@ test("live stopped supervisor yields terminal snapshots until output retirement 
   const terminal = channel.waitForTerminal().then((result) => { settled = true; return result; });
   try {
     await new Promise((resolve) => setTimeout(resolve, 30));
-    assert.equal(settled, false, "a live stopped supervisor still owns output retirement");
+    assert.equal(settled, false, "a live stopped supervisor still owns pending output retirement");
     assert.equal(snapshotCalls, 0, "terminal polling must not contend for the output-retirement writer fence");
-    supervisorLive = false;
+    retirePortableOutputAcknowledgement({ channelDirectory: join(root, "channel"), nonce: "nonce", fence, name, metadata });
     assert.deepEqual(await round4Within(terminal), { state: "exited", exitCode: 0 });
-    assert.ok(snapshotCalls > 0, "terminal proof is fenced after the supervisor exits");
+    assert.equal(snapshotCalls, 0, "retired live-stopped terminal proof remains lock-free");
   } finally { await channel.detach(); rmSync(root, { recursive: true, force: true }); }
 });
 
