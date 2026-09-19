@@ -34,7 +34,7 @@ jobs:
           node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/process-backend-contract.test.ts
           runner-v2/test/portable-process-protocol.test.ts
-          runner-v2/test/cli-capabilities-config.test.ts
+          runner-v2/test/runner-capabilities-config.test.ts
           runner-v2/test/native-build-manager.test.ts
           runner-v2/test/runner-resource-cleanup.test.ts
           runner-v2/test/static-adapter-policy.test.ts

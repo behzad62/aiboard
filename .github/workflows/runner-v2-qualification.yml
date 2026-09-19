@@ -45,6 +45,30 @@ jobs:
           runner-v2/test/managed-shared-native.test.ts
           runner-v2/test/mcp-lazy-native.test.ts
 
+  cli-readiness:
+    name: CLI readiness qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node-version: [24.x]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Run real CLI startup/readiness qualification
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test
+          runner-v2/test/cli-capabilities-config.test.ts
+
   recovery:
     name: Recovery qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}

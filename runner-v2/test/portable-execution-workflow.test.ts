@@ -13,7 +13,7 @@ const deterministicPrTests = [
   "runner-v2/test/process-backend-contract.test.ts",
   "runner-v2/test/portable-process-protocol.test.ts",
   "runner-v2/test/portable-process-channel.test.ts",
-  "runner-v2/test/cli-capabilities-config.test.ts",
+  "runner-v2/test/runner-capabilities-config.test.ts",
   "runner-v2/test/native-build-manager.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
   "runner-v2/test/static-adapter-policy.test.ts",
@@ -24,6 +24,7 @@ const deterministicPrTests = [
 ] as const;
 
 const qualificationTests = [
+  "runner-v2/test/cli-capabilities-config.test.ts",
   "runner-v2/test/recovery-smoke.test.ts",
   "runner-v2/test/windows-process-backend.test.ts",
   "runner-v2/test/windows-job-process-channel.test.ts",
