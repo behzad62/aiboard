@@ -26,6 +26,7 @@ import {
   parseProcessEmptyVerification,
   parseProcessLaunchResult,
   parseProcessReconciliation,
+  ProcessReleasePendingError,
   type ProcessBackend,
   type ProcessLaunchResult,
 } from "../src/process-backend.js";
@@ -198,7 +199,7 @@ test("POSIX terminal observation retries transient unknown birth inspection with
   }
 });
 
-test("POSIX terminal observation bounds persistent unknown birth inspection as outcome unknown", async () => {
+test("POSIX terminal observation keeps persistent unknown birth inspection nonterminal until cancellation", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-posix-terminal-birth-unknown-"));
   const directory = join(root, "owned-v2");
   const nonce = "terminal-birth-unknown-nonce";
@@ -231,16 +232,15 @@ test("POSIX terminal observation bounds persistent unknown birth inspection as o
   const channel = await backend.backpressuredChannelProvider().acquire(
     portableV2Binding(directory, nonce, supervisorBirth, workloadGroup), fence,
   );
+  let settled = false;
+  const terminal = channel.waitForTerminal().then((value) => { settled = true; return value; });
   try {
-    const terminal = await Promise.race([
-      channel.waitForTerminal(),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 500)),
-    ]);
-    assert.notEqual(terminal, "timeout", "persistent birth uncertainty must remain bounded");
-    assert.deepEqual(terminal, { state: "outcome_unknown" });
-    assert.ok(asyncInspections > 1, "persistent uncertainty receives bounded retry before fail-closed terminal status");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(asyncInspections > 2, "persistent birth uncertainty must keep being re-observed under the same durable authority");
+    assert.equal(settled, false, "unverified passive birth evidence must not become a terminal process outcome");
   } finally {
     await channel.detach();
+    await terminal.catch(() => undefined);
     removeFixtureRoot(root);
   }
 });
@@ -359,7 +359,6 @@ test("POSIX native session fixture owns descendants after launcher exit", async 
       if (settlement?.status !== "settled") throw new Error("POSIX live fixture output settlement did not reach the exact terminal proof.");
       unsubscribe();
       await channel.detach();
-      await waitForPosixLiveFixtureWitnessExit(backend, liveBinding, fence, Date.now() + 5_000);
     };
     await waitForPosixLiveFixtureCondition(
       () => observedOutput.length > 0,
@@ -372,8 +371,11 @@ test("POSIX native session fixture owns descendants after launcher exit", async 
     await new Promise((resolve) => setTimeout(resolve, 100));
     if (!parseProcessEmptyVerification(await backend.verifyEmpty(liveBinding, fence)).empty)
       assert.deepEqual(await backend.signal(liveBinding, "force_terminate", fence), { state: "exited" });
-    const stopped = JSON.parse(readFileSync(join(authorityDirectory, "state.json"), "utf8")) as { status?: unknown };
-    assert.equal(stopped.status, "stopped", "force must durably retire the workload before output acknowledgement is released");
+    const retired = JSON.parse(readFileSync(join(authorityDirectory, "state.json"), "utf8")) as {
+      workloadGroupRetirement?: { state?: unknown };
+    };
+    assert.equal(retired.workloadGroupRetirement?.state, "retired",
+      "force must durably retire the workload before output acknowledgement is released");
     assert.equal(parseProcessEmptyVerification(await backend.verifyEmpty(liveBinding, fence)).empty, false,
       "unacknowledged output must keep terminal cleanup blocked while the retained supervisor witness is alive");
     assert.doesNotThrow(() => process.kill(supervisorPid, 0),
@@ -409,7 +411,7 @@ test("C4 POSIX force queues the exact workload group and retains the supervisor 
   let supervisorAlive = true;
   let workloadAlive = true;
   let controlObserved = false;
-  let postControlPolls = 0;
+  let retirementPublicationScheduled = false;
   const directSignals: Array<[number, NodeJS.Signals]> = [];
   mkdirSync(join(directory, "channel", "output"), { recursive: true });
   mkdirSync(join(directory, "channel", "input"), { recursive: true });
@@ -458,17 +460,19 @@ test("C4 POSIX force queues the exact workload group and retains the supervisor 
         if (groupId !== workloadGroup.groupId) return groupId === supervisorPid && supervisorAlive ? [supervisorPid] : [];
         if (existsSync(join(directory, "control.json"))) {
           controlObserved = true;
-          postControlPolls += 1;
-        }
-        if (postControlPolls >= 4 && workloadAlive) {
           workloadAlive = false;
-          const retired = {
-            ...runningState,
-            workloadGroupRetirement: { state: "retired", cause: "force_terminate", at: "2026-09-06T00:00:01.000Z" },
-            revision: 2,
-            status: "running",
-          } as const;
-          writeFileSync(join(directory, "state.json"), JSON.stringify(retired));
+          if (!retirementPublicationScheduled) {
+            retirementPublicationScheduled = true;
+            setTimeout(() => {
+              const retired = {
+                ...runningState,
+                workloadGroupRetirement: { state: "retired", cause: "force_terminate", at: "2026-09-06T00:00:01.000Z" },
+                revision: 2,
+                status: "running",
+              } as const;
+              writeFileSync(join(directory, "state.json"), JSON.stringify(retired));
+            }, 400);
+          }
         }
         return workloadAlive ? [workloadGroup.leaderPid, 9003] : [];
       },
@@ -3759,7 +3763,7 @@ async function finalizePosixLiveFixture(
     }
   }
   try {
-    await backend.release(binding, effectFence);
+    await releasePosixLiveFixtureAuthority(backend, binding, effectFence, Date.now() + 5_000);
   } catch (error) {
     if (!existsSync(resolvedDirectory))
       throw new AggregateError([error], "POSIX live fixture release failed without retained exact authority.");
@@ -3780,20 +3784,20 @@ async function waitForPosixLiveFixtureCondition(
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
 }
-async function waitForPosixLiveFixtureWitnessExit(
-  backend: Pick<ProcessBackend, "reconcile">,
+async function releasePosixLiveFixtureAuthority(
+  backend: Pick<ProcessBackend, "release">,
   binding: ReturnType<typeof bindingFor>,
   effectFence: typeof fence,
   deadlineAt: number,
 ): Promise<void> {
   for (;;) {
-    const reconciliation = parseProcessReconciliation(await backend.reconcile(binding, effectFence));
-    if (reconciliation.state === "exited") return;
-    if (reconciliation.state !== "running")
-      throw new Error("POSIX live fixture supervisor witness lost exact terminal identity before authority release.");
-    if (Date.now() >= deadlineAt)
-      throw new Error("POSIX live fixture supervisor witness did not exit after output settlement and channel detach.");
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    try {
+      await backend.release(binding, effectFence);
+      return;
+    } catch (error) {
+      if (!(error instanceof ProcessReleasePendingError) || Date.now() >= deadlineAt) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
   }
 }
 function request(args: string[]) {

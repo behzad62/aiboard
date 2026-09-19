@@ -25,7 +25,6 @@ const PROCESS_MEMBERSHIP_INSPECTION_DEADLINE_MS = 15_000;
 const WINDOWS_PORTABLE_STARTUP_DEADLINE_MS = 30_000;
 const PORTABLE_STARTUP_DEADLINE_MS = 6_000;
 const POSIX_FORCE_SETTLEMENT_DEADLINE_MS = 5_000;
-const POSIX_TERMINAL_OBSERVATION_UNKNOWN_RETRIES = 2;
 const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 
 export interface NativeOwnedProcessBackendOptions {
@@ -322,9 +321,6 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
             return state === "live" ? "live" : "exited";
           },
           reattestObservation: async (signal) => {
-            let unknownRetriesRemaining = this.options.platform === "posix"
-              ? POSIX_TERMINAL_OBSERVATION_UNKNOWN_RETRIES
-              : 0;
             for (;;) {
               this.assertDurableFence(identity, fence);
               const inspection = this.operations.inspectProcessBirthAsync
@@ -338,9 +334,13 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
               if (inspection.state === "present" && !sameProcessBirth(inspection.fingerprint, identity.supervisorBirth))
                 throw new Error("Portable channel identity re-attestation failed.");
               if (inspection.state === "unknown") {
-                if (unknownRetriesRemaining < 1)
+                if (this.options.platform !== "posix")
                   throw new Error("Portable channel identity re-attestation failed.");
-                unknownRetriesRemaining -= 1;
+                // Passive POSIX observation cannot promote missing birth evidence
+                // into a terminal process result. Exact control and cleanup paths
+                // still fail closed independently; this watcher keeps re-attesting
+                // the durable fence and workload identity until evidence returns or
+                // its consumer cancels/detaches it.
                 await delay(this.pollIntervalMs);
                 continue;
               }
