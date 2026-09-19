@@ -25,6 +25,7 @@ const PROCESS_MEMBERSHIP_INSPECTION_DEADLINE_MS = 15_000;
 const WINDOWS_PORTABLE_STARTUP_DEADLINE_MS = 30_000;
 const PORTABLE_STARTUP_DEADLINE_MS = 6_000;
 const POSIX_FORCE_SETTLEMENT_DEADLINE_MS = 5_000;
+const POSIX_TERMINAL_OBSERVATION_UNKNOWN_RETRIES = 2;
 const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 
 export interface NativeOwnedProcessBackendOptions {
@@ -321,18 +322,30 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
             return state === "live" ? "live" : "exited";
           },
           reattestObservation: async (signal) => {
-            this.assertDurableFence(identity, fence);
-            const inspection = this.operations.inspectProcessBirthAsync
-              ? await this.operations.inspectProcessBirthAsync(identity.supervisorPid, this.options.platform, signal)
-              : this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
-            // Never reuse pre-wait ownership or POSIX identity as current authority.
-            if (signal.aborted) throw new Error("Portable channel observation cancelled.");
-            this.assertDurableFence(identity, fence);
-            if (identity.version === 2 && this.posixWorkloadSnapshot(identity).state !== "ready")
-              throw new Error("Portable channel workload identity re-attestation failed.");
-            if (inspection.state === "unknown" || inspection.state === "present" && !sameProcessBirth(inspection.fingerprint, identity.supervisorBirth))
-              throw new Error("Portable channel identity re-attestation failed.");
-            return inspection.state === "present" ? "live" : "exited";
+            let unknownRetriesRemaining = this.options.platform === "posix"
+              ? POSIX_TERMINAL_OBSERVATION_UNKNOWN_RETRIES
+              : 0;
+            for (;;) {
+              this.assertDurableFence(identity, fence);
+              const inspection = this.operations.inspectProcessBirthAsync
+                ? await this.operations.inspectProcessBirthAsync(identity.supervisorPid, this.options.platform, signal)
+                : this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
+              // Never reuse pre-wait ownership or POSIX identity as current authority.
+              if (signal.aborted) throw new Error("Portable channel observation cancelled.");
+              this.assertDurableFence(identity, fence);
+              if (identity.version === 2 && this.posixWorkloadSnapshot(identity).state !== "ready")
+                throw new Error("Portable channel workload identity re-attestation failed.");
+              if (inspection.state === "present" && !sameProcessBirth(inspection.fingerprint, identity.supervisorBirth))
+                throw new Error("Portable channel identity re-attestation failed.");
+              if (inspection.state === "unknown") {
+                if (unknownRetriesRemaining < 1)
+                  throw new Error("Portable channel identity re-attestation failed.");
+                unknownRetriesRemaining -= 1;
+                await delay(this.pollIntervalMs);
+                continue;
+              }
+              return inspection.state === "present" ? "live" : "exited";
+            }
           },
           effect: (kind, effect) => {
             const preparation = this.options.beforeFenceEffect?.(kind);

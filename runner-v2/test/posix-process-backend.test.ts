@@ -145,6 +145,106 @@ test("generic POSIX birth probes treat empty ps for a still-live pid as retryabl
   assert.deepEqual(JSON.parse(await vm.runInContext("osProcessBirthAsync(4242, 'posix', { aborted: false }).then(JSON.stringify)", asyncContext)), { state: "unknown" });
 });
 
+
+test("POSIX terminal observation retries transient unknown birth inspection without reporting terminal", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-terminal-birth-retry-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "terminal-birth-retry-nonce";
+  const supervisorBirth = "supervisor-birth";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  for (const path of [directory, join(directory, "channel/output"), join(directory, "channel/input"), join(directory, "channel/ack")])
+    mkdirSync(path, { recursive: true });
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...fence }));
+  writeFileSync(join(directory, "channel/output-checkpoint.json"), JSON.stringify({
+    nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 },
+  }));
+  writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v2", nonce, supervisorPid: 9001, supervisorBirth, workloadGroup,
+    workloadGroupRetirement: { state: "active" }, launchEffect: "started", rootProcess: null,
+    handledControl: 0, status: "running", exitCode: null, signal: null, knownProcesses: [], error: null,
+    revision: 1, updatedAt: "2026-09-19T00:00:00.000Z",
+  }));
+  let asyncInspections = 0;
+  const backend = createPosixProcessBackend({
+    stateDirectory: root, pollIntervalMs: 5,
+    operations: {
+      inspectProcessBirth: (pid) => pid === 9001
+        ? { state: "present", fingerprint: supervisorBirth }
+        : { state: "present", fingerprint: workloadGroup.leaderBirth },
+      inspectProcessBirthAsync: async (pid) => {
+        if (pid !== 9001) return { state: "present", fingerprint: workloadGroup.leaderBirth };
+        asyncInspections += 1;
+        return asyncInspections === 1
+          ? { state: "unknown" }
+          : { state: "present", fingerprint: supervisorBirth };
+      },
+      listPosixGroup: () => [workloadGroup.leaderPid],
+      signal: () => undefined,
+    },
+  });
+  const channel = await backend.backpressuredChannelProvider().acquire(
+    portableV2Binding(directory, nonce, supervisorBirth, workloadGroup), fence,
+  );
+  let settled = false;
+  const terminal = channel.waitForTerminal().then((value) => { settled = true; return value; });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.ok(asyncInspections >= 2, "transient unknown birth evidence must be retried");
+    assert.equal(settled, false, "transient birth uncertainty is not a terminal outcome");
+  } finally {
+    await channel.detach();
+    await terminal.catch(() => undefined);
+    removeFixtureRoot(root);
+  }
+});
+
+test("POSIX terminal observation bounds persistent unknown birth inspection as outcome unknown", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-posix-terminal-birth-unknown-"));
+  const directory = join(root, "owned-v2");
+  const nonce = "terminal-birth-unknown-nonce";
+  const supervisorBirth = "supervisor-birth";
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  for (const path of [directory, join(directory, "channel/output"), join(directory, "channel/input"), join(directory, "channel/ack")])
+    mkdirSync(path, { recursive: true });
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ...fence }));
+  writeFileSync(join(directory, "channel/output-checkpoint.json"), JSON.stringify({
+    nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 },
+  }));
+  writeFileSync(join(directory, "state.json"), JSON.stringify({
+    protocol: "aiboard-portable-process/v2", nonce, supervisorPid: 9001, supervisorBirth, workloadGroup,
+    workloadGroupRetirement: { state: "active" }, launchEffect: "started", rootProcess: null,
+    handledControl: 0, status: "running", exitCode: null, signal: null, knownProcesses: [], error: null,
+    revision: 1, updatedAt: "2026-09-19T00:00:00.000Z",
+  }));
+  let asyncInspections = 0;
+  const backend = createPosixProcessBackend({
+    stateDirectory: root, pollIntervalMs: 5,
+    operations: {
+      inspectProcessBirth: (pid) => pid === 9001
+        ? { state: "present", fingerprint: supervisorBirth }
+        : { state: "present", fingerprint: workloadGroup.leaderBirth },
+      inspectProcessBirthAsync: async () => { asyncInspections += 1; return { state: "unknown" }; },
+      listPosixGroup: () => [workloadGroup.leaderPid],
+      signal: () => undefined,
+    },
+  });
+  const channel = await backend.backpressuredChannelProvider().acquire(
+    portableV2Binding(directory, nonce, supervisorBirth, workloadGroup), fence,
+  );
+  try {
+    const terminal = await Promise.race([
+      channel.waitForTerminal(),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 500)),
+    ]);
+    assert.notEqual(terminal, "timeout", "persistent birth uncertainty must remain bounded");
+    assert.deepEqual(terminal, { state: "outcome_unknown" });
+    assert.ok(asyncInspections > 1, "persistent uncertainty receives bounded retry before fail-closed terminal status");
+  } finally {
+    await channel.detach();
+    removeFixtureRoot(root);
+  }
+});
+
 test("POSIX channel re-attestation observes the durable fence without reclaiming the writer lock", async (t) => {
   if (process.platform === "win32") {
     t.skip("POSIX fence observation requires a POSIX host.");
