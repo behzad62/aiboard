@@ -26,8 +26,10 @@ const posixHostedTests = [
   "runner-v2/test/portable-process-channel.test.ts",
 ] as const;
 
-const qualificationTests = [
+const qualificationOnlyTests = [
   "runner-v2/test/cli-capabilities-config.test.ts",
+  "runner-v2/test/runner-capability-contract.test.ts",
+  "runner-v2/test/plugin-loader.test.ts",
   "runner-v2/test/recovery-smoke.test.ts",
   "runner-v2/test/windows-process-backend.test.ts",
   "runner-v2/test/windows-job-process-channel.test.ts",
@@ -37,6 +39,11 @@ const qualificationTests = [
   "runner-v2/test/oci-execution-isolation-provider.test.ts",
   "runner-v2/test/managed-strict-oci.test.ts",
   "runner-v2/test/mcp-tools.test.ts",
+] as const;
+
+const qualificationTests = [
+  "runner-v2/test/runner-capabilities-config.test.ts",
+  ...qualificationOnlyTests,
 ] as const;
 
 test("required PR CI stays deterministic on every supported Node 24 host", () => {
@@ -60,8 +67,8 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   assert.match(portable,
     /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*portable-process-protocol\.test\.ts[\s\S]*portable-process-channel\.test\.ts/,
     "Real owned-fence protocol/channel files must stay off required Windows PR CI and run there in qualification.");
-  for (const testPath of qualificationTests) {
-    assert.equal(source.includes(testPath), false, `Host-sensitive qualification test leaked into required PR CI: ${testPath}.`);
+  for (const testPath of qualificationOnlyTests) {
+    assert.equal(source.includes(testPath), false, `Host-sensitive qualification-only test leaked into required PR CI: ${testPath}.`);
   }
   assert.equal(source.includes(nativeSmokeScript), true, "Required PR CI must retain one lightweight native-host smoke probe.");
   assert.doesNotMatch(source, /^  docker-oci-integration:/m,
@@ -74,8 +81,11 @@ test("host-sensitive lifecycle and Docker coverage is retained in scheduled/manu
   const source = readFileSync(qualificationWorkflowPath, "utf8");
   assert.match(source, /^\s*workflow_dispatch:/m);
   assert.match(source, /^\s*schedule:/m);
-  assert.doesNotMatch(source, /^\s*pull_request:/m,
-    "Qualification must not block pull requests on shared hosted-runner timing.");
+  assert.match(source, /^\s*pull_request:\s*\n\s*types:\s*\[labeled\]/m,
+    "Qualification needs a label-only PR trigger so a pre-merge tip can be qualified explicitly.");
+  const labelGuards = source.match(/github\.event\.label\.name\s*==\s*'runner-v2-qualification'/g) ?? [];
+  assert.equal(labelGuards.length, 5,
+    "Every qualification job must stay gated behind the explicit runner-v2-qualification PR label.");
   assert.match(source, /node-version:\s*\[24\.x\]/);
   for (const testPath of [...qualificationTests, ...posixHostedTests]) {
     assert.equal(source.includes(testPath), true, `Qualification coverage omits ${testPath}.`);

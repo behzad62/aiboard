@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '17 2 * * *'
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
@@ -11,6 +13,7 @@ permissions:
 jobs:
   native-lifecycle:
     name: Native lifecycle qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -47,6 +50,7 @@ jobs:
 
   cli-readiness:
     name: CLI readiness qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -64,13 +68,17 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Run real CLI startup/readiness qualification
+      - name: Run real CLI and configuration trust qualification
         run: >-
           node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/cli-capabilities-config.test.ts
+          runner-v2/test/runner-capabilities-config.test.ts
+          runner-v2/test/runner-capability-contract.test.ts
+          runner-v2/test/plugin-loader.test.ts
 
   recovery:
     name: Recovery qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -95,6 +103,7 @@ jobs:
 
   windows-portable-channel:
     name: Windows portable channel qualification (Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
@@ -119,6 +128,7 @@ jobs:
 
   docker-oci-integration:
     name: Docker OCI qualification (Linux, Node ${{ matrix.node-version }})
+    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
