@@ -11,8 +11,6 @@ const nativeSmokeScript = "scripts/runner-v2-native-smoke.mts";
 
 const deterministicPrTests = [
   "runner-v2/test/process-backend-contract.test.ts",
-  "runner-v2/test/portable-process-protocol.test.ts",
-  "runner-v2/test/portable-process-channel.test.ts",
   "runner-v2/test/runner-capabilities-config.test.ts",
   "runner-v2/test/native-build-manager.test.ts",
   "runner-v2/test/runner-resource-cleanup.test.ts",
@@ -21,6 +19,11 @@ const deterministicPrTests = [
   "runner-v2/test/runner-entrypoints.test.ts",
   "runner-v2/test/node-version.test.ts",
   "runner-v2/test/portable-execution-workflow.test.ts",
+] as const;
+
+const posixHostedTests = [
+  "runner-v2/test/portable-process-protocol.test.ts",
+  "runner-v2/test/portable-process-channel.test.ts",
 ] as const;
 
 const qualificationTests = [
@@ -51,9 +54,12 @@ test("required PR CI stays deterministic on every supported Node 24 host", () =>
   for (const testPath of deterministicPrTests) {
     assert.equal(source.includes(testPath), true, `Required PR CI omits deterministic test ${testPath}.`);
   }
+  for (const testPath of posixHostedTests) {
+    assert.equal(source.includes(testPath), true, `Required POSIX PR CI omits ${testPath}.`);
+  }
   assert.match(portable,
-    /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*runner-v2\/test\/portable-process-channel\.test\.ts/,
-    "The full portable-channel file must stay off required Windows PR CI because its Windows branch contains real lifecycle tests.");
+    /if:\s*runner\.os\s*!=\s*'Windows'[\s\S]*portable-process-protocol\.test\.ts[\s\S]*portable-process-channel\.test\.ts/,
+    "Real owned-fence protocol/channel files must stay off required Windows PR CI and run there in qualification.");
   for (const testPath of qualificationTests) {
     assert.equal(source.includes(testPath), false, `Host-sensitive qualification test leaked into required PR CI: ${testPath}.`);
   }
@@ -71,7 +77,7 @@ test("host-sensitive lifecycle and Docker coverage is retained in scheduled/manu
   assert.doesNotMatch(source, /^\s*pull_request:/m,
     "Qualification must not block pull requests on shared hosted-runner timing.");
   assert.match(source, /node-version:\s*\[24\.x\]/);
-  for (const testPath of qualificationTests) {
+  for (const testPath of [...qualificationTests, ...posixHostedTests]) {
     assert.equal(source.includes(testPath), true, `Qualification coverage omits ${testPath}.`);
   }
   assert.match(source, /RUNNER_V2_REQUIRE_DOCKER:\s*["']?1["']?/);

@@ -111,9 +111,10 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Run real Windows portable-channel qualification serially
+      - name: Run real Windows owned-fence protocol and portable-channel qualification serially
         run: >-
           node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          runner-v2/test/portable-process-protocol.test.ts
           runner-v2/test/portable-process-channel.test.ts
 
   docker-oci-integration:
