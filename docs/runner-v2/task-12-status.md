@@ -15,7 +15,7 @@ Plan: `docs/runner-v2/task-12-bounded-gates.md`
 
 ## Current gate
 
-T12-G — final integrated acceptance and platform-matrix audit. Gate F benchmark acceptance is complete: the Node 22 certified-preset failure was classified as `tsx@4.22.5` test-runner module-identity duplication, repaired by the dependency-only move to `tsx@4.23.13`, independently reviewed `READY`, and validated without changing benchmark waits, timeouts, thresholds, or Runner V2 runtime behavior. Gate G must resolve or explicitly classify the retained Darwin matrix follow-up and perform the final bounded whole-plan audit.
+T12-G — final integrated acceptance and platform-matrix audit. Gate F benchmark acceptance is complete: the historical Node 22 certified-preset failure was classified as `tsx@4.22.5` test-runner module-identity duplication, repaired by the dependency-only move to `tsx@4.23.13`, independently reviewed `READY`, and validated without changing benchmark waits, timeouts, thresholds, or Runner V2 runtime behavior. During Gate G, product support was intentionally narrowed to Node.js 24.x only; Node 22 remains historical evidence below but is no longer part of the supported release or final acceptance matrix. Gate G must resolve or explicitly classify the retained Darwin matrix follow-up and perform the final bounded whole-plan audit.
 
 ## Clean repair workspace
 

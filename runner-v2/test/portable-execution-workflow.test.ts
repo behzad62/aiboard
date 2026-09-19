@@ -22,7 +22,7 @@ const task12CiTests = [
   "runner-v2/test/static-adapter-policy.test.ts",
 ] as const;
 
-test("portable execution CI covers every host on both maintained Node lines and cannot silently skip Docker integration", () => {
+test("portable execution CI covers every host on certified Node 24 and cannot silently skip Docker integration", () => {
   assert.equal(existsSync(workflowPath), true, "Task 12 portable execution workflow is missing.");
   const source = readFileSync(workflowPath, "utf8");
   const portable = jobBlock(source, "portable-contract");  const native = jobBlock(source, "native-adapter");
@@ -32,7 +32,7 @@ test("portable execution CI covers every host on both maintained Node lines and 
 
   for (const block of [portable, native, packages]) {
     for (const host of ["windows-latest", "ubuntu-latest", "macos-latest"]) assert.match(block, new RegExp(host));
-    assert.match(block, /node-version:\s*\[22\.x,\s*24\.x\]/);
+    assert.match(block, /node-version:\s*\[24\.x\]/);
     assert.match(block, /node-version:\s*\$\{\{\s*matrix\.node-version\s*\}\}/);
   }
   assert.match(portable, /process-backend-contract\.test\.ts/);
@@ -58,7 +58,7 @@ test("portable execution CI covers every host on both maintained Node lines and 
   assert.match(packages, /actions\/upload-artifact@v4/);
   assert.match(packages, /runner-v2-package-hashes\.mjs\s+write/);
   assert.match(crossHost, /needs:\s*package-gate/);
-  assert.match(crossHost, /node-version:\s*\[22\.x,\s*24\.x\]/);
+  assert.match(crossHost, /node-version:\s*\[24\.x\]/);
   assert.match(crossHost, /actions\/download-artifact@v4/);
   assert.match(crossHost, /runner-v2-package-hashes\.mjs\s+compare/);
 });

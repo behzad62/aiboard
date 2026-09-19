@@ -4,7 +4,7 @@
   "private": true,
   "license": "AGPL-3.0-only",
   "engines": {
-    "node": ">=22.13.0 <23 || >=24.0.0 <25"
+    "node": ">=24.0.0 <25"
   },
   "scripts": {
     "publish-downloads": "node scripts/publish-downloads.mjs",

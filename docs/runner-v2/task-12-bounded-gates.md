@@ -196,6 +196,8 @@ A threshold change requires evidence that semantics are unchanged, the old thres
 Gate G contains validation, not exploratory development. A newly discovered architectural defect returns to its owning earlier gate.
 Precondition: Gates A-F independently accepted.
 
+For this release, the supported Node matrix is Node.js 24.x only.
+
 Final matrix must cover:
 - package parity on supported OS/Node combinations;
 - cross-host package reproducibility;

@@ -106,8 +106,8 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
         ?.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/)?.[0];
       check(`${path} uses the root package license`, packageJson.license === rootPackageJson.license);
       check(
-        `${path} accepts only maintained Node.js LTS lines with node:sqlite support`,
-        packageJson.engines?.node === ">=22.13.0 <23 || >=24.0.0 <25",
+        `${path} accepts only the certified Node.js 24 LTS line`,
+        packageJson.engines?.node === ">=24.0.0 <25",
         packageJson.engines
       );
       check(`${path} starts src/cli.ts`, packageJson.scripts?.start === "tsx src/cli.ts --");
@@ -132,7 +132,7 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
 
     if (readmeFile) {
       const readme = await readmeFile.async("string");
-      check(`${path} README documents maintained Node.js LTS lines`, /Node\.js 22\.x or 24\.x/.test(readme));
+      check(`${path} README documents the certified Node.js 24 LTS line`, /Node\.js 24\.x/.test(readme));
       check(`${path} README does not pin a Node patch`, !/24\.18\.0/.test(readme));
       check(`${path} README requires Git`, /\bGit\b/.test(readme));
       check(`${path} README documents npm install`, /\bnpm install\b/.test(readme));

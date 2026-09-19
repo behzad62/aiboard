@@ -217,9 +217,9 @@ test("POSIX native session fixture owns descendants after launcher exit", async 
       releaseOutputAcknowledgement();
     };
     const unsubscribe = channel.subscribeBackpressuredOutput(async (metadata, bytes) => {
-      // Node 22 still emits its SQLite ExperimentalWarning on the inherited
-      // stderr pipe. Acknowledge that unrelated runtime diagnostic immediately
-      // so ordered delivery can reach the workload stdout whose ACK this fixture
+      // A runtime diagnostic may appear on the inherited stderr pipe. Acknowledge
+      // that unrelated diagnostic immediately so ordered delivery can reach the
+      // workload stdout whose ACK this fixture
       // intentionally holds across the terminal-cleanup assertion.
       if (metadata.stream === "stderr") return metadata;
       observedOutput.push(Buffer.from(bytes));
