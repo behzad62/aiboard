@@ -713,8 +713,8 @@ class BlockingWriteChannel extends FakeChannel {
   maximumInFlightWrites = 0;
   private inFlightWrites = 0;
   private releaseFirst?: () => void;
-  private readonly firstWriteStarted = new Promise<void>((resolve) => { this.resolveFirstStart = resolve; });
   private resolveFirstStart!: () => void;
+  private readonly firstWriteStarted = new Promise<void>((resolve) => { this.resolveFirstStart = resolve; });
   private readonly firstWriteRelease = new Promise<void>((resolve) => { this.releaseFirst = resolve; });
 
   async write(input: { sequence: number }, payload: Uint8Array) {

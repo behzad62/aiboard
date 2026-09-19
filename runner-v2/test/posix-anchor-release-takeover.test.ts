@@ -22,8 +22,8 @@ test(`POSIX supervisor joins an already consumed anchor release under current ow
     release, accepted: false,
   };
   runInNewContext(named("recordCausalPosixAnchorRelease") + "\naccepted = recordCausalPosixAnchorRelease(release);", context);
-  assert.equal(context.accepted, mode === "takeover");
-  if (mode === "coordination") { busy = false; runInNewContext(named("recordCausalPosixAnchorRelease") + "\naccepted = recordCausalPosixAnchorRelease(release);", context); assert.equal(context.accepted, true); }
+  assert.equal(context.accepted, mode === "takeover" ? "recorded" : mode === "coordination" ? "deferred" : "invalid");
+  if (mode === "coordination") { busy = false; runInNewContext(named("recordCausalPosixAnchorRelease") + "\naccepted = recordCausalPosixAnchorRelease(release);", context); assert.equal(context.accepted, "recorded"); }
   if (mode === "forged" || mode === "regressed") assert.equal(context.posixChildReleasedAnchorRelease, null);
   current = { ownerId: "later", fencingToken: 3 };
 });
