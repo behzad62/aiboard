@@ -1,0 +1,7 @@
+{
+  "id": "hook-red",
+  "pattern": "^Task 9 production Git commit never executes a repository-controlled pre-commit hook$",
+  "tests": [
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ]
+}

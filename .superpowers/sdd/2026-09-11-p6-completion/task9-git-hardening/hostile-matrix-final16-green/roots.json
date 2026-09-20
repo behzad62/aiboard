@@ -1,0 +1,983 @@
+{
+  "events": [
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-2aJhO4"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-2aJhO4"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-FVIE3n"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-KO7ce0"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-atmmKQ"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-2aJhO4",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-PBWAW1"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-PBWAW1"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-krWKCR"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-KHtKLv"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-WqCTxK"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-PBWAW1",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-smudge-filter-JgrsGk"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-smudge-filter-JgrsGk"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-fDSs4s"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-vgqljX"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Hnqa3Y"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-smudge-filter-JgrsGk",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-process-filter-i4WL1J"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-process-filter-i4WL1J"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Nd2CTA"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-6zhz1Q"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-cLiiJR"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-process-filter-i4WL1J",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-include-o93M5Q"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-include-o93M5Q"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-K7obYH"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-0cIK2Q"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-fOs3Da"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-include-o93M5Q",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-textconv-Qqcuvz"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-textconv-Qqcuvz"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ShIoDf"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-xtbtwG"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-FVuA7z"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-textconv-Qqcuvz",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-alias-HoTcWI"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-alias-HoTcWI"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-XnRGRe"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-tKOBMb"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-evZthf"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-alias-HoTcWI",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-q8xw9O"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-q8xw9O"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-9AWerj"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-siWV0T"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Jy1Dfw"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-q8xw9O",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-remote-helper-MNwIKV"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-remote-helper-MNwIKV"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-gh5Ld6"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-IqiWqO"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-BlQGss"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-remote-helper-MNwIKV",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-submodule-update-AES9RB"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-submodule-update-AES9RB"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-CXAiMc"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-1nAVzB"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-r0eeHy"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-submodule-update-AES9RB",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-editor-gr7ac9"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-editor-gr7ac9"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-wjpyoq"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-i7IVkY"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-CzcLiz"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-editor-gr7ac9",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-sequence-editor-j7xxwY"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-sequence-editor-j7xxwY"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-PHOpz8"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-9xL14P"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-gRrhcK"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-sequence-editor-j7xxwY",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-pager-8gVpxj"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-pager-8gVpxj"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-a7alAc"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-e9yJzl"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-egdUEP"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-pager-8gVpxj",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-fsmonitor-p5fIUW"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-fsmonitor-p5fIUW"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-t1ktTF"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-5tnHeC"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Fatc2U"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-fsmonitor-p5fIUW",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-8NRD5g"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-8NRD5g"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Pnsw47"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-fN34Tm"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-XE9ACt"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-8NRD5g",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-credential-helper-Aj4haA"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-credential-helper-Aj4haA"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-tDsQTn"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-m8Lz58"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-t3jOMN"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-credential-helper-Aj4haA",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-2aJhO4",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-FVIE3n",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-KO7ce0",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-atmmKQ",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-PBWAW1",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-krWKCR",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-KHtKLv",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-WqCTxK",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-smudge-filter-JgrsGk",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-fDSs4s",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-vgqljX",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Hnqa3Y",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-process-filter-i4WL1J",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Nd2CTA",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-6zhz1Q",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-cLiiJR",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-include-o93M5Q",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-K7obYH",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-0cIK2Q",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-fOs3Da",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-textconv-Qqcuvz",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ShIoDf",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-xtbtwG",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-FVuA7z",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-alias-HoTcWI",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-XnRGRe",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-tKOBMb",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-evZthf",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-q8xw9O",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-9AWerj",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-siWV0T",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Jy1Dfw",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-remote-helper-MNwIKV",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-gh5Ld6",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-IqiWqO",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-BlQGss",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-submodule-update-AES9RB",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-CXAiMc",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-1nAVzB",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-r0eeHy",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-editor-gr7ac9",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-wjpyoq",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-i7IVkY",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-CzcLiz",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-sequence-editor-j7xxwY",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-PHOpz8",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-9xL14P",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-gRrhcK",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-pager-8gVpxj",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-a7alAc",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-e9yJzl",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-egdUEP",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-fsmonitor-p5fIUW",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-t1ktTF",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-5tnHeC",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Fatc2U",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-8NRD5g",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Pnsw47",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-fN34Tm",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-XE9ACt",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-credential-helper-Aj4haA",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-tDsQTn",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-m8Lz58",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-t3jOMN",
+      "existsAtExit": false
+    }
+  ],
+  "roots": [
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-2aJhO4",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-FVIE3n",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-KO7ce0",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-atmmKQ",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-PBWAW1",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-krWKCR",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-KHtKLv",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-WqCTxK",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-smudge-filter-JgrsGk",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-fDSs4s",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-vgqljX",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Hnqa3Y",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-process-filter-i4WL1J",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Nd2CTA",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-6zhz1Q",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-cLiiJR",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-include-o93M5Q",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-K7obYH",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-0cIK2Q",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-fOs3Da",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-textconv-Qqcuvz",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ShIoDf",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-xtbtwG",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-FVuA7z",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-alias-HoTcWI",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-XnRGRe",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-tKOBMb",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-evZthf",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-q8xw9O",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-9AWerj",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-siWV0T",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Jy1Dfw",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-remote-helper-MNwIKV",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-gh5Ld6",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-IqiWqO",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-BlQGss",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-submodule-update-AES9RB",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-CXAiMc",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-1nAVzB",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-r0eeHy",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-editor-gr7ac9",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-wjpyoq",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-i7IVkY",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-CzcLiz",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-sequence-editor-j7xxwY",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-PHOpz8",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-9xL14P",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-gRrhcK",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-pager-8gVpxj",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-a7alAc",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-e9yJzl",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-egdUEP",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-fsmonitor-p5fIUW",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-t1ktTF",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-5tnHeC",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Fatc2U",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-8NRD5g",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-Pnsw47",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-fN34Tm",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-XE9ACt",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-credential-helper-Aj4haA",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-tDsQTn",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-m8Lz58",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-t3jOMN",
+      "existsAtReceipt": false
+    }
+  ],
+  "note": "Existence observation only; verified ownership/cleanup is asserted by each fixture, not inferred from absence."
+}

@@ -1,0 +1,30 @@
+
+for (const mode of ["create", "replace"] as const) for (const phase of ["flush", "publication"] as const)
+  fixtureTest(`review3: ${mode} refuses staged-byte tampering at ${phase}`, async (f) => {
+    const path = join(f.workspace, "value.txt");
+    if (mode === "replace") fs.writeFileSync(path, "original");
+    const flush = fs.fsyncSync, stat = fs.lstatSync; let flushed = false; let injected = false;
+    const tamper = () => {
+      const temporary = fs.readdirSync(f.workspace).find((name) => name.startsWith(".aiboard-") && name.endsWith(".tmp"));
+      assert.ok(temporary);
+      fs.writeFileSync(join(f.workspace, temporary), "tampered");
+      injected = true;
+    };
+    f.t.mock.method(fs, "fsyncSync", (fd: number) => {
+      flush(fd); flushed = true;
+      if (phase === "flush") tamper();
+    });
+    f.t.mock.method(fs, "lstatSync", (...args: Parameters<typeof fs.lstatSync>) => {
+      if (phase === "publication" && flushed && !injected && resolve(String(args[0])) === path) tamper();
+      return stat(...args);
+    });
+    const result = await f.invoke("fs.write", { path: "value.txt", content: "replacement",
+      ...(mode === "replace" ? { expectedSha256: hash("original") } : {}) });
+    assert.equal(injected, true);
+    refused(result, "filesystem_identity_changed");
+    assert.ok(result.content.some((block) => block.type === "json" &&
+      (block.value as { partialMutation?: boolean }).partialMutation === false));
+    if (mode === "replace") assert.equal(fs.readFileSync(path, "utf8"), "original");
+    else assert.equal(fs.existsSync(path), false);
+    assert.deepEqual(fs.readdirSync(f.workspace), mode === "replace" ? ["value.txt"] : []);
+  });

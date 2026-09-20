@@ -1,0 +1,1895 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-managed-native-sSHNbT"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-jzUIbI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-EZArUR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-EBe2un"}
+# Subtest: managed real shared sessions survive start-grant revocation, drain output, list under fresh authority and stop exactly
+ok 1 - managed real shared sessions survive start-grant revocation, drain output, list under fresh authority and stop exactly
+  ---
+  duration_ms: 26124.3361
+  type: 'test'
+  ...
+# exact native managed root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-managed-native-sSHNbT
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-managed-native-mnTTzv"}
+# verified native managed root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-managed-native-sSHNbT
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ejfwTK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-SppYKf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-okIjJ2"}
+# Subtest: managed natural exit retains the exact exit code and final output after shared cleanup
+ok 2 - managed natural exit retains the exact exit code and final output after shared cleanup
+  ---
+  duration_ms: 19270.3756
+  type: 'test'
+  ...
+# exact native managed root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-managed-native-mnTTzv
+# verified native managed root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-managed-native-mnTTzv
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-managed-native-uZ0lwb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-h4lKxN"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-TR6WAJ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-oHFGpv"}
+# Subtest: managed rejected executable discovery leaves a verifiable no-launch record and close remains repeatable
+ok 3 - managed rejected executable discovery leaves a verifiable no-launch record and close remains repeatable
+  ---
+  duration_ms: 15611.6106
+  type: 'test'
+  ...
+# exact native managed root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-managed-native-uZ0lwb
+# verified native managed root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-managed-native-uZ0lwb
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-managed-native-sSHNbT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-jzUIbI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-EZArUR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-EBe2un","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-managed-native-mnTTzv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-ejfwTK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-SppYKf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-okIjJ2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-managed-native-uZ0lwb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-h4lKxN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-TR6WAJ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-oHFGpv","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-umYwGW"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-umYwGW"}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-umYwGW","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-hG3tcc"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-hG3tcc"}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-hG3tcc","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-U4cYEw"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-U4cYEw"}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-U4cYEw","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-CNgoSw"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-CNgoSw
+# Subtest: C1 cap output-error dispatch replacement respects registration lifetime and fresh scheduling
+ok 4 - C1 cap output-error dispatch replacement respects registration lifetime and fresh scheduling
+  ---
+  duration_ms: 47.8012
+  type: 'test'
+  ...
+# Subtest: C1 cap output-error dispatch removal respects registration lifetime and fresh scheduling
+ok 5 - C1 cap output-error dispatch removal respects registration lifetime and fresh scheduling
+  ---
+  duration_ms: 6.3794
+  type: 'test'
+  ...
+# Subtest: C1 cap output-error dispatch detach respects registration lifetime and fresh scheduling
+ok 6 - C1 cap output-error dispatch detach respects registration lifetime and fresh scheduling
+  ---
+  duration_ms: 5.3634
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-CNgoSw
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-iq9Sw1"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-iq9Sw1
+# Subtest: C1 round5 terminal dispatch skips a subscriber removed by an earlier callback
+ok 7 - C1 round5 terminal dispatch skips a subscriber removed by an earlier callback
+  ---
+  duration_ms: 448.2287
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-iq9Sw1
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-xC2fq2"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-xC2fq2
+# Subtest: C1 round5 terminal dispatch detach skips later subscribers and settles pending waiters
+ok 8 - C1 round5 terminal dispatch detach skips later subscribers and settles pending waiters
+  ---
+  duration_ms: 175.217
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-xC2fq2
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-1lJGud"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-1lJGud
+# Subtest: C1 round5 terminal dispatch addition receives fresh observation and survives predecessor removal
+ok 9 - C1 round5 terminal dispatch addition receives fresh observation and survives predecessor removal
+  ---
+  duration_ms: 190.3929
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-1lJGud
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-teKII3"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-teKII3
+# Subtest: C1 round5 terminal dispatch replacement receives fresh observation and survives predecessor removal
+ok 10 - C1 round5 terminal dispatch replacement receives fresh observation and survives predecessor removal
+  ---
+  duration_ms: 201.0436
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-teKII3
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-observation-o15RZw"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-observation-o15RZw
+# Subtest: C1 round5 terminal dispatch delivers ordinary subscribers and waiters once each
+ok 11 - C1 round5 terminal dispatch delivers ordinary subscribers and waiters once each
+  ---
+  duration_ms: 574.9131
+  type: 'test'
+  ...
+# {"activeCount":0,"afterUnsubscribe":0,"pendingInspections":1,"evidenceFinished":true}
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-observation-o15RZw
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-TAo7iL"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-TAo7iL
+# Subtest: round4 native terminal observation permits async evidence intake while birth inspection is pending
+ok 12 - round4 native terminal observation permits async evidence intake while birth inspection is pending
+  ---
+  duration_ms: 204.3896
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-TAo7iL
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-vxhs62"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-vxhs62
+# Subtest: round4 native terminal authority preserves absent_running
+ok 13 - round4 native terminal authority preserves absent_running
+  ---
+  duration_ms: 95.67
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-vxhs62
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-cwbYXq"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-cwbYXq
+# Subtest: round4 native terminal authority preserves recycled
+ok 14 - round4 native terminal authority preserves recycled
+  ---
+  duration_ms: 91.7621
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-cwbYXq
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-uzr5Cp"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-uzr5Cp
+# Subtest: round4 native terminal authority preserves unknown
+ok 15 - round4 native terminal authority preserves unknown
+  ---
+  duration_ms: 92.4153
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-uzr5Cp
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-tCSaqT"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-tCSaqT
+# Subtest: round4 native terminal authority preserves takeover
+ok 16 - round4 native terminal authority preserves takeover
+  ---
+  duration_ms: 90.815
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-tCSaqT
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-1Rg0ck"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-1Rg0ck
+# Subtest: round4 native terminal authority preserves wrong_nonce
+ok 17 - round4 native terminal authority preserves wrong_nonce
+  ---
+  duration_ms: 89.5361
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-1Rg0ck
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-xLE28G"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-xLE28G
+# Subtest: round4 native terminal authority preserves corrupt_state
+ok 18 - round4 native terminal authority preserves corrupt_state
+  ---
+  duration_ms: 87.0498
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-xLE28G
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-Mpbw1f"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-Mpbw1f
+# Subtest: round4 native terminal authority preserves unknown_status
+ok 19 - round4 native terminal authority preserves unknown_status
+  ---
+  duration_ms: 81.9675
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-Mpbw1f
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-JiqFOS"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-JiqFOS
+# Subtest: round4 native terminal authority preserves stopped
+ok 20 - round4 native terminal authority preserves stopped
+  ---
+  duration_ms: 135.7236
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-JiqFOS
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-B3z4bG"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-B3z4bG
+# Subtest: round4 native terminal authority preserves retained
+ok 21 - round4 native terminal authority preserves retained
+  ---
+  duration_ms: 185.8325
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-B3z4bG
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-cXgCAN"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-cXgCAN
+# Subtest: round4 native terminal authority preserves late_output
+ok 22 - round4 native terminal authority preserves late_output
+  ---
+  duration_ms: 197.8239
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-cXgCAN
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-BonxgV"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-BonxgV
+# Subtest: round4 native terminal authority preserves late_takeover
+ok 23 - round4 native terminal authority preserves late_takeover
+  ---
+  duration_ms: 130.2528
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-BonxgV
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-6fQQYH"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-6fQQYH
+# Subtest: round4 native terminal authority preserves late_running
+ok 24 - round4 native terminal authority preserves late_running
+  ---
+  duration_ms: 163.1875
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-6fQQYH
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-u4IW3g"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-u4IW3g
+# Subtest: round4 terminal unsubscribe and detach cancel and join late inspection without reviving observers
+ok 25 - round4 terminal unsubscribe and detach cancel and join late inspection without reviving observers
+  ---
+  duration_ms: 179.0157
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-authority-u4IW3g
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-posix-dWjIn3"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-posix-dWjIn3
+# Subtest: round4 native observation boundary rejects ownership changed during its await
+ok 26 - round4 native observation boundary rejects ownership changed during its await
+  ---
+  duration_ms: 106.0447
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-posix-dWjIn3
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-ZYLk6o"}
+# Subtest: round4 POSIX workload identity is revalidated after asynchronous birth inspection
+ok 27 - round4 POSIX workload identity is revalidated after asynchronous birth inspection
+  ---
+  duration_ms: 115.0369
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-8ceU2L"}
+# Subtest: round5 portable settlement waits through sink ACK publication retirement and terminal
+ok 28 - round5 portable settlement waits through sink ACK publication retirement and terminal
+  ---
+  duration_ms: 306.2305
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-sXKoLg"}
+# Subtest: round5 portable settlement blocks deadline while tracking the issued ACK
+ok 29 - round5 portable settlement blocks deadline while tracking the issued ACK
+  ---
+  duration_ms: 140.4093
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-gqKEyy"}
+# Subtest: round5 portable settlement blocks deadline_final_reattest while tracking the issued ACK
+ok 30 - round5 portable settlement blocks deadline_final_reattest while tracking the issued ACK
+  ---
+  duration_ms: 201.2403
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-f8eQBb"}
+# Subtest: round5 portable settlement blocks takeover while tracking the issued ACK
+ok 31 - round5 portable settlement blocks takeover while tracking the issued ACK
+  ---
+  duration_ms: 150.8234
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-ctwMkN"}
+# Subtest: round5 portable settlement blocks takeover_final_snapshot while tracking the issued ACK
+ok 32 - round5 portable settlement blocks takeover_final_snapshot while tracking the issued ACK
+  ---
+  duration_ms: 197.989
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-R6EeQN"}
+# Subtest: round5 portable settlement blocks coordination while tracking the issued ACK
+ok 33 - round5 portable settlement blocks coordination while tracking the issued ACK
+  ---
+  duration_ms: 164.3896
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-j4k1GG"}
+# Subtest: round5 portable settlement blocks corrupt_snapshot while tracking the issued ACK
+ok 34 - round5 portable settlement blocks corrupt_snapshot while tracking the issued ACK
+  ---
+  duration_ms: 428.5646
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-ZkTRuY"}
+# Subtest: round5 portable settlement blocks retirement_intent while tracking the issued ACK
+ok 35 - round5 portable settlement blocks retirement_intent while tracking the issued ACK
+  ---
+  duration_ms: 176.5205
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-output-publication-ogZcx3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-durable-input-ack-g0gobS"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-ack-order-GO5QUk"}
+# Subtest: round5 portable settlement blocks suffix while tracking the issued ACK
+ok 36 - round5 portable settlement blocks suffix while tracking the issued ACK
+  ---
+  duration_ms: 235.0441
+  type: 'test'
+  ...
+# Subtest: portable channel ignores only the exact supervisor atomic output publication
+ok 37 - portable channel ignores only the exact supervisor atomic output publication
+  ---
+  duration_ms: 8.6517
+  type: 'test'
+  ...
+# Subtest: portable write returns its durable acknowledged outcome when takeover wins before acknowledgement consumption
+ok 38 - portable write returns its durable acknowledged outcome when takeover wins before acknowledgement consumption
+  ---
+  duration_ms: 9.3403
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-channel-tGOerk"}
+# Subtest: portable provider retains a chunk until the identical sink acknowledgement settles
+ok 39 - portable provider retains a chunk until the identical sink acknowledgement settles
+  ---
+  duration_ms: 47.6139
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-output-gj1lfd"}
+# Subtest: real portable channel preserves ordered duplex bytes and exact acknowledgement metadata
+ok 40 - real portable channel preserves ordered duplex bytes and exact acknowledgement metadata
+  ---
+  duration_ms: 5969.9323
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-retired-cleanup-w9ImZW"}
+# Subtest: portable release refuses unsettled retained output until sink acknowledgement deletion is verified
+ok 41 - portable release refuses unsettled retained output until sink acknowledgement deletion is verified
+  ---
+  duration_ms: 4758.3106
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-replay-gfpNlK"}
+# Subtest: portable release retries exact retired-authority cleanup without reopening an effect
+ok 42 - portable release retries exact retired-authority cleanup without reopening an effect
+  ---
+  duration_ms: 1878.9776
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-stale-fence-QuEKrW"}
+# Subtest: portable retained window backpressures output and replays it after exact reattach
+ok 43 - portable retained window backpressures output and replays it after exact reattach
+  ---
+  duration_ms: 3161.8269
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-takeover-MC2TXQ"}
+# Subtest: portable control and channel acquisition reject a stale writer fence before effects
+ok 44 - portable control and channel acquisition reject a stale writer fence before effects
+  ---
+  duration_ms: 6381.2903
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-signal-effect-fence-0TGb5Y"}
+# Subtest: a higher portable writer fence atomically takes over and immediately revokes the old writer
+ok 45 - a higher portable writer fence atomically takes over and immediately revokes the old writer
+  ---
+  duration_ms: 6988.1041
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-write-effect-fence-nq8XGk"}
+# Subtest: portable signal paused before its effect cannot publish control after higher-fence takeover
+ok 46 - portable signal paused before its effect cannot publish control after higher-fence takeover
+  ---
+  duration_ms: 4794.1764
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-published-stale-input-NRfoXB"}
+# Subtest: portable write paused before its effect cannot overwrite takeover state or publish input
+ok 47 - portable write paused before its effect cannot overwrite takeover state or publish input
+  ---
+  duration_ms: 7043.1897
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-output-effect-fence-HxQJ0A"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-detach-held-sink-wfOFc2"}
+# Subtest: portable takeover reports one truthful outcome for published input and advances to token2 command
+ok 48 - portable takeover reports one truthful outcome for published input and advances to token2 command
+  ---
+  duration_ms: 7779.5501
+  type: 'test'
+  ...
+# Subtest: portable output acknowledgement paused after sink success cannot delete bytes after takeover
+ok 49 - portable output acknowledgement paused after sink success cannot delete bytes after takeover
+  ---
+  duration_ms: 8.8533
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-effect-fence-OTVjoZ"}
+# Subtest: portable detach waits for a held sink and leaves its bytes unacknowledged for reattach
+ok 50 - portable detach waits for a held sink and leaves its bytes unacknowledged for reattach
+  ---
+  duration_ms: 25.2174
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-empty-effect-fence-B5sZfZ"}
+# Subtest: portable release paused before deletion preserves the complete root after takeover
+ok 51 - portable release paused before deletion preserves the complete root after takeover
+  ---
+  duration_ms: 1633.4897
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-live-empty-release-unjVXV"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-live-empty-release-unjVXV"}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-live-empty-release-unjVXV","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-corrupt-ack-umGRDC"}
+# Subtest: portable empty proof paused at its final fence cannot survive higher-fence takeover
+ok 52 - portable empty proof paused at its final fence cannot survive higher-fence takeover
+  ---
+  duration_ms: 1886.6115
+  type: 'test'
+  ...
+# Subtest: portable release refuses a live supervisor even when membership is empty
+ok 53 - portable release refuses a live supervisor even when membership is empty
+  ---
+  duration_ms: 55.2232
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-corrupt-ack-unknown-owner-r6GL43"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-corrupt-ack-unreadable-state-LVbekw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-corrupt-ack-late-reappearance-G1Uhv8"}
+# Subtest: portable reconcile and release reject corrupt acknowledgement evidence
+ok 54 - portable reconcile and release reject corrupt acknowledgement evidence
+  ---
+  duration_ms: 3231.1813
+  type: 'test'
+  ...
+# Subtest: portable publication cleanup preserves unknown owner identity
+ok 55 - portable publication cleanup preserves unknown owner identity
+  ---
+  duration_ms: 3.5856
+  type: 'test'
+  ...
+# Subtest: portable publication cleanup preserves unreadable durable state
+ok 56 - portable publication cleanup preserves unreadable durable state
+  ---
+  duration_ms: 3.3199
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-fence-TwmCwP"}
+# Subtest: portable publication cleanup preserves a root that reappears after removal
+ok 57 - portable publication cleanup preserves a root that reappears after removal
+  ---
+  duration_ms: 227.8669
+  type: 'test'
+  ...
+# Subtest: portable supervisor reserves adaptive atomic replacement for durable state
+ok 58 - portable supervisor reserves adaptive atomic replacement for durable state
+  ---
+  duration_ms: 0.5293
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-terminal-output-neZKUo"}
+# Subtest: portable final effects fail closed when durable fence evidence disappears
+ok 59 - portable final effects fail closed when durable fence evidence disappears
+  ---
+  duration_ms: 1497.7555
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-eEgpzz"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-CEl5fR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-c8bYOw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-8qQL7J"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-13Ff6P"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-uqZuVR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-output-CHsCWp"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-ack-OEnA73"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-output-checkpoint-json-IYvzmF"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-malformed-ack-HBXvIr"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-terminal-missing-output-10p5Hi"}
+# Subtest: portable terminal and release fail closed after owned output evidence disappears
+ok 60 - portable terminal and release fail closed after owned output evidence disappears
+  ---
+  duration_ms: 1586.8739
+  type: 'test'
+  ...
+# Subtest: portable acquire fails closed on a corrupt retained filename, nonce, metadata, digest, or payload
+    # Subtest: filename
+    ok 1 - filename
+      ---
+      duration_ms: 5.6813
+      type: 'test'
+      ...
+    # Subtest: nonce
+    ok 2 - nonce
+      ---
+      duration_ms: 5.6042
+      type: 'test'
+      ...
+    # Subtest: sequence
+    ok 3 - sequence
+      ---
+      duration_ms: 5.6877
+      type: 'test'
+      ...
+    # Subtest: offset
+    ok 4 - offset
+      ---
+      duration_ms: 4.9313
+      type: 'test'
+      ...
+    # Subtest: digest
+    ok 5 - digest
+      ---
+      duration_ms: 5.4257
+      type: 'test'
+      ...
+    # Subtest: payload
+    ok 6 - payload
+      ---
+      duration_ms: 5.1942
+      type: 'test'
+      ...
+    1..6
+ok 61 - portable acquire fails closed on a corrupt retained filename, nonce, metadata, digest, or payload
+  ---
+  duration_ms: 33.5329
+  type: 'test'
+  ...
+# Subtest: portable acquire fails closed when owned output, acknowledgement, or checkpoint evidence is missing
+ok 62 - portable acquire fails closed when owned output, acknowledgement, or checkpoint evidence is missing
+  ---
+  duration_ms: 10.9261
+  type: 'test'
+  ...
+# Subtest: portable acquire rejects malformed acknowledgement evidence
+ok 63 - portable acquire rejects malformed acknowledgement evidence
+  ---
+  duration_ms: 5.5023
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-terminal-input-ack-8sTiAb"}
+# Subtest: portable channel terminal becomes outcome unknown when output evidence disappears after acquire
+ok 64 - portable channel terminal becomes outcome unknown when output evidence disappears after acquire
+  ---
+  duration_ms: 15.652
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-terminal-takeover-fJgzxE"}
+# Subtest: portable terminal validates but does not misclassify a durable input acknowledgement as unsettled output
+ok 65 - portable terminal validates but does not misclassify a durable input acknowledgement as unsettled output
+  ---
+  duration_ms: 18.3052
+  type: 'test'
+  ...
+# Subtest: portable terminal cannot return clean exit after ownership changes during evidence reads
+ok 66 - portable terminal cannot return clean exit after ownership changes during evidence reads
+  ---
+  duration_ms: 13.6938
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-umYwGW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-hG3tcc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-cap-output-U4cYEw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-CNgoSw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-iq9Sw1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-xC2fq2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-1lJGud","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-teKII3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-observation-o15RZw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-TAo7iL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-vxhs62","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-cwbYXq","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-uzr5Cp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-tCSaqT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-1Rg0ck","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-xLE28G","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-Mpbw1f","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-JiqFOS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-B3z4bG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-cXgCAN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-BonxgV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-6fQQYH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-authority-u4IW3g","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-posix-dWjIn3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-ZYLk6o","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-8ceU2L","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-sXKoLg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-gqKEyy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-f8eQBb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-ctwMkN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-R6EeQN","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-j4k1GG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-cleanup-settlement-ZkTRuY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-output-publication-ogZcx3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-durable-input-ack-g0gobS","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-ack-order-GO5QUk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-channel-tGOerk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-output-gj1lfd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-retired-cleanup-w9ImZW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-replay-gfpNlK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-stale-fence-QuEKrW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-takeover-MC2TXQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-signal-effect-fence-0TGb5Y","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-write-effect-fence-nq8XGk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-published-stale-input-NRfoXB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-output-effect-fence-HxQJ0A","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-detach-held-sink-wfOFc2","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-effect-fence-OTVjoZ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-empty-effect-fence-B5sZfZ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-live-empty-release-unjVXV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-corrupt-ack-umGRDC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-corrupt-ack-unknown-owner-r6GL43","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-corrupt-ack-unreadable-state-LVbekw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-release-corrupt-ack-late-reappearance-G1Uhv8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-fence-TwmCwP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-terminal-output-neZKUo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-eEgpzz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-CEl5fR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-c8bYOw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-8qQL7J","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-13Ff6P","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-corrupt-uqZuVR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-output-CHsCWp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-ack-OEnA73","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-missing-output-checkpoint-json-IYvzmF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-malformed-ack-HBXvIr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-terminal-missing-output-10p5Hi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-terminal-input-ack-8sTiAb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-terminal-takeover-fJgzxE","existsAtExit":false}
+# Subtest: supervisor ACK takeover at the protected effect is a nonfatal stale no-op
+ok 67 - supervisor ACK takeover at the protected effect is a nonfatal stale no-op
+  ---
+  duration_ms: 70.1332
+  type: 'test'
+  ...
+# Subtest: supervisor ACK pass defers without a second mutation attempt when intent coordination is unavailable
+ok 68 - supervisor ACK pass defers without a second mutation attempt when intent coordination is unavailable
+  ---
+  duration_ms: 9.7293
+  type: 'test'
+  ...
+# Subtest: supervisor resume blocks a post-ACK intent whose filename is not bound to its metadata
+ok 69 - supervisor resume blocks a post-ACK intent whose filename is not bound to its metadata
+  ---
+  duration_ms: 25.833
+  type: 'test'
+  ...
+# Subtest: supervisor control preserves a replacement published before apply or stale retirement
+ok 70 - supervisor control preserves a replacement published before apply or stale retirement
+  ---
+  duration_ms: 13.1716
+  type: 'test'
+  ...
+# Subtest: supervisor control rejects fractional and future-gap sequences before the effect boundary
+ok 71 - supervisor control rejects fractional and future-gap sequences before the effect boundary
+  ---
+  duration_ms: 19.8976
+  type: 'test'
+  ...
+# Subtest: channel snapshot does not classify an ACK retirement between filename list and checkpoint read as corruption
+ok 72 - channel snapshot does not classify an ACK retirement between filename list and checkpoint read as corruption
+  ---
+  duration_ms: 26.8832
+  type: 'test'
+  ...
+# Subtest: native output settlement rejects unexplained missing output without an authenticated retirement intent
+ok 73 - native output settlement rejects unexplained missing output without an authenticated retirement intent
+  ---
+  duration_ms: 40.7258
+  type: 'test'
+  ...
+# Subtest: native output settlement retains a completed retirement intent until the protocol finalizes it
+ok 74 - native output settlement retains a completed retirement intent until the protocol finalizes it
+  ---
+  duration_ms: 23.7435
+  type: 'test'
+  ...
+# Subtest: portable supervisor stale command retirement advances sequence without executing or acknowledging the command
+ok 75 - portable supervisor stale command retirement advances sequence without executing or acknowledging the command
+  ---
+  duration_ms: 282.7773
+  type: 'test'
+  ...
+# Subtest: portable supervisor command defers coordination unavailability without effects, acknowledgement, or progress
+ok 76 - portable supervisor command defers coordination unavailability without effects, acknowledgement, or progress
+  ---
+  duration_ms: 0.2456
+  type: 'test'
+  ...
+# Subtest: portable fence effect distinguishes missing authority from an indeterminate started effect
+ok 77 - portable fence effect distinguishes missing authority from an indeterminate started effect
+  ---
+  duration_ms: 52.4793
+  type: 'test'
+  ...
+# Subtest: portable read snapshot reports corrupt evidence as blocked rather than an indeterminate effect
+ok 78 - portable read snapshot reports corrupt evidence as blocked rather than an indeterminate effect
+  ---
+  duration_ms: 27.6246
+  type: 'test'
+  ...
+# Subtest: portable ACK retirement resumes every durable boundary exactly once
+ok 79 - portable ACK retirement resumes every durable boundary exactly once
+  ---
+  duration_ms: 45.7051
+  type: 'test'
+  ...
+# Subtest: a higher-fence owner resumes exact former-owner ACK intent without replaying or losing bytes
+ok 80 - a higher-fence owner resumes exact former-owner ACK intent without replaying or losing bytes
+  ---
+  duration_ms: 11.8943
+  type: 'test'
+  ...
+# Subtest: portable ACK resume rejects same-token foreign and future intent provenance before mutation
+ok 81 - portable ACK resume rejects same-token foreign and future intent provenance before mutation
+  ---
+  duration_ms: 26.4361
+  type: 'test'
+  ...
+# Subtest: portable ACK retirement blocks foreign, corrupt, and unexplained partial evidence
+ok 82 - portable ACK retirement blocks foreign, corrupt, and unexplained partial evidence
+  ---
+  duration_ms: 13.8867
+  type: 'test'
+  ...
+# Subtest: portable snapshot validates one coherent checkpoint, retained suffix, and ACK state
+ok 83 - portable snapshot validates one coherent checkpoint, retained suffix, and ACK state
+  ---
+  duration_ms: 13.1192
+  type: 'test'
+  ...
+# Subtest: portable snapshot and ACK retirement share the real owned lock and never expose a torn state
+ok 84 - portable snapshot and ACK retirement share the real owned lock and never expose a torn state
+  ---
+  duration_ms: 171.5481
+  type: 'test'
+  ...
+# Subtest: portable attach validates inside its existing effect lock and snapshots only after that effect releases
+ok 85 - portable attach validates inside its existing effect lock and snapshots only after that effect releases
+  ---
+  duration_ms: 10.9861
+  type: 'test'
+  ...
+# Subtest: native empty verification performs final output validation inside its existing fence effect without recursive locking
+ok 86 - native empty verification performs final output validation inside its existing fence effect without recursive locking
+  ---
+  duration_ms: 83.0141
+  type: 'test'
+  ...
+# Subtest: portable supervisor acknowledges only settled callbacks and never overlaps or replays a pending write
+ok 87 - portable supervisor acknowledges only settled callbacks and never overlaps or replays a pending write
+  ---
+  duration_ms: 7.6971
+  type: 'test'
+  ...
+# Subtest: portable supervisor refuses stale completed write acknowledgement without reissuing bytes
+ok 88 - portable supervisor refuses stale completed write acknowledgement without reissuing bytes
+  ---
+  duration_ms: 2.1116
+  type: 'test'
+  ...
+# Subtest: portable supervisor retains settled input through temporary coordination refusal
+ok 89 - portable supervisor retains settled input through temporary coordination refusal
+  ---
+  duration_ms: 1.7046
+  type: 'test'
+  ...
+# Subtest: portable supervisor settles a synchronous input exception as failed without replay
+ok 90 - portable supervisor settles a synchronous input exception as failed without replay
+  ---
+  duration_ms: 1.7804
+  type: 'test'
+  ...
+# Subtest: portable supervisor observes input stream errors without fabricating terminal ownership
+ok 91 - portable supervisor observes input stream errors without fabricating terminal ownership
+  ---
+  duration_ms: 2.019
+  type: 'test'
+  ...
+# Subtest: POSIX backend attests session ownership without claiming host-crash cleanup
+ok 92 - POSIX backend attests session ownership without claiming host-crash cleanup
+  ---
+  duration_ms: 1.6041
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-force-gmK8rI"}
+# Subtest: generic POSIX birth discovery keeps its one-second absolute envelope
+ok 93 - generic POSIX birth discovery keeps its one-second absolute envelope
+  ---
+  duration_ms: 1008.0212
+  type: 'test'
+  ...
+# Subtest: POSIX native session fixture owns descendants after launcher exit
+ok 94 - POSIX native session fixture owns descendants after launcher exit # SKIP POSIX session/process-group behavior requires a POSIX host.
+  ---
+  duration_ms: 0.3613
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-terminal-witness-jer0U0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-v2-state-mismatch-5IhITT"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-pre-retirement-crash-bUEbo6"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-post-retirement-crash-Zj8tzL"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-v2-rollback-8O9WIU"}
+# Subtest: C4 POSIX force queues the exact workload group and retains the supervisor witness
+ok 95 - C4 POSIX force queues the exact workload group and retains the supervisor witness
+  ---
+  duration_ms: 580.0503
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 terminal observation preserves a live supervisor until authority release
+ok 96 - C4 POSIX v2 terminal observation preserves a live supervisor until authority release
+  ---
+  duration_ms: 125.4784
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 rejects durable state whose workload identity differs from opaque authority
+ok 97 - C4 POSIX v2 rejects durable state whose workload identity differs from opaque authority
+  ---
+  duration_ms: 51.6787
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 blocks a supervisor crash before durable retirement despite an empty numeric group
+ok 98 - C4 POSIX v2 blocks a supervisor crash before durable retirement despite an empty numeric group
+  ---
+  duration_ms: 54.0528
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 accepts post-retirement supervisor crash without adopting a reused numeric group
+ok 99 - C4 POSIX v2 accepts post-retirement supervisor crash without adopting a reused numeric group
+  ---
+  duration_ms: 263.1385
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-anchor-lock-holder-Wqi5Gm"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-f1-channel-mxTdSo"}
+# Subtest: C4 POSIX v2 launch rollback queues workload control without signalling the supervisor group
+ok 100 - C4 POSIX v2 launch rollback queues workload control without signalling the supervisor group
+  ---
+  duration_ms: 146.2132
+  type: 'test'
+  ...
+# Subtest: C4 POSIX parses a detached anchor's birth and group from synthetic proc state
+ok 101 - C4 POSIX parses a detached anchor's birth and group from synthetic proc state
+  ---
+  duration_ms: 25.8905
+  type: 'test'
+  ...
+# Subtest: C4 POSIX reattests the exact anchor birth and detached group before control
+ok 102 - C4 POSIX reattests the exact anchor birth and detached group before control
+  ---
+  duration_ms: 30.4292
+  type: 'test'
+  ...
+# Subtest: C4 POSIX rejects malformed nonempty ps identity and membership rows
+ok 103 - C4 POSIX rejects malformed nonempty ps identity and membership rows
+  ---
+  duration_ms: 34.0181
+  type: 'test'
+  ...
+# Subtest: C4 POSIX barrier records bind prepared, go, and anchor release to captured current authority
+ok 104 - C4 POSIX barrier records bind prepared, go, and anchor release to captured current authority
+  ---
+  duration_ms: 33.1159
+  type: 'test'
+  ...
+# Subtest: C4 POSIX child consumes an anchor release only under captured current authority before go and after target exit
+ok 105 - C4 POSIX child consumes an anchor release only under captured current authority before go and after target exit
+  ---
+  duration_ms: 53.4957
+  type: 'test'
+  ...
+# Subtest: C4 POSIX child-crash anchor release records its own holder so a live supervisor cannot wedge C1 reclamation
+ok 106 - C4 POSIX child-crash anchor release records its own holder so a live supervisor cannot wedge C1 reclamation
+  ---
+  duration_ms: 62.3832
+  type: 'test'
+  ...
+# Subtest: C4 POSIX child does not spawn an executable after a mismatched go publication
+ok 107 - C4 POSIX child does not spawn an executable after a mismatched go publication
+  ---
+  duration_ms: 16.5117
+  type: 'test'
+  ...
+# Subtest: C4 POSIX child retains its exact prepared breadcrumb through a pre-go crash boundary
+ok 108 - C4 POSIX child retains its exact prepared breadcrumb through a pre-go crash boundary
+  ---
+  duration_ms: 13.3547
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor does not publish go when the fenced publication is interrupted
+ok 109 - C4 POSIX supervisor does not publish go when the fenced publication is interrupted
+  ---
+  duration_ms: 60.3274
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor preserves its witness and reports outcome_unknown after anchor loss
+ok 110 - C4 POSIX supervisor preserves its witness and reports outcome_unknown after anchor loss
+  ---
+  duration_ms: 30.5315
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor reattests inside the fenced effect before a group signal
+ok 111 - C4 POSIX supervisor reattests inside the fenced effect before a group signal
+  ---
+  duration_ms: 29.4978
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor treats readable EOF as exact pipe completion even when stream close is delayed
+ok 112 - C4 POSIX supervisor treats readable EOF as exact pipe completion even when stream close is delayed
+  ---
+  duration_ms: 13.0955
+  type: 'test'
+  ...
+# Subtest: C4 POSIX output pump probes a zero-length readable so pending EOF can retire the exact pipe
+ok 113 - C4 POSIX output pump probes a zero-length readable so pending EOF can retire the exact pipe
+  ---
+  duration_ms: 18.2061
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-f1-closed-unread-wGyCUU"}
+# Subtest: C4 POSIX producer keeps the real channel unsettled until closed pipes drain a late tail
+ok 114 - C4 POSIX producer keeps the real channel unsettled until closed pipes drain a late tail
+  ---
+  duration_ms: 199.4833
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-finalizer-5jX6wG"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-release-failure-Jelv64"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-retained-authority-IRGWOY"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-channel-failure-67WeqY"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-success-11pSRX"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-unsafe-root-2O1QUX"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-unsafe-authority-y2fyIs"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-contract-BhJVAk"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-identity-KWu6Ph"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-dead-signal-ELjUNg"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-terminal-contract-zwezbu"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-launch-rollback-8skKcK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-dead-supervisor-Zvfbnp"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-cleanup-fence-1XkFl1"}
+# Subtest: C4 POSIX producer drains a closed unread tail after backpressure before terminal proof
+ok 115 - C4 POSIX producer drains a closed unread tail after backpressure before terminal proof
+  ---
+  duration_ms: 433.2559
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor retires forced workload causally and waits for output ACK plus pipe closure
+ok 116 - C4 POSIX supervisor retires forced workload causally and waits for output ACK plus pipe closure
+  ---
+  duration_ms: 62.0229
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor releases an exact lone anchor only after executable exit and retains ACK lifetime
+ok 117 - C4 POSIX supervisor releases an exact lone anchor only after executable exit and retains ACK lifetime
+  ---
+  duration_ms: 75.571
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor refuses anchor release when membership changes inside its fence
+ok 118 - C4 POSIX supervisor refuses anchor release when membership changes inside its fence
+  ---
+  duration_ms: 29.6639
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor replaces an unconsumed anchor release marker after a higher-fence takeover
+ok 119 - C4 POSIX supervisor replaces an unconsumed anchor release marker after a higher-fence takeover
+  ---
+  duration_ms: 30.0603
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor retains authority when an anchor exits before reporting exact release consumption
+ok 120 - C4 POSIX supervisor retains authority when an anchor exits before reporting exact release consumption
+  ---
+  duration_ms: 52.5859
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor rejects mismatched released records and non-clean anchor exits
+ok 121 - C4 POSIX supervisor rejects mismatched released records and non-clean anchor exits
+  ---
+  duration_ms: 142.4961
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor retains uncertain authority when a forced anchor exits with descendants remaining
+ok 122 - C4 POSIX supervisor retains uncertain authority when a forced anchor exits with descendants remaining
+  ---
+  duration_ms: 19.2512
+  type: 'test'
+  ...
+# Subtest: C4 POSIX supervisor keeps its anchor through graceful control before one exact force signal
+ok 123 - C4 POSIX supervisor keeps its anchor through graceful control before one exact force signal
+  ---
+  duration_ms: 54.9801
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer fails closed and retains its exact authority on force failure
+ok 124 - C4 POSIX fixture finalizer fails closed and retains its exact authority on force failure
+  ---
+  duration_ms: 2.162
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer retains its exact authority on release failure
+ok 125 - C4 POSIX fixture finalizer retains its exact authority on release failure
+  ---
+  duration_ms: 1.724
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer rejects a release that leaves owned authority behind
+ok 126 - C4 POSIX fixture finalizer rejects a release that leaves owned authority behind
+  ---
+  duration_ms: 1.2995
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer retains its exact authority when channel settlement or detachment fails
+ok 127 - C4 POSIX fixture finalizer retains its exact authority when channel settlement or detachment fails
+  ---
+  duration_ms: 1.1962
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer deletes only its exact root after confirmed release
+ok 128 - C4 POSIX fixture finalizer deletes only its exact root after confirmed release
+  ---
+  duration_ms: 0.9923
+  type: 'test'
+  ...
+# Subtest: C4 POSIX fixture finalizer refuses an authority target outside its exact namespace
+ok 129 - C4 POSIX fixture finalizer refuses an authority target outside its exact namespace
+  ---
+  duration_ms: 1.4097
+  type: 'test'
+  ...
+# Subtest: POSIX v1 contracts remain observable but block active destructive control
+ok 130 - POSIX v1 contracts remain observable but block active destructive control
+  ---
+  duration_ms: 139.3051
+  type: 'test'
+  ...
+# Subtest: POSIX validates birth identity before any group signal
+ok 131 - POSIX validates birth identity before any group signal
+  ---
+  duration_ms: 27.8895
+  type: 'test'
+  ...
+# Subtest: POSIX v1 refuses active control after its supervisor exits with members remaining
+ok 132 - POSIX v1 refuses active control after its supervisor exits with members remaining
+  ---
+  duration_ms: 31.854
+  type: 'test'
+  ...
+# Subtest: POSIX terminal proof permits fenced empty verification and release without Windows tree records
+ok 133 - POSIX terminal proof permits fenced empty verification and release without Windows tree records
+  ---
+  duration_ms: 193.5605
+  type: 'test'
+  ...
+# Subtest: POSIX v1 launch rollback retains active authority rather than killing its witness group
+ok 134 - POSIX v1 launch rollback retains active authority rather than killing its witness group
+  ---
+  duration_ms: 1.7943
+  type: 'test'
+  ...
+# Subtest: POSIX v1 launch rollback retains authority after supervisor exit rather than resignal numerically
+ok 135 - POSIX v1 launch rollback retains authority after supervisor exit rather than resignal numerically
+  ---
+  duration_ms: 1.2927
+  type: 'test'
+  ...
+# Subtest: C4 POSIX v2 launch rollback rechecks the durable fence before queuing workload control
+ok 136 - C4 POSIX v2 launch rollback rechecks the durable fence before queuing workload control
+  ---
+  duration_ms: 36.5904
+  type: 'test'
+  ...
+# Subtest: portable POSIX control maps only an explicit workload group to fixed signals
+ok 137 - portable POSIX control maps only an explicit workload group to fixed signals
+  ---
+  duration_ms: 37.4326
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-force-gmK8rI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-terminal-witness-jer0U0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-v2-state-mismatch-5IhITT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-pre-retirement-crash-bUEbo6","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-post-retirement-crash-Zj8tzL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-v2-rollback-8O9WIU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-anchor-lock-holder-Wqi5Gm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-f1-channel-mxTdSo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-f1-closed-unread-wGyCUU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-finalizer-5jX6wG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-release-failure-Jelv64","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-retained-authority-IRGWOY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-channel-failure-67WeqY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-success-11pSRX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-live-unsafe-root-2O1QUX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-c4-unsafe-authority-y2fyIs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-contract-BhJVAk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-identity-KWu6Ph","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-dead-signal-ELjUNg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-terminal-contract-zwezbu","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-launch-rollback-8skKcK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-dead-supervisor-Zvfbnp","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-posix-cleanup-fence-1XkFl1","existsAtExit":false}
+# Subtest: Runner registry snapshot rejects structural forgeries and ignores array and implementation replacement
+ok 138 - Runner registry snapshot rejects structural forgeries and ignores array and implementation replacement
+  ---
+  duration_ms: 1.7385
+  type: 'test'
+  ...
+# Subtest: fresh revalidation returns the exact immutable implementation snapshot used for effects
+ok 139 - fresh revalidation returns the exact immutable implementation snapshot used for effects
+  ---
+  duration_ms: 1.1087
+  type: 'test'
+  ...
+# Subtest: selects by verified semantic capability and returns immutable registry-bound attestation digest
+ok 140 - selects by verified semantic capability and returns immutable registry-bound attestation digest
+  ---
+  duration_ms: 0.307
+  type: 'test'
+  ...
+# Subtest: rejects duplicate registry identities and false or identity-conflicting attestations
+ok 141 - rejects duplicate registry identities and false or identity-conflicting attestations
+  ---
+  duration_ms: 0.5836
+  type: 'test'
+  ...
+# Subtest: strictly snapshots every backend operation response and rejects unknown keys and wrong types
+ok 142 - strictly snapshots every backend operation response and rejects unknown keys and wrong types
+  ---
+  duration_ms: 0.5675
+  type: 'test'
+  ...
+# Subtest: all backend parsers reject accessors and proxies without consulting them
+ok 143 - all backend parsers reject accessors and proxies without consulting them
+  ---
+  duration_ms: 0.3301
+  type: 'test'
+  ...
+# Subtest: fresh re-attestation must match registry identity, implementation, backend id, version, and digest
+ok 144 - fresh re-attestation must match registry identity, implementation, backend id, version, and digest
+  ---
+  duration_ms: 0.3909
+  type: 'test'
+  ...
+# Subtest: normal reattestation rejects copied identity while explicit trusted restart adoption selects the new exact instance
+ok 145 - normal reattestation rejects copied identity while explicit trusted restart adoption selects the new exact instance
+  ---
+  duration_ms: 0.4588
+  type: 'test'
+  ...
+# Subtest: portable Windows baseline is available without Job Objects but strict guarantees require the Job enhancement
+ok 146 - portable Windows baseline is available without Job Objects but strict guarantees require the Job enhancement
+  ---
+  duration_ms: 0.8997
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-6iAEQR"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-6iAEQR
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-6iAEQR
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-ON6EuC"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-ON6EuC
+# Subtest: round4 default native birth observation preserves present and joins inspection close
+ok 147 - round4 default native birth observation preserves present and joins inspection close
+  ---
+  duration_ms: 157.506
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-ON6EuC
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-TOEIdc"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-TOEIdc
+# Subtest: round4 default native birth observation preserves absent and joins inspection close
+ok 148 - round4 default native birth observation preserves absent and joins inspection close
+  ---
+  duration_ms: 163.6844
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-TOEIdc
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-uhLbe0"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-uhLbe0
+# Subtest: round4 default native birth observation preserves recycled and joins inspection close
+ok 149 - round4 default native birth observation preserves recycled and joins inspection close
+  ---
+  duration_ms: 111.7469
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-uhLbe0
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-l1VHNG"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-l1VHNG
+# Subtest: round4 default native birth observation preserves malformed and joins inspection close
+ok 150 - round4 default native birth observation preserves malformed and joins inspection close
+  ---
+  duration_ms: 109.8936
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-l1VHNG
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-YvBwJC"}
+# C1 round4 synthetic root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-YvBwJC
+# Subtest: round4 default native birth observation preserves inspection_error and joins inspection close
+ok 151 - round4 default native birth observation preserves inspection_error and joins inspection close
+  ---
+  duration_ms: 106.6788
+  type: 'test'
+  ...
+# C1 round4 synthetic root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-c1-round4-transport-YvBwJC
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-reset-r5bqiQ"}
+# Subtest: round4 default native birth observation preserves cancel and joins inspection close
+ok 152 - round4 default native birth observation preserves cancel and joins inspection close
+  ---
+  duration_ms: 124.5879
+  type: 'test'
+  ...
+# Subtest: portable and Job fence owners share the crash-recoverable exact-identity lock authority
+ok 153 - portable and Job fence owners share the crash-recoverable exact-identity lock authority
+  ---
+  duration_ms: 1.538
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-retired-fence-kTU9P4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-release-recovery-rBA4mn"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-record-substitution-AIlG0V"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-hard-link-alias-knjpCd"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-symbolic-link-alias-U3MKdC"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-path-identity-SxXquf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-startup-identity-nHM7Eb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-release-race-5BGKcG"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-absolute-startup-deadline-x4aSMC"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-late-birth-deadline-pRHWNE"}
+# C5 round9 late-birth root created: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-late-birth-deadline-pRHWNE
+# Subtest: Windows Job supervisor request classifies a partial response reset through durable stopped proof
+ok 154 - Windows Job supervisor request classifies a partial response reset through durable stopped proof
+  ---
+  duration_ms: 100.3658
+  type: 'test'
+  ...
+# Subtest: Windows Job durable release refuses stale post-release fence resurrection without coordination residue
+ok 155 - Windows Job durable release refuses stale post-release fence resurrection without coordination residue
+  ---
+  duration_ms: 49.5312
+  type: 'test'
+  ...
+# Subtest: Windows Job exact release recovers a durable tombstone after SQLite holder finalization fails
+ok 156 - Windows Job exact release recovers a durable tombstone after SQLite holder finalization fails
+  ---
+  duration_ms: 102.043
+  type: 'test'
+  ...
+# Subtest: Windows Job release rejects a substituted record before touching another process lock
+ok 157 - Windows Job release rejects a substituted record before touching another process lock
+  ---
+  duration_ms: 32.7886
+  type: 'test'
+  ...
+# Subtest: Windows Job release rejects hard-link and symbolic-link coordination aliases
+ok 158 - Windows Job release rejects hard-link and symbolic-link coordination aliases
+  ---
+  duration_ms: 82.3507
+  type: 'test'
+  ...
+# Subtest: Windows Job rejects path-escaping process IDs before reading outside host state
+ok 159 - Windows Job rejects path-escaping process IDs before reading outside host state
+  ---
+  duration_ms: 2.4416
+  type: 'test'
+  ...
+# Subtest: Windows Job startup refuses to cache a filename and embedded process identity mismatch
+ok 160 - Windows Job startup refuses to cache a filename and embedded process identity mismatch
+  ---
+  duration_ms: 1.5909
+  type: 'test'
+  ...
+# Subtest: Windows Job prequeued releases persist one tombstone and both retire exact coordination
+ok 161 - Windows Job prequeued releases persist one tombstone and both retire exact coordination
+  ---
+  duration_ms: 51.3111
+  type: 'test'
+  ...
+# Subtest: Windows portable baseline is selectable without Job Objects and reports crash cleanup honestly
+ok 162 - Windows portable baseline is selectable without Job Objects and reports crash cleanup honestly
+  ---
+  duration_ms: 0.4408
+  type: 'test'
+  ...
+# Subtest: Windows portable launch consumes the caller's shared absolute startup deadline
+ok 163 - Windows portable launch consumes the caller's shared absolute startup deadline
+  ---
+  duration_ms: 1.6737
+  type: 'test'
+  ...
+# C5 round9 late-birth root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-late-birth-deadline-pRHWNE
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-unattested-batch-nQjfXa"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-consumers-kOkgSk"}
+# Subtest: Windows portable launch rejects a birth result that arrives after its absolute deadline
+ok 164 - Windows portable launch rejects a birth result that arrives after its absolute deadline
+  ---
+  duration_ms: 12527.4684
+  type: 'test'
+  ...
+# C5 late birth observed: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-late-birth-deadline-pRHWNE","pid":42868,"state":"present","wallAt":1789376913417,"deadlineAt":1789376913202,"fixtureAt":1789376913417}
+# C5 original late-birth error chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-late-birth-deadline-pRHWNE","launchRejected":true,"messages":["NativeProcessLaunchBlockedError: Launch cleanup preserved evidence because Windows emptiness was not proven before its deadline. Evidence retained at C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-late-birth-deadline-pRHWNE\\\\state\\\\owned-fe7496b7-6d6e-4a81-980f-8e29edc778cb.","Error: Portable process startup deadline is exhausted.","Error: Launch cleanup preserved evidence because Windows emptiness was not proven before its deadline. Evidence retained at C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-late-birth-deadline-pRHWNE\\\\state\\\\owned-fe7496b7-6d6e-4a81-980f-8e29edc778cb."]}
+# Subtest: omitted Windows semantic facts fail closed and service presence alone cannot select Job containment
+ok 165 - omitted Windows semantic facts fail closed and service presence alone cannot select Job containment
+  ---
+  duration_ms: 3.7292
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-path-batch-IBIez4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-path-ambiguity-y3eYew"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-path-order-w0PzMB"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-recycled-tree-Nm05bD"}
+# Subtest: Windows semantic facts independently gate batch launch and exact-tree attestation
+ok 166 - Windows semantic facts independently gate batch launch and exact-tree attestation
+  ---
+  duration_ms: 2202.605
+  type: 'test'
+  ...
+# Subtest: unverified batch argv rejects an extensionless PATH command that resolves first to cmd
+ok 167 - unverified batch argv rejects an extensionless PATH command that resolves first to cmd
+  ---
+  duration_ms: 3.2556
+  type: 'test'
+  ...
+# Subtest: Windows extensionless resolution refuses conflicting case-insensitive PATH keys before launch
+ok 168 - Windows extensionless resolution refuses conflicting case-insensitive PATH keys before launch
+  ---
+  duration_ms: 1.9576
+  type: 'test'
+  ...
+# Subtest: Windows extensionless resolution preserves directory priority before PATHEXT priority
+ok 169 - Windows extensionless resolution preserves directory priority before PATHEXT priority
+  ---
+  duration_ms: 3.6339
+  type: 'test'
+  ...
+# Subtest: unverified batch argv rejects Job batch targets without disabling native Job launch
+ok 170 - unverified batch argv rejects Job batch targets without disabling native Job launch
+  ---
+  duration_ms: 1.0322
+  type: 'test'
+  ...
+# Subtest: Windows portable supervisor reuses one birth-tagged tree snapshot per ownership tick
+ok 171 - Windows portable supervisor reuses one birth-tagged tree snapshot per ownership tick
+  ---
+  duration_ms: 0.7261
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-stale-parent-edge-zTpLUI"}
+# Subtest: Windows portable supervisor preserves historical proof without traversing a PID replacement
+ok 172 - Windows portable supervisor preserves historical proof without traversing a PID replacement
+  ---
+  duration_ms: 1288.7595
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-recycled-tree-Nm05bD
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-batch-yni1uW"}
+# Subtest: Windows portable supervisor rejects a child edge whose birth predates its exact parent
+ok 173 - Windows portable supervisor rejects a child edge whose birth predates its exact parent
+  ---
+  duration_ms: 1218.7057
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-stale-parent-edge-zTpLUI
+# Subtest: Windows portable control never delegates descendant discovery to taskkill
+ok 174 - Windows portable control never delegates descendant discovery to taskkill
+  ---
+  duration_ms: 0.4077
+  type: 'test'
+  ...
+# Subtest: Windows Job supervisor durably settles final retained output before acknowledging it
+ok 175 - Windows Job supervisor durably settles final retained output before acknowledging it
+  ---
+  duration_ms: 0.2071
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-identity-contract-e5A35O"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-inspection-unknown-xzDb7N"}
+# Subtest: Windows portable backend launches a batch shim with argv boundaries while Job containment is unavailable
+ok 176 - Windows portable backend launches a batch shim with argv boundaries while Job containment is unavailable
+  ---
+  duration_ms: 2602.9578
+  type: 'test'
+  ...
+# Subtest: Windows reconciliation distinguishes missing opaque identity from a birth mismatch
+ok 177 - Windows reconciliation distinguishes missing opaque identity from a birth mismatch
+  ---
+  duration_ms: 0.6257
+  type: 'test'
+  ...
+# Subtest: Windows portable recovery treats a replaced historical process identity as absent
+ok 178 - Windows portable recovery treats a replaced historical process identity as absent
+  ---
+  duration_ms: 4.6181
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-control-retry-IRmjMj"}
+# Subtest: Windows birth inspection failure is unknown and cannot prove empty, release, or signal
+ok 179 - Windows birth inspection failure is unknown and cannot prove empty, release, or signal
+  ---
+  duration_ms: 2606.9118
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-batched-birth-hIiVyC"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-dead-control-PtSbRI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-state-identity-lIDJEw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-signal-reattest-X7HkIl"}
+# Subtest: Windows outcome-unknown control permits only a higher-sequence retry after exact birth re-attestation
+ok 180 - Windows outcome-unknown control permits only a higher-sequence retry after exact birth re-attestation
+  ---
+  duration_ms: 846.3665
+  type: 'test'
+  ...
+# Subtest: Windows emptiness inspects every recorded birth in one bounded batch
+ok 181 - Windows emptiness inspects every recorded birth in one bounded batch
+  ---
+  duration_ms: 2.7463
+  type: 'test'
+  ...
+# Subtest: Windows cannot imply control when the supervisor exited with a live birth-attested descendant
+ok 182 - Windows cannot imply control when the supervisor exited with a live birth-attested descendant
+  ---
+  duration_ms: 29.3076
+  type: 'test'
+  ...
+# Subtest: Windows emptiness and rollback reject a replaced well-formed supervisor state
+ok 183 - Windows emptiness and rollback reject a replaced well-formed supervisor state
+  ---
+  duration_ms: 30.2963
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-unknown-8G5xlR"}
+# Subtest: Windows signal retries transient descendant inspection uncertainty without accepting persistent unknown
+ok 184 - Windows signal retries transient descendant inspection uncertainty without accepting persistent unknown
+  ---
+  duration_ms: 172.4111
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-watchdog-AJCMBz"}
+# Subtest: Windows supervisor treats unavailable CIM inspection as unknown and ignores destructive control
+ok 185 - Windows supervisor treats unavailable CIM inspection as unknown and ignores destructive control
+  ---
+  duration_ms: 945.2801
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-cim-unknown-8G5xlR
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-adaptive-birth-oLV7j7"}
+# Subtest: Windows supervisor watchdog terminates a hung CIM inspector and reaches durable unknown
+ok 186 - Windows supervisor watchdog terminates a hung CIM inspector and reaches durable unknown
+  ---
+  duration_ms: 5038.7742
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-cim-watchdog-AJCMBz
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-adaptive-cim-qgbqAM"}
+# Subtest: Windows portable startup retries an exact birth inspection with an adaptive bounded budget
+ok 187 - Windows portable startup retries an exact birth inspection with an adaptive bounded budget
+  ---
+  duration_ms: 6010.4625
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-adaptive-birth-oLV7j7
+# Subtest: portable backend does not cap Windows supervisor birth discovery at the former one-second window
+ok 188 - portable backend does not cap Windows supervisor birth discovery at the former one-second window
+  ---
+  duration_ms: 0.5255
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-control-watchdog-L7xHJI"}
+# Subtest: Windows supervisor adapts its default inventory attempt budget to a slower host
+ok 189 - Windows supervisor adapts its default inventory attempt budget to a slower host
+  ---
+  duration_ms: 6535.512
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-adaptive-cim-qgbqAM
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-taskkill-watchdog-uDRQ7Q"}
+# Subtest: Windows destructive control bounds a hung fresh inspector and never signals under uncertainty
+ok 190 - Windows destructive control bounds a hung fresh inspector and never signals under uncertainty
+  ---
+  duration_ms: 2857.9819
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-control-watchdog-L7xHJI
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-taskkill-retry-zRmbYK"}
+# Subtest: Windows destructive control bounds taskkill and treats timeout as durable uncertainty
+ok 191 - Windows destructive control bounds taskkill and treats timeout as durable uncertainty
+  ---
+  duration_ms: 3586.1668
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-taskkill-watchdog-uDRQ7Q
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-empty-LjLVyY"}
+# Subtest: Windows supervisor reattests exact live members before a higher-sequence force retry
+ok 192 - Windows supervisor reattests exact live members before a higher-sequence force retry
+  ---
+  duration_ms: 5673.4132
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-taskkill-retry-zRmbYK
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-bare-child-8bHOV1"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-live-inspection-unknown-scfTXE"}
+# Subtest: Windows supervisor rejects successful empty CIM inventory as consecutive uncertainty
+ok 193 - Windows supervisor rejects successful empty CIM inventory as consecutive uncertainty
+  ---
+  duration_ms: 1857.0367
+  type: 'test'
+  ...
+# certified contained fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-cim-empty-LjLVyY
+# Subtest: Windows state with a bare initial child PID is unknown and never traverses a recycled process
+ok 194 - Windows state with a bare initial child PID is unknown and never traverses a recycled process
+  ---
+  duration_ms: 84.7696
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-transient-launch-hog11T"}
+# Subtest: Windows launch rollback persists a recoverable blocker when live-supervisor inspection is unknown
+ok 195 - Windows launch rollback persists a recoverable blocker when live-supervisor inspection is unknown
+  ---
+  duration_ms: 3005.4132
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-dead-supervisor-w6D7BM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-launch-cleanup-fMIxVG"}
+# Subtest: Windows launch rollback retries transient identity uncertainty before proving empty
+ok 196 - Windows launch rollback retries transient identity uncertainty before proving empty
+  ---
+  duration_ms: 544.4626
+  type: 'test'
+  ...
+# Subtest: Windows launch rollback preserves an immediate blocker when the supervisor exited with an owned descendant
+ok 197 - Windows launch rollback preserves an immediate blocker when the supervisor exited with an owned descendant
+  ---
+  duration_ms: 59.4861
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-live-rollback-O0pCN4"}
+# Subtest: Windows portable launch failure verifies owned cleanup instead of killing only the supervisor PID
+ok 198 - Windows portable launch failure verifies owned cleanup instead of killing only the supervisor PID
+  ---
+  duration_ms: 1329.6762
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-fixture-env-M8Ctpe"}
+# Subtest: Windows launch rollback authenticates force termination at the real live supervisor seam
+ok 199 - Windows launch rollback authenticates force termination at the real live supervisor seam
+  ---
+  duration_ms: 9093.5415
+  type: 'test'
+  ...
+# exact Windows live rollback fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-live-rollback-O0pCN4
+# certified Windows rollback root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-live-rollback-O0pCN4
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-descendant-9rwgyO"}
+# Subtest: Windows portable fixture supervisor argv excludes ambient credential sentinels
+ok 200 - Windows portable fixture supervisor argv excludes ambient credential sentinels
+  ---
+  duration_ms: 6592.4079
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-backend-job-LsmMpv"}
+# Subtest: Windows native supervisor owns a surviving descendant after launcher exit
+ok 201 - Windows native supervisor owns a surviving descendant after launcher exit
+  ---
+  duration_ms: 13101.7465
+  type: 'test'
+  ...
+# certified backend fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-descendant-9rwgyO
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-channel-E3Y6q4"}
+# Subtest: optional Windows Job adapter terminates and verifies a TERM-ignoring descendant tree
+ok 202 - optional Windows Job adapter terminates and verifies a TERM-ignoring descendant tree
+  ---
+  duration_ms: 2279.0003
+  type: 'test'
+  ...
+# certified backend fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-backend-job-LsmMpv
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-write-fence-SlWjNs"}
+# Subtest: Windows Job v2 channel performs a real duplex roundtrip with detach and reattach
+ok 203 - Windows Job v2 channel performs a real duplex roundtrip with detach and reattach
+  ---
+  duration_ms: 1999.305
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-input-limit-Ugrlbb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-output-fence-vVlWpG"}
+# Subtest: Windows Job lowest host boundary rejects held write after a higher-fence takeover
+ok 204 - Windows Job lowest host boundary rejects held write after a higher-fence takeover
+  ---
+  duration_ms: 1493.8576
+  type: 'test'
+  ...
+# Subtest: Windows Job host rejects oversized input before any owned effect
+ok 205 - Windows Job host rejects oversized input before any owned effect
+  ---
+  duration_ms: 1.1931
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-signal-fence-zHhZPx"}
+# Subtest: Windows Job lowest host boundary rejects held output acknowledgement after takeover
+ok 206 - Windows Job lowest host boundary rejects held output acknowledgement after takeover
+  ---
+  duration_ms: 1407.059
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-release-fence-2EV7yi"}
+# Subtest: Windows Job lowest host boundary rejects held signal and release after takeover
+    # Subtest: signal
+    ok 1 - signal
+      ---
+      duration_ms: 894.4118
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-missing-output-aUWK0K"}
+    # Subtest: release
+    ok 2 - release
+      ---
+      duration_ms: 1169.1856
+      type: 'test'
+      ...
+    1..2
+ok 207 - Windows Job lowest host boundary rejects held signal and release after takeover
+  ---
+  duration_ms: 2064.415
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-read-missing-wpJbFC"}
+# Subtest: Windows Job terminal and release fail closed when owned output evidence disappears
+ok 208 - Windows Job terminal and release fail closed when owned output evidence disappears
+  ---
+  duration_ms: 910.693
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-backpressure-stdout-VGLS4G"}
+# Subtest: Windows Job output read fails closed when evidence disappears after attach re-attestation
+ok 209 - Windows Job output read fails closed when evidence disappears after attach re-attestation
+  ---
+  duration_ms: 701.9846
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-backpressure-stderr-k0e107"}
+# Subtest: Windows Job producer pauses at the retained chunk and byte window until exact acknowledgement
+    # Subtest: stdout
+    ok 1 - stdout
+      ---
+      duration_ms: 5659.6325
+      type: 'test'
+      ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-coalesced-eAhRX5"}
+    # Subtest: stderr
+    ok 2 - stderr
+      ---
+      duration_ms: 5676.079
+      type: 'test'
+      ...
+    1..2
+ok 210 - Windows Job producer pauses at the retained chunk and byte window until exact acknowledgement
+  ---
+  duration_ms: 11336.3785
+  type: 'test'
+  ...
+# certified backend fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-job-backpressure-stdout-VGLS4G
+# certified backend fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-job-backpressure-stderr-k0e107
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-signal-retained-0NBT7y"}
+# Subtest: Windows Job coalesced read acknowledges every exact retained chunk boundary through its end
+ok 211 - Windows Job coalesced read acknowledges every exact retained chunk boundary through its end
+  ---
+  duration_ms: 1616.5289
+  type: 'test'
+  ...
+# certified backend fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-job-coalesced-eAhRX5
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-backend-output-cQnh4U"}
+# Subtest: Windows Job signal reports exact empty while retained output drains and exits after acknowledgement
+ok 212 - Windows Job signal reports exact empty while retained output drains and exits after acknowledgement
+  ---
+  duration_ms: 4797.4487
+  type: 'test'
+  ...
+# certified backend fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-windows-job-signal-retained-0NBT7y
+# Subtest: Windows Job observation uses absolute durable offsets beyond the configured tail
+ok 213 - Windows Job observation uses absolute durable offsets beyond the configured tail
+  ---
+  duration_ms: 1598.214
+  type: 'test'
+  ...
+# Subtest: Windows Job observation advances absolute offsets across incremental durable reads
+ok 214 - Windows Job observation advances absolute offsets across incremental durable reads
+  ---
+  duration_ms: 101.5484
+  type: 'test'
+  ...
+# Subtest: Windows Job observation surfaces a throwing sink and retains unacknowledged output
+ok 215 - Windows Job observation surfaces a throwing sink and retains unacknowledged output
+  ---
+  duration_ms: 0.8239
+  type: 'test'
+  ...
+# Subtest: Windows Job detach settles a held sink without acknowledging and reattach replays it
+ok 216 - Windows Job detach settles a held sink without acknowledging and reattach replays it
+  ---
+  duration_ms: 0.6542
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-sink-failure-ZmGSgg"}
+# Subtest: Windows Job unsubscribe during held host acknowledgement never delivers the next stream to the old sink
+ok 217 - Windows Job unsubscribe during held host acknowledgement never delivers the next stream to the old sink
+  ---
+  duration_ms: 13.1188
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-ack-failure-XYGtRB"}
+# Subtest: Windows Job sink failure leaves a durable unknown terminal until retained output is acknowledged
+ok 218 - Windows Job sink failure leaves a durable unknown terminal until retained output is acknowledged
+  ---
+  duration_ms: 4887.0395
+  type: 'test'
+  ...
+# Subtest: Windows Job acknowledgement failure cannot report clean terminal or release retained output
+ok 219 - Windows Job acknowledgement failure cannot report clean terminal or release retained output
+  ---
+  duration_ms: 4999.2566
+  type: 'test'
+  ...
+# Subtest: Windows Job serializes ownership observation with cancellation control
+ok 220 - Windows Job serializes ownership observation with cancellation control
+  ---
+  duration_ms: 33.2432
+  type: 'test'
+  ...
+# Subtest: Windows Job cancellation accepts exact terminal state while retained output drains
+ok 221 - Windows Job cancellation accepts exact terminal state while retained output drains
+  ---
+  duration_ms: 0.5666
+  type: 'test'
+  ...
+# Subtest: Windows Job cancellation fails closed without exact empty retained-output proof
+ok 222 - Windows Job cancellation fails closed without exact empty retained-output proof
+  ---
+  duration_ms: 0.3652
+  type: 'test'
+  ...
+# Subtest: Windows Job shared activation rejects a different exact birth before service action
+ok 223 - Windows Job shared activation rejects a different exact birth before service action
+  ---
+  duration_ms: 0.371
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-signal-snapshot-z1Dn5C"}
+# Subtest: Windows Job release waits for active output delivery and closes later observation
+ok 224 - Windows Job release waits for active output delivery and closes later observation
+  ---
+  duration_ms: 29.7426
+  type: 'test'
+  ...
+# Subtest: Windows Job release drains callback and reconcile errors without retaining offsets
+    # Subtest: callback
+    ok 1 - callback
+      ---
+      duration_ms: 0.7565
+      type: 'test'
+      ...
+    # Subtest: reconcile
+    ok 2 - reconcile
+      ---
+      duration_ms: 0.2249
+      type: 'test'
+      ...
+    1..2
+ok 225 - Windows Job release drains callback and reconcile errors without retaining offsets
+  ---
+  duration_ms: 1.8613
+  type: 'test'
+  ...
+# Subtest: Windows Job control lane advances after an operation error and still releases
+ok 226 - Windows Job control lane advances after an operation error and still releases
+  ---
+  duration_ms: 0.4843
+  type: 'test'
+  ...
+# Subtest: Windows Job durable release authority rejects stale identities beyond prior cache capacity
+ok 227 - Windows Job durable release authority rejects stale identities beyond prior cache capacity
+  ---
+  duration_ms: 114.0363
+  type: 'test'
+  ...
+# Subtest: Windows Job durable release rejects a stale clone after adapter restart and startedAt mismatch
+ok 228 - Windows Job durable release rejects a stale clone after adapter restart and startedAt mismatch
+  ---
+  duration_ms: 0.4598
+  type: 'test'
+  ...
+# Subtest: Windows Job backend restart activates an existing binding with the claimed takeover fence
+ok 229 - Windows Job backend restart activates an existing binding with the claimed takeover fence
+  ---
+  duration_ms: 0.3384
+  type: 'test'
+  ...
+# Subtest: Windows Job host signal returns the post-effect stopped snapshot
+ok 230 - Windows Job host signal returns the post-effect stopped snapshot
+  ---
+  duration_ms: 810.8129
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-6iAEQR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-ON6EuC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-TOEIdc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-uhLbe0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-l1VHNG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c1-round4-transport-YvBwJC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-reset-r5bqiQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-retired-fence-kTU9P4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-release-recovery-rBA4mn","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-record-substitution-AIlG0V","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-hard-link-alias-knjpCd","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-symbolic-link-alias-U3MKdC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-path-identity-SxXquf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-startup-identity-nHM7Eb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-release-race-5BGKcG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-absolute-startup-deadline-x4aSMC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-late-birth-deadline-pRHWNE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-unattested-batch-nQjfXa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-consumers-kOkgSk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-path-batch-IBIez4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-path-ambiguity-y3eYew","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-path-order-w0PzMB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-recycled-tree-Nm05bD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-stale-parent-edge-zTpLUI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-portable-batch-yni1uW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-identity-contract-e5A35O","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-inspection-unknown-xzDb7N","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-control-retry-IRmjMj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-batched-birth-hIiVyC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-dead-control-PtSbRI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-state-identity-lIDJEw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-signal-reattest-X7HkIl","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-unknown-8G5xlR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-watchdog-AJCMBz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-adaptive-birth-oLV7j7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-adaptive-cim-qgbqAM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-control-watchdog-L7xHJI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-taskkill-watchdog-uDRQ7Q","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-taskkill-retry-zRmbYK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-cim-empty-LjLVyY","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-bare-child-8bHOV1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-live-inspection-unknown-scfTXE","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-transient-launch-hog11T","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-dead-supervisor-w6D7BM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-launch-cleanup-fMIxVG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-live-rollback-O0pCN4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-fixture-env-M8Ctpe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-descendant-9rwgyO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-backend-job-LsmMpv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-channel-E3Y6q4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-write-fence-SlWjNs","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-input-limit-Ugrlbb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-output-fence-vVlWpG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-signal-fence-zHhZPx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-release-fence-2EV7yi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-missing-output-aUWK0K","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-read-missing-wpJbFC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-backpressure-stdout-VGLS4G","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-backpressure-stderr-k0e107","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-coalesced-eAhRX5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-signal-retained-0NBT7y","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-backend-output-cQnh4U","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-sink-failure-ZmGSgg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-ack-failure-XYGtRB","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-job-signal-snapshot-z1Dn5C","existsAtExit":false}
+1..230
+# tests 242
+# suites 0
+# pass 241
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 268730.5334

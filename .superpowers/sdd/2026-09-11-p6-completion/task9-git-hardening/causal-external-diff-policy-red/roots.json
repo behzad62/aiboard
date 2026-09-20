@@ -1,0 +1,63 @@
+{
+  "events": [
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-NBbdQr"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-NBbdQr"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-2ieft2"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-12NnAk"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Tw0tpR"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-NBbdQr",
+      "existsAtExit": true
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-2ieft2",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-12NnAk",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Tw0tpR",
+      "existsAtExit": false
+    }
+  ],
+  "roots": [
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-external-diff-NBbdQr",
+      "existsAtReceipt": true
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-2ieft2",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-12NnAk",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-Tw0tpR",
+      "existsAtReceipt": false
+    }
+  ],
+  "note": "Existence observation only; verified ownership/cleanup is asserted by each fixture, not inferred from absence."
+}

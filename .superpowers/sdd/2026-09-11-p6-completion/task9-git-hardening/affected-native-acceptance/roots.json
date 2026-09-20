@@ -1,0 +1,527 @@
+{
+  "events": [
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-6BrIwj"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-J98QMz"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QHRx4U"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-6BrIwj",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-J98QMz",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QHRx4U",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution IiefTB"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 2FINKz"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution yZzwAR"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 00twLP"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution iKDqkF"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution Red6FE"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution GmaC0h"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution PeoEdM"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution ROvpNu"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 6yOVEH"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution XqwmRN"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution IiefTB",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 2FINKz",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution yZzwAR",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 00twLP",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution iKDqkF",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution Red6FE",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution GmaC0h",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution PeoEdM",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution ROvpNu",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 6yOVEH",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution XqwmRN",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-zQFe1C"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-zQFe1C",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-reassigned-review-qYq1ps"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-steering-X34irb"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-Zl7rMI"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-project-T9GzN1"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-full-UbQre4"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-only-tools-xsSKe9"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-resume-0dXqeh"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-reassigned-review-qYq1ps",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-steering-X34irb",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-Zl7rMI",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-project-T9GzN1",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-full-UbQre4",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-only-tools-xsSKe9",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-resume-0dXqeh",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard native final verification factory bOMKpO"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-zRHuUA"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-7nhrTP"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-D69NGD"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright-artifacts-6JyoXZ"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright_chromiumdev_profile-S4I5ti"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard native final verification factory bOMKpO",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-zRHuUA",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-7nhrTP",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-D69NGD",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright-artifacts-6JyoXZ",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright_chromiumdev_profile-S4I5ti",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-preferred-7gnr6f"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-provider-fallback-4WWRwL"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-context-9f6Dqx"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-budget-attribution-ICeZ4T"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-authority-y4wyBe"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-stale-inIa5I"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-vEG1pe"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-replay-YbsoQY"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-pending-6RtRQV"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-preferred-7gnr6f",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-provider-fallback-4WWRwL",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-context-9f6Dqx",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-budget-attribution-ICeZ4T",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-authority-y4wyBe",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-stale-inIa5I",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-vEG1pe",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-replay-YbsoQY",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-pending-6RtRQV",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-8Fgxx0"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-63iSSD"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-cancel-S5t4k9"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-8Fgxx0",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-63iSSD",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-cancel-S5t4k9",
+      "existsAtExit": false
+    }
+  ],
+  "roots": [
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-6BrIwj",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-J98QMz",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-QHRx4U",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution IiefTB",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 2FINKz",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution yZzwAR",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 00twLP",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution iKDqkF",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution Red6FE",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution GmaC0h",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution PeoEdM",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution ROvpNu",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution 6yOVEH",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-v2 final verification execution XqwmRN",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-final-managed-authority-zQFe1C",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-reassigned-review-qYq1ps",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-steering-X34irb",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-architect-Zl7rMI",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-project-T9GzN1",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-extension-full-UbQre4",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-plan-only-tools-xsSKe9",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-architect-resume-0dXqeh",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard native final verification factory bOMKpO",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-zRHuUA",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-7nhrTP",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-D69NGD",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright-artifacts-6JyoXZ",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\playwright_chromiumdev_profile-S4I5ti",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-preferred-7gnr6f",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-provider-fallback-4WWRwL",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-context-9f6Dqx",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-budget-attribution-ICeZ4T",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-authority-y4wyBe",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-stale-inIa5I",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-vEG1pe",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-replay-YbsoQY",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-verifier-verdict-pending-6RtRQV",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-8Fgxx0",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-production-one-shot-63iSSD",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-native-worker-cancel-S5t4k9",
+      "existsAtReceipt": false
+    }
+  ],
+  "note": "Existence observation only; verified ownership/cleanup is asserted by each fixture, not inferred from absence."
+}

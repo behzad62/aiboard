@@ -1,0 +1,133 @@
+{
+  "id": "extension-prototype-grant-leak",
+  "target": "runner-v2/src/language-provider-router.ts",
+  "test": "runner-v2/test/lsp-server-control.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-green",
+  "sourceFinalSha256": "e9c44f60af7a1e79e8614a04c3d6050837395279880620c481ccf1657c06d7b1",
+  "testFinalSha256": "c7c3df8cfa02439dfc0f2f9f003d7912e5c6700f622489c6cd7695b800627e8a",
+  "redReceipt": {
+    "id": "fault-extension-prototype-grant-leak-red",
+    "startedAt": "2026-09-12T17:26:16.063Z",
+    "finishedAt": "2026-09-12T17:26:17.653Z",
+    "wrapperPid": 76756,
+    "testPid": 70504,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP router never forwards",
+      "runner-v2/test/lsp-server-control.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-extension-boundary-zgYqzF"
+    ]
+  },
+  "greenReceipt": {
+    "id": "fault-extension-prototype-grant-leak-green",
+    "startedAt": "2026-09-12T17:26:17.697Z",
+    "finishedAt": "2026-09-12T17:26:18.393Z",
+    "wrapperPid": 73340,
+    "testPid": 132288,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP router never forwards",
+      "runner-v2/test/lsp-server-control.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/red-terminal.json",
+      "sha256": "05834c9bcc4a29c633ac41b2d0d645275bf452860df7a72250888b222ed9c845"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/red-inputs-before.json",
+      "sha256": "05fe21c689c927b95569343d95f2972431d3877c5751e2960954cd5f23bd819b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/red-inputs-after.json",
+      "sha256": "05fe21c689c927b95569343d95f2972431d3877c5751e2960954cd5f23bd819b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/red-stdout.log",
+      "sha256": "fb683739432af53bff777c5819cc1e6b50f66e4eea4fbbba207a0917dc4e2f2a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/red-wrapper.json",
+      "sha256": "836e09b25f2bbe8407534880d696d4682c1f78059d368da1ea14df62887530b1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/red-child.json",
+      "sha256": "b7131a9b439908bbfeff0de844462ee1468b5c3565085667b4e08e2b21d9b859"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/green-terminal.json",
+      "sha256": "1849fffad001655c9e8a6cd69aa45d53d79bf2f70c64408929d163b2bfea8a1c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/green-inputs-before.json",
+      "sha256": "b1af2b8c028aa00f2c0868300d3e910818be2d35512ba58cf04a51f891800192"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/green-inputs-after.json",
+      "sha256": "b1af2b8c028aa00f2c0868300d3e910818be2d35512ba58cf04a51f891800192"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/green-stdout.log",
+      "sha256": "a59bf4c0c4021ff01a8c4082e3d3b5056fa1816ee2a6ecd5ea7aa6557d935861"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/green-wrapper.json",
+      "sha256": "297c4a456c447e0e454de518a675a21fd969457ff742f626abc753a7b1dd81e2"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-extension-prototype-grant-leak-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/extension-prototype-grant-leak/green-child.json",
+      "sha256": "d23e73c80eec25c9fc1162ebb522b150c72ddf4790599183a2179f4483f0864a"
+    }
+  ]
+}

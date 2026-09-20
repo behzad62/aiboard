@@ -1,0 +1,47 @@
+[
+  {
+    "path": "runner-v2/src/durable-process-store.ts",
+    "sha256": "65123ccafe1753174e8b4f6d78bab3365951d2a23a1e2fd06e8f71857b8a530a",
+    "beforeSHA256": "d85b37def742e4b4f71a9c12b814f6bc4f1a9b161b23fa05c5143ad9334c0a48"
+  },
+  {
+    "path": "runner-v2/src/execution-grants.ts",
+    "sha256": "fd0517448c0dd0d5e5839fa890cdc9db935963bf6781729e7053ae250ca9145a",
+    "beforeSHA256": "8bcbe7e4447a5566e8970dac2842c2df35eaf9c07aa9d5e22373d17e9676c61b"
+  },
+  {
+    "path": "runner-v2/src/execution-host.ts",
+    "sha256": "facd0308d8dffae836a3274b5312cf69bcd5e087ea980e0cfb9fc05094759b5b",
+    "beforeSHA256": "5f55262a778c00dd72fc10800ae09378a0b9a09c4134032992dac8f0b3c04e79"
+  },
+  {
+    "path": "runner-v2/src/execution-safety-contracts.ts",
+    "sha256": "d5832ca4472cc874b9f17e10ed39943c8a9026b01be628231a8257103d5f150d",
+    "beforeSHA256": "1af97a2dcb51f3615b2fc80f8f3161fcf31b2d047a2902bb82a6a1b8b8b95ca8"
+  },
+  {
+    "path": "runner-v2/src/git-runtime-runner.ts",
+    "sha256": "266a0acf67764cf4779556f0a541b8754593c9a2273c10648f86ac3c2ffdbeef",
+    "beforeSHA256": "19d02724c45b30a3dacf6afd79839541a8971d9534791b98d0f377421d616312"
+  },
+  {
+    "path": "runner-v2/src/subprocess-runtime.ts",
+    "sha256": "1e42012720b2f509ff8182aa421f2f126a4928e91c630a06d3aea833f85942c3",
+    "beforeSHA256": "7e275079a04a678edb3c8116a700035e820928f6928172431317ccd0d3532d26"
+  },
+  {
+    "path": "runner-v2/test/execution-command-grant-scope.test.ts",
+    "sha256": "1a08c7e160d264dff8d98d4e19535f7e09e842ff380e72effa19351ea102bce6",
+    "beforeSHA256": "88e1507fa84b0fea93177076915db28898ffc3ea791c4810ddd5806bc15934c9"
+  },
+  {
+    "path": "runner-v2/test/process-output-binary-tail.test.ts",
+    "sha256": "b1bc8b357ee0d8038405237536a5799f0bc050331cff660698faa5e6935452a6",
+    "beforeSHA256": null
+  },
+  {
+    "path": "runner-v2/test/subprocess-runtime.test.ts",
+    "sha256": "fbbfeb9db4b6c9c0f3b647d9a016fd1cfb2c4c17491f2f17e364e4dac9cec1db",
+    "beforeSHA256": "e612dd830f9846a29e153a5594a585bd5570d0e3ccb2335a3b8b38616f2d7650"
+  }
+]

@@ -1,0 +1,956 @@
+{
+  "events": [
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-kikmS4"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-d59RBO"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-x1epcH"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-kikmS4",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-d59RBO",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-x1epcH",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5n5cfi"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TWYET6"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a13GBg"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MsQrao"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jBuOr7"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V9yG3g"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bfsz2b"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-9sPRHj"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-1HAdMM"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-RrrNHZ"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7KQso6"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PpiRhR"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bxb9U0"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jaEISd"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-b9KAJU"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ADog38"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a5VAXn"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NieICw"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-SMaFIT"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-aQHQCa"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gwVJFQ"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gOcDVf"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0FTVVq"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PBAKq4"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-qGN5c1"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5WEuAH"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pB3ZoM"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4CvoSt"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XoAeFp"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-S6nV8c"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-THAEwI"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AW3u5A"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-yK9vmG"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-hI80rv"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V3ZnkS"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Ff1QJI"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0mIr83"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bkFjMY"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ZNQsqm"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gfGGB6"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WTYroa"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xnk1qY"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MOR3IT"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-iCxMrV"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-JxHfzx"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4Q0XjJ"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-mrJSmk"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7yLXrf"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ioNvDV"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pqYFV9"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WWd8yc"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-LCaCJU"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XUsenR"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4bDsqe"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XSQXQg"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AUzvHI"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NEc72H"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-HL14mI"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xNE3rX"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-VKCsKB"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-2ExlKd"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TQTwdc"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-wMIK3o"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5n5cfi",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TWYET6",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a13GBg",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MsQrao",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jBuOr7",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V9yG3g",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bfsz2b",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-9sPRHj",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-1HAdMM",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-RrrNHZ",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7KQso6",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PpiRhR",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bxb9U0",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jaEISd",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-b9KAJU",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ADog38",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a5VAXn",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NieICw",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-SMaFIT",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-aQHQCa",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gwVJFQ",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gOcDVf",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0FTVVq",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PBAKq4",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-qGN5c1",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5WEuAH",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pB3ZoM",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4CvoSt",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XoAeFp",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-S6nV8c",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-THAEwI",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AW3u5A",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-yK9vmG",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-hI80rv",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V3ZnkS",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Ff1QJI",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0mIr83",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bkFjMY",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ZNQsqm",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gfGGB6",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WTYroa",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xnk1qY",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MOR3IT",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-iCxMrV",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-JxHfzx",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4Q0XjJ",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-mrJSmk",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7yLXrf",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ioNvDV",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pqYFV9",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WWd8yc",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-LCaCJU",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XUsenR",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4bDsqe",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XSQXQg",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AUzvHI",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NEc72H",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-HL14mI",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xNE3rX",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-VKCsKB",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-2ExlKd",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TQTwdc",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-wMIK3o",
+      "existsAtExit": false
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-tools-9ggsja"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-patch-crlf-T5Nnl0"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-git-aware-j33BrW"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-mutations-wXdKso"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostics-kxzxAa"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostic-failure-lWHYbC"
+    },
+    {
+      "event": "created",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-benchmark-policy-4jflu0"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-tools-9ggsja",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-patch-crlf-T5Nnl0",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-git-aware-j33BrW",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-mutations-wXdKso",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostics-kxzxAa",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostic-failure-lWHYbC",
+      "existsAtExit": false
+    },
+    {
+      "event": "exit",
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-benchmark-policy-4jflu0",
+      "existsAtExit": false
+    }
+  ],
+  "roots": [
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-kikmS4",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-d59RBO",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-x1epcH",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5n5cfi",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TWYET6",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a13GBg",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MsQrao",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jBuOr7",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V9yG3g",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bfsz2b",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-9sPRHj",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-1HAdMM",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-RrrNHZ",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7KQso6",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PpiRhR",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bxb9U0",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-jaEISd",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-b9KAJU",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ADog38",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-a5VAXn",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NieICw",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-SMaFIT",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-aQHQCa",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gwVJFQ",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gOcDVf",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0FTVVq",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-PBAKq4",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-qGN5c1",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-5WEuAH",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pB3ZoM",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4CvoSt",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XoAeFp",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-S6nV8c",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-THAEwI",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AW3u5A",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-yK9vmG",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-hI80rv",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-V3ZnkS",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Ff1QJI",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-0mIr83",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-bkFjMY",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ZNQsqm",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gfGGB6",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WTYroa",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xnk1qY",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-MOR3IT",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-iCxMrV",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-JxHfzx",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4Q0XjJ",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-mrJSmk",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-7yLXrf",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-ioNvDV",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-pqYFV9",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-WWd8yc",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-LCaCJU",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XUsenR",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-4bDsqe",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-XSQXQg",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-AUzvHI",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-NEc72H",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-HL14mI",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-xNE3rX",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-VKCsKB",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-2ExlKd",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-TQTwdc",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-wMIK3o",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-tools-9ggsja",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-patch-crlf-T5Nnl0",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-git-aware-j33BrW",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-mutations-wXdKso",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostics-kxzxAa",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-diagnostic-failure-lWHYbC",
+      "existsAtReceipt": false
+    },
+    {
+      "path": "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-fs-benchmark-policy-4jflu0",
+      "existsAtReceipt": false
+    }
+  ],
+  "note": "Existence observation only; verified ownership/cleanup is asserted by each fixture, not inferred from absence."
+}

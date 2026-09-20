@@ -1,20 +1,52 @@
+import { configureMcpServers } from "./mcp-configuration.js";
 import { randomBytes } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
+import { ArtifactStore } from "./artifact-store.js";
 import type { BuildStepResult } from "./build-runtime.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
-import { captureGitBaseline } from "./git-baseline.js";
-import { checkGit } from "./git-preflight.js";
-import { NativeBuildFactory } from "./native-build-factory.js";
-import { NativeBuildManager } from "./native-build-manager.js";
-import { McpManager, type McpServerSpec } from "./mcp-tools.js";
+import { createExecutionHost } from "./execution-host.js";
+import { createRunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
+import { captureRunGitBaseline } from "./git-bootstrap.js";
+import {
+  classifyNativeBuildRecoveryError,
+  NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE,
+  NativeBuildFactory,
+  preflightRecoveredRunnerCapabilities,
+  snapshotNativeBuildAmbientEnvironment,
+} from "./native-build-factory.js";
+import {
+  NativeBuildManager,
+  type HistoricalTerminalState,
+} from "./native-build-manager.js";
+import {
+  createLiveMcpStatusRegistry,
+  type McpServerSpec,
+} from "./mcp-tools.js";
 import { assertSupportedNodeVersion } from "./node-version.js";
 import { SqlitePermissionStore } from "./permission-store.js";
+import {
+  capabilitiesConfigCanonicalTargetIsInsideProject,
+  emptyRunnerCapabilitiesConfig,
+  loadRunnerCapabilitiesConfig,
+  type RunnerCapabilitiesConfig,
+} from "./runner-capabilities-config.js";
 import { RunSupervisor } from "./run-supervisor.js";
+import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
+import type { RunState } from "./contracts.js";
+import {
+  closeRunnerResources,
+  reconcileRunnerStartup,
+  startupFailureWithCleanup,
+  type RunnerResources,
+} from "./runner-resource-cleanup.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
+import {
+  type SchedulerProjection,
+} from "./scheduler-store.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -25,21 +57,13 @@ interface CliOptions {
   token: string;
   mcpServers: McpServerSpec[];
   allowOrigins: string[];
-}
-
-interface RunnerResources {
-  server: ControlServer;
-  supervisor: RunSupervisor;
-  builds: NativeBuildManager;
-  buildFactory: NativeBuildFactory;
-  mcpManager: McpManager;
-  permissions: SqlitePermissionStore;
+  capabilitiesConfigPath?: string;
 }
 
 void main();
 
 async function main(): Promise<void> {
-  let resources: RunnerResources | undefined;
+  const resources: RunnerResources = {};
   try {
     assertSupportedNodeVersion(process.versions.node);
     const args = parseRunnerArguments(process.argv.slice(2));
@@ -54,67 +78,152 @@ async function main(): Promise<void> {
         "invalid_state_directory: Runner state must be outside the project directory."
       );
     }
+    let capabilitiesConfig = emptyRunnerCapabilitiesConfig();
+    if (options.capabilitiesConfigPath) {
+      if (
+        await capabilitiesConfigCanonicalTargetIsInsideProject(
+          options.projectPath,
+          options.capabilitiesConfigPath,
+        )
+      ) {
+        throw new Error(
+          "invalid_capabilities_config: Runner capabilities configuration must be outside the project directory."
+        );
+      }
+      capabilitiesConfig = await loadRunnerCapabilitiesConfig(options.capabilitiesConfigPath);
+    }
     await mkdir(options.stateDirectory, { recursive: true });
     await assertDirectory(options.stateDirectory, "state");
 
-    const git = await checkGit();
+    const artifactDirectory = join(options.stateDirectory, "artifacts");
+    await mkdir(artifactDirectory, { recursive: true });
+    const artifacts = new ArtifactStore(artifactDirectory);
+    const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
+    const executionHost = createExecutionHost({
+      projectRoot: options.projectPath,
+      stateDirectory: options.stateDirectory,
+      artifacts,
+      ambientEnvironment,
+    });
+    resources.executionHost = executionHost;
+    const internalExecutionContext = createRunnerInternalExecutionContext({
+      projectDirectory: options.projectPath,
+      stateDirectory: options.stateDirectory,
+      processKernel: executionHost.internalProcesses,
+      ambientEnvironment: executionHost.filteredEnvironmentSource(),
+    });
+    resources.internalExecutionContext = internalExecutionContext;
+
+    const git = (await internalExecutionContext.gitPreflight()).result;
     if (!git.available) {
       throw new Error(`${git.code}: ${git.reason}`);
     }
+    const configuredCapabilitiesAttestation =
+      await internalExecutionContext.attestConfiguredCapabilities({
+        mcpServers: options.mcpServers,
+        capabilitiesConfig,
+      });
 
-    const artifactDirectory = join(options.stateDirectory, "artifacts");
-    await mkdir(artifactDirectory, { recursive: true });
     const supervisor = new RunSupervisor(
       new SqliteEventStore(join(options.stateDirectory, "events.sqlite"))
+    );
+    resources.supervisor = supervisor;
+    await validateActiveRecoveryCapabilityContracts(
+      supervisor,
+      capabilitiesConfig,
+      options.stateDirectory,
+      options.projectPath,
+      executionHost.filteredEnvironmentSource(),
     );
     const providerConfigs = new EncryptedProviderConfigStore(
       join(options.stateDirectory, "provider-configs.enc"),
       options.token
     );
-    const mcpManager = new McpManager({
-      cwd: options.projectPath,
-      servers: options.mcpServers,
-    });
-    await mcpManager.start();
+    resources.providerConfigs = providerConfigs;
+    const mcpStatus = createLiveMcpStatusRegistry(options.mcpServers);
     const permissions = new SqlitePermissionStore(
       join(options.stateDirectory, "permissions.sqlite")
     );
+    resources.permissions = permissions;
     const buildFactory = new NativeBuildFactory({
       projectRoot: options.projectPath,
       stateDirectory: options.stateDirectory,
       providerConfigs,
-      mcpManager,
       permissions,
+      capabilitiesConfig,
+      executionHost,
+      internalExecutionContext,
+      mcpServers: options.mcpServers,
+      mcpAttestation: configuredCapabilitiesAttestation.mcp,
+      mcpStatusRegistry: mcpStatus,
+      closeProviderConfigs: false,
       baselineFor: (runId) => {
         const revision = supervisor.getRun(runId).baselineRevision;
         if (!revision) throw new Error(`Run ${runId} has no Git baseline.`);
         return revision;
       },
     });
+    resources.buildFactory = buildFactory;
     const builds = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(
         join(options.stateDirectory, "build-specs.sqlite")
       ),
       createRuntime: (spec) => buildFactory.create(spec),
+      createHistoricalRuntime: (spec, terminalState) =>
+        buildFactory.createHistorical(spec, terminalState),
+      terminalStateForHistoricalSpec: (spec) => {
+        const state = supervisor.getRun(spec.runId).state;
+        return isTerminalRunState(state) ? state : undefined;
+      },
+      prepareSpec: (spec) => buildFactory.prepareSpec(spec),
+      shouldRecoverSpec: (spec) =>
+        !isTerminalRunState(supervisor.getRun(spec.runId).state),
+      validateRecoveredSpec: async (spec) => {
+        const run = supervisor.getRun(spec.runId);
+        if (isTerminalRunState(run.state)) return;
+        await buildFactory.validateRecoveryCapabilityContract(spec);
+      },
+      onRecoverySpecError: (runId, error) => {
+        recordRuntimeRecoveryFailure(supervisor, runId, error);
+      },
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
       onPumpResult: (runId, result) =>
-        syncAutonomousBuildLifecycle(supervisor, runId, result),
+        syncAutonomousBuildLifecycle(
+          supervisor,
+          runId,
+          result,
+          builds.projection(runId),
+        ),
       onPumpError: (runId, error) => writeRunnerWarning(runId, error),
       runArtifactCompaction: (operation) =>
         buildFactory.runArtifactCompaction(operation),
       prepareArtifactCleanup: () => buildFactory.prepareArtifactCleanup(),
     });
+    resources.builds = builds;
+    await reconcileRunnerStartup([{
+      resource: "nativeBuildRuntime",
+      covers: NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE,
+      reconcile: async () => {
+        const report = await builds.recover();
+        if (report.failures.length === 0) return;
+        throw new AggregateError(
+          report.failures.map((failure) => failure.error),
+          `Native Build startup recovery left ${report.failures.length} unresolved owned resource failure(s): ${report.failures.map((failure) => `${failure.runId}:${failure.stage}`).join(", ")}.`,
+        );
+      },
+    }]);
     const server = new ControlServer({
       supervisor,
       builds,
       buildProvisioner: builds,
+      processRecovery: builds,
       providerConfigs,
       allowedOrigins: options.allowOrigins,
       runnerInfo: {
         projectPath: options.projectPath,
         nodeVersion: process.versions.node,
       },
-      mcp: mcpManager,
+      mcp: mcpStatus,
       permissions,
       token: options.token,
       checkGit: async () => git,
@@ -124,7 +233,10 @@ async function main(): Promise<void> {
             `project_mismatch: Runner is bound to ${options.projectPath}.`
           );
         }
-        const baseline = await captureGitBaseline({
+        const baseline = await captureRunGitBaseline({
+          host: executionHost,
+          permissionProfile: input.permissionProfile,
+          capabilitiesConfig,
           projectPath: options.projectPath,
           stateDirectory: options.stateDirectory,
           runId: input.runId,
@@ -135,8 +247,7 @@ async function main(): Promise<void> {
         };
       },
     });
-    resources = { server, supervisor, builds, buildFactory, mcpManager, permissions };
-    await builds.recover();
+    resources.server = server;
     const address = await server.start(options.port);
 
     const readiness = {
@@ -148,7 +259,7 @@ async function main(): Promise<void> {
       projectPath: options.projectPath,
       stateDirectory: options.stateDirectory,
       gitVersion: git.version,
-      mcp: mcpManager.status(),
+      mcp: mcpStatus.status(),
       allowOrigins: options.allowOrigins,
     };
     process.stdout.write(`${JSON.stringify(readiness)}\n`);
@@ -158,7 +269,7 @@ async function main(): Promise<void> {
     const shutdown = (signal: NodeJS.Signals) => {
       if (shuttingDown) return;
       shuttingDown = true;
-      void closeResources(resources).then(
+      void closeRunnerResources(resources).then(
         () => {
           process.exitCode = signal === "SIGINT" ? 130 : 0;
         },
@@ -171,8 +282,17 @@ async function main(): Promise<void> {
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
   } catch (error) {
-    await closeResources(resources);
-    writeStartupError(error);
+    let cleanupError: unknown;
+    try {
+      await closeRunnerResources(resources);
+    } catch (closeError) {
+      cleanupError = closeError;
+    }
+    writeStartupError(
+      cleanupError
+        ? startupFailureWithCleanup(error, cleanupError)
+        : error,
+    );
     process.exitCode = 1;
   }
 }
@@ -180,13 +300,18 @@ async function main(): Promise<void> {
 function syncAutonomousBuildLifecycle(
   supervisor: RunSupervisor,
   runId: string,
-  result: BuildStepResult
+  result: BuildStepResult,
+  build: SchedulerProjection,
 ): void {
   const run = supervisor.getRun(runId);
-  if (result.status === "completed" && run.state === "running") {
-    supervisor.complete(
+  if (
+    result.status === "completed" &&
+    run.state === "running"
+  ) {
+    supervisor.completeBuild(
       runId,
-      `autonomous-build-completed:${run.lastSequence}`
+      `autonomous-build-completed:${run.lastSequence}`,
+      build,
     );
   } else if (result.status === "paused" && run.state === "running") {
     supervisor.pause(
@@ -195,6 +320,81 @@ function syncAutonomousBuildLifecycle(
       result.action ?? "native-build"
     );
   }
+}
+
+function isTerminalRunState(state: RunState): state is HistoricalTerminalState {
+  return state === "stopped" || state === "completed" || state === "failed";
+}
+
+async function validateActiveRecoveryCapabilityContracts(
+  supervisor: RunSupervisor,
+  capabilitiesConfig: RunnerCapabilitiesConfig,
+  stateDirectory: string,
+  projectDirectory: string,
+  environment: Readonly<Record<string, string>>,
+): Promise<void> {
+  const specs = new SqliteBuildSpecStore(join(stateDirectory, "build-specs.sqlite"));
+  const failures: unknown[] = [];
+  try {
+    for (const spec of specs.list()) {
+      const run = supervisor.getRun(spec.runId);
+      if (isTerminalRunState(run.state)) continue;
+      try {
+        await preflightRecoveredRunnerCapabilities({
+          spec,
+          config: capabilitiesConfig,
+          environment,
+          projectDirectory,
+          stateDirectory,
+          reservedToolNames: RUNNER_BUILTIN_TOOL_NAMES,
+        });
+      } catch (error) {
+        recordRuntimeRecoveryFailure(supervisor, spec.runId, error);
+        failures.push(error);
+      }
+    }
+  } finally {
+    specs.close();
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      "Runner startup rejected active Build capability contracts.",
+    );
+  }
+}
+
+function recordRuntimeRecoveryFailure(
+  supervisor: RunSupervisor,
+  runId: string,
+  error: unknown,
+): void {
+  try {
+    const run = supervisor.getRun(runId);
+    if (isTerminalRunState(run.state)) return;
+    supervisor.fail(
+      runId,
+      `runtime-recovery:${run.lastSequence}`,
+      runtimeRecoveryReason(error),
+    );
+  } catch (recordError) {
+    writeRunnerWarning(runId, new AggregateError(
+      [error, recordError],
+      "Unable to record Runner recovery failure.",
+    ));
+  }
+}
+
+function runtimeRecoveryReason(error: unknown): string {
+  const classified = classifyNativeBuildRecoveryError(error);
+  if (classified?.kind === "capability") {
+    return `capability-contract:${classified.code}`;
+  }
+  if (classified?.kind === "runtime") {
+    return `runtime-recovery:${classified.stage}_failed`;
+  }
+  return "runtime-recovery:runtime_failed";
 }
 
 function parseRunnerArguments(rawArgs: string[]): string[] {
@@ -220,12 +420,18 @@ function isHelpRequested(args: string[]): boolean {
 function parseArguments(args: string[]): CliOptions {
   const values = new Map<string, string>();
   const mcpServers: McpServerSpec[] = [];
+  const mcpEnvelopes: string[] = [];
   const allowOrigins: string[] = [];
   const allowOriginSet = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
     if (!flag?.startsWith("--")) {
       throw new Error(`invalid_arguments: Unknown token ${flag ?? "argument"}.`);
+    }
+    if (flag === "--mcp-envelope") {
+      const value = args[index + 1];
+      if (value === undefined || value.startsWith("--")) throw new Error("invalid_arguments: Expected name=JSON after --mcp-envelope.");
+      mcpEnvelopes.push(value); index += 1; continue;
     }
     if (flag === "--mcp") {
       const value = args[index + 1];
@@ -257,7 +463,15 @@ function parseArguments(args: string[]): CliOptions {
       index += 1;
       continue;
     }
-  if (!["--project", "--state-dir", "--port", "--token"].includes(flag)) {
+    if (
+      ![
+        "--project",
+        "--state-dir",
+        "--port",
+        "--token",
+        "--capabilities-config",
+      ].includes(flag)
+    ) {
       throw new Error(`invalid_arguments: Unknown option ${flag}.`);
     }
     const value = args[index + 1];
@@ -273,6 +487,10 @@ function parseArguments(args: string[]): CliOptions {
 
   const projectPath = requiredAbsolutePath(values, "--project");
   const stateDirectory = requiredAbsolutePath(values, "--state-dir");
+  const capabilitiesConfigPath = optionalAbsolutePath(
+    values,
+    "--capabilities-config",
+  );
   const portText = values.get("--port") ?? "0";
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
@@ -287,8 +505,9 @@ function parseArguments(args: string[]): CliOptions {
     stateDirectory,
     port,
     token,
-    mcpServers,
+    mcpServers: [...configureMcpServers(mcpServers, mcpEnvelopes)],
     allowOrigins,
+    ...(capabilitiesConfigPath ? { capabilitiesConfigPath } : {}),
   };
 }
 
@@ -323,13 +542,16 @@ function printHelp(): void {
     "  --state-dir <path>      Absolute path to runner state. Must be outside project. (required)",
     "  --port <number>         TCP port to bind (0 = random). Default 0.",
     "  --token <string>        Authentication token. Auto-generated if omitted.",
+    "  --capabilities-config <path>  Absolute trusted JSON configuration outside the project.",
     "  --mcp <name=command>    Register MCP server; can be repeated.",
+    "  --mcp-envelope <name=JSON> Fixed paths/network/credential requirements; defaults to no extra access.",
     "  --allow-origin <url>    Allowed browser CORS origin (repeatable, comma-separated list supported).",
     "                         Defaults to loopback origins + aiboard.me.",
     "  --help, -h              Show this help text.",
     "",
     "Examples:",
     "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --port 8787",
+    "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --capabilities-config C:\\path\\to\\runner-capabilities.json",
     "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --allow-origin https://aiboard.me",
     "  npm run runner:v2 -- --project C:\\path\\to\\project --state-dir C:\\path\\to\\runner-state --allow-origin https://aiboard.me,https://127.0.0.1:8787",
     "",
@@ -387,6 +609,18 @@ function requiredAbsolutePath(values: Map<string, string>, flag: string): string
   return resolve(value);
 }
 
+function optionalAbsolutePath(
+  values: Map<string, string>,
+  flag: string,
+): string | undefined {
+  const value = values.get(flag);
+  if (value === undefined) return undefined;
+  if (!isAbsolute(value)) {
+    throw new Error(`invalid_arguments: ${flag} must be an absolute path.`);
+  }
+  return resolve(value);
+}
+
 function isInside(parent: string, candidate: string): boolean {
   const traversal = relative(parent, candidate);
   return traversal === "" || (!traversal.startsWith("..") && !isAbsolute(traversal));
@@ -402,16 +636,6 @@ async function assertDirectory(path: string, label: string): Promise<void> {
   if (!details.isDirectory()) {
     throw new Error(`invalid_${label}_directory: ${path} is not a directory.`);
   }
-}
-
-async function closeResources(resources: RunnerResources | undefined): Promise<void> {
-  if (!resources) return;
-  await resources.server.close();
-  resources.permissions.close();
-  await resources.builds.close();
-  await resources.buildFactory.close();
-  await resources.mcpManager.close();
-  resources.supervisor.close();
 }
 
 function writeStartupError(error: unknown): void {

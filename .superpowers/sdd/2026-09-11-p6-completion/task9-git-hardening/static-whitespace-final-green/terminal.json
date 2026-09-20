@@ -1,0 +1,20 @@
+{
+  "id": "static-whitespace-final-green",
+  "startedAt": "2026-09-14T19:55:17.026Z",
+  "finishedAt": "2026-09-14T19:55:17.682Z",
+  "wrapperPid": 25240,
+  "testPid": 5116,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "git",
+    "diff",
+    "--check",
+    "--",
+    "runner-v2"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

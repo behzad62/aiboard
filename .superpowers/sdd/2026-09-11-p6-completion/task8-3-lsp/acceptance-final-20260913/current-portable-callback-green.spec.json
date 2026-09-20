@@ -1,0 +1,6 @@
+{
+  "id": "current-portable-callback-green",
+  "tests": [
+    "runner-v2/test/portable-supervisor-input.test.ts"
+  ]
+}

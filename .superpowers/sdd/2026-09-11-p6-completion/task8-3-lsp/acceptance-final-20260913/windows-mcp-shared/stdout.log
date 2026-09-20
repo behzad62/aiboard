@@ -1,0 +1,522 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----mORkNm"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----mORkNm","fixture":0,"kind":"portable"}
+# {"fixture":0,"kind":"portable","provider":"sp-6a85b44046ca4892bf64c1cd4f4518b1","lockPath":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----mORkNm\\\\builds\\\\sp-6a85b44046ca4892bf64c1cd4f4518b1-9f88631afb\\\\execution-isolation\\\\sp-6a85b44046ca4892bf64c1cd4f4518b1\\\\oci-leases-sp-6a85b44046ca4892bf64c1cd4f4518b1.json.lock","lockLength":232,"journalLength":240,"effects":1,"inspections":0,"lockBytes":28672,"leaseStateExists":true}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----mORkNm","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----9B3960"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----9B3960","fixture":0,"kind":"unavailable"}
+# {"fixture":0,"kind":"unavailable","provider":"su-4e0c2ddb4d144011bfdfda7bc3fb6695","lockPath":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----9B3960\\\\builds\\\\su-4e0c2ddb4d144011bfdfda7bc3fb6695-a23dcdcfa5\\\\execution-isolation\\\\su-4e0c2ddb4d144011bfdfda7bc3fb6695\\\\oci-leases-su-4e0c2ddb4d144011bfdfda7bc3fb6695.json.lock","lockLength":232,"journalLength":240,"effects":1,"inspections":0,"lockBytes":28672,"leaseStateExists":true}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----9B3960","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----qKx1Cj"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----qKx1Cj","fixture":0,"kind":"absolute"}
+# {"fixture":0,"kind":"absolute","provider":"sa-9bb5be149dd04cc4880b71c268f047ef","lockPath":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----qKx1Cj\\\\builds\\\\sa-9bb5be149dd04cc4880b71c268f047ef-24d1faadfb\\\\execution-isolation\\\\sa-9bb5be149dd04cc4880b71c268f047ef\\\\oci-leases-sa-9bb5be149dd04cc4880b71c268f047ef.json.lock","lockLength":232,"journalLength":240,"effects":1,"inspections":0,"lockBytes":28672,"leaseStateExists":true}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----qKx1Cj","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----GMi2OL"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----GMi2OL","fixture":1,"kind":"portable"}
+# {"fixture":1,"kind":"portable","provider":"sp-aa21fbad0ea8456f93655ebf1bdabf19","lockPath":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----GMi2OL\\\\builds\\\\sp-aa21fbad0ea8456f93655ebf1bdabf19-7e5527dea5\\\\execution-isolation\\\\sp-aa21fbad0ea8456f93655ebf1bdabf19\\\\oci-leases-sp-aa21fbad0ea8456f93655ebf1bdabf19.json.lock","lockLength":232,"journalLength":240,"effects":1,"inspections":0,"lockBytes":28672,"leaseStateExists":true}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----GMi2OL","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----L8FvVX"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----L8FvVX","fixture":1,"kind":"unavailable"}
+# {"fixture":1,"kind":"unavailable","provider":"su-2f1f36774a8145a5b607cbb8f4d40455","lockPath":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----L8FvVX\\\\builds\\\\su-2f1f36774a8145a5b607cbb8f4d40455-399468a11e\\\\execution-isolation\\\\su-2f1f36774a8145a5b607cbb8f4d40455\\\\oci-leases-su-2f1f36774a8145a5b607cbb8f4d40455.json.lock","lockLength":232,"journalLength":240,"effects":1,"inspections":0,"lockBytes":28672,"leaseStateExists":true}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----L8FvVX","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----VLVOnH"}
+# {"created":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----VLVOnH","fixture":1,"kind":"absolute"}
+# {"fixture":1,"kind":"absolute","provider":"sa-4bb834bd129e4ad0b8337c13921a877d","lockPath":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----VLVOnH\\\\builds\\\\sa-4bb834bd129e4ad0b8337c13921a877d-72153f888b\\\\execution-isolation\\\\sa-4bb834bd129e4ad0b8337c13921a877d\\\\oci-leases-sa-4bb834bd129e4ad0b8337c13921a877d.json.lock","lockLength":232,"journalLength":240,"effects":1,"inspections":0,"lockBytes":28672,"leaseStateExists":true}
+# {"removed":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----VLVOnH","absent":true}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-IpCTQn"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-TmcEDz"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-IpCTQn","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-TmcEDz"]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-IpCTQn","failures":[{"name":"Error","message":"synthetic pending observation failed"}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-IpCTQn","failures":[{"name":"Error","message":"synthetic pending observation failed"}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-IpCTQn","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-TmcEDz"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-jMho4x"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-R3sfHa"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-jMho4x","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-R3sfHa"]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-jMho4x","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-R3sfHa"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-GUueuQ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-ZQc8U7"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-GUueuQ","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-ZQc8U7"]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-GUueuQ","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-ZQc8U7"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-NwTiAa"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-fWgbBh"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-NwTiAa","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-fWgbBh"]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-NwTiAa","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-fWgbBh"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-ToUkSx"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-uUaDZT"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-ToUkSx","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-uUaDZT"]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-ToUkSx","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-uUaDZT"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-7geLcM"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-giVna8"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-7geLcM","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-giVna8"]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-7geLcM","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-giVna8"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-FVT3xC"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-98zKxe"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-FVT3xC","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-98zKxe"]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-FVT3xC","failures":[{"kind":"number"},{"name":"Error","message":"close one"},{"name":"Error","message":"close two"},{"name":"Error","message":"release"},{"name":"Error","message":"absence"},{"name":"Error","message":"residue"}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-FVT3xC","failures":[{"kind":"number"},{"name":"Error","message":"close one"},{"name":"Error","message":"close two"},{"name":"Error","message":"release"},{"name":"Error","message":"absence"},{"name":"Error","message":"residue"}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-FVT3xC","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-98zKxe"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BGezmt"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-vOdGGv"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BGezmt","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-vOdGGv"]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BGezmt","failures":[{"name":"Error","message":"synthetic release"}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BGezmt","failures":[{"name":"Error","message":"synthetic release"}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BGezmt","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-vOdGGv"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-30J93U"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-Q5yghK"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-30J93U","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-Q5yghK"]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-30J93U","failures":[{"name":"Error","message":"synthetic absence"}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-30J93U","failures":[{"name":"Error","message":"synthetic absence"}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-30J93U","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-Q5yghK"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-zUQdNX"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-sa6CCH"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-zUQdNX","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-sa6CCH"]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-zUQdNX","failures":[{"name":"Error","message":"synthetic residue"}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-zUQdNX","failures":[{"name":"Error","message":"synthetic residue"}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-zUQdNX","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-sa6CCH"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-giPr3g"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-U1Ss8m"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-giPr3g","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-U1Ss8m"]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-giPr3g","failures":[{"name":"Error","message":"Post-ready fixture owner is unavailable."}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-giPr3g","failures":[{"name":"Error","message":"Post-ready fixture owner is unavailable."}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-giPr3g","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-U1Ss8m"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-empty-owner-d6NGcy"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-S8yS0d"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-empty-owner-d6NGcy","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-S8yS0d"]}
+# Subtest: C5 round5 strict OCI fixture identities support real SQLite lease locks across distinct fixtures
+    # Subtest: portable fixture 1
+    ok 1 - portable fixture 1
+      ---
+      duration_ms: 36.7611
+      type: 'test'
+      ...
+    # Subtest: unavailable fixture 1
+    ok 2 - unavailable fixture 1
+      ---
+      duration_ms: 25.7688
+      type: 'test'
+      ...
+    # Subtest: absolute fixture 1
+    ok 3 - absolute fixture 1
+      ---
+      duration_ms: 26.5262
+      type: 'test'
+      ...
+    # Subtest: portable fixture 2
+    ok 4 - portable fixture 2
+      ---
+      duration_ms: 27.7205
+      type: 'test'
+      ...
+    # Subtest: unavailable fixture 2
+    ok 5 - unavailable fixture 2
+      ---
+      duration_ms: 25.546
+      type: 'test'
+      ...
+    # Subtest: absolute fixture 2
+    ok 6 - absolute fixture 2
+      ---
+      duration_ms: 26.0298
+      type: 'test'
+      ...
+    1..6
+ok 1 - C5 round5 strict OCI fixture identities support real SQLite lease locks across distinct fixtures
+  ---
+  duration_ms: 169.8073
+  type: 'test'
+  ...
+# Subtest: C5 round4 finalizer retains state when a later pending observation fails
+ok 2 - C5 round4 finalizer retains state when a later pending observation fails
+  ---
+  duration_ms: 1.5866
+  type: 'test'
+  ...
+# Subtest: C5 round4 construction failure after 0 owners closes every known owner and retains roots
+ok 3 - C5 round4 construction failure after 0 owners closes every known owner and retains roots
+  ---
+  duration_ms: 2.1523
+  type: 'test'
+  ...
+# Subtest: C5 round4 construction failure after 1 owners closes every known owner and retains roots
+ok 4 - C5 round4 construction failure after 1 owners closes every known owner and retains roots
+  ---
+  duration_ms: 1.4575
+  type: 'test'
+  ...
+# Subtest: C5 round4 construction failure after 2 owners closes every known owner and retains roots
+ok 5 - C5 round4 construction failure after 2 owners closes every known owner and retains roots
+  ---
+  duration_ms: 1.049
+  type: 'test'
+  ...
+# Subtest: C5 round4 construction failure after 3 owners closes every known owner and retains roots
+ok 6 - C5 round4 construction failure after 3 owners closes every known owner and retains roots
+  ---
+  duration_ms: 0.9453
+  type: 'test'
+  ...
+# Subtest: C5 round4 construction failure after 4 owners closes every known owner and retains roots
+ok 7 - C5 round4 construction failure after 4 owners closes every known owner and retains roots
+  ---
+  duration_ms: 0.9211
+  type: 'test'
+  ...
+# Subtest: C5 round4 finalizer aggregates falsy primary every owner close and all release absence residue proofs
+ok 8 - C5 round4 finalizer aggregates falsy primary every owner close and all release absence residue proofs
+  ---
+  duration_ms: 1.5698
+  type: 'test'
+  ...
+# Subtest: C5 round4 failed release alone prevents disposal after successful owner close
+ok 9 - C5 round4 failed release alone prevents disposal after successful owner close
+  ---
+  duration_ms: 2.272
+  type: 'test'
+  ...
+# Subtest: C5 round4 failed absence alone prevents disposal after successful owner close
+ok 10 - C5 round4 failed absence alone prevents disposal after successful owner close
+  ---
+  duration_ms: 2.4949
+  type: 'test'
+  ...
+# Subtest: C5 round4 failed residue alone prevents disposal after successful owner close
+ok 11 - C5 round4 failed residue alone prevents disposal after successful owner close
+  ---
+  duration_ms: 1.978
+  type: 'test'
+  ...
+# Subtest: C5 round4 finalizer refuses disposal with missing owner and captured construction state
+ok 12 - C5 round4 finalizer refuses disposal with missing owner and captured construction state
+  ---
+  duration_ms: 1.022
+  type: 'test'
+  ...
+# Subtest: C5 round4 OCI residue observation uses only the exact fixture identity and read-only argv
+ok 13 - C5 round4 OCI residue observation uses only the exact fixture identity and read-only argv
+  ---
+  duration_ms: 0.1433
+  type: 'test'
+  ...
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-empty-owner-d6NGcy","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-S8yS0d"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-qfybQf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-lFEICb"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-qfybQf","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-lFEICb"]}
+# Subtest: C5 round4 actual empty owner release proof reopens retained durable state after all owners close
+ok 14 - C5 round4 actual empty owner release proof reopens retained durable state after all owners close
+  ---
+  duration_ms: 65.4087
+  type: 'test'
+  ...
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-qfybQf","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-lFEICb"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-redbI4"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-atGRXm"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-redbI4","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-atGRXm"]}
+# Subtest: C5 round4 successful disposal follows retained idempotent close pending settlement and every proof
+ok 15 - C5 round4 successful disposal follows retained idempotent close pending settlement and every proof
+  ---
+  duration_ms: 2.4488
+  type: 'test'
+  ...
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-redbI4","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-atGRXm"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BUU3Jr"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-WNwnS4"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BUU3Jr","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-WNwnS4"]}
+# Subtest: C5 round4 directly owned wrapper running is stopped only by handle and joined before finalization
+ok 16 - C5 round4 directly owned wrapper running is stopped only by handle and joined before finalization
+  ---
+  duration_ms: 1.3875
+  type: 'test'
+  ...
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BUU3Jr","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-WNwnS4"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-hASTOc"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-T8riIk"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-hASTOc","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-T8riIk"]}
+# Subtest: C5 round4 directly owned wrapper exited is stopped only by handle and joined before finalization
+ok 17 - C5 round4 directly owned wrapper exited is stopped only by handle and joined before finalization
+  ---
+  duration_ms: 0.9319
+  type: 'test'
+  ...
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-hASTOc","failures":[{"name":"AggregateError","message":"Owned MCP wrapper stop/join failed.","errors":[{"name":"Error","message":"synthetic direct stop error"}]}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-hASTOc","failures":[{"name":"AggregateError","message":"Owned MCP wrapper stop/join failed.","errors":[{"name":"Error","message":"synthetic direct stop error"}]}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-hASTOc","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-T8riIk"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-R621L3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-hyrmFF"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-R621L3","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-hyrmFF"]}
+# Subtest: C5 round4 directly owned wrapper stop-error is stopped only by handle and joined before finalization
+ok 18 - C5 round4 directly owned wrapper stop-error is stopped only by handle and joined before finalization
+  ---
+  duration_ms: 1.2674
+  type: 'test'
+  ...
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-R621L3","failures":[{"name":"AggregateError","message":"Owned MCP wrapper stop/join failed.","errors":[{"name":"Error","message":"Owned MCP wrapper stop was not accepted."}]}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-R621L3","failures":[{"name":"AggregateError","message":"Owned MCP wrapper stop/join failed.","errors":[{"name":"Error","message":"Owned MCP wrapper stop was not accepted."}]}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-R621L3","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-hyrmFF"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-u2VLOg"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-oFQuSt"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-u2VLOg","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-oFQuSt"]}
+# Subtest: C5 round4 directly owned wrapper stop-refused is stopped only by handle and joined before finalization
+ok 19 - C5 round4 directly owned wrapper stop-refused is stopped only by handle and joined before finalization
+  ---
+  duration_ms: 1.1938
+  type: 'test'
+  ...
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-u2VLOg","failures":[{"name":"AggregateError","message":"Owned MCP wrapper stop/join failed.","errors":[{"name":"Error","message":"synthetic wrapper error before close"}]}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-u2VLOg","failures":[{"name":"AggregateError","message":"Owned MCP wrapper stop/join failed.","errors":[{"name":"Error","message":"synthetic wrapper error before close"}]}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-u2VLOg","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-oFQuSt"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-Hvj0r0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-TwrPk1"}
+# {"created":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-Hvj0r0","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-TwrPk1"]}
+# Subtest: C5 round4 directly owned wrapper join-error is stopped only by handle and joined before finalization
+ok 20 - C5 round4 directly owned wrapper join-error is stopped only by handle and joined before finalization
+  ---
+  duration_ms: 1.5065
+  type: 'test'
+  ...
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-Hvj0r0","failures":[{"name":"AggregateError","message":"Owned MCP wrapper stop/join failed.","errors":[{"name":"Error","message":"synthetic direct stop error"},{"name":"Error","message":"synthetic wrapper error before close"}]}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-Hvj0r0","failures":[{"name":"AggregateError","message":"Owned MCP wrapper stop/join failed.","errors":[{"name":"Error","message":"synthetic direct stop error"},{"name":"Error","message":"synthetic wrapper error before close"}]}]}
+# {"removed":["C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-Hvj0r0","C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-TwrPk1"],"absent":[true,true]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-PzP8Fz"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-state-9ejihk"}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-PzP8Fz","failures":[{"name":"Error","message":"synthetic trigger-marker wait failure"}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-PzP8Fz","failures":[{"name":"Error","message":"synthetic trigger-marker wait failure"}]}
+# Subtest: C5 round4 directly owned wrapper both-errors is stopped only by handle and joined before finalization
+ok 21 - C5 round4 directly owned wrapper both-errors is stopped only by handle and joined before finalization
+  ---
+  duration_ms: 1.3049
+  type: 'test'
+  ...
+# Subtest: C5 post-ready finalizer retains both exact roots and observes a close-rejected pending call after primary failure
+ok 22 - C5 post-ready finalizer retains both exact roots and observes a close-rejected pending call after primary failure
+  ---
+  duration_ms: 1.029
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-ordering-KkdJWy"}
+# Subtest: C5 post-ready call observer owns a rejection before finalizer settlement
+ok 23 - C5 post-ready call observer owns a rejection before finalizer settlement
+  ---
+  duration_ms: 0.3061
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-siaxJm"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-state-wyagYP"}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-siaxJm","failures":[{"name":"Error","message":"synthetic primary failure"},{"name":"Error","message":"synthetic close cleanup failure"}]}
+# MCP fixture original failure chain: {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-siaxJm","failures":[{"name":"Error","message":"synthetic primary failure"},{"name":"Error","message":"synthetic close cleanup failure"}]}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-bcKIeL"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-state-DOfuMD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-project-gLTwuA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-7V5FUC"}
+# Subtest: C5 post-ready fixture settles its owned call before asserting a controlled delayed trigger marker
+ok 24 - C5 post-ready fixture settles its owned call before asserting a controlled delayed trigger marker
+  ---
+  duration_ms: 3510.4684
+  type: 'test'
+  ...
+# Subtest: C5 post-ready finalizer aggregates primary and close cleanup failures without deleting either exact root
+ok 25 - C5 post-ready finalizer aggregates primary and close cleanup failures without deleting either exact root
+  ---
+  duration_ms: 1.3574
+  type: 'test'
+  ...
+# Subtest: C5 post-ready finalizer deletes only after clean close with no primary failure
+ok 26 - C5 post-ready finalizer deletes only after clean close with no primary failure
+  ---
+  duration_ms: 1.0609
+  type: 'test'
+  ...
+# Subtest: C5 actual empty owned manager retains its exact state root when final cleanup preserves primary evidence
+ok 27 - C5 actual empty owned manager retains its exact state root when final cleanup preserves primary evidence
+  ---
+  duration_ms: 51.9768
+  type: 'test'
+  ...
+# Subtest: live MCP status follows registered per-run managers and returns to configured stopped state
+ok 28 - live MCP status follows registered per-run managers and returns to configured stopped state
+  ---
+  duration_ms: 0.5092
+  type: 'test'
+  ...
+# Subtest: post-ready transport failure closes automatically and explicit close retries one blocked cleanup
+ok 29 - post-ready transport failure closes automatically and explicit close retries one blocked cleanup
+  ---
+  duration_ms: 37.8725
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-c95GZv"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-KXJQds"}
+# Subtest: a terminal failure during transport opening cannot be overwritten as ready
+ok 30 - a terminal failure during transport opening cannot be overwritten as ready
+  ---
+  duration_ms: 1.5267
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-permission-djRrEV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-9sXYp9"}
+# Subtest: MCP stdio schemas become audited native tools with artifact-backed images
+ok 31 - MCP stdio schemas become audited native tools with artifact-backed images
+  ---
+  duration_ms: 21771.6283
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-identity-EtmdYo"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-7rGNgr"}
+# {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-identity-EtmdYo","stateDirectory":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-7rGNgr"}
+# Subtest: MCP calls require approval outside Full Access
+ok 32 - MCP calls require approval outside Full Access
+  ---
+  duration_ms: 4613.7492
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-bsiNXt"}
+# {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-identity-EtmdYo","stateDirectory":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-bsiNXt"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-ijCWjn"}
+# {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-identity-EtmdYo","stateDirectory":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-ijCWjn"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-tree-ZloxaI"}
+# {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-tree-ZloxaI","stateDirectory":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-eQ4Gaw"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-eQ4Gaw"}
+# Subtest: strict public MCP uses the separately attested portable image command and refuses unsafe host identities
+ok 33 - strict public MCP uses the separately attested portable image command and refuses unsafe host identities
+  ---
+  duration_ms: 30700.2859
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-post-ready-self-exit-fLb13h"}
+# C5 post-ready self-exit project root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-mcp-post-ready-self-exit-fLb13h
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-2WAiJr"}
+# C5 post-ready self-exit state root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-mcp-owned-state-2WAiJr
+# Subtest: public MCP manager close verifies its launched server tree is empty
+ok 34 - public MCP manager close verifies its launched server tree is empty
+  ---
+  duration_ms: 22968.787
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-post-ready-oversized-line-pDL5V0"}
+# C5 post-ready oversized-line project root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-mcp-post-ready-oversized-line-pDL5V0
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-osMbC3"}
+# C5 post-ready oversized-line state root: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-mcp-owned-state-osMbC3
+# Subtest: post-ready self-exit failure rejects the call and releases its exact process session
+ok 35 - post-ready self-exit failure rejects the call and releases its exact process session
+  ---
+  duration_ms: 18391.5802
+  type: 'test'
+  ...
+# Subtest: post-ready oversized-line failure rejects the call and releases its exact process session
+ok 36 - post-ready oversized-line failure rejects the call and releases its exact process session
+  ---
+  duration_ms: 23310.2432
+  type: 'test'
+  ...
+# Subtest: recovered blocked MCP ownership prevents a replacement launch
+ok 37 - recovered blocked MCP ownership prevents a replacement launch
+  ---
+  duration_ms: 0.5489
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-manager-crash-dYxNbK"}
+# {"root":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-manager-crash-dYxNbK","stateDirectory":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-manager-crash-dYxNbK\\\\state"}
+# Subtest: closing an owned MCP transport stops a sustained pending-output pump after its current delivery
+ok 38 - closing an owned MCP transport stops a sustained pending-output pump after its current delivery
+  ---
+  duration_ms: 132.9464
+  type: 'test'
+  ...
+# Subtest: public MCP manager crash recovery cleans its exact launched server tree without relaunch
+ok 39 - public MCP manager crash recovery cleans its exact launched server tree without relaunch
+  ---
+  duration_ms: 21749.0687
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----mORkNm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----9B3960","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----qKx1Cj","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----GMi2OL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----L8FvVX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-path-probe----VLVOnH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-IpCTQn","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-TmcEDz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-jMho4x","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-R3sfHa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-GUueuQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-ZQc8U7","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-NwTiAa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-fWgbBh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-ToUkSx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-uUaDZT","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-7geLcM","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-giVna8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-FVT3xC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-98zKxe","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BGezmt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-vOdGGv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-30J93U","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-Q5yghK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-zUQdNX","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-sa6CCH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-giPr3g","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-U1Ss8m","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-empty-owner-d6NGcy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-S8yS0d","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-qfybQf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-lFEICb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-redbI4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-atGRXm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-BUU3Jr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-WNwnS4","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-hASTOc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-T8riIk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-R621L3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-hyrmFF","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-u2VLOg","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-oFQuSt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-project-Hvj0r0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-round4-state-TwrPk1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-PzP8Fz","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-state-9ejihk","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-ordering-KkdJWy","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-siaxJm","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-state-wyagYP","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-finalizer-bcKIeL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-state-DOfuMD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-c5-mcp-project-gLTwuA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-7V5FUC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-c95GZv","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-KXJQds","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-permission-djRrEV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-9sXYp9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-identity-EtmdYo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-7rGNgr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-bsiNXt","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-strict-state-ijCWjn","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-tree-ZloxaI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-eQ4Gaw","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-post-ready-self-exit-fLb13h","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-2WAiJr","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-post-ready-oversized-line-pDL5V0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-owned-state-osMbC3","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-mcp-manager-crash-dYxNbK","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-b3-real-crash-VNp0WC"}
+# Subtest: real Runner crash before transfer is cleaned exactly once without fabricated adoption
+ok 40 - real Runner crash before transfer is cleaned exactly once without fabricated adoption
+  ---
+  duration_ms: 11116.2483
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-b3-real-output-ZJZl20"}
+# Subtest: real persistent output stays private between calls and spill failure never corrupts protocol bytes
+ok 41 - real persistent output stays private between calls and spill failure never corrupts protocol bytes
+  ---
+  duration_ms: 9994.7716
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-b3-real-crash-VNp0WC","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\runner-b3-real-output-ZJZl20","existsAtExit":false}
+1..41
+# tests 47
+# suites 0
+# pass 47
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 170253.1358

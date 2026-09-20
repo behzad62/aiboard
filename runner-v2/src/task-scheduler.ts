@@ -3,8 +3,13 @@ import type {
   SchedulerStore,
 } from "./scheduler-store.js";
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
-import type { BuildTask } from "./task-contracts.js";
+import { isFinalVerificationTask, type BuildTask } from "./task-contracts.js";
 import { readyTaskIds } from "./task-graph.js";
+import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
+import {
+  isSteeringReassignedWorkerId,
+  standardWorkerId,
+} from "./worker-identity.js";
 
 export interface WorkerAssignment {
   runId: string;
@@ -17,7 +22,11 @@ export interface WorkerAssignment {
 }
 
 export type WorkerOutcome =
-  | { type: "submitted"; changeSetId: string }
+  | {
+      type: "submitted";
+      changeSetId: string;
+      criterionEvidenceLinks?: CriterionEvidenceLink[];
+    }
   | {
       type: "guidance";
       requestId: string;
@@ -105,9 +114,15 @@ export class TaskScheduler {
     try {
       let projection = this.projection();
       if (projection.status !== "running") return;
+      if (hasPendingUserGuidance(projection)) return;
+      if (
+        projection.acceptanceContractStatus ===
+        "acceptance_contract_upgrade_required"
+      ) return;
 
       for (const task of Object.values(projection.tasks)) {
         if (this.active.size >= this.maxConcurrency) break;
+        if (isFinalVerificationTask(task)) continue;
         if (
           (task.status === "assigned" || task.status === "running") &&
           !this.active.has(task.id)
@@ -115,11 +130,13 @@ export class TaskScheduler {
           const allocation = task.workspacePath
             ? { path: task.workspacePath }
             : normalizeWorkspace(await this.workspaceFor(task, task.attempt));
+          projection = this.projection();
+          if (hasPendingUserGuidance(projection)) return;
           const workspacePath = allocation.path;
           if (task.status === "assigned") {
             this.transition(task.id, "running", task.attempt, {
               ...workspacePatch(allocation),
-            });
+            }, task.assignedWorkerId);
             projection = this.projection();
           }
           this.dispatch(projection.tasks[task.id], workspacePath);
@@ -145,14 +162,16 @@ export class TaskScheduler {
         const allocation = normalizeWorkspace(
           await this.workspaceFor(task, attempt)
         );
+        projection = this.projection();
+        if (hasPendingUserGuidance(projection)) return;
         const workspacePath = allocation.path;
-        const workerId = `worker_${taskId}_${attempt}`;
+        const workerId = standardWorkerId(taskId, attempt);
         this.transition(taskId, "assigned", attempt, {
           attempt,
           assignedWorkerId: workerId,
           ...workspacePatch(allocation),
-        });
-        this.transition(taskId, "running", attempt, workspacePatch(allocation));
+        }, workerId);
+        this.transition(taskId, "running", attempt, workspacePatch(allocation), workerId);
         this.dispatch(this.projection().tasks[taskId], workspacePath);
       }
     } finally {
@@ -188,7 +207,7 @@ export class TaskScheduler {
       runId: this.runId,
       task: { ...task },
       attempt: task.attempt,
-      workerId: task.assignedWorkerId ?? `worker_${task.id}_${task.attempt}`,
+      workerId: task.assignedWorkerId ?? standardWorkerId(task.id, task.attempt),
       workspacePath,
       ...(this.lifecycleSignal ? { signal: this.lifecycleSignal() } : {}),
       ...(providerRetryDeadlineMs !== undefined
@@ -197,12 +216,17 @@ export class TaskScheduler {
     };
     const operation = Promise.resolve()
       .then(async () => await this.driver.run(assignment))
-      .then((outcome) => this.recordOutcome(task.id, task.attempt, outcome))
+      .then((outcome) => {
+        if (assignment.signal?.aborted) return;
+        this.recordOutcome(task.id, task.attempt, assignment.workerId, outcome);
+      })
       .catch((error: unknown) =>
-        this.recordOutcome(task.id, task.attempt, {
-          type: "failed",
-          reason: error instanceof Error ? error.message : String(error),
-        })
+        assignment.signal?.aborted
+          ? undefined
+          : this.recordOutcome(task.id, task.attempt, assignment.workerId, {
+              type: "failed",
+              reason: error instanceof Error ? error.message : String(error),
+            })
       )
       .finally(() => {
         this.active.delete(task.id);
@@ -213,12 +237,21 @@ export class TaskScheduler {
   private recordOutcome(
     taskId: string,
     attempt: number,
+    workerId: string,
     outcome: WorkerOutcome
   ): void {
     if (outcome.type === "submitted") {
       this.transition(taskId, "submitted", attempt, {
         changeSetId: outcome.changeSetId,
-      });
+        ...(outcome.criterionEvidenceLinks
+          ? {
+              criterionEvidenceLinks: outcome.criterionEvidenceLinks.map((link) => ({
+                ...link,
+                artifactHashes: [...link.artifactHashes],
+              })),
+            }
+          : {}),
+      }, workerId);
       return;
     }
     if (outcome.type === "guidance") {
@@ -226,7 +259,7 @@ export class TaskScheduler {
         runId: this.runId,
         type: "guidance.requested",
         occurredAt: this.clock(),
-        actor: { role: "worker", id: `worker_${taskId}_${attempt}` },
+        actor: { role: "worker", id: workerId },
         idempotencyKey: `guidance:${outcome.requestId}`,
         payload: {
           requestId: outcome.requestId,
@@ -252,24 +285,43 @@ export class TaskScheduler {
     }
     this.transition(taskId, "failed", attempt, {
       failureReason: outcome.reason,
-    });
+    }, workerId);
   }
 
   private transition(
     taskId: string,
     status: BuildTask["status"],
     attempt: number,
-    patch: Record<string, unknown>
+    patch: Record<string, unknown>,
+    workerId?: string
   ): void {
     this.store.append({
       runId: this.runId,
       type: "task.transitioned",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "scheduler" },
-      idempotencyKey: `task:${taskId}:attempt:${attempt}:${status}`,
+      idempotencyKey: taskTransitionIdempotencyKey(
+        taskId,
+        attempt,
+        status,
+        workerId
+      ),
       payload: { taskId, status, patch },
     });
   }
+}
+
+function taskTransitionIdempotencyKey(
+  taskId: string,
+  attempt: number,
+  status: BuildTask["status"],
+  workerId?: string
+): string {
+  const legacyKey = `task:${taskId}:attempt:${attempt}:${status}`;
+  return workerId !== undefined &&
+    isSteeringReassignedWorkerId(taskId, attempt, workerId)
+    ? `${legacyKey}:worker:${workerId}`
+    : legacyKey;
 }
 
 function normalizeWorkspace(
@@ -288,4 +340,10 @@ function workspacePatch(
       ? { workspaceBaselineRevision: allocation.baselineRevision }
       : {}),
   };
+}
+
+function hasPendingUserGuidance(projection: SchedulerProjection): boolean {
+  return Object.values(projection.userGuidance).some(
+    (guidance) => guidance.status === "submitted"
+  );
 }

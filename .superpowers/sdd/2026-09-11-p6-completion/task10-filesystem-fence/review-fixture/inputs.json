@@ -1,0 +1,22 @@
+[
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-fixture-repaired.snapshot",
+    "sha256": "e98783b79f44ed6af24dd72944ea63af328853ef299ec5ec7f3196ed836c871e"
+  },
+  {
+    "path": "runner-v2/src/integration-manager.ts",
+    "sha256": "d8d09834cfa53a9a4db6ea790036387952ec70df040cb740911afd7384302d54"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-early-loser-red/terminal.json",
+    "sha256": "9a2263e7d3872dcc32ee9facd3dc61a66e0bc89e7a6734eb9e22561dfac86b7f"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-early-loser-red/stdout.log",
+    "sha256": "45673baf1641e67d13452a8beeaff0b1e661c6f689530943710c47f0894f3cd5"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-fixture-green/terminal.json",
+    "sha256": "95be1a6816a80ed38be9dae12f6c6ebec941dff3c7689cbb83dd73b5489a9010"
+  }
+]

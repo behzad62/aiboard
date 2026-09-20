@@ -1,0 +1,25 @@
+{
+  "id": "review2-green",
+  "startedAt": "2026-09-15T06:55:36.410Z",
+  "finishedAt": "2026-09-15T06:55:37.485Z",
+  "wrapperPid": 4832,
+  "testPid": 47776,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 441,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=review2:",
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "rootCount": 5,
+  "retainedRoots": []
+}

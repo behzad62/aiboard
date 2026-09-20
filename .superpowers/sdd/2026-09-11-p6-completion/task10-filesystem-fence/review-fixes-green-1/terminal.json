@@ -1,0 +1,29 @@
+{
+  "id": "review-fixes-green-1",
+  "startedAt": "2026-09-14T22:09:49.500Z",
+  "finishedAt": "2026-09-14T22:09:55.141Z",
+  "wrapperPid": 26144,
+  "testPid": 18396,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 440,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+    "runner-v2/test/language-invocation-propagation.test.ts"
+  ],
+  "rootCount": 55,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Ltiw8J"
+  ]
+}

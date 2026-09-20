@@ -1,0 +1,37 @@
+{
+  "id": "reversal-pid",
+  "startedAt": "2026-09-15T09:25:17.536Z",
+  "finishedAt": "2026-09-15T09:25:18.463Z",
+  "wrapperPid": 61004,
+  "testPid": 60892,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 444,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=changed |recycled birth",
+    "runner-v2/test/process-recovery.test.ts"
+  ],
+  "rootCount": 12,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-IqbE8x",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-PIqafz",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9ZmiWX",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-929Hvi",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-MDh8Hd",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-bB62cf",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-urtdg9",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-RaV94A",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-FwAKVF",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-5flfPB",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1ly1VY"
+  ]
+}

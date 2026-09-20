@@ -1,0 +1,14 @@
+{
+  "index": 4,
+  "label": "test-native-build-cutover",
+  "exitCode": 0,
+  "startedAt": "2026-09-11T10:21:42.961866+00:00",
+  "finishedAt": "2026-09-11T10:21:43.200473+00:00",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/tsx/dist/cli.mjs",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "scripts/test-native-build-cutover.mts"
+  ]
+}

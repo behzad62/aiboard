@@ -1,0 +1,11 @@
+{
+  "startedAt": "2026-09-15T08:07:09.697Z",
+  "finishedAt": "2026-09-15T08:07:26.171Z",
+  "wrapperPid": 52372,
+  "childPid": 29920,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "tools": [],
+  "sessionPersistence": false
+}

@@ -1,0 +1,95 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { ArtifactStore } from "../../src/artifact-store.js";
+import { createExecutionHost } from "../../src/execution-host.js";
+import { snapshotNativeBuildAmbientEnvironment } from "../../src/native-build-factory.js";
+import { createExecutionHostMcpTransportFactory } from "../../src/execution-host-mcp-transport.js";
+import { McpManager } from "../../src/mcp-tools.js";
+import { emptyRunnerCapabilitiesConfig } from "../../src/runner-capabilities-config.js";
+import type { RunnerCapabilityContract } from "../../src/runner-capability-contract.js";
+import { createRunnerInternalExecutionContext } from "../../src/runner-internal-execution-context.js";
+
+const [stateDirectory, projectDirectory, readyMarker, serverMarker, descendantMarker] =
+  process.argv.slice(2);
+if (!stateDirectory || !projectDirectory || !readyMarker || !serverMarker || !descendantMarker) {
+  throw new Error("MCP manager crash fixture arguments are missing.");
+}
+
+const runId = "mcp-manager-crash-recovery";
+const capabilities = emptyRunnerCapabilitiesConfig();
+const serverFixture = fileURLToPath(new URL("./mcp-descendant-server.mjs", import.meta.url));
+const servers = [{
+  name: "tree",
+  command: [process.execPath, serverFixture, descendantMarker, serverMarker, "--lazy"]
+    .map(quoteConfiguredArgument)
+    .join(" "),
+}];
+const ambientEnvironment = snapshotNativeBuildAmbientEnvironment();
+const host = createExecutionHost({
+  projectRoot: projectDirectory,
+  stateDirectory,
+  artifacts: new ArtifactStore(join(stateDirectory, "artifacts")),
+  ambientEnvironment,
+  ...(process.platform === "win32" ? {
+    processHostFacts: {
+      portableDuplex: "verified" as const,
+      windowsBatchArgv: "verified" as const,
+      exactTreeBirth: "verified" as const,
+      jobContainment: "unavailable" as const,
+    },
+  } : {}),
+});
+const internal = createRunnerInternalExecutionContext({
+  projectDirectory,
+  stateDirectory,
+  processKernel: host.internalProcesses,
+  ambientEnvironment,
+});
+const attestation = await internal.attestConfiguredCapabilities({
+  mcpServers: servers,
+  capabilitiesConfig: capabilities,
+});
+const launches = await internal.resolveMcpRuntimeLaunches({
+  servers,
+  attestation: attestation.mcp,
+});
+const run = await host.bindRun({
+  runId,
+  permissionProfile: "full",
+  capabilityContract: { digest: "a".repeat(64) } as RunnerCapabilityContract,
+  capabilitiesConfig: capabilities,
+});
+await run.recover({ maxRecords: 1_024, timeoutMs: 30_000 });
+const discoveryOwner = internal.createMcpDiscoveryExecutor({ runId: run.runId, servers, attestation: attestation.mcp, requestTimeoutMs: 5000 });
+const discovery = await discoveryOwner.discover(); await discoveryOwner.close();
+const manager = new McpManager({
+  runId: run.runId, discovery,
+  reattest: () => internal.resolveMcpRuntimeLaunches({ servers, attestation: attestation.mcp }),
+  cwd: projectDirectory,
+  servers,
+  transportFactory: createExecutionHostMcpTransportFactory({
+    run,
+    permissionProfile: "full",
+    projectDirectory,
+    launches,
+  }),
+});
+await manager.start();
+if (manager.status()[0]?.status !== "ready") {
+  throw new Error(`MCP manager crash fixture did not become ready: ${JSON.stringify(manager.status())}`);
+}
+const binding = { runId: run.runId, sessionId: "actual-crash-agent", actor: { role: "worker" as const, id: "actual-crash-worker" },
+  callId: "first-crash-call", toolName: "mcp.tree.probe", permissionProfile: "full" as const };
+const grant = await run.executionGrants.issue({ ...binding, workspacePath: projectDirectory, access: [], networkApproved: false, externalApproved: false, destructiveApproved: false });
+await manager.toolEntries()[0]!.client.call("probe", {}, { ...binding, workspacePath: projectDirectory, executionGrant: grant });
+await run.executionGrants.revoke(grant, "completed");
+writeFileSync(readyMarker, JSON.stringify({ pid: process.pid }), { flag: "wx" });
+process.exit(86);
+
+function quoteConfiguredArgument(value: string): string {
+  return process.platform === "win32"
+    ? `"${value.replaceAll('"', '""')}"`
+    : `'${value.replaceAll("'", "'\\''")}'`;
+}

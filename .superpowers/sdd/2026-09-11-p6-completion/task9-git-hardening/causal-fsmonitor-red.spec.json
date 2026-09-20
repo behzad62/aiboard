@@ -1,0 +1,7 @@
+{
+  "id": "causal-fsmonitor-red",
+  "tests": [
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ],
+  "pattern": "neutralizes repository fsmonitor"
+}

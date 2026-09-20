@@ -1,0 +1,104 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-5ONsBZ"}
+# Subtest: LSP invocation propagates the exact original code.workspace_symbols grant and identity
+not ok 1 - LSP invocation propagates the exact original code.workspace_symbols grant and identity
+  ---
+  duration_ms: 3.924
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\language-invocation-propagation.test.ts:1:536'
+  failureType: 'testCodeFailure'
+  error: 'configured LSP must receive actual call authority, not mint an internal replacement'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\language-invocation-propagation.test.ts:26:51)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-5ONsBZ
+# synthetic invocation failure retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-5ONsBZ
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-XwWOSN"}
+# Subtest: LSP invocation propagates the exact original code.definition grant and identity
+not ok 2 - LSP invocation propagates the exact original code.definition grant and identity
+  ---
+  duration_ms: 2.047
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\language-invocation-propagation.test.ts:1:536'
+  failureType: 'testCodeFailure'
+  error: 'configured LSP must receive actual call authority, not mint an internal replacement'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\language-invocation-propagation.test.ts:26:51)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-XwWOSN
+# synthetic invocation failure retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-XwWOSN
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-2gaXvf"}
+# Subtest: LSP invocation propagates the exact original code.references grant and identity
+not ok 3 - LSP invocation propagates the exact original code.references grant and identity
+  ---
+  duration_ms: 0.6955
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\language-invocation-propagation.test.ts:1:536'
+  failureType: 'testCodeFailure'
+  error: 'configured LSP must receive actual call authority, not mint an internal replacement'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\language-invocation-propagation.test.ts:26:51)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-2gaXvf
+# synthetic invocation failure retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-2gaXvf
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-yr5985"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-bdJjCz"}
+# Subtest: LSP invocation propagates the exact original code.diagnostics grant and identity
+not ok 4 - LSP invocation propagates the exact original code.diagnostics grant and identity
+  ---
+  duration_ms: 0.6484
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\language-invocation-propagation.test.ts:1:536'
+  failureType: 'testCodeFailure'
+  error: 'configured LSP must receive actual call authority, not mint an internal replacement'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\language-invocation-propagation.test.ts:26:51)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-yr5985
+# synthetic invocation failure retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-yr5985
+# Subtest: LSP invocation propagates the exact original fs.write grant and identity
+ok 5 - LSP invocation propagates the exact original fs.write grant and identity
+  ---
+  duration_ms: 4.3303
+  type: 'test'
+  ...
+# synthetic invocation root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-bdJjCz
+# synthetic invocation root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-context-bdJjCz
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-5ONsBZ","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-XwWOSN","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-2gaXvf","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-yr5985","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-context-bdJjCz","existsAtExit":false}
+1..5
+# tests 5
+# suites 0
+# pass 1
+# fail 4
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 267.5254

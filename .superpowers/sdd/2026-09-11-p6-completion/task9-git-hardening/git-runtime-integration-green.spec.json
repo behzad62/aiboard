@@ -1,0 +1,6 @@
+{
+  "id": "git-runtime-integration-green",
+  "tests": [
+    "runner-v2/test/git-runtime-integration.test.ts"
+  ]
+}

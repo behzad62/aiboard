@@ -1,0 +1,159 @@
+{
+  "id": "current-portable-callback",
+  "target": "runner-v2/src/portable-process-supervisor.mjs",
+  "test": "runner-v2/test/portable-supervisor-input.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-green",
+  "mutation": {
+    "id": "current-portable-callback",
+    "file": "runner-v2/src/portable-process-supervisor.mjs",
+    "old": "try { child.stdin.write(bytes, (error) => { pending.status = error ? \"failed\" : \"acknowledged\"; pending.settled = true; }); }",
+    "replacement": "try { child.stdin.write(bytes); pending.status = \"acknowledged\"; pending.settled = true; }",
+    "test": "portable-supervisor-input",
+    "originalHash": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+    "faultHash": "7b0ca897624c63f4ada7f7dbbc7ad141285555dd25fa1ecaecff2e06fefbeb9a",
+    "red": {
+      "id": "current-portable-callback-red",
+      "exitCode": 1,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [
+        "not ok 1 - portable supervisor acknowledges only settled callbacks and never overlaps or replays a pending write",
+        "not ok 2 - portable supervisor refuses stale completed write acknowledgement without reissuing bytes",
+        "not ok 3 - portable supervisor retains settled input through temporary coordination refusal"
+      ],
+      "parseError": false
+    },
+    "restoredHash": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+    "green": {
+      "id": "current-portable-callback-green",
+      "exitCode": 0,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [],
+      "parseError": false
+    }
+  },
+  "sourceFinalSha256": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+  "testFinalSha256": "bbf09d19a82288bf73d0c31468ba11cd0fd652d0ec9cca13de45dc5fffc5b89f",
+  "redReceipt": {
+    "id": "current-portable-callback-red",
+    "startedAt": "2026-09-13T19:40:47.180Z",
+    "finishedAt": "2026-09-13T19:40:47.881Z",
+    "wrapperPid": 37400,
+    "testPid": 33660,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/portable-supervisor-input.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "current-portable-callback-green",
+    "startedAt": "2026-09-13T19:40:47.929Z",
+    "finishedAt": "2026-09-13T19:40:48.608Z",
+    "wrapperPid": 9084,
+    "testPid": 18784,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/portable-supervisor-input.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/red-terminal.json",
+      "sha256": "6943fc8384811bbd39c3220a017cda685db758f000965f853c922cfc9c4b25b7"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/red-inputs-before.json",
+      "sha256": "77c7f0caf52e2551faca156475b09bdb3f233d6ca5eeae114a605881f722094d"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/red-inputs-after.json",
+      "sha256": "77c7f0caf52e2551faca156475b09bdb3f233d6ca5eeae114a605881f722094d"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/red-stdout.log",
+      "sha256": "6419458252f48c8da65ac492ab15b53421466f02739b845689fea7e760600263"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/red-wrapper.json",
+      "sha256": "7de569de2e9c2693c5579ef22ee6fe78153fa65553071e3541f13550f584a9c0"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/red-child.json",
+      "sha256": "bd7a9353365492fd8bf9c2f0f734b78043be98654b081eba98599fb9e48f4391"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/green-terminal.json",
+      "sha256": "e71b7d87913e1bf489f468ef3ce6a2903a2c150646f73c4c341b1ad078b384df"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/green-inputs-before.json",
+      "sha256": "6e9a3c1171a056101f8333fc414f717658fcdc27f9b026e25a7b4cdc9891e134"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/green-inputs-after.json",
+      "sha256": "6e9a3c1171a056101f8333fc414f717658fcdc27f9b026e25a7b4cdc9891e134"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/green-stdout.log",
+      "sha256": "726e4cff71381b8fad578567e11654949ac4b2a03c08b5947581c725baec4fe3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/green-wrapper.json",
+      "sha256": "4cf611de674990d21541b202b0b4ab2d5c91111483add05f703ac0d99d59810a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-portable-callback-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-portable-callback/green-child.json",
+      "sha256": "d0f4a54cfe2867ae8a0d35c6344e7ff1be63593ec7a2154232a2f2cb7345ec51"
+    }
+  ]
+}

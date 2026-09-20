@@ -1,4 +1,4 @@
-import type { NativeBuildRunPolicy } from "./build-spec.js";
+export type NativeBudgetRunPolicy = "finish" | "budgeted" | "plan_only";
 
 export type NativeBudgetRuntimeCostBasis =
   | "priced_api"
@@ -11,7 +11,7 @@ export interface NativeBudgetRuntime {
 }
 
 export interface NativeBudgetPolicyInput {
-  runPolicy: NativeBuildRunPolicy;
+  runPolicy: NativeBudgetRunPolicy;
   budgetLimits: {
     maxEstimatedCostMicros?: number;
     maxActiveMs?: number;

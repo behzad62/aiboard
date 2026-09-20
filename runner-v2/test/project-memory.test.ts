@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -64,6 +64,51 @@ test("worker proposals require Architect promotion and survive restart", async (
     assert.equal(results[0].status, "promoted");
     store.close();
   } finally {
+    fixture.cleanup();
+  }
+});
+
+test("read-only memory history reconstructs events without creating a writable authority", () => {
+  const fixture = memoryFixture();
+  let writer: SqliteProjectMemoryStore | undefined;
+  let reader: SqliteProjectMemoryStore | undefined;
+  try {
+    writer = new SqliteProjectMemoryStore(fixture.database);
+    writer.propose({
+      projectId: "project_a",
+      runId: "run_legacy",
+      actor: { role: "architect", id: "architect_1" },
+      content: "Historical memory.",
+      concepts: ["history"],
+      occurredAt: "2026-08-28T00:00:00.000Z",
+      idempotencyKey: "legacy-memory",
+    });
+    writer.close();
+    writer = undefined;
+    const beforeBytes = readFileSync(fixture.database);
+    const beforeMtime = statSync(fixture.database).mtimeMs;
+
+    reader = new SqliteProjectMemoryStore(fixture.database, { readOnly: true });
+    assert.equal(reader.events("project_a").length, 1);
+    assert.throws(
+      () => reader!.propose({
+        projectId: "project_a",
+        runId: "run_legacy",
+        actor: { role: "architect", id: "architect_1" },
+        content: "Must not persist.",
+        concepts: ["history"],
+        occurredAt: "2026-08-28T00:00:01.000Z",
+        idempotencyKey: "must-not-write",
+      }),
+      /read-only/i,
+    );
+    reader.close();
+    reader = undefined;
+    assert.deepEqual(readFileSync(fixture.database), beforeBytes);
+    assert.equal(statSync(fixture.database).mtimeMs, beforeMtime);
+  } finally {
+    reader?.close();
+    writer?.close();
     fixture.cleanup();
   }
 });

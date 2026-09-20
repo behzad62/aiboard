@@ -1,0 +1,19 @@
+{
+  "id": "client-recovery-red",
+  "startedAt": "2026-09-15T14:31:23.587Z",
+  "finishedAt": "2026-09-15T14:31:24.348Z",
+  "wrapperPid": 23172,
+  "testPid": 24104,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 449,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-client.mts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

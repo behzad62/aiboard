@@ -20,7 +20,7 @@ export default function RunnerGuidePage() {
       <section className="space-y-3">
         <h2 className="font-display text-xl font-semibold">Prerequisites</h2>
         <ul className="list-disc space-y-2 pl-6">
-          <li>Node.js 24.18.0 or newer.</li>
+          <li>Node.js 24.x.</li>
           <li>Git installed and available on PATH.</li>
           <li>A state directory outside the project directory.</li>
         </ul>

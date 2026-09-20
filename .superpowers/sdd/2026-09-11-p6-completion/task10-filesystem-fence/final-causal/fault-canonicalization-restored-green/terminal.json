@@ -1,0 +1,25 @@
+{
+  "id": "fault-canonicalization-restored-green",
+  "startedAt": "2026-09-15T07:52:28.349Z",
+  "finishedAt": "2026-09-15T07:52:29.023Z",
+  "wrapperPid": 52328,
+  "testPid": 42088,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 442,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=a new-file parent retarget",
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

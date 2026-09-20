@@ -1,0 +1,30 @@
+{
+  "id": "implementation-1",
+  "startedAt": "2026-09-14T21:40:33.086Z",
+  "finishedAt": "2026-09-14T21:40:37.115Z",
+  "wrapperPid": 48476,
+  "testPid": 39716,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 439,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/tool-broker.test.ts",
+    "runner-v2/test/execution-grants.test.ts"
+  ],
+  "rootCount": 41,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-R2WCIj",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-JhIJxe"
+  ]
+}

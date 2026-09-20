@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "event": "created",
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz"
+    },
+    {
+      "event": "exit",
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz",
+      "existsAtExit": false
+    }
+  ],
+  "roots": [
+    {
+      "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-integration-handoff-concurrent-journals-eaTAWz",
+      "existsAtReceipt": false
+    }
+  ],
+  "note": "Existence observation only; verified ownership/cleanup is asserted by each fixture, not inferred from absence."
+}

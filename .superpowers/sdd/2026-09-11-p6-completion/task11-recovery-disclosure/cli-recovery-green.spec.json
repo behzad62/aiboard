@@ -1,0 +1,7 @@
+{
+  "id": "cli-recovery-green",
+  "pattern": "CLI connects",
+  "tests": [
+    "runner-v2/test/process-recovery-control.test.ts"
+  ]
+}

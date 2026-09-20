@@ -1,0 +1,21 @@
+{
+  "pid": 27700,
+  "identity": {
+    "Id": 27700,
+    "StartTimeUtc": "2026-09-14T15:57:30.0220742Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 19428,
+  "spawnedAt": "2026-09-14T15:57:30.301Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-production-managers.test.ts"
+  ]
+}

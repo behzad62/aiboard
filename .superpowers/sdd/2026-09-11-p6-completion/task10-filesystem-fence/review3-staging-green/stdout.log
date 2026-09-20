@@ -1,0 +1,42 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Cwx2wh"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Qz6T5a"}
+# Subtest: filesystem fence: review3: create refuses staged-byte tampering at flush
+ok 1 - filesystem fence: review3: create refuses staged-byte tampering at flush
+  ---
+  duration_ms: 56.8538
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gP1sRJ"}
+# Subtest: filesystem fence: review3: create refuses staged-byte tampering at publication
+ok 2 - filesystem fence: review3: create refuses staged-byte tampering at publication
+  ---
+  duration_ms: 32.5912
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-vieNUQ"}
+# Subtest: filesystem fence: review3: replace refuses staged-byte tampering at flush
+ok 3 - filesystem fence: review3: replace refuses staged-byte tampering at flush
+  ---
+  duration_ms: 25.3199
+  type: 'test'
+  ...
+# Subtest: filesystem fence: review3: replace refuses staged-byte tampering at publication
+ok 4 - filesystem fence: review3: replace refuses staged-byte tampering at publication
+  ---
+  duration_ms: 38.274
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Cwx2wh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-Qz6T5a","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-gP1sRJ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-fence-vieNUQ","existsAtExit":false}
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 472.4648

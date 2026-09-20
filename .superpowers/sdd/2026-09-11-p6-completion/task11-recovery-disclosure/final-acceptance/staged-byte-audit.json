@@ -1,0 +1,88 @@
+{
+  "warningPathCount": 41,
+  "allWhitespaceWarningsEvidenceOnly": true,
+  "outsideWarningPaths": [],
+  "sourceFreezeVerified": false,
+  "sourceCount": 19,
+  "sourceMismatches": [
+    {
+      "path": "runner-v2/src/build-observability.ts",
+      "expected": "f842e1d995cd2cbf52e7b2d7eac432eca31d4471606f7303615f10652344c2bc",
+      "working": "f842e1d995cd2cbf52e7b2d7eac432eca31d4471606f7303615f10652344c2bc",
+      "staged": "9a529663fcf5bc21528b1b110bb1b5c08c25339427b528f34f7238fb22046b82",
+      "ok": false
+    },
+    {
+      "path": "runner-v2/src/cli.ts",
+      "expected": "ae9ab3ab161ffb4660aa064b1884906c7b00ee9dc9bd333df341553d1f1c4c26",
+      "working": "ae9ab3ab161ffb4660aa064b1884906c7b00ee9dc9bd333df341553d1f1c4c26",
+      "staged": "70ef48f8dd54865213f228afe6105c5ca4c3d3039d438c2fb5a968b64101ca32",
+      "ok": false
+    },
+    {
+      "path": "runner-v2/src/control-server.ts",
+      "expected": "e49c392da06f7422fbb0ced8be024ec9d6ad32ceb5696e0da06df14b222e1d06",
+      "working": "e49c392da06f7422fbb0ced8be024ec9d6ad32ceb5696e0da06df14b222e1d06",
+      "staged": "58e7b9713ccc489ae30b87c6f8d88006e5d541929d1bebb322ae93a2b0685bcb",
+      "ok": false
+    },
+    {
+      "path": "runner-v2/src/native-build-factory.ts",
+      "expected": "8115c0aec3bf3e05c9a289eb7c9b1280f9de6f07a8224bda8e2a3850ede60380",
+      "working": "8115c0aec3bf3e05c9a289eb7c9b1280f9de6f07a8224bda8e2a3850ede60380",
+      "staged": "782d8d32240b8e4d754f48c33c1c41935e9b65078cb2d2dc558001287ec5fdf3",
+      "ok": false
+    },
+    {
+      "path": "runner-v2/src/native-build-manager.ts",
+      "expected": "f4f43ceec6cb9635807032d0200e3ae3a706f67e328ae7abab5c096ab60cf9cd",
+      "working": "f4f43ceec6cb9635807032d0200e3ae3a706f67e328ae7abab5c096ab60cf9cd",
+      "staged": "fc13a6be2b8f03f824e6700d02957fa377a380d7e5cfe5a57ab09ceccc66e2d2",
+      "ok": false
+    },
+    {
+      "path": "runner-v2/src/scheduler-store.ts",
+      "expected": "f383a4fb55b3221c11e1b87f92d9ecee2a4215abef5d863c2ff295e08b94458f",
+      "working": "f383a4fb55b3221c11e1b87f92d9ecee2a4215abef5d863c2ff295e08b94458f",
+      "staged": "0ae9a8e7c90995712b4a9e08c54bf13e14574884d4c0f1fea7b82f3fbb893fba",
+      "ok": false
+    },
+    {
+      "path": "runner-v2/src/streaming-session-store.ts",
+      "expected": "4a7f0d2e30700bb0fa51389524ab04299161372cd1db99627325c2ee34ecc547",
+      "working": "4a7f0d2e30700bb0fa51389524ab04299161372cd1db99627325c2ee34ecc547",
+      "staged": "3fc15ea738133f8d20437ec4d3561bd9536eec9f9076d2ac9e03efe47d2bc091",
+      "ok": false
+    },
+    {
+      "path": "lib/client/runner-v2.ts",
+      "expected": "199a4e8f25d6cb9d1dcf8598d9af35081939654f25acdf2b7a6ec815d7f54b37",
+      "working": "199a4e8f25d6cb9d1dcf8598d9af35081939654f25acdf2b7a6ec815d7f54b37",
+      "staged": "b105e4d565712dbe836d0e58acf3cbe2ad31e579d8bb7409944427727cbce5be",
+      "ok": false
+    },
+    {
+      "path": "components/RunnerV2ObservabilityPanel.tsx",
+      "expected": "ae1e492dbff3ba741d4c4a2a7978ae9244b8662b3fefec80321601ea731b114d",
+      "working": "ae1e492dbff3ba741d4c4a2a7978ae9244b8662b3fefec80321601ea731b114d",
+      "staged": "ac9648d4222b7ba0e7dee375be87a520deeb4f8c13acaeacbaa50ef08c13e087",
+      "ok": false
+    },
+    {
+      "path": "scripts/test-runner-v2-client.mts",
+      "expected": "b15c72708e532c2040a81ff12a7d4bff9a2c933a144b6dbdca2da743371169d8",
+      "working": "b15c72708e532c2040a81ff12a7d4bff9a2c933a144b6dbdca2da743371169d8",
+      "staged": "c7c958f7c2eb79471f0f06769ae5d007992747c00387c26620b4efa6f433a6dd",
+      "ok": false
+    },
+    {
+      "path": "scripts/test-runner-v2-observability.mts",
+      "expected": "2ac98af3d740ffeae2c1db8cf4e2432f31ab35e74cf13a22b697496387552a0a",
+      "working": "2ac98af3d740ffeae2c1db8cf4e2432f31ab35e74cf13a22b697496387552a0a",
+      "staged": "6a8d69735d99170f6e13cd3ad1fe927d53c4fafcfeb475a1663c9203527da548",
+      "ok": false
+    }
+  ],
+  "evidenceIndexedCount": 566,
+  "evidenceRawByteMismatches": []
+}

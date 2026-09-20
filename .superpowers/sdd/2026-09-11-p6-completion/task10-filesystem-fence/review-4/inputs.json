@@ -1,0 +1,18 @@
+[
+  {
+    "path": "runner-v2/src/filesystem-mutation-fence.ts",
+    "sha256": "48a61aa60deb472301f41cced009ef9ed60ff9e1061298dd1b547be69d4d9d3d"
+  },
+  {
+    "path": "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "sha256": "f27ee5ac1a025a705382e57ce68af8c6894e483779f120f371b2600a7a7ebcdc"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/review3-staging-green/terminal.json",
+    "sha256": "543875614ac843e79d408aa6cd0c8648321c7713058125afe028d0f66231f91c"
+  },
+  {
+    "path": ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/review3-focused/terminal.json",
+    "sha256": "fc3595958fee3bdc7850be46400ffa2493745a9323b42887529461da50299a7e"
+  }
+]

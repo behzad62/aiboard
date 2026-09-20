@@ -1,0 +1,38 @@
+LINUX_RUNTIME {"node":"v24.20.0","platform":"linux","arch":"x64","pid":15,"startedAt":"2026-09-13T19:42:18.698Z"}
+FSYNC_ROOT {"dir":"/home/node/task83-fsync-lhdOIK","at":"2026-09-13T19:42:18.702Z"}
+FSYNC_PROBE {"parent":"/home/node","samples":[3.6076639999999998,3.054638999999998,3.0366379999999964,3.0150369999999995,3.1532430000000033,3.010337,3.164044000000004,3.1943449999999984,3.091239999999999,2.8692300000000017,3.018338,3.0515390000000053,3.0674390000000002,3.0024370000000005,3.0918410000000023,2.9687349999999952],"removed":true}
+FSYNC_ROOT {"dir":"/tmp/task83-fsync-ImmClL","at":"2026-09-13T19:42:18.754Z"}
+FSYNC_PROBE {"parent":"/tmp","samples":[0.0033000000000100727,0.0014000000000038426,0.001300000000000523,0.0010999999999938836,0.0011000000000080945,0.0010999999999938836,0.0011999999999972033,0.0010999999999938836,0.0011999999999972033,0.0010999999999938836,0.001300000000000523,0.0011999999999972033,0.0011009999999913589,0.0010999999999938836,0.0012010000000088894,0.0012009999999946785],"removed":true}
+LINUX_COMMAND 0 ["node","--import","./runner-v2/test/support/cli-root-observer.mjs","--test","--test-concurrency=1","--test-reporter=tap","--test-timeout=120000","runner-v2/test/linked-output-spill-storage.test.js"]
+LINUX_CONTROLLER_IDENTITY {"pid":15,"startedAt":"2026-09-13T19:42:18.755Z","stat":"15 (MainThread) R 7 7 1 0 -1 4194560 4392 0 0 0 1 1 0 0 20 0 7 0 258841 1108742144 14073 18446744073709551615 99493384658944 99493433313062 140724356446592 0 0 0 0 16781312 17922 0 0 0 17 5 0 0 0 0 0 99493491347608 99493492833360 99494233821184 140724356452095 140724356452133 140724356452133 140724356452324 0\n"}
+TAP version 13
+# C5 CLI root: {"event":"created","path":"/tmp/p683-linked-spill-lDlLkO"}
+# Subtest: linked spill fixture matches its advertised linked-entry contract exact
+ok 1 - linked spill fixture matches its advertised linked-entry contract exact
+  ---
+  duration_ms: 8.067867
+  type: 'test'
+  ...
+# exact linked test-storage root acquired: /tmp/p683-linked-spill-lDlLkO
+# exact linked test-storage root removed: /tmp/p683-linked-spill-lDlLkO
+# C5 CLI root: {"event":"created","path":"/tmp/p683-linked-spill-LhEBCP"}
+# Subtest: linked spill fixture matches its advertised linked-entry contract wrong-identity
+ok 2 - linked spill fixture matches its advertised linked-entry contract wrong-identity
+  ---
+  duration_ms: 4.685713
+  type: 'test'
+  ...
+# exact linked test-storage root acquired: /tmp/p683-linked-spill-LhEBCP
+# exact linked test-storage root removed: /tmp/p683-linked-spill-LhEBCP
+# C5 CLI root: {"event":"exit","path":"/tmp/p683-linked-spill-lDlLkO","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"/tmp/p683-linked-spill-LhEBCP","existsAtExit":false}
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 87.553985
+LINUX_COMMAND_PASSED 0

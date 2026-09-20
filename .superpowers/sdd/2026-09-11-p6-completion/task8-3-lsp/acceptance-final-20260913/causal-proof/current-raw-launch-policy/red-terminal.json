@@ -1,0 +1,25 @@
+{
+  "id": "current-raw-launch-policy-red",
+  "startedAt": "2026-09-13T19:40:48.656Z",
+  "finishedAt": "2026-09-13T19:40:49.660Z",
+  "wrapperPid": 19272,
+  "testPid": 8608,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 416,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP migrated family contains no direct launch signal shell or ambient environment fallback$",
+    "runner-v2/test/lsp-caller-audit.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

@@ -227,6 +227,12 @@ export type OrchestratorEvent =
       candidateRuntimeIds: string[];
     }
   | {
+      type: "verifier_selection_required";
+      reason: string;
+      requiredCapabilities: string[];
+      candidateRuntimeIds: string[];
+    }
+  | {
       type: "project_handoff_required";
       summary: string;
       options: Array<"keep_integration_branch" | "apply_to_project">;
@@ -263,7 +269,7 @@ export type OrchestratorEvent =
   // Build mode (architect-orchestrated): task board + file writes.
   | {
       type: "build_plan";
-      tasks: Array<{ id: string; title: string; status: string }>;
+      tasks: Array<{ id: string; title: string; status: string; kind?: "implementation" | "verification_repair" | "final_verification" }>;
       cycle: number;
     }
   | {
@@ -273,6 +279,7 @@ export type OrchestratorEvent =
       status: "planned" | "in_progress" | "review" | "fixing" | "done" | "failed";
       worker?: string;
       cycle?: number;
+      kind?: "implementation" | "verification_repair" | "final_verification";
     }
   | {
       type: "file_written";

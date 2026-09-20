@@ -1,3 +1,4 @@
+import { languageInvocation } from "./language-intelligence.js";
 import { resolve } from "node:path";
 
 import type {
@@ -6,12 +7,12 @@ import type {
   ToolExecutionOutput,
   ValidationResult,
 } from "./agent-contracts.js";
+import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
 import type { RepositoryIntelligence } from "./repository-intelligence.js";
-import type { TypeScriptIntelligence } from "./typescript-intelligence.js";
 
 export interface CodeIntelligenceToolsOptions {
   repository: RepositoryIntelligence;
-  typescript: TypeScriptIntelligence;
+  language: LanguageIntelligenceProvider;
 }
 
 type Input = Record<string, unknown>;
@@ -51,7 +52,7 @@ export function createCodeIntelligenceTools(
     ),
     readTool(
       "code.workspace_symbols",
-      "Search TypeScript and JavaScript workspace symbols",
+      "Search symbols through the configured language-intelligence provider",
       objectSchema({
         path: pathSchema(),
         query: { type: "string" },
@@ -59,18 +60,18 @@ export function createCodeIntelligenceTools(
         limit: limitSchema(),
       }, ["path", "query"]),
       validateWorkspaceSymbols,
-      async (input, context) => await options.typescript.workspaceSymbols({
+      async (input, context) => await options.language.workspaceSymbols({
         root: workspacePath(context, input.path as string),
         query: input.query as string,
         ...(input.kind !== undefined ? { kind: input.kind as string } : {}),
         ...(input.limit !== undefined ? { limit: input.limit as number } : {}),
-      }, context.signal),
+      }, context.signal, languageInvocation(context)),
     ),
     positionTool("code.definition", "Resolve the symbol definition at a source position", options),
     positionTool("code.references", "Find references to the symbol at a source position", options),
     readTool(
       "code.diagnostics",
-      "Return bounded TypeScript or JavaScript syntactic and semantic diagnostics",
+      "Return bounded diagnostics from the configured language-intelligence provider",
       objectSchema({
         path: pathSchema(),
         limit: limitSchema(),
@@ -78,11 +79,11 @@ export function createCodeIntelligenceTools(
       validatePathAndLimit,
       async (input, context) => {
         const path = input.path as string;
-        return await options.typescript.diagnostics({
+        return await options.language.diagnostics({
           root: requiredWorkspace(context),
           ...(path === "." ? {} : { path }),
           ...(input.limit !== undefined ? { limit: input.limit as number } : {}),
-        }, context.signal);
+        }, context.signal, languageInvocation(context));
       },
     ),
   ];
@@ -113,8 +114,8 @@ function positionTool(
         ...(input.limit !== undefined ? { limit: input.limit as number } : {}),
       };
       return name === "code.definition"
-        ? await options.typescript.definition(query, context.signal)
-        : await options.typescript.references(query, context.signal);
+        ? await options.language.definition(query, context.signal, languageInvocation(context))
+        : await options.language.references(query, context.signal, languageInvocation(context));
     },
   );
 }

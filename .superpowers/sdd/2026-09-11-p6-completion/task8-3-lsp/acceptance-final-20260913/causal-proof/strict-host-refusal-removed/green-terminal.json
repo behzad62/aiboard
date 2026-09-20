@@ -1,0 +1,25 @@
+{
+  "id": "fault-strict-host-refusal-removed-green",
+  "startedAt": "2026-09-12T17:26:23.039Z",
+  "finishedAt": "2026-09-12T17:26:23.765Z",
+  "wrapperPid": 64428,
+  "testPid": 52132,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 412,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP shared transport rejects strict-host-only",
+    "runner-v2/test/lsp-transport-authority.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

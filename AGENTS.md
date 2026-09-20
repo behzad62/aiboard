@@ -19,6 +19,10 @@ npx tsx scripts/test-project-fs.ts
 
 Development is on Windows/PowerShell. Running `npm run build` while the dev server is active can corrupt `.next`; restart the dev server afterward.
 
+## Runner V2 Task 12 mandate
+
+When working on Runner V2 Task 12 / P6 acceptance, **read and follow `docs/runner-v2/task-12-bounded-gates.md` before editing or running broad gates**. Continue from `docs/runner-v2/task-12-status.md`; update that durable state as gates advance. Do not substitute ad-hoc CI repair, skip affected portable coverage, weaken fail-closed ownership semantics, or inflate timeouts to obtain green CI. Gates must be completed in the documented order with targeted evidence and independent review before the final integrated matrix.
+
 ## Architecture
 
 AI Board is a static-export Next.js app (App Router, React 19, strict TypeScript, no API routes). Discussion modes run in the browser. Build mode requires the separate native Runner V2 process. Import alias: `@/*` points to the repository root.
@@ -35,7 +39,7 @@ AI Board is a static-export Next.js app (App Router, React 19, strict TypeScript
 - `lib/client/legacy-build-engine.benchmark.ts` exists only for certified WorkBench benchmark compatibility. Product Build mode must never import it.
 - `lib/orchestrator/engine.ts` is otherwise legacy server code, but its `OrchestratorEvent` type remains live.
 
-Runner V2 requires exactly Node.js 24.18.0 and Git. Git absence stops before model calls. Verifiers record mechanical facts and never decide completeness. The Architect is semantic authority. Final project handoff always pauses for a user choice, including under Full access.
+Runner V2 requires the certified Node.js 24.x LTS release line and Git. Git absence stops before model calls. Verifiers record mechanical facts and never decide completeness. The Architect is semantic authority. Final project handoff always pauses for a user choice, including under Full access.
 
 ### Providers
 

@@ -1,0 +1,21 @@
+{
+  "pid": 93772,
+  "identity": {
+    "pid": 93772,
+    "unavailable": true
+  },
+  "wrapperPid": 90860,
+  "spawnedAt": "2026-09-12T17:26:22.152Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP and MCP",
+    "runner-v2/test/streaming-language-operation.test.ts"
+  ]
+}

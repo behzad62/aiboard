@@ -1,0 +1,22 @@
+{
+  "task": "8.5",
+  "status": "VERIFIED",
+  "baseHead": "f48da929f0c4f94d2cd70c092812be39fcd7da37",
+  "report": ".superpowers/sdd/2026-09-11-p6-completion/task8-5-launch-audit/report.md",
+  "audit": ".superpowers/sdd/2026-09-11-p6-completion/task8-5-launch-audit/final-audit.json",
+  "acceptedRuns": [
+    "raw-launch-final-green",
+    "runner-internal-focused-green",
+    "process-host-semantic-green",
+    "windows-process-backend-final",
+    "native-final-verification-green5",
+    "focused-execution-host-final",
+    "final-managed-call-scope-green",
+    "job-semantic-attestation-green",
+    "windows-helper-binding-green",
+    "typecheck-acceptance",
+    "eslint-acceptance",
+    "diff-check-acceptance"
+  ],
+  "nextTask": "9"
+}

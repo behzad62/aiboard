@@ -1,0 +1,131 @@
+{
+  "id": "strict-host-refusal-removed",
+  "target": "runner-v2/src/execution-host-lsp-transport.ts",
+  "test": "runner-v2/test/lsp-transport-authority.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-green",
+  "sourceFinalSha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+  "testFinalSha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd",
+  "redReceipt": {
+    "id": "fault-strict-host-refusal-removed-red",
+    "startedAt": "2026-09-12T17:26:22.231Z",
+    "finishedAt": "2026-09-12T17:26:22.994Z",
+    "wrapperPid": 88492,
+    "testPid": 99144,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP shared transport rejects strict-host-only",
+      "runner-v2/test/lsp-transport-authority.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "fault-strict-host-refusal-removed-green",
+    "startedAt": "2026-09-12T17:26:23.039Z",
+    "finishedAt": "2026-09-12T17:26:23.765Z",
+    "wrapperPid": 64428,
+    "testPid": 52132,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP shared transport rejects strict-host-only",
+      "runner-v2/test/lsp-transport-authority.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/red-terminal.json",
+      "sha256": "30fe650e706b41ae1f335a10241f6ecc323f04444324b68cb247640fe3a3c699"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/red-inputs-before.json",
+      "sha256": "46f288b2ebb668b3b78daf559b1708c8b840d2f18bf6c4b64743635fe6c5328d"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/red-inputs-after.json",
+      "sha256": "46f288b2ebb668b3b78daf559b1708c8b840d2f18bf6c4b64743635fe6c5328d"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/red-stdout.log",
+      "sha256": "21f51490d58995a42c6387134d58b39a85a6f389625f1cce81d050cc71a3f3db"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/red-wrapper.json",
+      "sha256": "df3c24721c4d8ec677a92c604f06d71d7f74dd4cfd349b3d9b5645bb78feb1e9"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/red-child.json",
+      "sha256": "101d0608730365c7cd0a9851c14c6b806e82382243557c43f8e5bef4cabbe1f0"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/green-terminal.json",
+      "sha256": "82f48547fe582dff17cb5cc9f28f71591069bb209c33124834c201b8890605e5"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/green-inputs-before.json",
+      "sha256": "8362db95253312081024c5d28678f32633ce66a7582b8048f5ea0f5a8875c1ee"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/green-inputs-after.json",
+      "sha256": "8362db95253312081024c5d28678f32633ce66a7582b8048f5ea0f5a8875c1ee"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/green-stdout.log",
+      "sha256": "1bf77fd329b44a2c99dca7354b7fbfd1775cf60108c7e5ac98ad19801d76878c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/green-wrapper.json",
+      "sha256": "1cdef8f86e8c8d032d9063eea56ee10f0e9e91bdf9bbe936b32c0eb4a79212ea"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-strict-host-refusal-removed-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/strict-host-refusal-removed/green-child.json",
+      "sha256": "5aba3b0dce31131e63d397c67eff9940ea014f786375045caca2ccdc7b2ed7c4"
+    }
+  ]
+}

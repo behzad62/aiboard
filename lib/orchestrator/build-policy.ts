@@ -9,12 +9,14 @@ export const DEFAULT_BUILD_RUN_POLICY: BuildRunPolicy = "finish";
 export const DEFAULT_BUILD_SKILL_MODE: BuildSkillMode = "balanced";
 export const DEFAULT_BUILD_BUDGET_USD = 0;
 export const DEFAULT_BUILD_TIME_LIMIT_MINUTES = 120;
+export const DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER = false;
 
 export interface NormalizedBuildSettings {
   runPolicy: BuildRunPolicy;
   skillMode: BuildSkillMode;
   budgetUsd: number;
   timeLimitMinutes: number;
+  alwaysRequireIndependentVerifier: boolean;
 }
 
 const RUN_POLICIES = new Set<BuildRunPolicy>(["finish", "budgeted", "plan_only"]);
@@ -33,6 +35,7 @@ export function normalizeBuildSettings(
       | "buildSkillMode"
       | "buildBudgetUsd"
       | "buildTimeLimitMinutes"
+      | "buildAlwaysRequireIndependentVerifier"
     >
   >
 ): NormalizedBuildSettings {
@@ -55,6 +58,10 @@ export function normalizeBuildSettings(
       input.buildTimeLimitMinutes,
       DEFAULT_BUILD_TIME_LIMIT_MINUTES
     ),
+    alwaysRequireIndependentVerifier:
+      typeof input.buildAlwaysRequireIndependentVerifier === "boolean"
+        ? input.buildAlwaysRequireIndependentVerifier
+        : DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER,
   };
 }
 

@@ -1,0 +1,14 @@
+{
+  "pid": 12928,
+  "identity": {
+    "Id": 12928,
+    "StartTimeUtc": "2026-09-13T19:43:43.5065922Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 2012,
+  "spawnedAt": "2026-09-13T19:43:43.781Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linked-reverse.mjs"
+  ]
+}

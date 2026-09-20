@@ -1,0 +1,43 @@
+{
+  "id": "affected-git-acceptance",
+  "startedAt": "2026-09-14T15:51:04.635Z",
+  "finishedAt": "2026-09-14T15:53:49.557Z",
+  "wrapperPid": 15836,
+  "testPid": 29392,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-execution-policy.test.ts",
+    "runner-v2/test/git-runtime-runner.test.ts",
+    "runner-v2/test/git-baseline.test.ts",
+    "runner-v2/test/git-bootstrap.test.ts",
+    "runner-v2/test/git-preflight.test.ts",
+    "runner-v2/test/git-repository.test.ts",
+    "runner-v2/test/git-run-context.test.ts",
+    "runner-v2/test/git-runtime-integration.test.ts",
+    "runner-v2/test/git-tools.test.ts",
+    "runner-v2/test/git-production-managers.test.ts",
+    "runner-v2/test/git-caller-audit.test.ts",
+    "runner-v2/test/git-caller-routing.test.ts",
+    "runner-v2/test/git-control-refusal.test.ts",
+    "runner-v2/test/change-set.test.ts",
+    "runner-v2/test/workspace-manager.test.ts",
+    "runner-v2/test/verification-workspace.test.ts",
+    "runner-v2/test/child-environment.test.ts"
+  ],
+  "rootCount": 87,
+  "retainedRoots": [
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-TXjc2u",
+    "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-managers-DPs0l3"
+  ]
+}

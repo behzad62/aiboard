@@ -1,3 +1,4 @@
+import { ExecutionIsolationError } from "./execution-isolation-provider.js";
 import { timingSafeEqual } from "node:crypto";
 import {
   createServer,
@@ -12,13 +13,17 @@ import type {
   RunEvent,
 } from "./contracts.js";
 import type { BuildControlPlane } from "./build-runtime-registry.js";
-import type { ProjectHandoffChoice } from "./scheduler-store.js";
+import {
+  acceptanceContractAuditProjection,
+  type ProjectHandoffChoice,
+  type SchedulerProjection,
+} from "./scheduler-store.js";
 import {
   assertBuildRunPolicyLimits,
   type NativeBuildSpec,
 } from "./build-spec.js";
 import { assertBudgetLimits } from "./budget-policy.js";
-import { checkGit, type GitPreflightResult } from "./git-preflight.js";
+import { type GitPreflightResult } from "./git-preflight.js";
 import type {
   ProviderConfigStore,
   RunnerProviderConfig,
@@ -26,6 +31,7 @@ import type {
 import type { RunSupervisor } from "./run-supervisor.js";
 import type { McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
+import { ProcessRecoveryError, type ProcessRecoveryControlPlane } from "./process-recovery.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const ALLOWED_RUNNER_EXTRA_ORIGINS = new Set<string>([
@@ -48,6 +54,7 @@ export interface ControlServerOptions {
   runnerInfo?: { projectPath: string; nodeVersion: string };
   mcp?: Pick<McpManager, "status">;
   permissions?: SqlitePermissionStore;
+  processRecovery?: ProcessRecoveryControlPlane;
   allowedOrigins?: string[];
 }
 
@@ -79,6 +86,8 @@ interface CreateRunBody {
     objective: string;
     architectRuntimeId: string;
     workerRuntimeIds: string[];
+    verifierRuntimeIds: string[];
+    alwaysRequireIndependentVerifier: boolean;
     maxConcurrency: number;
     runPolicy: NativeBuildSpec["runPolicy"];
     budgetLimits: NativeBuildSpec["budgetLimits"];
@@ -110,6 +119,32 @@ interface ProjectHandoffBody {
   idempotencyKey: string;
 }
 
+interface UserGuidanceBody {
+  guidanceId: string;
+  text: string;
+  idempotencyKey: string;
+}
+
+interface ArchitectQuestionAnswerBody {
+  expectedVersion: number;
+  answer: string;
+  idempotencyKey: string;
+}
+
+interface RecoveryGenerateBody {
+  invocationId: string;
+  proposalId: string;
+}
+
+interface RecoveryDecisionBody {
+  fingerprint: string;
+  decision: "approve" | "reject";
+}
+
+interface RecoveryExecuteBody {
+  fingerprint: string;
+}
+
 interface PermissionDecisionBody {
   decision: "approved" | "denied";
   idempotencyKey: string;
@@ -137,6 +172,7 @@ export class ControlServer {
   private readonly runnerInfo?: ControlServerOptions["runnerInfo"];
   private readonly mcp?: ControlServerOptions["mcp"];
   private readonly permissions?: SqlitePermissionStore;
+  private readonly processRecovery?: ProcessRecoveryControlPlane;
   private readonly allowedOrigins: ReadonlySet<string>;
   private readonly streams = new Set<ServerResponse>();
   private readonly commandTails = new Map<string, Promise<void>>();
@@ -146,7 +182,10 @@ export class ControlServer {
     if (!options.token) throw new Error("Control server token is required.");
     this.supervisor = options.supervisor;
     this.token = options.token;
-    this.gitPreflight = options.checkGit ?? (() => checkGit());
+    this.gitPreflight = options.checkGit ?? (async () => ({
+      available: false, version: null, code: "git_missing",
+      reason: "An explicit Runner-owned Git preflight is required.",
+    }));
     this.bootstrapRun = options.bootstrapRun;
     this.heartbeatMs = options.heartbeatMs ?? 15_000;
     this.builds = options.builds;
@@ -155,6 +194,7 @@ export class ControlServer {
     this.runnerInfo = options.runnerInfo;
     this.mcp = options.mcp;
     this.permissions = options.permissions;
+    this.processRecovery = options.processRecovery;
     this.allowedOrigins = buildAllowedOriginSet(options.allowedOrigins);
   }
 
@@ -339,12 +379,15 @@ export class ControlServer {
             throw new HttpError(503, "native_build_unavailable", "Native Build provisioning is unavailable.");
           }
           await this.buildProvisioner.create({
-            version: 1,
+            version: 2,
             runId: body.runId,
             projectId: body.build.projectId,
             objective: body.build.objective,
             architectRuntimeId: body.build.architectRuntimeId,
             workerRuntimeIds: [...body.build.workerRuntimeIds],
+            verifierRuntimeIds: [...body.build.verifierRuntimeIds],
+            alwaysRequireIndependentVerifier:
+              body.build.alwaysRequireIndependentVerifier,
             maxConcurrency: body.build.maxConcurrency,
             permissionProfile: body.permissionProfile,
             runPolicy: body.build.runPolicy,
@@ -396,6 +439,33 @@ export class ControlServer {
       if (segments.length === 3 && request.method === "GET") {
         sendJson(response, 200, this.supervisor.getRun(runId));
         return;
+      }
+      if (segments.length === 5 && segments[3] === "build" && segments[4] === "recovery" && request.method === "GET") {
+        const records = Object.values(this.requireProcessRecovery().processRecoveryRecords(runId))
+          .sort((left, right) => left.proposalId.localeCompare(right.proposalId));
+        sendJson(response, 200, { records });
+        return;
+      }
+      if (segments.length === 6 && segments[3] === "build" && segments[4] === "recovery" && segments[5] === "generate" && request.method === "POST") {
+        const body = await readJson<RecoveryGenerateBody>(request);
+        assertExactBodyKeys(body, ["invocationId", "proposalId"]);
+        if (!isNonEmptyString(body.invocationId) || !isNonEmptyString(body.proposalId)) invalidBody();
+        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().generateProcessRecovery(runId, body.invocationId, body.proposalId));
+        sendJson(response, 200, result); return;
+      }
+      if (segments.length === 7 && segments[3] === "build" && segments[4] === "recovery" && segments[6] === "decision" && request.method === "POST") {
+        const body = await readJson<RecoveryDecisionBody>(request);
+        assertExactBodyKeys(body, ["fingerprint", "decision"]);
+        if (!/^[a-f0-9]{64}$/.test(body.fingerprint) || !["approve", "reject"].includes(body.decision)) invalidBody();
+        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().decideProcessRecovery(runId, segments[5], body.fingerprint, body.decision));
+        sendJson(response, 200, result); return;
+      }
+      if (segments.length === 7 && segments[3] === "build" && segments[4] === "recovery" && segments[6] === "execute" && request.method === "POST") {
+        const body = await readJson<RecoveryExecuteBody>(request);
+        assertExactBodyKeys(body, ["fingerprint"]);
+        if (!/^[a-f0-9]{64}$/.test(body.fingerprint)) invalidBody();
+        const result = await this.serializeRunCommand(runId, () => this.requireProcessRecovery().executeProcessRecovery(runId, segments[5], body.fingerprint));
+        sendJson(response, 200, result); return;
       }
       if (
         segments.length === 4 &&
@@ -456,17 +526,66 @@ export class ControlServer {
         request.method === "GET"
       ) {
         const builds = this.requireBuilds();
+        const build = builds.projection(runId);
         const observability = await builds.observability(runId);
         const usage = builds.usage(runId);
         sendJson(response, 200, {
           protocolVersion: 2,
           run: this.supervisor.getRun(runId),
-          build: builds.projection(runId),
+          build,
+          acceptanceContract: acceptanceContractAuditProjection(build),
           usage,
           observability,
           runEvents: this.supervisor.events(runId),
           buildEvents: builds.events(runId),
         });
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "user-guidance" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<UserGuidanceBody>(request);
+        assertExactBodyKeys(body, ["guidanceId", "text", "idempotencyKey"]);
+        if (
+          !isNonEmptyString(body.guidanceId) ||
+          !isNonEmptyString(body.text) ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        const projection = await this.serializeRunCommand(runId, async () => {
+          const builds = this.requireBuilds();
+          const current = builds.projection(runId);
+          const version = current.userGuidance[body.guidanceId]?.version ??
+            current.userGuidanceVersion + 1;
+          return await builds.submitUserGuidance(runId, { ...body, version });
+        });
+        sendJson(response, 200, projection);
+        return;
+      }
+      if (
+        segments.length === 7 &&
+        segments[3] === "build" &&
+        segments[4] === "architect-questions" &&
+        segments[6] === "answer" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<ArchitectQuestionAnswerBody>(request);
+        assertExactBodyKeys(body, ["expectedVersion", "answer", "idempotencyKey"]);
+        if (
+          !Number.isSafeInteger(body.expectedVersion) ||
+          body.expectedVersion < 1 ||
+          !isNonEmptyString(body.answer) ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        const projection = await this.serializeRunCommand(runId, async () =>
+          await this.requireBuilds().answerArchitectQuestion(runId, {
+            questionId: segments[5],
+            ...body,
+          })
+        );
+        sendJson(response, 200, projection);
         return;
       }
       if (
@@ -494,6 +613,28 @@ export class ControlServer {
       if (
         segments.length === 5 &&
         segments[3] === "build" &&
+        segments[4] === "verifier-handoff" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<ArchitectHandoffBody>(request);
+        if (
+          !isNonEmptyString(body.runtimeId) ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        sendJson(
+          response,
+          200,
+          await this.requireBuilds().selectVerifierRuntime(
+            runId,
+            body.runtimeId,
+            body.idempotencyKey,
+          ),
+        );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
         segments[4] === "project-handoff" &&
         request.method === "POST"
       ) {
@@ -511,7 +652,7 @@ export class ControlServer {
         if (projection.status !== "completed") {
           throw new Error("Final project handoff did not complete the Build.");
         }
-        this.syncBuildLifecycle(runId, "completed");
+        this.syncBuildLifecycle(runId, "completed", projection);
         sendJson(response, 200, projection);
         return;
       }
@@ -619,6 +760,11 @@ export class ControlServer {
     throw new HttpError(404, "not_found", "Route not found.");
   }
 
+  private requireProcessRecovery(): ProcessRecoveryControlPlane {
+    if (!this.processRecovery) throw new HttpError(503, "process_recovery_unavailable", "Exceptional process recovery is unavailable.");
+    return this.processRecovery;
+  }
+
   private requireProviderConfigs(): ProviderConfigStore {
     if (!this.providerConfigs) {
       throw new HttpError(503, "provider_config_unavailable", "Provider configuration is unavailable.");
@@ -639,7 +785,8 @@ export class ControlServer {
 
   private syncBuildLifecycle(
     runId: string,
-    status: "progressed" | "paused" | "completed" | "idle"
+    status: "progressed" | "paused" | "completed" | "idle" | "blocked",
+    completedProjection?: SchedulerProjection,
   ): void {
     let run;
     try {
@@ -649,7 +796,12 @@ export class ControlServer {
       throw error;
     }
     if (status === "completed" && !["completed", "failed", "stopped"].includes(run.state)) {
-      this.supervisor.complete(runId, `native-build-completed:${run.lastSequence}`);
+      const build = completedProjection ?? this.requireBuilds().projection(runId);
+      this.supervisor.completeBuild(
+        runId,
+        `native-build-completed:${run.lastSequence}`,
+        build,
+      );
     } else if (status === "paused" && run.state === "running") {
       this.supervisor.pause(runId, `native-build-paused:${run.lastSequence}`, "native-build");
     }
@@ -966,6 +1118,16 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
     body.workerRuntimeIds.length < 1 ||
     body.workerRuntimeIds.some((runtimeId) => !isNonEmptyString(runtimeId))
   ) invalidBody();
+  if (
+    !Array.isArray(body.verifierRuntimeIds) ||
+    body.verifierRuntimeIds.length < 1 ||
+    body.verifierRuntimeIds.some(
+      (runtimeId) =>
+        !isNonEmptyString(runtimeId) || runtimeId !== runtimeId.trim()
+    ) ||
+    new Set(body.verifierRuntimeIds).size !== body.verifierRuntimeIds.length
+  ) invalidBody();
+  if (typeof body.alwaysRequireIndependentVerifier !== "boolean") invalidBody();
   if (!Number.isSafeInteger(body.maxConcurrency) || body.maxConcurrency < 1) {
     invalidBody();
   }
@@ -1029,6 +1191,12 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function assertExactBodyKeys(body: unknown, expected: string[]): asserts body is Record<string, unknown> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) invalidBody();
+  const allowed = new Set(expected);
+  if (Object.keys(body).some((key) => !allowed.has(key))) invalidBody();
+}
+
 function invalidBody(): never {
   throw new HttpError(400, "invalid_request", "Request body is invalid.");
 }
@@ -1048,12 +1216,28 @@ function readAfterSequence(url: URL): number {
 
 function toHttpError(error: unknown): HttpError {
   if (error instanceof HttpError) return error;
+  if (error instanceof ProcessRecoveryError) {
+    if (error.code === "invalid_recovery_proposal") return new HttpError(400, error.code, error.message);
+    if (error.code === "recovery_not_found") return new HttpError(404, error.code, error.message);
+    if (error.code === "recovery_model_failed") return new HttpError(502, error.code, error.message);
+    return new HttpError(409, error.code, error.message);
+  }
+  if (error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable") {
+    // Only the trusted typed failure is projected, never exception details or
+    // an arbitrary object's code. The requested profile is not downgraded.
+    return new HttpError(412, error.code, "The requested execution isolation capability is unavailable.");
+  }
   const message = error instanceof Error ? error.message : "Unknown error.";
   if (/^Unknown run /.test(message)) return new HttpError(404, "run_not_found", message);
   if (/^Unknown build runtime /.test(message)) {
     return new HttpError(404, "build_runtime_not_found", message);
   }
-  if (/cannot accept|must be the first|Expected event sequence/i.test(message)) {
+  if (/Scheduler idempotency conflict/i.test(message)) {
+    return new HttpError(409, "idempotency_conflict", message);
+  }
+  if (
+    /cannot accept|must be the first|Expected event sequence|User guidance version must advance|Architect question .* (?:version is|is not open|is not the active blocking question)|Duplicate user guidance/i.test(message)
+  ) {
     return new HttpError(409, "invalid_transition", message);
   }
   return new HttpError(500, "internal_error", "The runner could not complete the request.");

@@ -48,6 +48,7 @@ import {
 } from "@/lib/client/build-capabilities";
 import {
   DEFAULT_BUILD_BUDGET_USD,
+  DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER,
   DEFAULT_BUILD_RUN_POLICY,
   DEFAULT_BUILD_SKILL_MODE,
   DEFAULT_BUILD_TIME_LIMIT_MINUTES,
@@ -64,6 +65,7 @@ export interface DiscussionSessionSettingsValue {
   buildSkillMode?: BuildSkillMode;
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
+  buildAlwaysRequireIndependentVerifier?: boolean;
 }
 
 interface DiscussionSessionSettingsProps {
@@ -119,6 +121,11 @@ export function DiscussionSessionSettings({
   const [buildTimeLimitMinutes, setBuildTimeLimitMinutes] = useState(
     discussion.buildTimeLimitMinutes ?? DEFAULT_BUILD_TIME_LIMIT_MINUTES
   );
+  const [buildAlwaysRequireIndependentVerifier, setBuildAlwaysRequireIndependentVerifier] =
+    useState(
+      discussion.buildAlwaysRequireIndependentVerifier ??
+        DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER
+    );
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -133,6 +140,10 @@ export function DiscussionSessionSettings({
     setBuildBudgetUsd(discussion.buildBudgetUsd ?? DEFAULT_BUILD_BUDGET_USD);
     setBuildTimeLimitMinutes(
       discussion.buildTimeLimitMinutes ?? DEFAULT_BUILD_TIME_LIMIT_MINUTES
+    );
+    setBuildAlwaysRequireIndependentVerifier(
+      discussion.buildAlwaysRequireIndependentVerifier ??
+        DEFAULT_BUILD_ALWAYS_REQUIRE_INDEPENDENT_VERIFIER
     );
     setMessage(null);
   }, [discussion]);
@@ -212,6 +223,10 @@ export function DiscussionSessionSettings({
       buildBudgetUsd: discussion.mode === "build" ? buildBudgetUsd : undefined,
       buildTimeLimitMinutes:
         discussion.mode === "build" ? buildTimeLimitMinutes : undefined,
+      buildAlwaysRequireIndependentVerifier:
+        discussion.mode === "build"
+          ? buildAlwaysRequireIndependentVerifier
+          : undefined,
     });
     if (saved) {
       setMessage("Saved. Resume will use these session settings.");
@@ -260,12 +275,17 @@ export function DiscussionSessionSettings({
                 skillMode: buildSkillMode,
                 budgetUsd: buildBudgetUsd,
                 timeLimitMinutes: buildTimeLimitMinutes,
+                alwaysRequireIndependentVerifier:
+                  buildAlwaysRequireIndependentVerifier,
               }}
               onChange={(next) => {
                 setBuildRunPolicy(next.runPolicy);
                 setBuildSkillMode(next.skillMode);
                 setBuildBudgetUsd(next.budgetUsd);
                 setBuildTimeLimitMinutes(next.timeLimitMinutes);
+                setBuildAlwaysRequireIndependentVerifier(
+                  next.alwaysRequireIndependentVerifier
+                );
               }}
               disabled={!canEdit || busy}
             />

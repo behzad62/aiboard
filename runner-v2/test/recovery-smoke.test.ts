@@ -1,14 +1,16 @@
+import { cliRootCaptureArgs, forwardCliRootRecords } from "./support/cli-root-capture.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { runGit } from "../src/git-command.js";
+import { runGit } from "./support/git-fixture.js";
+import { reconcileRunnerStartup, RunnerCleanupBlockedError } from "../src/runner-resource-cleanup.js";
 
 interface Readiness {
   protocolVersion: number;
@@ -19,12 +21,38 @@ interface Readiness {
   stateDirectory: string;
 }
 
+// Outer readiness guard only. Hosted Windows can spend most of 30s in the
+// real semantic probes before readiness; product process/cleanup deadlines stay unchanged.
+const CLI_STARTUP_FIXTURE_BUDGET_MS = process.platform === "win32" ? 90_000 : 30_000;
 const token = "recovery-test-token";
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxPath = fileURLToPath(
   new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url)
 );
 
+
+test("startup recovery blocks readiness when an owned resource class cannot be reconciled", async () => {
+  let acceptedWork = false;
+  await assert.rejects(
+    (async () => {
+      await reconcileRunnerStartup([{
+        resource: "nativeBuildRuntime",
+        covers: ["processes", "backends", "isolation", "grants", "spills", "tempRoots"],
+        reconcile: async () => {
+          throw new Error("retained OCI lease is not proven empty");
+        },
+      }]);
+      acceptedWork = true;
+    })(),
+    (error: unknown) => {
+      assert.ok(error instanceof RunnerCleanupBlockedError);
+      assert.equal(error.code, "runner_startup_reconciliation_blocked");
+      assert.equal(error.blockers[0]?.resource, "nativeBuildRuntime");
+      return true;
+    },
+  );
+  assert.equal(acceptedWork, false);
+});
 test("CLI recovers a paused run and preserves event continuity after restart", async () => {
   const directory = mkdtempSync(join(tmpdir(), "aiboard-runner-recovery-"));
   const projectPath = join(directory, "project");
@@ -40,7 +68,14 @@ test("CLI recovers a paused run and preserves event continuity after restart", a
     assert.equal(firstStart.readiness.projectPath, projectPath);
     assert.equal(firstStart.readiness.stateDirectory, stateDirectory);
 
-    const created = await createRun(firstStart.readiness.url, projectPath);
+    const refused = await fetch(`${firstStart.readiness.url}/v2/runs`, {
+      method: "POST", headers: headers(), body: JSON.stringify({ runId: "strict-no-provider", projectPath,
+        permissionProfile: "project", idempotencyKey: "strict-no-provider" }),
+    });
+    assert.equal(refused.status, 412, `${await refused.clone().text()}\nRunner stderr:\n${firstStart.diagnostics()}`);
+    assert.equal((await refused.json() as { code: string }).code, "isolation_capability_unavailable");
+    assert.equal(existsSync(join(projectPath, ".git")), false, "strict bootstrap must not fall back to host Git");
+    const created = await createRun(firstStart.readiness.url, projectPath, firstStart.diagnostics);
     assert.match(String(created.baselineRevision), /^[a-f0-9]{40,64}$/);
     assert.equal(
       (
@@ -98,7 +133,7 @@ test("CLI recovers a paused run and preserves event continuity after restart", a
   } finally {
     if (first) await stopProcess(first);
     if (second) await stopProcess(second);
-    rmSync(directory, { recursive: true, force: true });
+    rmSync(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
 
@@ -108,10 +143,11 @@ async function startRunner(
 ): Promise<{
   child: ChildProcessWithoutNullStreams;
   readiness: Readiness;
+  diagnostics(): string;
 }> {
   const child = spawn(
     process.execPath,
-    [
+    cliRootCaptureArgs([
       tsxPath,
       cliPath,
       "--project",
@@ -122,9 +158,10 @@ async function startRunner(
       "0",
       "--token",
       token,
-    ],
+    ], undefined, "tsx"),
     { stdio: ["pipe", "pipe", "pipe"], windowsHide: true }
   );
+  forwardCliRootRecords(child.stderr);
   const diagnostics: string[] = [];
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => diagnostics.push(chunk));
@@ -144,21 +181,31 @@ async function startRunner(
       new Promise<never>((_, reject) => {
         timeout = setTimeout(
           () => reject(new Error("Runner readiness timed out.")),
-          10_000
+          CLI_STARTUP_FIXTURE_BUDGET_MS
         );
       }),
     ]);
+  } catch (error) {
+    try { await stopProcess(child); }
+    catch (cleanup) {
+      throw new AggregateError(
+        [error, cleanup],
+        `Runner readiness failed and fixture cleanup did not settle. stderr: ${diagnostics.join("")}`,
+      );
+    }
+    throw error;
   } finally {
     if (timeout) clearTimeout(timeout);
   }
   lines.close();
   assert.equal(readiness.token, token);
-  return { child, readiness };
+  return { child, readiness, diagnostics: () => diagnostics.join("") };
 }
 
 async function createRun(
   url: string,
-  projectPath: string
+  projectPath: string,
+  diagnostics: () => string,
 ): Promise<Record<string, unknown>> {
   const response = await fetch(`${url}/v2/runs`, {
     method: "POST",
@@ -166,12 +213,12 @@ async function createRun(
     body: JSON.stringify({
       runId: "run_1",
       projectPath,
-      permissionProfile: "project",
+      permissionProfile: "full",
       idempotencyKey: "create:run_1",
     }),
   });
   const text = await response.text();
-  assert.equal(response.status, 201, text);
+  assert.equal(response.status, 201, `${text}\nRunner stderr:\n${diagnostics()}`);
   return JSON.parse(text) as Record<string, unknown>;
 }
 

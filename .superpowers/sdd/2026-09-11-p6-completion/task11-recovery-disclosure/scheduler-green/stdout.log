@@ -1,0 +1,302 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-BvVAs5"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-U98ivV"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-JqLypx"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-geowCb"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9vvvq9"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-JtRi8P"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9lsXrU"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-WpANww"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-kqFIiH"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-6wVY5t"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-LAELSK"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-VJ5duA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-109D0y"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-99QGL9"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-2i4yg1"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Wvf1xR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dwtRrD"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-wBvlMf"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Ddqvie"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Cuhg2A"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-FYT8Yl"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-2f6w2M"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dWrqen"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-tnZ5UQ"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-2uUKGu"}
+# Task11 RED root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task11-recovery-2uUKGu
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-K7tEeo"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-qMo9Zi"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-zF51q8"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-EUoprc"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Vzfg7q"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-iVawCW"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-U6SXeA"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1k0JMh"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Mw1x5Y"}
+# Subtest: process recovery: routine state prepared cannot call a model or effect
+ok 1 - process recovery: routine state prepared cannot call a model or effect
+  ---
+  duration_ms: 28.424
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state launching cannot call a model or effect
+ok 2 - process recovery: routine state launching cannot call a model or effect
+  ---
+  duration_ms: 19.6456
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state running cannot call a model or effect
+ok 3 - process recovery: routine state running cannot call a model or effect
+  ---
+  duration_ms: 19.2643
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state stopping cannot call a model or effect
+ok 4 - process recovery: routine state stopping cannot call a model or effect
+  ---
+  duration_ms: 19.5128
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state exited cannot call a model or effect
+ok 5 - process recovery: routine state exited cannot call a model or effect
+  ---
+  duration_ms: 19.6252
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state verifying_empty cannot call a model or effect
+ok 6 - process recovery: routine state verifying_empty cannot call a model or effect
+  ---
+  duration_ms: 19.8604
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state cleaned cannot call a model or effect
+ok 7 - process recovery: routine state cleaned cannot call a model or effect
+  ---
+  duration_ms: 19.3852
+  type: 'test'
+  ...
+# Subtest: process recovery: routine state cleanup_blocked cannot call a model or effect
+ok 8 - process recovery: routine state cleanup_blocked cannot call a model or effect
+  ---
+  duration_ms: 20.0566
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional orphaned accepts only a validated proposal
+ok 9 - process recovery: exceptional orphaned accepts only a validated proposal
+  ---
+  duration_ms: 34.5572
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional identity_mismatch accepts only a validated proposal
+ok 10 - process recovery: exceptional identity_mismatch accepts only a validated proposal
+  ---
+  duration_ms: 30.6798
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional backend_unavailable accepts only a validated proposal
+ok 11 - process recovery: exceptional backend_unavailable accepts only a validated proposal
+  ---
+  duration_ms: 29.5106
+  type: 'test'
+  ...
+# Subtest: process recovery: exceptional outcome_unknown accepts only a validated proposal
+ok 12 - process recovery: exceptional outcome_unknown accepts only a validated proposal
+  ---
+  duration_ms: 32.3034
+  type: 'test'
+  ...
+# Subtest: process recovery: changed runId is rejected before execution
+ok 13 - process recovery: changed runId is rejected before execution
+  ---
+  duration_ms: 19.0286
+  type: 'test'
+  ...
+# Subtest: process recovery: changed taskId is rejected before execution
+ok 14 - process recovery: changed taskId is rejected before execution
+  ---
+  duration_ms: 20.0915
+  type: 'test'
+  ...
+# Subtest: process recovery: changed sessionId is rejected before execution
+ok 15 - process recovery: changed sessionId is rejected before execution
+  ---
+  duration_ms: 19.1161
+  type: 'test'
+  ...
+# Subtest: process recovery: changed invocationId is rejected before execution
+ok 16 - process recovery: changed invocationId is rejected before execution
+  ---
+  duration_ms: 19.5853
+  type: 'test'
+  ...
+# Subtest: process recovery: changed logicalProcessId is rejected before execution
+ok 17 - process recovery: changed logicalProcessId is rejected before execution
+  ---
+  duration_ms: 19.3554
+  type: 'test'
+  ...
+# Subtest: process recovery: changed ownerId is rejected before execution
+ok 18 - process recovery: changed ownerId is rejected before execution
+  ---
+  duration_ms: 19.5096
+  type: 'test'
+  ...
+# Subtest: process recovery: changed revision is rejected before execution
+ok 19 - process recovery: changed revision is rejected before execution
+  ---
+  duration_ms: 19.4282
+  type: 'test'
+  ...
+# Subtest: process recovery: changed fencingToken is rejected before execution
+ok 20 - process recovery: changed fencingToken is rejected before execution
+  ---
+  duration_ms: 19.3202
+  type: 'test'
+  ...
+# Subtest: process recovery: changed backendIdentity is rejected before execution
+ok 21 - process recovery: changed backendIdentity is rejected before execution
+  ---
+  duration_ms: 19.1778
+  type: 'test'
+  ...
+# Subtest: process recovery: changed birthFingerprint is rejected before execution
+ok 22 - process recovery: changed birthFingerprint is rejected before execution
+  ---
+  duration_ms: 19.716
+  type: 'test'
+  ...
+# Subtest: process recovery: changed rootPid is rejected before execution
+ok 23 - process recovery: changed rootPid is rejected before execution
+  ---
+  duration_ms: 19.2928
+  type: 'test'
+  ...
+# Subtest: process recovery: same PID with recycled birth invalidates an authorized action
+ok 24 - process recovery: same PID with recycled birth invalidates an authorized action
+  ---
+  duration_ms: 26.7418
+  type: 'test'
+  ...
+# Subtest: process recovery: destructive action pauses and binds exact local-user approval
+not ok 25 - process recovery: destructive action pauses and binds exact local-user approval
+  ---
+  duration_ms: 35.9956
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\process-recovery.test.ts:1:1328'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'outcome_unknown'
+    - 'executed'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'executed'
+  actual: 'outcome_unknown'
+  operator: 'strictEqual'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:69:10)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\process-recovery.test.ts:34:11)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: process recovery: rejects expired authority
+ok 26 - process recovery: rejects expired authority
+  ---
+  duration_ms: 21.4674
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects scope authority
+ok 27 - process recovery: rejects scope authority
+  ---
+  duration_ms: 19.4516
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects call authority
+ok 28 - process recovery: rejects call authority
+  ---
+  duration_ms: 19.6109
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects shell authority
+ok 29 - process recovery: rejects shell authority
+  ---
+  duration_ms: 19.267
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects capability authority
+ok 30 - process recovery: rejects capability authority
+  ---
+  duration_ms: 19.6483
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects ownership authority
+ok 31 - process recovery: rejects ownership authority
+  ---
+  duration_ms: 18.8274
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects identity authority
+ok 32 - process recovery: rejects identity authority
+  ---
+  duration_ms: 19.5985
+  type: 'test'
+  ...
+# Subtest: process recovery: rejects pending authority
+ok 33 - process recovery: rejects pending authority
+  ---
+  duration_ms: 18.7106
+  type: 'test'
+  ...
+# Subtest: process recovery: durable replay executes at most once and stores no raw model secrets
+ok 34 - process recovery: durable replay executes at most once and stores no raw model secrets
+  ---
+  duration_ms: 31.7578
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-BvVAs5","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-U98ivV","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-JqLypx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-geowCb","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9vvvq9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-JtRi8P","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-9lsXrU","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-WpANww","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-kqFIiH","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-6wVY5t","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-LAELSK","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-VJ5duA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-109D0y","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-99QGL9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-2i4yg1","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Wvf1xR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dwtRrD","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-wBvlMf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Ddqvie","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Cuhg2A","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-FYT8Yl","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-2f6w2M","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-dWrqen","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-tnZ5UQ","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-2uUKGu","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-K7tEeo","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-qMo9Zi","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-zF51q8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-EUoprc","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Vzfg7q","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-iVawCW","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-U6SXeA","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-1k0JMh","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-recovery-Mw1x5Y","existsAtExit":false}
+1..34
+# tests 34
+# suites 0
+# pass 33
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1080.5177

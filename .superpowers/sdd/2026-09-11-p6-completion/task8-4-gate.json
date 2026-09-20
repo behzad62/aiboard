@@ -1,0 +1,528 @@
+{
+  "task": "8.4 managed processes",
+  "status": "VERIFIED",
+  "baseHead": "59becb95ec49b56bbe33be5426b0f44e084dacb9",
+  "acceptedAt": "2026-09-14T09:18:02.282Z",
+  "windows": {
+    "closeout": {
+      "id": "current-source-closeout",
+      "startedAt": "2026-09-14T07:58:36.278Z",
+      "finishedAt": "2026-09-14T08:02:56.732Z",
+      "wrapperPid": 8804,
+      "testPid": 13052,
+      "exitCode": 0,
+      "signal": null,
+      "inputsUnchanged": true,
+      "inputCount": 433,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "runner-v2/test/execution-host.test.ts",
+        "runner-v2/test/managed-process.test.ts",
+        "runner-v2/test/managed-record-compatibility.test.ts",
+        "runner-v2/test/managed-shared-facade.test.ts",
+        "runner-v2/test/managed-shared-native.test.ts",
+        "runner-v2/test/managed-strict-oci.test.ts",
+        "runner-v2/test/final-verification-managed-authority.test.ts",
+        "runner-v2/test/final-verification-runtime-b1.test.ts",
+        "runner-v2/test/native-build-cleanup.test.ts",
+        "runner-v2/test/native-build-manager.test.ts",
+        "runner-v2/test/native-build-initialization.test.ts",
+        "runner-v2/test/recovery-smoke.test.ts",
+        "runner-v2/test/remaining-fixture-finalizers.test.ts"
+      ],
+      "rootCount": 107,
+      "retainedRoots": [],
+      "counts": {
+        "tests": 112,
+        "pass": 112,
+        "fail": 0,
+        "skipped": 0
+      }
+    },
+    "portable": {
+      "id": "windows-portable-final2",
+      "startedAt": "2026-09-14T09:06:14.564Z",
+      "finishedAt": "2026-09-14T09:10:44.305Z",
+      "wrapperPid": 11868,
+      "testPid": 32400,
+      "exitCode": 0,
+      "signal": null,
+      "inputsUnchanged": true,
+      "inputCount": 433,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "runner-v2/test/posix-process-backend.test.ts",
+        "runner-v2/test/portable-process-channel.test.ts",
+        "runner-v2/test/portable-process-protocol.test.ts",
+        "runner-v2/test/portable-supervisor-input.test.ts",
+        "runner-v2/test/windows-process-backend.test.ts",
+        "runner-v2/test/process-backend-contract.test.ts",
+        "runner-v2/test/managed-shared-native.test.ts"
+      ],
+      "rootCount": 169,
+      "retainedRoots": [],
+      "counts": {
+        "tests": 242,
+        "pass": 241,
+        "fail": 0,
+        "skipped": 1
+      }
+    },
+    "strictOci": {
+      "id": "managed-strict-oci-green",
+      "startedAt": "2026-09-14T07:37:31.809Z",
+      "finishedAt": "2026-09-14T07:37:51.090Z",
+      "wrapperPid": 16268,
+      "testPid": 40436,
+      "exitCode": 0,
+      "signal": null,
+      "inputsUnchanged": true,
+      "inputCount": 433,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "runner-v2/test/managed-strict-oci.test.ts"
+      ],
+      "rootCount": 1,
+      "retainedRoots": [],
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "skipped": 0
+      }
+    },
+    "posixRegressions": {
+      "id": "final-posix-regressions2",
+      "startedAt": "2026-09-14T09:16:38.674Z",
+      "finishedAt": "2026-09-14T09:16:40.841Z",
+      "wrapperPid": 43316,
+      "testPid": 32172,
+      "exitCode": 0,
+      "signal": null,
+      "inputsUnchanged": true,
+      "inputCount": 433,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=C4 POSIX (supervisor treats readable EOF|output pump probes a zero-length readable)|portable supervisor observes input stream errors without fabricating terminal ownership",
+        "runner-v2/test/posix-process-backend.test.ts",
+        "runner-v2/test/portable-supervisor-input.test.ts"
+      ],
+      "rootCount": 0,
+      "retainedRoots": [],
+      "counts": {
+        "tests": 3,
+        "pass": 3,
+        "fail": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "linux": {
+    "stress": {
+      "startedAt": "2026-09-14T08:59:57.688Z",
+      "finishedAt": "2026-09-14T09:00:22.706Z",
+      "wrapperPid": 30640,
+      "compileExit": 0,
+      "exitCode": 0,
+      "containerId": "41e1ed84b7cb2c11ea5a529de70ac1a5cfc85a93909c712bf13832bac634ad67",
+      "imageId": "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+      "state": {
+        "Status": "exited",
+        "Running": false,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 0,
+        "ExitCode": 0,
+        "Error": "",
+        "StartedAt": "2026-09-14T09:00:06.832879368Z",
+        "FinishedAt": "2026-09-14T09:00:22.158247963Z"
+      },
+      "copiedEvidence": true,
+      "removed": true,
+      "absenceVerified": true,
+      "inputsUnchanged": true,
+      "groups": [
+        {
+          "tests": 3,
+          "pass": 3
+        },
+        {
+          "tests": 3,
+          "pass": 3
+        },
+        {
+          "tests": 3,
+          "pass": 3
+        },
+        {
+          "tests": 46,
+          "pass": 46
+        }
+      ]
+    },
+    "fullFinal3": {
+      "startedAt": "2026-09-14T09:01:33.949Z",
+      "finishedAt": "2026-09-14T09:02:48.700Z",
+      "wrapperPid": 44672,
+      "compileExit": 0,
+      "exitCode": 1,
+      "containerId": "7a4257efb1eb612a729d072ea68cec9b49eb749d6a74bc2d9ac35f883a9e7431",
+      "imageId": "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+      "state": {
+        "Status": "exited",
+        "Running": false,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 0,
+        "ExitCode": 1,
+        "Error": "",
+        "StartedAt": "2026-09-14T09:01:48.619969331Z",
+        "FinishedAt": "2026-09-14T09:02:48.265210415Z"
+      },
+      "copiedEvidence": true,
+      "removed": false,
+      "absenceVerified": false,
+      "inputsUnchanged": true,
+      "groups": [
+        {
+          "tests": 31,
+          "pass": 31
+        },
+        {
+          "tests": 3,
+          "pass": 3
+        },
+        {
+          "tests": 342,
+          "pass": 342
+        },
+        {
+          "tests": 140,
+          "pass": 139,
+          "fail": 1,
+          "knownHarnessFailure": "portable-supervisor-input missing installPosixOutputLifecycle VM binding; fixed and final focused regression 3/3 green"
+        }
+      ]
+    },
+    "finalRetryInfrastructure": {
+      "controller": {
+        "id": "linux-managed-final4-controller",
+        "startedAt": "2026-09-14T09:06:14.414Z",
+        "finishedAt": "2026-09-14T09:07:31.919Z",
+        "wrapperPid": 17392,
+        "testPid": 42076,
+        "exitCode": 1,
+        "signal": null,
+        "inputsUnchanged": true,
+        "inputCount": 433,
+        "command": [
+          "C:\\Program Files\\nodejs\\node.exe",
+          "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-4-managed\\resume-20260914\\linux-task84-gate.mjs",
+          "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-4-managed\\resume-20260914\\linux-managed-final4.json"
+        ],
+        "rootCount": 0,
+        "retainedRoots": []
+      },
+      "dockerImageInspectError": "request returned 500 Internal Server Error for API route and version http://%2F%2F.%2Fpipe%2FdockerDesktopLinuxEngine/v1.55/images/node:24-alpine/json, check if the server supports the requested API version"
+    }
+  },
+  "static": {
+    "typecheck": {
+      "id": "typecheck-final4",
+      "startedAt": "2026-09-14T09:06:14.569Z",
+      "finishedAt": "2026-09-14T09:06:27.222Z",
+      "wrapperPid": 28628,
+      "testPid": 24472,
+      "exitCode": 0,
+      "signal": null,
+      "inputsUnchanged": true,
+      "inputCount": 433,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/typescript/bin/tsc",
+        "-p",
+        "runner-v2/tsconfig.json",
+        "--noEmit"
+      ],
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    "eslint": {
+      "id": "eslint-final4",
+      "startedAt": "2026-09-14T09:06:14.585Z",
+      "finishedAt": "2026-09-14T09:06:36.479Z",
+      "wrapperPid": 37944,
+      "testPid": 41488,
+      "exitCode": 0,
+      "signal": null,
+      "inputsUnchanged": true,
+      "inputCount": 433,
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "node_modules/eslint/bin/eslint.js",
+        "runner-v2/src",
+        "runner-v2/test"
+      ],
+      "rootCount": 0,
+      "retainedRoots": []
+    },
+    "eslintOutput": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\mcp-tools.test.ts\n  3:15  warning  'ToolExecutionContext' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars\n\n✖ 1 problem (0 errors, 1 warning)",
+    "diffCheck": {
+      "id": "diff-check-final4",
+      "startedAt": "2026-09-14T09:06:14.628Z",
+      "finishedAt": "2026-09-14T09:06:16.028Z",
+      "wrapperPid": 37264,
+      "testPid": 43328,
+      "exitCode": 0,
+      "signal": null,
+      "inputsUnchanged": true,
+      "inputCount": 433,
+      "command": [
+        "C:\\Program Files\\Git\\cmd\\git.exe",
+        "diff",
+        "--check",
+        "--",
+        "runner-v2"
+      ],
+      "rootCount": 0,
+      "retainedRoots": []
+    }
+  },
+  "causal": {
+    "final": [
+      {
+        "id": "verifier-grant-authority",
+        "file": "runner-v2/src/final-verification-runtime.ts",
+        "beforeSha256": "6b6291898e36d2e023ac2a7ef2ad126a9b6ae9d2b204efa2ff7e776928e27ea7",
+        "faultSha256": "17f9f4dfadc671bd89382202d204b00f9d3ea790320094f9c137badb0145698e",
+        "redExit": 1,
+        "behavioralRed": true,
+        "restoredSha256": "6b6291898e36d2e023ac2a7ef2ad126a9b6ae9d2b204efa2ff7e776928e27ea7"
+      },
+      {
+        "id": "trusted-transitional-observation",
+        "file": "runner-v2/src/execution-host-managed-transport.ts",
+        "beforeSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d",
+        "faultSha256": "922089bfc600c09f195d01896d76b9e7b359b1f08edb9c433bc4ec7c7116eea1",
+        "redExit": 1,
+        "behavioralRed": true,
+        "restoredSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d"
+      },
+      {
+        "id": "terminal-cleanup-join",
+        "file": "runner-v2/src/execution-host-managed-transport.ts",
+        "beforeSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d",
+        "faultSha256": "7f559ba7d147325c67862b9a5e252c1c1fd772e3e336508afb4d948a2072dbbe",
+        "redExit": 1,
+        "behavioralRed": true,
+        "restoredSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d"
+      }
+    ],
+    "strict": {
+      "startedAt": "2026-09-14T07:38:36.285Z",
+      "file": "runner-v2/src/execution-host-managed-transport.ts",
+      "beforeSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d",
+      "faultSha256": "1a01a0a379134514d0189324705e354388b0c08b03f6be05fa7635116887b539",
+      "redExit": 1,
+      "behavioralRed": true,
+      "restoredSha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d",
+      "finishedAt": "2026-09-14T07:38:39.105Z"
+    },
+    "posixEofPump": {
+      "beforeSha256": "b967dd5dd01e216b05877e6fd5438a36be55357af8892c94864c3bf5bad930f0",
+      "faultSha256": "e03ea434b766d51bd743abbd274599700768ca31e6d1c1815eca862d29dd7e1f",
+      "redExit": 1,
+      "behavioralRed": true,
+      "restoredSha256": "b967dd5dd01e216b05877e6fd5438a36be55357af8892c94864c3bf5bad930f0"
+    }
+  },
+  "audit": {
+    "at": "2026-09-14T09:13:30.177Z",
+    "head": "59becb95ec49b56bbe33be5426b0f44e084dacb9",
+    "branch": "codex/runner-v2-robust-build",
+    "protectedCount": 3529,
+    "protectedDrift": [],
+    "indexMatchesBaseline": true,
+    "cached": [],
+    "runnerHashes": [
+      {
+        "path": "runner-v2/src/evidence-continuation.ts",
+        "sha256": "ca90293787f8f424cfad811d38416ac2f0353931e34d1b93e65cfcbb3ff0210a"
+      },
+      {
+        "path": "runner-v2/src/execution-host.ts",
+        "sha256": "3c5633d01fb488cf1597499f1359f1179e78676de6a609454202addf5473221d"
+      },
+      {
+        "path": "runner-v2/src/final-verification-runtime.ts",
+        "sha256": "6b6291898e36d2e023ac2a7ef2ad126a9b6ae9d2b204efa2ff7e776928e27ea7"
+      },
+      {
+        "path": "runner-v2/src/managed-process-tools.ts",
+        "sha256": "07343b4674b2d48de44836473316c67bc054764d9a08586751bd91f757e55f0f"
+      },
+      {
+        "path": "runner-v2/src/managed-process.ts",
+        "sha256": "babd84db33fed2cad99f5f31a3bcb6e59c6609dddf94654eda9724a318a27e3e"
+      },
+      {
+        "path": "runner-v2/src/native-build-factory.ts",
+        "sha256": "f1eea961215fcbbbdf11f41475a8aa79ec89e5f084572dd9aee7a060e5ab73ad"
+      },
+      {
+        "path": "runner-v2/src/portable-process-supervisor.mjs",
+        "sha256": "b967dd5dd01e216b05877e6fd5438a36be55357af8892c94864c3bf5bad930f0"
+      },
+      {
+        "path": "runner-v2/src/protocol-evidence-tee.ts",
+        "sha256": "c52b354d6d5bc4c1d11bfa74375055a9690944e1a0d74fa5145136ecaa9b21ed"
+      },
+      {
+        "path": "runner-v2/src/session-authority.ts",
+        "sha256": "cbd0784c36e6fe2d72bf6f81615f4816743d0be579fc2b17d322fc669b5da127"
+      },
+      {
+        "path": "runner-v2/src/streaming-process-session-runtime.ts",
+        "sha256": "7857fd6af49163a6494e5ab763c52fafa492d3a96d3b6f40716aad6113d3f962"
+      },
+      {
+        "path": "runner-v2/src/windows-job-process-channel.ts",
+        "sha256": "e6ea0c79aec3369615207ad4df91c574e3daa04e1906840a52f7d48ca70bd288"
+      },
+      {
+        "path": "runner-v2/test/final-verification-runtime-b1.test.ts",
+        "sha256": "5d37fd423e6ecdfd39066102571f2585b4892d7d53cd97de01b86ea2339da8fa"
+      },
+      {
+        "path": "runner-v2/test/managed-process.test.ts",
+        "sha256": "74a8172a60d9d33c19d13f5d8f2f682abc4785967198c5b08fd35d605bdc41a3"
+      },
+      {
+        "path": "runner-v2/test/portable-supervisor-input.test.ts",
+        "sha256": "6f01efe7d01145dfac6547ca9484a01c3feb255f3532a6bf76b95c6fe491d981"
+      },
+      {
+        "path": "runner-v2/test/posix-process-backend.test.ts",
+        "sha256": "00770b522a2e5d43ea345d4dafef446b576a0d2fc95adc08abfdb00120bd9f71"
+      },
+      {
+        "path": "runner-v2/test/remaining-fixture-finalizers.test.ts",
+        "sha256": "457d11d0b90badfc719cadc2854b0387fda9bb277b584160b034fb5d69e57285"
+      },
+      {
+        "path": "runner-v2/test/streaming-process-session-runtime.test.ts",
+        "sha256": "b70c3c52edd4ad379cd3b32b9f99e24b4a9747bfa32635972cf8df7768735109"
+      },
+      {
+        "path": "runner-v2/test/support/one-shot-command-executor.ts",
+        "sha256": "8f008092107ee403e50541ef23c4508797a3ed759e0e93ca3ce80d6107a190ca"
+      },
+      {
+        "path": "runner-v2/test/windows-process-backend.test.ts",
+        "sha256": "3860259ebc1901436b08b64b6b6cb0dafb7e6958793317b13a219b84493b0eed"
+      },
+      {
+        "path": "runner-v2/src/execution-host-managed-transport.ts",
+        "sha256": "a0c5fdbda4bde85b996966b825e941ebe4403f5b325cb31d924485a2f0dcf05d"
+      },
+      {
+        "path": "runner-v2/src/managed-process-contracts.ts",
+        "sha256": "7c6fd3047f0aa4499e15f2fa8bc30b2c7dd4b0bcfaac9e01c8997a8f9146ffd5"
+      },
+      {
+        "path": "runner-v2/src/managed-process-history.ts",
+        "sha256": "041aa1164664b0ae82201e1a24628d3b1d4093d435d005631d035ada27b25eda"
+      },
+      {
+        "path": "runner-v2/src/managed-process-record.ts",
+        "sha256": "36d9fa03ef7f34b3077c5430efd9efa9eaeb8c23735870181735bab04a667f30"
+      },
+      {
+        "path": "runner-v2/src/managed-process-transport.ts",
+        "sha256": "9df566d3e8be62936933687f6ffaa9179db858404127899034de0accabb3e6fa"
+      },
+      {
+        "path": "runner-v2/test/bounded-output-observation.test.ts",
+        "sha256": "ece2960f0ad19fddb2fc739021ee73febe7e77dc93e9bf1cfbe711678354d496"
+      },
+      {
+        "path": "runner-v2/test/final-verification-managed-authority.test.ts",
+        "sha256": "1eb8f172de12255e66926ac84f7a005e872338b0ee6f9fbb92350bda08aa2dc9"
+      },
+      {
+        "path": "runner-v2/test/managed-backend-boundary.test.ts",
+        "sha256": "8786b2131ac13863e9e2ab8dbfd8d42101cf1bed00ac95032eedb8f302bbbede"
+      },
+      {
+        "path": "runner-v2/test/managed-observation-authority.test.ts",
+        "sha256": "a10cdf038b71afa59a17f257d5c21fc66efbb87f1b56d151db947c7a074ce248"
+      },
+      {
+        "path": "runner-v2/test/managed-record-compatibility.test.ts",
+        "sha256": "6ad8c900aee5aaaf6ab9fa15ba789d45df76c24596765ddda3f8144a784b9280"
+      },
+      {
+        "path": "runner-v2/test/managed-shared-facade.test.ts",
+        "sha256": "9742b9a1b9b228d4ff282f9042f785f66e4501bb4d826cca7864d89d6773b905"
+      },
+      {
+        "path": "runner-v2/test/managed-shared-native.test.ts",
+        "sha256": "41031638cf0f33fb9453de3874851c72620e98a44e6ea1d789fc0bf0277adf10"
+      },
+      {
+        "path": "runner-v2/test/managed-strict-oci.test.ts",
+        "sha256": "5d67ad0261db5ec7f7a6d2e0fa2e6575e7955c875010b2376d2e0e70bf1e24bf"
+      },
+      {
+        "path": "runner-v2/test/managed-tool-await.test.ts",
+        "sha256": "948933a6dda13cd7f15e6bb8613002aaa10984fd52728e44df60084fa3777e64"
+      },
+      {
+        "path": "runner-v2/test/windows-job-terminal-observation.test.ts",
+        "sha256": "741d77ebfbf94940e105c243781fed9e131801050cb325cbf52ed13be3d854bc"
+      }
+    ]
+  },
+  "resources": {
+    "successfulRoots": {
+      "closeout": 107,
+      "windowsPortable": 169,
+      "strictOci": 1,
+      "retained": 0
+    },
+    "failedEvidenceRootsPreserved": 52,
+    "failedDockerEvidencePreserved": true
+  }
+}

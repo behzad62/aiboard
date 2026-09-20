@@ -1,0 +1,90 @@
+{
+  "at": "2026-09-11T10:49:47.058458+00:00",
+  "base": "7f6fbcb15c67dfe87984131c1d208636056611e9",
+  "sourceInputsVerified": 361,
+  "unrelatedFilesPreserved": 222,
+  "status": "PACKET 8.0B VERIFIED 100% COMPLETE \u2014 FAMILY PACKET 8.1 GIT MAY BEGIN",
+  "review": "owner-authorized controller review against original B3.1-B3.4 requirements, actual code and hash-bound accepted evidence",
+  "B3Complete": true,
+  "P6Complete": false,
+  "namedEvidence": [
+    {
+      "requirementTest": "strict OCI duplex requires separately attested interactive create and exact interactive attach",
+      "result": "ok 899 - strict OCI duplex requires separately attested interactive create and exact interactive attach"
+    },
+    {
+      "requirementTest": "strict OCI consumer cancellation and external disappearance retain exact cleanup ownership",
+      "result": "ok 900 - strict OCI consumer cancellation and external disappearance retain exact cleanup ownership"
+    },
+    {
+      "requirementTest": "strict OCI duplex fails typed before executable probing or create when interactive attach is unavailable",
+      "result": "ok 901 - strict OCI duplex fails typed before executable probing or create when interactive attach is unavailable"
+    },
+    {
+      "requirementTest": "strict OCI rejects a bind-mounted host executable before workload creation",
+      "result": "ok 902 - strict OCI rejects a bind-mounted host executable before workload creation"
+    },
+    {
+      "requirementTest": "real Docker strict interactive plan completes an exact JSON duplex roundtrip and leaves zero containers",
+      "result": "ok 926 - real Docker strict interactive plan completes an exact JSON duplex roundtrip and leaves zero containers"
+    },
+    {
+      "requirementTest": "real Docker strict attach cancellation and external disappearance leave zero owned containers",
+      "result": "ok 927 - real Docker strict attach cancellation and external disappearance leave zero owned containers"
+    },
+    {
+      "requirementTest": "one ExecutionHost creates isolated per-run grants stores runtimes and cleanup ownership",
+      "result": "ok 365 - one ExecutionHost creates isolated per-run grants stores runtimes and cleanup ownership"
+    },
+    {
+      "requirementTest": "ExecutionHost close retains failed bindings and retries its exact cleanup graph",
+      "result": "ok 370 - ExecutionHost close retains failed bindings and retries its exact cleanup graph"
+    },
+    {
+      "requirementTest": "static MCP attestation spawns nothing and ephemeral discovery cannot call tools or leak a live channel",
+      "result": "ok 1315 - static MCP attestation spawns nothing and ephemeral discovery cannot call tools or leak a live channel"
+    },
+    {
+      "requirementTest": "Git preflight and MCP discovery use distinct closed internal principals",
+      "result": "ok 1319 - Git preflight and MCP discovery use distinct closed internal principals"
+    },
+    {
+      "requirementTest": "NativeBuildFactory reverses every acquired runtime resource after construction faults",
+      "result": "ok 802 - NativeBuildFactory reverses every acquired runtime resource after construction faults"
+    },
+    {
+      "requirementTest": "NativeBuildFactory retains the primary construction error while retrying every failed cleanup",
+      "result": "ok 804 - NativeBuildFactory retains the primary construction error while retrying every failed cleanup"
+    },
+    {
+      "requirementTest": "CLI closes per-run MCP discovery and public facades when active extension startup fails before readiness",
+      "result": "ok 235 - CLI closes per-run MCP discovery and public facades when active extension startup fails before readiness"
+    },
+    {
+      "requirementTest": "real persistent output stays private between calls and spill failure never corrupts protocol bytes",
+      "result": "ok 1262 - real persistent output stays private between calls and spill failure never corrupts protocol bytes"
+    },
+    {
+      "requirementTest": "real Runner crash before transfer is cleaned exactly once without fabricated adoption",
+      "result": "ok 1261 - real Runner crash before transfer is cleaned exactly once without fabricated adoption"
+    },
+    {
+      "requirementTest": "strict public MCP uses the separately attested portable image command and refuses unsafe host identities",
+      "result": "ok 756 - strict public MCP uses the separately attested portable image command and refuses unsafe host identities"
+    },
+    {
+      "requirementTest": "public MCP manager crash recovery cleans its exact launched server tree without relaunch",
+      "result": "ok 762 - public MCP manager crash recovery cleans its exact launched server tree without relaunch"
+    },
+    {
+      "requirementTest": "public MCP manager close verifies its launched server tree is empty",
+      "result": "ok 757 - public MCP manager close verifies its launched server tree is empty"
+    },
+    {
+      "requirementTest": "two real concurrent run bindings cannot cross grants outputs or cleanup effects",
+      "result": "ok 378 - two real concurrent run bindings cannot cross grants outputs or cleanup effects"
+    }
+  ],
+  "terminalSHA256": "94c6e53ccca76f10153cb42bd9a2e0508d25f77110f691dbaadea03bb0bab3fe",
+  "fullLogSHA256": "fdc866d1e7124f354fb79c783e73094025dc3de754e08ab2d7a5ded7279423cd"
+}

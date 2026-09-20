@@ -1,0 +1,25 @@
+{
+  "id": "ownership-green",
+  "startedAt": "2026-09-15T14:46:24.992Z",
+  "finishedAt": "2026-09-15T14:46:25.768Z",
+  "wrapperPid": 37708,
+  "testPid": 18128,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 447,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=adapter never invents ownership",
+    "runner-v2/test/process-recovery.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

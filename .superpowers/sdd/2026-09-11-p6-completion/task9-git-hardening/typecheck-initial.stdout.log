@@ -1,0 +1,2 @@
+runner-v2/src/git-execution-policy.ts(41,5): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+  Type 'undefined' is not assignable to type 'string'.

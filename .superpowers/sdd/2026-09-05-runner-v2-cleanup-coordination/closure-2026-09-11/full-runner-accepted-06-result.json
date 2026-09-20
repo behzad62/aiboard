@@ -1,0 +1,14 @@
+{
+  "index": 6,
+  "label": "test-native-model-usage",
+  "exitCode": 0,
+  "startedAt": "2026-09-11T10:21:44.305245+00:00",
+  "finishedAt": "2026-09-11T10:21:44.544592+00:00",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/tsx/dist/cli.mjs",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "scripts/test-native-model-usage.mts"
+  ]
+}

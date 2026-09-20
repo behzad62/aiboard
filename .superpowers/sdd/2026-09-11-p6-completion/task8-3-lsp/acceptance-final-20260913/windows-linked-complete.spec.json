@@ -1,0 +1,9 @@
+{
+  "id": "windows-linked-complete",
+  "tests": [
+    "runner-v2/test/bounded-output-spool.test.ts",
+    "runner-v2/test/evidence-continuation.test.ts",
+    "runner-v2/test/streaming-process-session-runtime.test.ts",
+    "runner-v2/test/linked-output-spill-storage.test.ts"
+  ]
+}

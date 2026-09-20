@@ -1,0 +1,24 @@
+{
+  "id": "process-host-semantic-green",
+  "startedAt": "2026-09-14T10:22:51.483Z",
+  "finishedAt": "2026-09-14T10:23:13.846Z",
+  "wrapperPid": 27512,
+  "testPid": 24192,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-host-semantic-probes.test.ts"
+  ],
+  "rootCount": 34,
+  "retainedRoots": []
+}

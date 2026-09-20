@@ -19,6 +19,7 @@ const publicDirectory = outputDirectoryOption
   : path.join(root, "public");
 const runnerDirectory = path.join(root, "runner-v2");
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const runnerPackage = JSON.parse(fs.readFileSync(path.join(runnerDirectory, "package.json"), "utf8"));
 const accountRunnerSource = path.join(root, "lib", "account-provider-runner.mjs");
 const accountSdkSource = path.join(root, "lib", "account-provider-copilot-sdk.mjs");
 const downloads = [
@@ -42,7 +43,7 @@ function normalizedTextFile(source) {
 }
 
 function archiveFileContent(source) {
-  return [".ts", ".md"].includes(path.extname(source).toLowerCase())
+  return [".ts", ".mts", ".mjs", ".ps1", ".md"].includes(path.extname(source).toLowerCase())
     ? normalizedTextFile(source)
     : fs.readFileSync(source);
 }
@@ -81,11 +82,13 @@ function nativeRunnerPackageJson() {
     private: true,
     license: rootPackage.license,
     type: "module",
-    engines: { node: ">=24.18.0" },
+    engines: runnerPackage.engines,
+    bin: runnerPackage.bin,
     scripts: {
       start: "tsx src/cli.ts --",
       "setup:browser": "playwright install chromium",
     },
+    ...(runnerPackage.optionalDependencies ? { optionalDependencies: runnerPackage.optionalDependencies } : {}),
     dependencies: {
       playwright: playwrightVersion,
       tsx: tsxVersion,
@@ -100,7 +103,7 @@ Runner V2 is the native process required by AI Board Build mode.
 
 ## Prerequisites
 
-- Node.js 24.18.0 or newer
+- Node.js 24.x
 - Git installed and available on PATH
 
 ## Install and start
@@ -141,6 +144,7 @@ function addNativeRunnerFiles(zip, archiveRoot = "") {
 
   const archivePath = (file) => path.posix.join(archiveRoot, file);
   addDirectory(zip, path.join(runnerDirectory, "src"), archivePath("src"));
+  addDirectory(zip, path.join(runnerDirectory, "bin"), archivePath("bin"));
   addDirectory(zip, skills, archivePath("skills"));
   zip.file(archivePath("package.json"), `${JSON.stringify(nativeRunnerPackageJson(), null, 2)}\n`, {
     date: new Date(0),
@@ -186,7 +190,7 @@ This bundle includes the Bench Runner and its managed Runner V2 source.
 
 ## Prerequisites
 
-- Node.js 24.18.0
+- Node.js 24.x
 - Git installed and available on PATH
 
 ## Install and start

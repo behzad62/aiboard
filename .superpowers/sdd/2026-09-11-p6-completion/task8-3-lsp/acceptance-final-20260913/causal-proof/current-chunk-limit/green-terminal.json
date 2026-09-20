@@ -1,0 +1,25 @@
+{
+  "id": "current-chunk-limit-green",
+  "startedAt": "2026-09-13T19:40:46.168Z",
+  "finishedAt": "2026-09-13T19:40:47.129Z",
+  "wrapperPid": 12084,
+  "testPid": 19304,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 416,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP shared transport uses the real launching call and fresh exact language request authority$",
+    "runner-v2/test/lsp-transport-authority.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,10 +7,12 @@ import test from "node:test";
 import type { AgentModel, AgentModelRequest } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { BudgetedAgentModel } from "../src/budgeted-model.js";
+import { LanguageProviderRouter } from "../src/language-provider-router.js";
+import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
-import { createSubagentTools } from "../src/subagent-tools.js";
+import { createSubagentTools } from "./support/git-fixture.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
 test("read-only subagents expose no workspace mutation tools and are concurrency-safe", async () => {
@@ -92,6 +94,82 @@ test("read-only subagents expose no workspace mutation tools and are concurrency
       "browser.click",
     ]) assert.equal(childTools.has(forbidden), false, `${forbidden} must be unavailable`);
   } finally {
+    sessions.close();
+    ledger.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("subagents route code intelligence through the supplied shared language router", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-subagent-language-"));
+  const workspace = join(root, "workspace");
+  mkdirSync(workspace);
+  writeFileSync(join(workspace, "value.fixture"), "value\n");
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+  const ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
+  const language = new LanguageProviderRouter({
+    builtInProvider: fixtureLanguageProvider(),
+    extensionProviders: [],
+    configuredServers: [],
+  });
+  let turns = 0;
+  const model: AgentModel = {
+    complete: async () => {
+      turns += 1;
+      return turns === 1
+        ? {
+            blocks: [{
+              type: "tool_call",
+              callId: "definition_1",
+              name: "code.definition",
+              arguments: { path: "value.fixture", line: 1, column: 1 },
+            }],
+            stopReason: "tool_calls",
+          }
+        : {
+            blocks: [{
+              type: "tool_call",
+              callId: "return_1",
+              name: "return_to_parent",
+              arguments: { summary: "Found the fixture.", artifactHashes: [] },
+            }],
+            stopReason: "tool_calls",
+          };
+    },
+  };
+  try {
+    const registry = new ToolRegistry();
+    for (const tool of createSubagentTools({
+      model,
+      runId: "run_1",
+      parentSessionId: "worker:run_1:T1:1",
+      taskId: "T1",
+      parentActorId: "worker_1",
+      permissionProfile: "full",
+      workspacePath: workspace,
+      artifacts,
+      ledger,
+      sessions,
+      language,
+    } as Parameters<typeof createSubagentTools>[0])) registry.register(tool);
+    const result = await registry.invoke({
+      type: "tool_call",
+      callId: "research_1",
+      name: "spawn_readonly_subagent",
+      arguments: { assignment: "Find the fixture definition", maxTurns: 3 },
+    }, {
+      runId: "run_1",
+      sessionId: "worker:run_1:T1:1",
+      actor: { role: "worker", id: "worker_1" },
+      workspacePath: workspace,
+    });
+    assert.equal(result.isError, false, result.error?.message ?? "subagent failed");
+    assert.deepEqual(language.auditRecords().map((record) => record.providerId), [
+      "fixture.subagent.language",
+    ]);
+  } finally {
+    await language.close();
     sessions.close();
     ledger.close();
     rmSync(root, { recursive: true, force: true });
@@ -196,3 +274,24 @@ test("subagent model calls use child role and session attribution", async () => 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function fixtureLanguageProvider(): LanguageIntelligenceProvider {
+  return {
+    descriptor: {
+      id: "fixture.subagent.language",
+      displayName: "Fixture subagent language",
+      extensions: [".fixture"],
+      rootMarkers: [],
+      priority: 1,
+    },
+    workspaceSymbols: async () => ({ status: "ok", results: [], truncated: false }),
+    definition: async () => ({
+      status: "ok",
+      results: [{ path: "value.fixture", line: 1, column: 1, preview: "value" }],
+      truncated: false,
+    }),
+    references: async () => ({ status: "ok", results: [], truncated: false }),
+    diagnostics: async () => ({ status: "ok", results: [], truncated: false }),
+    close: async () => undefined,
+  };
+}

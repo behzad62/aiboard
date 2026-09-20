@@ -1,0 +1,35 @@
+{
+  "verifiedAt": "2026-09-11T11:54:45.975757+00:00",
+  "head": "7f6fbcb15c67dfe87984131c1d208636056611e9",
+  "connectionResponsive": true,
+  "checkpoint": "Task8.1 runtime-backed Git host integration and exact output boundary",
+  "counts": {
+    "tests": 95,
+    "pass": 95,
+    "fail": 0,
+    "cancelled": 0,
+    "skipped": 0,
+    "todo": 0
+  },
+  "sourceFiles": 203,
+  "sourceDrift": [],
+  "currentNativeGitPassed": true,
+  "materialFaultsDetected": 8,
+  "typecheckExit": 0,
+  "eslintExit": 0,
+  "finalGateExactAcquisitions": 67,
+  "finalGateRetainedRoots": [],
+  "unrelatedFilesPreserved": 222,
+  "headUnchanged": true,
+  "indexUnchanged": true,
+  "B3CloseoutRecorded": true,
+  "GitFamilyMigrationComplete": false,
+  "P6Complete": false,
+  "nextStep": "Route all production Git owners through their explicit per-run/call runner, then verify family compatibility and launch-policy closure.",
+  "limitations": [
+    "Whole-family caller migration is not complete.",
+    "No complete P6 suite/CI/platform acceptance is claimed.",
+    "Without a complete private spill, output larger than the retained 128KiB tail remains a typed output_limit; never partial Git success.",
+    "Historical failed native roots remain outside arbitrary cleanup authority."
+  ]
+}

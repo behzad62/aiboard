@@ -1,0 +1,25 @@
+{
+  "id": "fault-final-controls-green",
+  "startedAt": "2026-09-15T07:19:53.103Z",
+  "finishedAt": "2026-09-15T07:19:53.780Z",
+  "wrapperPid": 21592,
+  "testPid": 41692,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 442,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=a new-file parent retarget|publication is create-if-absent",
+    "runner-v2/test/filesystem-mutation-fence.test.ts"
+  ],
+  "rootCount": 2,
+  "retainedRoots": []
+}

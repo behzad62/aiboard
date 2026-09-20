@@ -1,0 +1,54 @@
+{
+  "id": "causal-external-diff-red",
+  "pattern": "neutralizes repository fsmonitor",
+  "sentinel": "external-diff-sentinel.txt",
+  "expected": "diff",
+  "beforeHash": "0cd39defd2aec4e54db98641a1e60039f70fe319c532efba58b484194cea4e6a",
+  "afterHash": "0cd39defd2aec4e54db98641a1e60039f70fe319c532efba58b484194cea4e6a",
+  "restoredExact": true,
+  "mutatedHash": "0b940fae73aba9555d791a67720ad159202a615ffc8d501daea54f8a8cbac16c",
+  "replacements": [
+    {
+      "oldValue": "\"diff.external=\", ",
+      "newValue": ""
+    }
+  ],
+  "childExit": 1,
+  "terminal": {
+    "id": "causal-external-diff-red",
+    "startedAt": "2026-09-14T15:38:55.359Z",
+    "finishedAt": "2026-09-14T15:39:10.952Z",
+    "wrapperPid": 4440,
+    "testPid": 37512,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 437,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=neutralizes repository fsmonitor",
+      "runner-v2/test/git-indirect-execution-policy.test.ts"
+    ],
+    "rootCount": 4,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-neutralized-config-lbYPc1"
+    ]
+  },
+  "sentinelProof": {
+    "matches": [
+      {
+        "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task9-neutralized-config-lbYPc1\\external-diff-sentinel.txt",
+        "content": "diff"
+      }
+    ]
+  },
+  "controllerError": null,
+  "finishedAt": "2026-09-14T15:39:10.962Z"
+}

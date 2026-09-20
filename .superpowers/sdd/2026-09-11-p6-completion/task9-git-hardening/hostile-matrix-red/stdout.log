@@ -1,0 +1,40 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-TYCOCe"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-TYCOCe"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-5Id4CE"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-J6m9uz"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-ECdt5f"}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-hook-TYCOCe","existsAtExit":false}
+# Subtest: Task 9 production Git commit never executes a repository-controlled pre-commit hook
+ok 1 - Task 9 production Git commit never executes a repository-controlled pre-commit hook
+  ---
+  duration_ms: 13427.5598
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-cGaBj3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-clean-filter-cGaBj3"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-cO8UrO"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-plx9d5"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-BxvPb8"}
+# Subtest: Task 9 refuses a repository clean filter before it can run
+not ok 2 - Task 9 refuses a repository clean filter before it can run
+  ---
+  duration_ms: 12828.3813
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-indirect-execution-policy.test.ts:1:4267'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async expectPolicyRefused (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-indirect-execution-policy.test.ts:106:3)
+    async <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-indirect-execution-policy.test.ts:121:5)
+    async withProductionGit (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-indirect-execution-policy.test.ts:48:5)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-indirect-execution-policy.test.ts:116:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-smudge-filter-yVXkmv"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-smudge-filter-yVXkmv"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-qguwtm"}

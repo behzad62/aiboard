@@ -1,0 +1,194 @@
+[
+  {
+    "path": "broad-fixtures-proof.json",
+    "sha256": "0c25c6a31dda86b59385d23d3015e7ab864ed0a4914b4b99c34e876c60f17706",
+    "proof": {
+      "causalRedExit": 1,
+      "materialRedExit": 1,
+      "restoredExit": 0,
+      "coveredFailures": [
+        "ExecutionHost close conjunction retains a pre-adoption unknown launch and exact retry authority",
+        "C4 POSIX child consumes an anchor release only under captured current authority before go and after target exit",
+        "C4 POSIX child-crash anchor release records its own holder so a live supervisor cannot wedge C1 reclamation",
+        "C4 POSIX child does not spawn an executable after a mismatched go publication",
+        "C4 POSIX child retains its exact prepared breadcrumb through a pre-go crash boundary",
+        "C4 POSIX supervisor does not publish go when the fenced publication is interrupted",
+        "C4 POSIX supervisor preserves its witness and reports outcome_unknown after anchor loss",
+        "C4 POSIX supervisor reattests inside the fenced effect before a group signal",
+        "C4 POSIX producer keeps the real channel unsettled until closed pipes drain a late tail",
+        "C4 POSIX producer drains a closed unread tail after backpressure before terminal proof",
+        "C4 POSIX supervisor retires forced workload causally and waits for output ACK plus pipe closure",
+        "C4 POSIX supervisor releases an exact lone anchor only after executable exit and retains ACK lifetime",
+        "C4 POSIX supervisor refuses anchor release when membership changes inside its fence",
+        "C4 POSIX supervisor replaces an unconsumed anchor release marker after a higher-fence takeover",
+        "C4 POSIX supervisor retains authority when an anchor exits before reporting exact release consumption",
+        "C4 POSIX supervisor rejects mismatched released records and non-clean anchor exits",
+        "C4 POSIX supervisor retains uncertain authority when a forced anchor exits with descendants remaining",
+        "C4 POSIX supervisor keeps its anchor through graceful control before one exact force signal"
+      ],
+      "pathCorrections": 18,
+      "sources": [
+        {
+          "path": "runner-v2/test/execution-host.test.ts",
+          "sha256": "222b332c16beb9404d7b18df3dbf9c80c120505028e0a1b64bcdfbfde3c3c3f7"
+        },
+        {
+          "path": "runner-v2/test/posix-process-backend.test.ts",
+          "sha256": "bbf2dbfa307d0f0ac0dce357c969c37689d284c66059c21bcffac80cc1aae939"
+        }
+      ]
+    }
+  },
+  {
+    "path": "expired-host-material-proof.json",
+    "sha256": "7b97bc51c8aa6c9880ac824421fcbd1d4ce39862f9d53568c3b27a20b117f0cc",
+    "proof": {
+      "redExit": 1,
+      "restoredExit": 0,
+      "runtimeSHA256": "865ef7964bc71375bfc701905bff0527803b9ffd7e860907e22aecad6425b84a"
+    }
+  },
+  {
+    "path": "finite-child-material-proof.json",
+    "sha256": "dae7cdab9b605e991d7c8938f80ad1ba742b2bcfc8c551058a606e950df35071",
+    "proof": {
+      "faults": [
+        {
+          "name": "native-close",
+          "redExit": 1
+        },
+        {
+          "name": "retained-errors",
+          "redExit": 1
+        },
+        {
+          "name": "stop-once",
+          "redExit": 1
+        }
+      ],
+      "restoredExit": 0,
+      "restoredSHA256": "f8fc275ff8d09cdc9f2aaca7a48da03faf5da66d2a2dc4a4c1c6160ceb7218fc"
+    }
+  },
+  {
+    "path": "finite-child-race-material-proof.json",
+    "sha256": "8edfc202726f768bbfbfea70e460fd3fbe4c05b3e7c82bd9549f2409c7b7ff84",
+    "proof": {
+      "redExit": 1,
+      "restoredExit": 0,
+      "sourceSHA256": "57a4db8c3a3594e1bd964024e652d7ce440704c9e37933d09b3b9da1e3179e98"
+    }
+  },
+  {
+    "path": "job-bootstrap-material-proof.json",
+    "sha256": "5afc3e4145252f0f93d5eb3c3db8d9d44808931f5734f67b169f4cf14dfe16ec",
+    "proof": {
+      "oldMetadataRedExit": 1,
+      "forgedZeroRedExit": 1,
+      "restoredExit": 0,
+      "exactSHA256": "b4b7123cce3fd372a0de9839940753b317f7e86e3d81edd91a915a377f17c452"
+    }
+  },
+  {
+    "path": "job-bootstrap-proof.json",
+    "sha256": "8c0db165e03ffa799bc18b78859cb6430aa9bad105e8d6b0e38c8dae75341202",
+    "proof": {
+      "typecheckExit": 0,
+      "redExit": 1,
+      "sourceSHA256": "b4b7123cce3fd372a0de9839940753b317f7e86e3d81edd91a915a377f17c452",
+      "greenExit": 0
+    }
+  },
+  {
+    "path": "lock-delegation-proof.json",
+    "sha256": "034e054f6401378eb376d3f7fb69e159c60114dbb96455616c8b04ad97b75dfb",
+    "proof": {
+      "materialRedExit": 1,
+      "restoredExit": 0,
+      "unchangedProductionSHA256": "6f25843bbafe46641bcefead1e1815a7f3934fb3a81533a9bdd96cc17f6d93f0"
+    }
+  },
+  {
+    "path": "oci-path-material-proof.json",
+    "sha256": "f0740abe5005ef91903a9fca15bd66a9c4c2f87ea8e901ac7e48452fef007b6b",
+    "proof": {
+      "redExit": 1,
+      "restoredExit": 0,
+      "restoredSHA256": "5d965aad2a70f73a74029ca62ea7149f4e370146a105e0096d274b0be9818bc6"
+    }
+  },
+  {
+    "path": "oci-path-proof.json",
+    "sha256": "368e2803bdc3be2ab3656deb4e7e0b736805eb614de58e41d800f4986903d5f8",
+    "proof": {
+      "greenExit": 0,
+      "sourceSHA256": "5d965aad2a70f73a74029ca62ea7149f4e370146a105e0096d274b0be9818bc6",
+      "redExit": 1
+    }
+  },
+  {
+    "path": "remaining-finalizers-material-proof.json",
+    "sha256": "f8d321d87b99dabfc2dc146dd17ad5a6cd341d6d18d6834b70e638a2da12effe",
+    "proof": {
+      "redExit": 1,
+      "restoredExit": 0,
+      "hashes": [
+        {
+          "path": "runner-v2/test/lsp-client.test.ts",
+          "sha256": "5a75a03debe89aa96476dc8dcfe67c43d173152d7fc415092900ec3915e6b106"
+        },
+        {
+          "path": "runner-v2/test/managed-process.test.ts",
+          "sha256": "e8e3d3462c7e7b0c60362c22e9aba543e5b5c0b46f243c50ead8828acf4d692d"
+        },
+        {
+          "path": "runner-v2/test/runner-internal-execution-context.test.ts",
+          "sha256": "bf5740f56d85fe1a949e2b045203df40c019009f6e4f0464b5441fe617ab67e6"
+        }
+      ]
+    }
+  },
+  {
+    "path": "synthetic-proof-summary.json",
+    "sha256": "d42568b39e04048742a4c9a72430d2fce53f7ad9cfde2ec3a1a66a243fc48ff4",
+    "proof": {
+      "at": "2026-09-11T07:19:44.705178+00:00",
+      "proofs": [
+        {
+          "name": "actual-finalizer-boundaries",
+          "redExit": 1,
+          "restoredExit": 0,
+          "hashes": {
+            "runner-v2/test/windows-process-backend.test.ts": "b4ba16003a68b36ba516e8f6af68b459ac4833e69bdc7c35b7a5e291d02c7265",
+            "runner-v2/test/execution-host.test.ts": "e11af52f5cff8852ab50e9c3a042f4c024c5345c233407e64b4b157cdf3cecd8"
+          }
+        },
+        {
+          "name": "no-empty-proof",
+          "redExit": 1,
+          "restoredHash": "03ecb567d4c8a3e4fbbb06d61a44d1c5f63d544083cb099c854be7570ebcbc40"
+        },
+        {
+          "name": "no-native-close",
+          "redExit": 1,
+          "restoredHash": "03ecb567d4c8a3e4fbbb06d61a44d1c5f63d544083cb099c854be7570ebcbc40"
+        },
+        {
+          "name": "foreign-identity",
+          "redExit": 1,
+          "restoredHash": "03ecb567d4c8a3e4fbbb06d61a44d1c5f63d544083cb099c854be7570ebcbc40"
+        }
+      ],
+      "finalExit": 0
+    }
+  },
+  {
+    "path": "unstarted-material-proof.json",
+    "sha256": "d24f71192862e01aecce199bc9e7083e85055f355f8cead13a58d8a2bb512dae",
+    "proof": {
+      "redExit": 1,
+      "restoredExit": 0,
+      "exactSourceSHA256": "81d8e1b84949ade2396f3288c98a7aa4c4f201eebd161ae0728d53f17cd53eb3"
+    }
+  }
+]

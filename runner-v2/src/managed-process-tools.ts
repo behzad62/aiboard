@@ -46,7 +46,7 @@ export function createManagedProcessTools(
       validate: processIdInput,
       execute: async (input, context) => {
         try {
-          return snapshotOutput(service.poll(input.processId as string, context));
+          return snapshotOutput(await service.poll(input.processId as string, context));
         } catch (error) {
           return managedError(error);
         }
@@ -55,10 +55,11 @@ export function createManagedProcessTools(
     {
       definition: definition("process.list", "List owned background processes", true, "none"),
       validate: objectInput,
-      execute: async (_input, context) => ({
-        content: [{ type: "json", value: { processes: service.list(context) } }],
-        isError: false,
-      }),
+      execute: async (_input, context) => {
+        try {
+          return { content: [{ type: "json", value: { processes: await service.list(context) } }], isError: false };
+        } catch (error) { return managedError(error); }
+      },
     },
     {
       definition: definition("process.signal", "Signal an owned background process", false, "workspace"),

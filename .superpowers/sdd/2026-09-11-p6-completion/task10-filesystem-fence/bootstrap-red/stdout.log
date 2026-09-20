@@ -1,0 +1,52 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-6xdu8I"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-nyAiFT"}
+# Subtest: bootstrap .gitignore symlink cannot mutate an outside object
+not ok 1 - bootstrap .gitignore symlink cannot mutate an outside object
+  ---
+  duration_ms: 765.9132
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\filesystem-bootstrap-fence.test.ts:1:247'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'filesystem_alias'
+  operator: 'rejects'
+  stack: |-
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-bootstrap-fence.test.ts:19:7)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Task 10 RED bootstrap root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-bootstrap-6xdu8I
+# Subtest: bootstrap .gitignore hardlink cannot mutate an outside object
+not ok 2 - bootstrap .gitignore hardlink cannot mutate an outside object
+  ---
+  duration_ms: 825.033
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\filesystem-bootstrap-fence.test.ts:1:247'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    code: 'hardlink_confinement_unprovable'
+  operator: 'rejects'
+  stack: |-
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\filesystem-bootstrap-fence.test.ts:19:7)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Task 10 RED bootstrap root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task10-bootstrap-nyAiFT
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-6xdu8I","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-nyAiFT","existsAtExit":true}
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2771.1728

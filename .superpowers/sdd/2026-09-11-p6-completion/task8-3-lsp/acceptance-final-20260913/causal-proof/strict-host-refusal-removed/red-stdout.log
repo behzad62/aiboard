@@ -1,0 +1,25 @@
+TAP version 13
+# Subtest: LSP shared transport rejects strict-host-only before backend launch or invented grant
+not ok 1 - LSP shared transport rejects strict-host-only before backend launch or invented grant
+  ---
+  duration_ms: 114.5502
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\lsp-transport-authority.test.ts:1:668'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected rejection.'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\lsp-transport-authority.test.ts:16:3)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 355.9182

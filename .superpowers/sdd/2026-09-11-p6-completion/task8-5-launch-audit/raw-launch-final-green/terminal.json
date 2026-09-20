@@ -1,0 +1,24 @@
+{
+  "id": "raw-launch-final-green",
+  "startedAt": "2026-09-14T11:18:28.990Z",
+  "finishedAt": "2026-09-14T11:18:31.190Z",
+  "wrapperPid": 12476,
+  "testPid": 4696,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/task8-raw-launch-closure.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

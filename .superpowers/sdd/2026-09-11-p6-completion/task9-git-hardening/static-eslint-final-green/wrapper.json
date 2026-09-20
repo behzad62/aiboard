@@ -1,0 +1,29 @@
+{
+  "pid": 25944,
+  "identity": {
+    "Id": 25944,
+    "StartTimeUtc": "2026-09-14T19:55:08.1690829Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-14T19:55:08.202Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\gate.mjs",
+    ".\\.superpowers\\sdd\\2026-09-11-p6-completion\\task9-git-hardening\\static-eslint-final-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node_modules/eslint/bin/eslint.js",
+    "runner-v2/src",
+    "runner-v2/test"
+  ],
+  "spec": {
+    "id": "static-eslint-final-green",
+    "args": [
+      "node_modules/eslint/bin/eslint.js",
+      "runner-v2/src",
+      "runner-v2/test"
+    ]
+  }
+}

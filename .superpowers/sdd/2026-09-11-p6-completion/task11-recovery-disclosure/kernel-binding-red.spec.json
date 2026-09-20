@@ -1,0 +1,7 @@
+{
+  "id": "kernel-binding-red",
+  "pattern": "binds its grant",
+  "tests": [
+    "runner-v2/test/process-recovery-kernel.test.ts"
+  ]
+}

@@ -1,0 +1,442 @@
+{
+  "verifiedAt": "2026-09-11T14:21:33.831651+00:00",
+  "faults": [
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=Git compatibility wrappers",
+        "runner-v2/test/git-caller-routing.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-explicit-wrapper-red.log",
+      "fault": "explicit-wrapper",
+      "path": "runner-v2/src/git-command.ts",
+      "exactRestoredSHA256": "3c3184b6aa897af322825a471b60a4ed17cbd1809efb63825dd9ce542f18fa09"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=migrated Git execution paths",
+        "runner-v2/test/git-caller-audit.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-actual-aliased-raw-launch-red.log",
+      "fault": "actual-aliased-raw-launch",
+      "path": "runner-v2/src/git-tools.ts",
+      "exactRestoredSHA256": "6c8c17da0b30273ba762193912df87d1b6eae10236735e320e3047a8463c759d"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=every active production Git owner",
+        "runner-v2/test/git-caller-audit.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-factory-manager-injection-red.log",
+      "fault": "factory-manager-injection",
+      "path": "runner-v2/src/native-build-factory.ts",
+      "exactRestoredSHA256": "ec87221df6f3df6127124d04bc6b0d4115f7ba2facf7e291a0195df4cfcd9bf6"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=actual ToolBroker carries",
+        "runner-v2/test/git-run-context.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-broker-call-propagation-red.log",
+      "fault": "broker-call-propagation",
+      "path": "runner-v2/src/tool-broker.ts",
+      "exactRestoredSHA256": "d9d0743eb26c99e5de4312e2c3ccd7685ada3202c19c93390f68008543383b40"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=nested repository Git reads retain separate",
+        "runner-v2/test/git-run-context.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-run-local-async-context-red.log",
+      "fault": "run-local-async-context",
+      "path": "runner-v2/src/git-run-context.ts",
+      "exactRestoredSHA256": "c112bf20ddfdee16dc1cd3045eb24947e5907dab069bb26be76d42f27f1fe291"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=evidence revision read and its command",
+        "runner-v2/test/git-run-context.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-same-call-command-sequence-red.log",
+      "fault": "same-call-command-sequence",
+      "path": "runner-v2/src/git-run-context.ts",
+      "exactRestoredSHA256": "c112bf20ddfdee16dc1cd3045eb24947e5907dab069bb26be76d42f27f1fe291"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=subprocess live output observation",
+        "runner-v2/test/subprocess-runtime.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-shared-byte-observer-red.log",
+      "fault": "shared-byte-observer",
+      "path": "runner-v2/src/subprocess-runtime.ts",
+      "exactRestoredSHA256": "91f9ef61eb4f31a84ced3428ceeafc04fcfda83b8d98e4651143ff94c6a1e5ec"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=bounded command capture complete",
+        "runner-v2/test/one-shot-output-capture.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-capture-buffer-ownership-red.log",
+      "fault": "capture-buffer-ownership",
+      "path": "runner-v2/src/one-shot-command-executor.ts",
+      "exactRestoredSHA256": "ad9ab27fc09f747996e61f60a837b0eadb09061059a43de57784f7b2cb6b92c3"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=bounded command capture overflow",
+        "runner-v2/test/one-shot-output-capture.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-capture-overflow-bound-red.log",
+      "fault": "capture-overflow-bound",
+      "path": "runner-v2/src/one-shot-command-executor.ts",
+      "exactRestoredSHA256": "ad9ab27fc09f747996e61f60a837b0eadb09061059a43de57784f7b2cb6b92c3"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=bounded command capture incomplete-observation",
+        "runner-v2/test/one-shot-output-capture.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-capture-completeness-red.log",
+      "fault": "capture-completeness",
+      "path": "runner-v2/src/one-shot-command-executor.ts",
+      "exactRestoredSHA256": "ad9ab27fc09f747996e61f60a837b0eadb09061059a43de57784f7b2cb6b92c3"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=Git live capture complete",
+        "runner-v2/test/git-runtime-runner.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-large-binary-live-path-red.log",
+      "fault": "large-binary-live-path",
+      "path": "runner-v2/src/git-runtime-runner.ts",
+      "exactRestoredSHA256": "38f3daf3a07f792d1909435b5d21cfc5e23cf56445d56c1d5d0f7c6fdb631a1a"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=baseline bootstrap (project|guarded)",
+        "runner-v2/test/git-bootstrap.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 2,
+        "pass": 0,
+        "fail": 2,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-bootstrap-profile-no-downgrade-red.log",
+      "fault": "bootstrap-profile-no-downgrade",
+      "path": "runner-v2/src/git-bootstrap.ts",
+      "exactRestoredSHA256": "e6dac06d0c26c1731ec338f41e84d899ef9ce70ac207bcdfcb1f17402343c991"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=historical Git query owns separate transient state",
+        "runner-v2/test/git-bootstrap.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-historical-state-namespace-red.log",
+      "fault": "historical-state-namespace",
+      "path": "runner-v2/src/execution-host.ts",
+      "exactRestoredSHA256": "e6eaaa60ad82745013f511a990deb9880e1c769a47a2aaff680d20f867afe51b"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=Git bootstrap API preserves untrusted-error",
+        "runner-v2/test/git-control-refusal.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-typed-error-not-spoof-red.log",
+      "fault": "typed-error-not-spoof",
+      "path": "runner-v2/src/control-server.ts",
+      "exactRestoredSHA256": "47529d50038f7306a0925cd3cfb591fb002c4f05704c8b87ec66b89282095d09"
+    },
+    {
+      "command": [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "--import",
+        "./runner-v2/test/support/cli-root-observer.mjs",
+        "--import",
+        "tsx",
+        "--test",
+        "--test-concurrency=1",
+        "--test-reporter=tap",
+        "--test-name-pattern=MCP ownership census excludes only",
+        "runner-v2/test/native-build-capabilities.test.ts"
+      ],
+      "exitCode": 1,
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0,
+        "todo": 0
+      },
+      "log": "material-durable-census-release-red.log",
+      "fault": "durable-census-release",
+      "path": "runner-v2/test/native-build-capabilities.test.ts",
+      "exactRestoredSHA256": "0fb6bda99e6a9b860f7f1572686b9ddbbc64f7e1a986ed721130105b98329723"
+    }
+  ],
+  "restored": {
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^(Git compatibility wrappers|migrated Git execution paths|every active production Git owner|actual ToolBroker carries|nested repository Git reads retain separate|evidence revision read and its command|subprocess live output observation|bounded command capture|Git live capture|baseline bootstrap|historical Git query owns separate transient state|Git bootstrap API preserves|MCP ownership census)",
+      "runner-v2/test/git-bootstrap.test.ts",
+      "runner-v2/test/git-caller-audit.test.ts",
+      "runner-v2/test/git-caller-routing.test.ts",
+      "runner-v2/test/git-control-refusal.test.ts",
+      "runner-v2/test/git-run-context.test.ts",
+      "runner-v2/test/git-runtime-runner.test.ts",
+      "runner-v2/test/native-build-capabilities.test.ts",
+      "runner-v2/test/one-shot-output-capture.test.ts",
+      "runner-v2/test/subprocess-runtime.test.ts"
+    ],
+    "exitCode": 0,
+    "counts": {
+      "tests": 23,
+      "pass": 23,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    "log": "material-restored-green.log"
+  }
+}

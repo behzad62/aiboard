@@ -1,14 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  acceptanceContractAuditProjection,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
+  type SchedulerEvent,
 } from "../src/scheduler-store.js";
+import type { CriterionEvidenceLink } from "../src/acceptance-contracts.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { readyTaskIds } from "../src/task-graph.js";
 import type { BuildTask } from "../src/task-contracts.js";
@@ -41,7 +45,7 @@ test("Finish and Budgeted reject forged plan-only handoff payloads", () => {
           summary: "Forged plan-only handoff",
           runPolicy: "plan_only",
         },
-      }), /requires terminal task states/i);
+      }), /terminal|completion is not ready/i);
       assert.equal(
         rebuildSchedulerProjection(store.readRun(runId)).projectHandoff,
         undefined
@@ -179,6 +183,1114 @@ test("scheduler events recover exact task and blocking-guidance state", () => {
     assert.equal(projection.lastSequence, 4);
     recovered.close();
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("raw pre-P1 scheduler WAL fixtures preserve ordering and one legacy gate across reopens", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-pre-p1-wal-"));
+  const database = join(root, "scheduler.sqlite");
+  const wal = `${database}-wal`;
+  const runId = "run_raw_pre_p1";
+  const raw = new DatabaseSync(database);
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    raw.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA wal_autocheckpoint = 0;
+      CREATE TABLE scheduler_events (
+        event_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        actor_json TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        UNIQUE(run_id, sequence),
+        UNIQUE(run_id, idempotency_key)
+      );
+      CREATE INDEX idx_scheduler_events
+      ON scheduler_events(run_id, sequence);
+    `);
+    const insert = raw.prepare(`
+      INSERT INTO scheduler_events (
+        event_id, run_id, sequence, event_type, occurred_at,
+        actor_json, idempotency_key, payload_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run(
+      "legacy_event_1",
+      runId,
+      1,
+      "run.policy_configured",
+      "2026-07-12T00:00:00.000Z",
+      JSON.stringify({ role: "runner", id: "legacy-runner" }),
+      "run-policy-configured",
+      JSON.stringify({ runPolicy: "finish" }),
+    );
+    insert.run(
+      "legacy_event_2",
+      runId,
+      2,
+      "plan.created",
+      "2026-07-12T00:00:01.000Z",
+      JSON.stringify({ role: "architect", id: "legacy-architect" }),
+      "plan:1",
+      JSON.stringify({
+        revision: 1,
+        tasks: [{
+          id: "task_raw_legacy",
+          objective: "Recover a raw pre-P1 task",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: ["code"],
+          attempt: 0,
+        }],
+      }),
+    );
+    assert.equal(existsSync(wal), true, "raw fixture must retain its WAL sidecar");
+
+    store = new SqliteSchedulerStore(database);
+    assert.deepEqual(
+      store.readRun(runId).map((event) => [event.sequence, event.eventId, event.type]),
+      [
+        [1, "legacy_event_1", "run.policy_configured"],
+        [2, "legacy_event_2", "plan.created"],
+      ],
+    );
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun(runId)).acceptanceContractStatus,
+      "acceptance_contract_upgrade_required",
+    );
+
+    const gate: NewSchedulerEvent = {
+      runId,
+      type: "acceptance_contract.upgrade_required",
+      occurredAt: "2026-07-12T00:00:02.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_raw_legacy"] },
+    };
+    const firstGate = store.append(gate);
+    assert.equal(firstGate.sequence, 3);
+    assert.throws(
+      () => store!.append({ ...gate, idempotencyKey: "acceptance-contract-upgrade-required-duplicate" }),
+      /already recorded|upgrade gate/i,
+    );
+    assert.equal(
+      store.readRun(runId).filter((event) => event.type === "acceptance_contract.upgrade_required").length,
+      1,
+    );
+    assert.equal(existsSync(wal), true, "WAL sidecar must remain present through current-store append");
+
+    const beforeReopen = store.readRun(runId);
+    store.close();
+    store = undefined;
+    assert.equal(existsSync(wal), true, "raw connection must keep the WAL sidecar for reopen");
+
+    store = new SqliteSchedulerStore(database);
+    assert.deepEqual(store.readRun(runId), beforeReopen);
+    store.close();
+    store = undefined;
+
+    store = new SqliteSchedulerStore(database);
+    const secondReopen = store.readRun(runId);
+    assert.deepEqual(secondReopen, beforeReopen);
+    assert.equal(
+      secondReopen.filter((event) => event.type === "acceptance_contract.upgrade_required").length,
+      1,
+    );
+  } finally {
+    store?.close();
+    raw.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("raw scheduler replay rejects missing evidence and reopens valid exact evidence", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-replay-evidence-"));
+  const schedulerDatabase = join(root, "scheduler.sqlite");
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const validRunId = "run_replay_valid_evidence";
+  const missingRunId = "run_replay_missing_evidence";
+  const taskId = "task_replay_evidence";
+  const artifactHash = "a".repeat(64);
+  const validEvidence = evidenceStore.record({
+    runId: validRunId,
+    taskId,
+    actor: { role: "worker", id: "worker_replay" },
+    fact: {
+      kind: "browser_screenshot",
+      label: "valid replay evidence",
+      capturedAt: "2026-08-26T00:00:00.000Z",
+      screenshotArtifactHash: artifactHash,
+      mediaType: "image/png",
+      byteLength: 16,
+    },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    idempotencyKey: "valid-replay-evidence",
+    attempt: 1,
+  });
+  const raw = seedRawSchedulerDatabase(schedulerDatabase, [
+    ...rawAcceptanceEvents(missingRunId, taskId, {
+      criterionId: "behavior",
+      evidenceId: "evidence_missing_on_reopen",
+      artifactHashes: [artifactHash],
+      taskId,
+      attempt: 1,
+    }),
+    ...rawAcceptanceEvents(validRunId, taskId, {
+      criterionId: "behavior",
+      evidenceId: validEvidence.id,
+      artifactHashes: [artifactHash],
+      taskId,
+      attempt: 1,
+    }),
+  ]);
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    assert.equal(existsSync(`${schedulerDatabase}-wal`), true, "raw fixture must retain its WAL sidecar");
+    const omittedEvidenceStore = new SqliteSchedulerStore(schedulerDatabase);
+    try {
+      assert.throws(
+        () => omittedEvidenceStore.readRun(missingRunId),
+        /authoritative evidence store/i,
+      );
+    } finally {
+      omittedEvidenceStore.close();
+    }
+    store = new SqliteSchedulerStore(schedulerDatabase, { evidenceStore });
+    assert.throws(
+      () => store!.readRun(missingRunId),
+      /evidence.*missing|missing.*evidence/i,
+    );
+
+    const validEvents = store.readRun(validRunId);
+    assert.equal(
+      rebuildSchedulerProjection(validEvents).tasks[taskId].status,
+      "submitted",
+    );
+    store.close();
+    store = new SqliteSchedulerStore(schedulerDatabase, { evidenceStore });
+    assert.deepEqual(store.readRun(validRunId), validEvents);
+  } finally {
+    store?.close();
+    raw.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("scheduler append fails closed when acceptance evidence lacks an authoritative store", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-append-evidence-store-"));
+  const database = join(root, "scheduler.sqlite");
+  const store = new SqliteSchedulerStore(database);
+  try {
+    const runId = "run_append_missing_evidence_store";
+    store.append(event(runId, "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_append_evidence",
+        objective: "Require authoritative evidence",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+        acceptanceCriteria: [{ id: "behavior", text: "Evidence is durable." }],
+        acceptanceCriteriaVersion: 1,
+      }],
+    }));
+    store.append(event(runId, "task.transitioned", "assign:1", {
+      taskId: "task_append_evidence",
+      status: "assigned",
+      patch: { attempt: 1, assignedWorkerId: "worker_append" },
+    }));
+    store.append(event(runId, "task.transitioned", "run:1", {
+      taskId: "task_append_evidence",
+      status: "running",
+      patch: {},
+    }));
+    assert.throws(
+      () => store.append(event(runId, "task.transitioned", "submit:1", {
+        taskId: "task_append_evidence",
+        status: "submitted",
+        patch: {
+          changeSetId: "changeset_append_evidence",
+          criterionEvidenceLinks: [{
+            criterionId: "behavior",
+            evidenceId: "evidence_without_store",
+            artifactHashes: ["a".repeat(64)],
+            taskId: "task_append_evidence",
+            attempt: 1,
+          }],
+        },
+      })),
+      /authoritative evidence store/i,
+    );
+    const projection = rebuildSchedulerProjection(store.readRun(runId));
+    assert.equal(projection.tasks.task_append_evidence.status, "running");
+    assert.equal(store.readRun(runId).length, 3);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("raw scheduler replay rejects foreign owner, task, attempt, and artifact evidence", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-replay-adversarial-evidence-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const taskId = "task_replay_adversarial";
+  const validHash = "a".repeat(64);
+  const foreignHash = "b".repeat(64);
+  const cases = [
+    {
+      name: "foreign-owner",
+      recordTaskId: taskId,
+      actorId: "worker_foreign",
+      recordAttempt: 1,
+      linkHash: validHash,
+      expected: /outside the assigned worker/i,
+    },
+    {
+      name: "foreign-task",
+      recordTaskId: "task_elsewhere",
+      actorId: "worker_replay",
+      recordAttempt: 1,
+      linkHash: validHash,
+      expected: /missing|another task/i,
+    },
+    {
+      name: "foreign-attempt",
+      recordTaskId: taskId,
+      actorId: "worker_replay",
+      recordAttempt: 2,
+      linkHash: validHash,
+      expected: /stale|attempt/i,
+    },
+    {
+      name: "hash-mismatch",
+      recordTaskId: taskId,
+      actorId: "worker_replay",
+      recordAttempt: 1,
+      linkHash: foreignHash,
+      expected: /artifact|hash/i,
+    },
+  ] as const;
+  try {
+    for (const scenario of cases) {
+      const runId = `run_replay_${scenario.name}`;
+      const record = evidenceStore.record({
+        runId,
+        taskId: scenario.recordTaskId,
+        actor: { role: "worker", id: scenario.actorId },
+        fact: {
+          kind: "browser_screenshot",
+          label: `${scenario.name} evidence`,
+          capturedAt: "2026-08-26T00:00:00.000Z",
+          screenshotArtifactHash: scenario.linkHash,
+          mediaType: "image/png",
+          byteLength: 16,
+        },
+        createdAt: "2026-08-26T00:00:00.000Z",
+        idempotencyKey: `${scenario.name}-evidence`,
+        attempt: scenario.recordAttempt,
+      });
+      const raw = seedRawSchedulerDatabase(
+        join(root, `${scenario.name}.sqlite`),
+        rawAcceptanceEvents(runId, taskId, {
+          criterionId: "behavior",
+          evidenceId: record.id,
+          artifactHashes: [validHash],
+          taskId,
+          attempt: 1,
+        }),
+      );
+      let store: SqliteSchedulerStore | undefined;
+      try {
+        store = new SqliteSchedulerStore(join(root, `${scenario.name}.sqlite`), {
+          evidenceStore,
+        });
+        assert.throws(() => store!.readRun(runId), scenario.expected);
+      } finally {
+        store?.close();
+        raw.close();
+      }
+    }
+  } finally {
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("raw scheduler replay rejects review artifact hashes outside valid submitted evidence", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-replay-review-evidence-"));
+  const schedulerDatabase = join(root, "scheduler.sqlite");
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const runId = "run_replay_review_hash";
+  const taskId = "task_replay_review";
+  const validHash = "a".repeat(64);
+  const invalidHash = "b".repeat(64);
+  const evidence = evidenceStore.record({
+    runId,
+    taskId,
+    actor: { role: "worker", id: "worker_replay" },
+    fact: {
+      kind: "browser_screenshot",
+      label: "valid review evidence",
+      capturedAt: "2026-08-26T00:00:00.000Z",
+      screenshotArtifactHash: validHash,
+      mediaType: "image/png",
+      byteLength: 16,
+    },
+    createdAt: "2026-08-26T00:00:00.000Z",
+    idempotencyKey: "review-evidence",
+    attempt: 1,
+  });
+  const link: CriterionEvidenceLink = {
+    criterionId: "behavior",
+    evidenceId: evidence.id,
+    artifactHashes: [validHash],
+    taskId,
+    attempt: 1,
+  };
+  const raw = seedRawSchedulerDatabase(schedulerDatabase, [
+    ...rawAcceptanceEvents(runId, taskId, link),
+    {
+      eventId: `${runId}_event_5`,
+      runId,
+      sequence: 5,
+      type: "review.requested",
+      occurredAt: "2026-08-26T00:00:04.000Z",
+      actor: { role: "runner", id: "runner_replay" },
+      idempotencyKey: "review:requested",
+      payload: {
+        taskId,
+        criterionEvidenceLinks: [link],
+        evidenceArtifactHashes: [validHash],
+      },
+    },
+    {
+      eventId: `${runId}_event_6`,
+      runId,
+      sequence: 6,
+      type: "review.decided",
+      occurredAt: "2026-08-26T00:00:05.000Z",
+      actor: { role: "architect", id: "architect_replay" },
+      idempotencyKey: "review:decided",
+      payload: {
+        taskId,
+        decision: "approved",
+        summary: "The review cites an artifact outside durable evidence.",
+        evidenceArtifactHashes: [invalidHash],
+        criterionVerdicts: [{
+          criterionId: "behavior",
+          verdict: "satisfied",
+          rationale: "The evidence is sufficient.",
+          evidenceIds: [evidence.id],
+          artifactHashes: [invalidHash],
+        }],
+      },
+    },
+  ]);
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    store = new SqliteSchedulerStore(schedulerDatabase, { evidenceStore });
+    assert.throws(
+      () => store!.readRun(runId),
+      /artifact outside|outside.*durable|artifact hashes/i,
+    );
+  } finally {
+    store?.close();
+    raw.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy active runs require exactly one acceptance-contract upgrade before submission", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-acceptance-upgrade-"));
+  const database = join(root, "scheduler.sqlite");
+  let store = new SqliteSchedulerStore(database);
+  try {
+    store.append(event("run_legacy_upgrade", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_legacy",
+        objective: "Preserve an old task",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: ["code"],
+        attempt: 0,
+      }],
+    }));
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun("run_legacy_upgrade")).acceptanceContractStatus,
+      "acceptance_contract_upgrade_required"
+    );
+    store.append({
+      runId: "run_legacy_upgrade",
+      type: "acceptance_contract.upgrade_required" as NewSchedulerEvent["type"],
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_legacy"] },
+    });
+    const duplicate = store.append({
+      runId: "run_legacy_upgrade",
+      type: "acceptance_contract.upgrade_required" as NewSchedulerEvent["type"],
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_legacy"] },
+    });
+    assert.equal(duplicate.sequence, 2);
+    assert.throws(
+      () => store.append({
+        runId: "run_legacy_upgrade",
+        type: "acceptance_contract.upgrade_required" as NewSchedulerEvent["type"],
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "acceptance-contract-upgrade-required-duplicate",
+        payload: { taskIds: ["task_legacy"] },
+      }),
+      /already recorded|upgrade gate/i
+    );
+    assert.equal(store.readRun("run_legacy_upgrade").length, 2);
+    store.append(event("run_legacy_upgrade", "task.transitioned", "assign:1", {
+      taskId: "task_legacy",
+      status: "assigned",
+      patch: { attempt: 1 },
+    }));
+    store.append(event("run_legacy_upgrade", "task.transitioned", "run:1", {
+      taskId: "task_legacy",
+      status: "running",
+      patch: {},
+    }));
+    assert.throws(
+      () => store.append(event("run_legacy_upgrade", "task.transitioned", "submit:1", {
+        taskId: "task_legacy",
+        status: "submitted",
+        patch: { changeSetId: "changeset_legacy" },
+      })),
+      /acceptance_contract_upgrade_required|upgrade/i
+    );
+
+    assert.throws(
+      () => store.append({
+        runId: "run_legacy_upgrade",
+        type: "acceptance_contract.upgraded" as NewSchedulerEvent["type"],
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "acceptance-contract-upgraded",
+        payload: {
+          revision: 2,
+          criteriaByTask: [{ taskId: "task_legacy", acceptanceCriteria: [] }],
+        },
+      }),
+      /criterion|invalid|upgrade/i
+    );
+    assert.equal(store.readRun("run_legacy_upgrade").length, 4);
+
+    store.close();
+    store = new SqliteSchedulerStore(database);
+    store.append({
+      runId: "run_legacy_upgrade",
+      type: "acceptance_contract.upgraded" as NewSchedulerEvent["type"],
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "acceptance-contract-upgraded",
+      payload: {
+        revision: 2,
+        criteriaByTask: [{
+          taskId: "task_legacy",
+          acceptanceCriteria: [{ id: "behavior", text: "The behavior is implemented." }],
+        }],
+      },
+    });
+    const upgraded = rebuildSchedulerProjection(store.readRun("run_legacy_upgrade"));
+    assert.equal(upgraded.acceptanceContractStatus, "current");
+    assert.deepEqual(upgraded.tasks.task_legacy.acceptanceCriteria, [
+      { id: "behavior", text: "The behavior is implemented." },
+    ]);
+    assert.equal(upgraded.tasks.task_legacy.acceptanceCriteriaVersion, 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("legacy scheduler completion has no final-verification grandfathering", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-legacy-completed-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    store.append(event("run_legacy_completed", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [task("task_done", "integrated", [])],
+    }));
+    assert.throws(
+      () => store.append({
+        runId: "run_legacy_completed",
+        type: "run.completed",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "run-completed",
+        payload: {},
+      }),
+      /completion|verification|revision/i,
+    );
+    const projection = rebuildSchedulerProjection(store.readRun("run_legacy_completed"));
+    assert.equal(projection.status, "running");
+    assert.equal(projection.acceptanceContractStatus, "acceptance_contract_upgrade_required");
+    assert.equal(projection.tasks.task_done.objective, "Objective task_done");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("gated active legacy runs reject raw completion and handoff selection until upgrade", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-legacy-gate-boundary-"));
+  const database = join(root, "scheduler.sqlite");
+  const legacyTask = task("task_gate", "planned", []);
+  const store = new SqliteSchedulerStore(database);
+  try {
+    store.append(policyEvent("run_gate_completion", "finish"));
+    store.append(event("run_gate_completion", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [legacyTask],
+    }));
+    store.append({
+      runId: "run_gate_completion",
+      type: "acceptance_contract.upgrade_required",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: [legacyTask.id] },
+    });
+    assert.throws(
+      () => store.append({
+        runId: "run_gate_completion",
+        type: "run.completed",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "run-completed-before-upgrade",
+        payload: {},
+      }),
+      /upgrade|required|legacy/i,
+    );
+    assert.equal(store.readRun("run_gate_completion").length, 3);
+    store.append({
+      runId: "run_gate_completion",
+      type: "acceptance_contract.upgraded",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "acceptance-contract-upgraded",
+      payload: {
+        revision: 2,
+        criteriaByTask: [{
+          taskId: legacyTask.id,
+          acceptanceCriteria: [{ id: "behavior", text: "The behavior is implemented." }],
+        }],
+      },
+    });
+    assert.throws(
+      () => store.append({
+        runId: "run_gate_completion",
+        type: "run.completed",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "architect", id: "architect_1" },
+        idempotencyKey: "run-completed-after-upgrade",
+        payload: {},
+      }),
+      /completion|verification|revision/i,
+    );
+    const incomplete = rebuildSchedulerProjection(store.readRun("run_gate_completion"));
+    assert.equal(incomplete.status, "running");
+    assert.equal(incomplete.acceptanceContractStatus, "current");
+
+    store.append(policyEvent("run_gate_handoff", "plan_only"));
+    store.append(event("run_gate_handoff", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [task("task_handoff_gate", "planned", [])],
+    }));
+    store.append({
+      runId: "run_gate_handoff",
+      type: "acceptance_contract.upgrade_required",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_handoff_gate"] },
+    });
+    store.append({
+      runId: "run_gate_handoff",
+      type: "project.handoff_requested",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "project-handoff-requested",
+      payload: { summary: "Legacy handoff waits for upgrade." },
+    });
+    assert.throws(
+      () => store.append({
+        runId: "run_gate_handoff",
+        type: "project.handoff_selected",
+        occurredAt: "2026-07-13T00:00:00.000Z",
+        actor: { role: "user", id: "local-user" },
+        idempotencyKey: "project-handoff-selected-before-upgrade",
+        payload: {
+          choice: "keep_integration_branch",
+          integrationRevision: "integration_revision",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        },
+      }),
+      /upgrade|required|legacy/i,
+    );
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun("run_gate_handoff")).projectHandoff?.status,
+      "requested",
+    );
+    store.append({
+      runId: "run_gate_handoff",
+      type: "acceptance_contract.upgraded",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "acceptance-contract-upgraded",
+      payload: {
+        revision: 2,
+        criteriaByTask: [{
+          taskId: "task_handoff_gate",
+          acceptanceCriteria: [{ id: "behavior", text: "The behavior is implemented." }],
+        }],
+      },
+    });
+    store.append({
+      runId: "run_gate_handoff",
+      type: "project.handoff_selected",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "project-handoff-selected-after-upgrade",
+      payload: {
+        choice: "keep_integration_branch",
+        integrationRevision: "integration_revision",
+        integrationBranch: "aiboard/run/integration",
+        appliedToProject: false,
+      },
+    });
+    const handedOff = rebuildSchedulerProjection(store.readRun("run_gate_handoff"));
+    assert.equal(handedOff.status, "completed");
+    assert.equal(handedOff.acceptanceContractStatus, "current");
+    assert.equal(handedOff.projectHandoff?.status, "selected");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("durable submission rejects fabricated evidence IDs and hashes", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-evidence-boundary-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore });
+  try {
+    store.append(event("run_evidence_boundary", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_evidence",
+        objective: "Bind evidence",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+        acceptanceCriteria: [{ id: "behavior", text: "Evidence belongs to this worker." }],
+        acceptanceCriteriaVersion: 1,
+      }],
+    }));
+    store.append(event("run_evidence_boundary", "task.transitioned", "assign:1", {
+      taskId: "task_evidence",
+      status: "assigned",
+      patch: { attempt: 1, assignedWorkerId: "worker_task_evidence_1" },
+    }));
+    store.append(event("run_evidence_boundary", "task.transitioned", "running:1", {
+      taskId: "task_evidence",
+      status: "running",
+      patch: {},
+    }));
+    assert.throws(
+      () => store.append(event("run_evidence_boundary", "task.transitioned", "submit:1", {
+        taskId: "task_evidence",
+        status: "submitted",
+        patch: {
+          changeSetId: "changeset_fabricated",
+          criterionEvidenceLinks: [{
+            criterionId: "behavior",
+            evidenceId: "evidence_does_not_exist",
+            artifactHashes: ["f".repeat(64)],
+            taskId: "task_evidence",
+            attempt: 1,
+          }],
+        },
+      })),
+      /evidence.*(missing|not found|unknown)|artifact/i,
+    );
+    assert.equal(rebuildSchedulerProjection(store.readRun("run_evidence_boundary")).tasks.task_evidence.status, "running");
+  } finally {
+    store.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("durable current criterion assignment requires an assigned worker identity", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-assigned-worker-required-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore });
+  try {
+    store.append(event("run_assigned_worker_required", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_assigned_worker",
+        objective: "Require worker ownership",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+        acceptanceCriteria: [{ id: "behavior", text: "Evidence belongs to the assigned worker." }],
+        acceptanceCriteriaVersion: 1,
+      }],
+    }));
+
+    assert.throws(
+      () => store.append(event("run_assigned_worker_required", "task.transitioned", "assign:1", {
+        taskId: "task_assigned_worker",
+        status: "assigned",
+        patch: { attempt: 1 },
+      })),
+      /assigned worker/i,
+    );
+    const projection = rebuildSchedulerProjection(
+      store.readRun("run_assigned_worker_required")
+    );
+    assert.equal(projection.tasks.task_assigned_worker.status, "planned");
+    assert.equal(projection.tasks.task_assigned_worker.assignedWorkerId, undefined);
+  } finally {
+    store.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("durable submission rejects legacy worker absence after acceptance upgrade", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-upgraded-worker-required-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore });
+  try {
+    store.append(event("run_upgraded_worker_required", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_upgraded_worker",
+        objective: "Require worker ownership after upgrade",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+      }],
+    }));
+    store.append({
+      runId: "run_upgraded_worker_required",
+      type: "acceptance_contract.upgrade_required",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "acceptance-contract-upgrade-required",
+      payload: { taskIds: ["task_upgraded_worker"] },
+    });
+    store.append(event("run_upgraded_worker_required", "task.transitioned", "assign:1", {
+      taskId: "task_upgraded_worker",
+      status: "assigned",
+      patch: { attempt: 1 },
+    }));
+    store.append(event("run_upgraded_worker_required", "task.transitioned", "run:1", {
+      taskId: "task_upgraded_worker",
+      status: "running",
+      patch: {},
+    }));
+    store.append({
+      runId: "run_upgraded_worker_required",
+      type: "acceptance_contract.upgraded",
+      occurredAt: "2026-07-13T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "acceptance-contract-upgraded",
+      payload: {
+        revision: 2,
+        criteriaByTask: [{
+          taskId: "task_upgraded_worker",
+          acceptanceCriteria: [{ id: "behavior", text: "Evidence belongs to the assigned worker." }],
+        }],
+      },
+    });
+    const evidence = evidenceStore.record({
+      runId: "run_upgraded_worker_required",
+      taskId: "task_upgraded_worker",
+      actor: { role: "architect", id: "architect_1" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "Architect evidence",
+        capturedAt: "2026-07-13T00:00:00.000Z",
+        screenshotArtifactHash: "a".repeat(64),
+        mediaType: "image/png",
+        byteLength: 16,
+      },
+      createdAt: "2026-07-13T00:00:00.000Z",
+      idempotencyKey: "architect-evidence",
+      attempt: 1,
+    });
+
+    assert.throws(
+      () => store.append(event("run_upgraded_worker_required", "task.transitioned", "submit:1", {
+        taskId: "task_upgraded_worker",
+        status: "submitted",
+        patch: {
+          changeSetId: "changeset_architect_evidence",
+          criterionEvidenceLinks: [{
+            criterionId: "behavior",
+            evidenceId: evidence.id,
+            artifactHashes: ["a".repeat(64)],
+            taskId: "task_upgraded_worker",
+            attempt: 1,
+          }],
+        },
+      })),
+      /assigned worker/i,
+    );
+    const projection = rebuildSchedulerProjection(
+      store.readRun("run_upgraded_worker_required")
+    );
+    assert.equal(projection.tasks.task_upgraded_worker.status, "running");
+    assert.equal(store.readRun("run_upgraded_worker_required").length, 5);
+  } finally {
+    store.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("durable criterion submission permits only the assigned worker or an attributed descendant", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-worker-evidence-controls-"));
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore });
+  const scenarios = [
+    { name: "architect", actor: { role: "architect" as const, id: "architect_1" }, accepted: false },
+    { name: "unrelated-worker", actor: { role: "worker" as const, id: "worker_other" }, accepted: false },
+    { name: "assigned-worker", actor: { role: "worker" as const, id: "worker_current" }, accepted: true },
+    { name: "attributed-descendant", actor: { role: "subagent" as const, id: "worker_current:call_1" }, accepted: true },
+  ];
+  try {
+    for (const scenario of scenarios) {
+      const runId = `run_worker_evidence_${scenario.name}`;
+      store.append(event(runId, "plan.created", "plan:1", {
+        revision: 1,
+        tasks: [{
+          id: "task_worker_evidence",
+          objective: "Check evidence ownership",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: [],
+          attempt: 0,
+          acceptanceCriteria: [{ id: "behavior", text: "Evidence belongs to the assigned worker." }],
+          acceptanceCriteriaVersion: 1,
+        }],
+      }));
+      store.append(event(runId, "task.transitioned", "assign:1", {
+        taskId: "task_worker_evidence",
+        status: "assigned",
+        patch: { attempt: 1, assignedWorkerId: "worker_current" },
+      }));
+      store.append(event(runId, "task.transitioned", "run:1", {
+        taskId: "task_worker_evidence",
+        status: "running",
+        patch: {},
+      }));
+      const evidence = evidenceStore.record({
+        runId,
+        taskId: "task_worker_evidence",
+        actor: scenario.actor,
+        fact: {
+          kind: "browser_screenshot",
+          label: `${scenario.name} evidence`,
+          capturedAt: "2026-07-13T00:00:00.000Z",
+          screenshotArtifactHash: "b".repeat(64),
+          mediaType: "image/png",
+          byteLength: 16,
+        },
+        createdAt: "2026-07-13T00:00:00.000Z",
+        idempotencyKey: `${scenario.name}-evidence`,
+        attempt: 1,
+      });
+      const submission = () => store.append(event(runId, "task.transitioned", "submit:1", {
+        taskId: "task_worker_evidence",
+        status: "submitted",
+        patch: {
+          changeSetId: `changeset_${scenario.name}`,
+          criterionEvidenceLinks: [{
+            criterionId: "behavior",
+            evidenceId: evidence.id,
+            artifactHashes: ["b".repeat(64)],
+            taskId: "task_worker_evidence",
+            attempt: 1,
+          }],
+        },
+      }));
+      if (scenario.accepted) {
+        submission();
+        assert.equal(
+          rebuildSchedulerProjection(store.readRun(runId)).tasks.task_worker_evidence.status,
+          "submitted"
+        );
+      } else {
+        assert.throws(submission, /outside the assigned worker/i);
+        assert.equal(
+          rebuildSchedulerProjection(store.readRun(runId)).tasks.task_worker_evidence.status,
+          "running"
+        );
+      }
+    }
+  } finally {
+    store.close();
+    evidenceStore.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("retry clears the current acceptance projection while replay preserving versioned history", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-retry-projection-"));
+  const database = join(root, "scheduler.sqlite");
+  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const oldEvidence = evidenceStore.record({
+    runId: "run_retry_projection",
+    taskId: "task_retry",
+    actor: { role: "worker", id: "worker_1" },
+    fact: {
+      kind: "browser_screenshot",
+      label: "Attempt one evidence",
+      capturedAt: "2026-07-12T00:00:00.000Z",
+      screenshotArtifactHash: "a".repeat(64),
+      mediaType: "image/png",
+      byteLength: 16,
+    },
+    createdAt: "2026-07-12T00:00:00.000Z",
+    idempotencyKey: "retry-projection-evidence",
+    attempt: 1,
+  });
+  const oldLink = {
+    criterionId: "behavior",
+    evidenceId: oldEvidence.id,
+    artifactHashes: ["a".repeat(64)],
+    taskId: "task_retry",
+    attempt: 1,
+  };
+  let store = new SqliteSchedulerStore(database, { evidenceStore });
+  try {
+    store.append(event("run_retry_projection", "plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "task_retry",
+        objective: "Retry projection",
+        dependencies: [],
+        status: "planned",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "behavior", text: "The behavior works." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 0,
+      }],
+    }));
+    store.append(event("run_retry_projection", "task.transitioned", "assign:1", {
+      taskId: "task_retry",
+      status: "assigned",
+      patch: { attempt: 1, assignedWorkerId: "worker_1" },
+    }));
+    store.append(event("run_retry_projection", "task.transitioned", "running:1", {
+      taskId: "task_retry",
+      status: "running",
+      patch: {},
+    }));
+    store.append(event("run_retry_projection", "task.transitioned", "submit:1", {
+      taskId: "task_retry",
+      status: "submitted",
+      patch: {
+        changeSetId: "changeset_attempt_1",
+        criterionEvidenceLinks: [oldLink],
+      },
+    }));
+    store.append({
+      runId: "run_retry_projection",
+      type: "review.decided",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "review:1",
+      payload: {
+        taskId: "task_retry",
+        decision: "rejected",
+        summary: "Attempt one is incomplete.",
+        evidenceArtifactHashes: ["a".repeat(64)],
+        criterionVerdicts: [{
+          criterionId: "behavior",
+          verdict: "unsatisfied",
+          rationale: "Attempt one is incomplete.",
+          evidenceIds: [oldEvidence.id],
+          artifactHashes: ["a".repeat(64)],
+        }],
+      },
+    });
+    store.append(event("run_retry_projection", "task.transitioned", "retry:1", {
+      taskId: "task_retry",
+      status: "planned",
+      patch: {},
+    }));
+
+    const beforeRestart = rebuildSchedulerProjection(store.readRun("run_retry_projection"));
+    assert.equal(beforeRestart.tasks.task_retry.status, "planned");
+    assert.equal(beforeRestart.tasks.task_retry.criterionEvidenceLinks, undefined);
+    assert.equal(beforeRestart.tasks.task_retry.changeSetId, undefined);
+    assert.equal(beforeRestart.reviews.task_retry, undefined);
+    assert.deepEqual(beforeRestart.submissionHistory?.task_retry, [{
+      taskId: "task_retry",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      changeSetId: "changeset_attempt_1",
+      criterionEvidenceLinks: [oldLink],
+    }]);
+    assert.deepEqual(beforeRestart.reviewHistory?.task_retry, [{
+      taskId: "task_retry",
+      attempt: 1,
+      acceptanceCriteriaVersion: 1,
+      status: "rejected",
+      summary: "Attempt one is incomplete.",
+      evidenceArtifactHashes: ["a".repeat(64)],
+      criterionEvidenceLinks: [oldLink],
+      criterionVerdicts: [{
+        criterionId: "behavior",
+        verdict: "unsatisfied",
+        rationale: "Attempt one is incomplete.",
+        evidenceIds: [oldEvidence.id],
+        artifactHashes: ["a".repeat(64)],
+      }],
+    }]);
+    const audit = acceptanceContractAuditProjection(beforeRestart);
+    assert.deepEqual(audit.tasks.task_retry.criterionEvidenceLinks, []);
+    assert.deepEqual(audit.tasks.task_retry.criterionVerdicts, []);
+    assert.equal(audit.tasks.task_retry.reviewStatus, undefined);
+    assert.equal(audit.tasks.task_retry.submissionHistory[0].attempt, 1);
+    assert.equal(audit.tasks.task_retry.reviewHistory[0].acceptanceCriteriaVersion, 1);
+
+    store.close();
+    store = new SqliteSchedulerStore(database, { evidenceStore });
+    const recovered = rebuildSchedulerProjection(store.readRun("run_retry_projection"));
+    assert.deepEqual(recovered.tasks.task_retry, beforeRestart.tasks.task_retry);
+    assert.deepEqual(recovered.reviews, beforeRestart.reviews);
+    assert.deepEqual(recovered.submissionHistory, beforeRestart.submissionHistory);
+    assert.deepEqual(recovered.reviewHistory, beforeRestart.reviewHistory);
+  } finally {
+    store.close();
+    evidenceStore.close();
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -478,4 +1590,122 @@ function policyEvent(
     idempotencyKey: "run-policy-configured",
     payload: { runPolicy },
   };
+}
+
+function seedRawSchedulerDatabase(
+  databasePath: string,
+  events: readonly SchedulerEvent[],
+): DatabaseSync {
+  const raw = new DatabaseSync(databasePath);
+  raw.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA wal_autocheckpoint = 0;
+    CREATE TABLE scheduler_events (
+      event_id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      sequence INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      occurred_at TEXT NOT NULL,
+      actor_json TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      UNIQUE(run_id, sequence),
+      UNIQUE(run_id, idempotency_key)
+    );
+    CREATE INDEX idx_scheduler_events
+    ON scheduler_events(run_id, sequence);
+  `);
+  const insert = raw.prepare(`
+    INSERT INTO scheduler_events (
+      event_id, run_id, sequence, event_type, occurred_at,
+      actor_json, idempotency_key, payload_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const event of events) {
+    insert.run(
+      event.eventId,
+      event.runId,
+      event.sequence,
+      event.type,
+      event.occurredAt,
+      JSON.stringify(event.actor),
+      event.idempotencyKey,
+      JSON.stringify(event.payload),
+    );
+  }
+  return raw;
+}
+
+function rawAcceptanceEvents(
+  runId: string,
+  taskId: string,
+  link: CriterionEvidenceLink,
+): SchedulerEvent[] {
+  const occurredAt = (sequence: number) =>
+    `2026-08-26T00:00:0${sequence - 1}.000Z`;
+  return [
+    {
+      eventId: `${runId}_event_1`,
+      runId,
+      sequence: 1,
+      type: "plan.created",
+      occurredAt: occurredAt(1),
+      actor: { role: "architect", id: "architect_replay" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [{
+          id: taskId,
+          objective: "Replay evidence",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: [],
+          attempt: 0,
+          acceptanceCriteria: [{ id: "behavior", text: "Evidence is exact." }],
+          acceptanceCriteriaVersion: 1,
+        }],
+      },
+    },
+    {
+      eventId: `${runId}_event_2`,
+      runId,
+      sequence: 2,
+      type: "task.transitioned",
+      occurredAt: occurredAt(2),
+      actor: { role: "runner", id: "runner_replay" },
+      idempotencyKey: "assign:1",
+      payload: {
+        taskId,
+        status: "assigned",
+        patch: { attempt: 1, assignedWorkerId: "worker_replay" },
+      },
+    },
+    {
+      eventId: `${runId}_event_3`,
+      runId,
+      sequence: 3,
+      type: "task.transitioned",
+      occurredAt: occurredAt(3),
+      actor: { role: "runner", id: "runner_replay" },
+      idempotencyKey: "run:1",
+      payload: { taskId, status: "running", patch: {} },
+    },
+    {
+      eventId: `${runId}_event_4`,
+      runId,
+      sequence: 4,
+      type: "task.transitioned",
+      occurredAt: occurredAt(4),
+      actor: { role: "runner", id: "runner_replay" },
+      idempotencyKey: "submit:1",
+      payload: {
+        taskId,
+        status: "submitted",
+        patch: {
+          changeSetId: `changeset_${runId}`,
+          criterionEvidenceLinks: [link],
+        },
+      },
+    },
+  ];
 }

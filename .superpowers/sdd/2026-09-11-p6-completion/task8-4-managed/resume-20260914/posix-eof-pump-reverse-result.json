@@ -1,0 +1,7 @@
+{
+  "beforeSha256": "b967dd5dd01e216b05877e6fd5438a36be55357af8892c94864c3bf5bad930f0",
+  "faultSha256": "e03ea434b766d51bd743abbd274599700768ca31e6d1c1815eca862d29dd7e1f",
+  "redExit": 1,
+  "behavioralRed": true,
+  "restoredSha256": "b967dd5dd01e216b05877e6fd5438a36be55357af8892c94864c3bf5bad930f0"
+}

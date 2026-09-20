@@ -1,0 +1,29 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r12-alignment-7j4LSl"}
+# Subtest: LSP grace expiry joins an already admitted parser delivery before cleanup changes ownership
+not ok 1 - LSP grace expiry joins an already admitted parser delivery before cleanup changes ownership
+  ---
+  duration_ms: 85.9125
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\streaming-process-session-runtime.test.ts:1:228978'
+  failureType: 'testCodeFailure'
+  error: 'Output delivery outcome is unknown.'
+  code: 'outcome_unknown'
+  name: 'StreamingOutputError'
+  stack: |-
+    markUnknown (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\streaming-output-controller.ts:59:239)
+    deliverNext (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\streaming-output-controller.ts:161:30)
+    async Object.deliverNextPrivately (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\streaming-output-controller.ts:187:14)
+  ...
+# new synthetic evidence fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r12-alignment-7j4LSl
+# closed 1 synthetic spools; exact failed evidence root retained: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\c2r12-alignment-7j4LSl
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\c2r12-alignment-7j4LSl","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 402.4817

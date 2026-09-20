@@ -1,0 +1,26 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-manager-4e08l8"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-control-U58oxp"}
+# Subtest: native Build manager exposes recovery only through the live handle
+ok 1 - native Build manager exposes recovery only through the live handle
+  ---
+  duration_ms: 20.15
+  type: 'test'
+  ...
+# Subtest: control server recovery routes are authenticated, closed and serialize exact decisions
+ok 2 - control server recovery routes are authenticated, closed and serialize exact decisions
+  ---
+  duration_ms: 86.9231
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-manager-4e08l8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task11-control-U58oxp","existsAtExit":false}
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 906.8594

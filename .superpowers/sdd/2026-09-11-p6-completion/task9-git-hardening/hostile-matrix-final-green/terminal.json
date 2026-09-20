@@ -1,0 +1,24 @@
+{
+  "id": "hostile-matrix-final-green",
+  "startedAt": "2026-09-14T15:41:54.315Z",
+  "finishedAt": "2026-09-14T15:45:02.084Z",
+  "wrapperPid": 19284,
+  "testPid": 45928,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 437,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ],
+  "rootCount": 60,
+  "retainedRoots": []
+}

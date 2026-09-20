@@ -1,0 +1,21 @@
+{
+  "pid": 66616,
+  "identity": {
+    "pid": 66616,
+    "unavailable": true
+  },
+  "wrapperPid": 71488,
+  "spawnedAt": "2026-09-12T17:26:19.127Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP compound call stops",
+    "runner-v2/test/streaming-language-operation.test.ts"
+  ]
+}

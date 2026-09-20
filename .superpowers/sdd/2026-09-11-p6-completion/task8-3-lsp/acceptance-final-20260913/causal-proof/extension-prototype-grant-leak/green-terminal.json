@@ -1,0 +1,25 @@
+{
+  "id": "fault-extension-prototype-grant-leak-green",
+  "startedAt": "2026-09-12T17:26:17.697Z",
+  "finishedAt": "2026-09-12T17:26:18.393Z",
+  "wrapperPid": 73340,
+  "testPid": 132288,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 412,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP router never forwards",
+    "runner-v2/test/lsp-server-control.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

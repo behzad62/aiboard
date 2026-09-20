@@ -1,0 +1,24 @@
+{
+  "id": "managed-strict-oci-green",
+  "startedAt": "2026-09-14T07:37:31.809Z",
+  "finishedAt": "2026-09-14T07:37:51.090Z",
+  "wrapperPid": 16268,
+  "testPid": 40436,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 433,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/managed-strict-oci.test.ts"
+  ],
+  "rootCount": 1,
+  "retainedRoots": []
+}

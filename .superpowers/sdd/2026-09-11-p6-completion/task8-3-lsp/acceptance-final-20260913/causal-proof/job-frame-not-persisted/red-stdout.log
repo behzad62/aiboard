@@ -1,0 +1,41 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-job-replay-2PyXIw"}
+# Subtest: Windows Job output reservation survives host reopen without coalescing an accepted frame
+not ok 1 - Windows Job output reservation survives host reopen without coalescing an accepted frame
+  ---
+  duration_ms: 302.7974
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\windows-job-output-replay.test.ts:1:913'
+  failureType: 'testCodeFailure'
+  error: |-
+    durable acceptance fixes the exact bytes until their ACK
+    + actual - expected
+    
+    + 'shutdown-later'
+    - 'shutdown'
+               ^
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'shutdown'
+  actual: 'shutdown-later'
+  operator: 'strictEqual'
+  stack: |-
+    <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-output-replay.test.ts:24:10)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async withFixture (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\windows-job-output-replay.test.ts:68:9)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# exact synthetic Job replay fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-job-replay-2PyXIw
+# synthetic authenticated Job failure retained, no OS workload was launched: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p683-job-replay-2PyXIw
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-job-replay-2PyXIw","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 604.4999

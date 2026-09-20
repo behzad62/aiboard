@@ -1,0 +1,37 @@
+{
+  "pid": 29392,
+  "identity": {
+    "Id": 29392,
+    "StartTimeUtc": "2026-09-14T15:51:04.9972811Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 15836,
+  "spawnedAt": "2026-09-14T15:51:05.338Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/git-execution-policy.test.ts",
+    "runner-v2/test/git-runtime-runner.test.ts",
+    "runner-v2/test/git-baseline.test.ts",
+    "runner-v2/test/git-bootstrap.test.ts",
+    "runner-v2/test/git-preflight.test.ts",
+    "runner-v2/test/git-repository.test.ts",
+    "runner-v2/test/git-run-context.test.ts",
+    "runner-v2/test/git-runtime-integration.test.ts",
+    "runner-v2/test/git-tools.test.ts",
+    "runner-v2/test/git-production-managers.test.ts",
+    "runner-v2/test/git-caller-audit.test.ts",
+    "runner-v2/test/git-caller-routing.test.ts",
+    "runner-v2/test/git-control-refusal.test.ts",
+    "runner-v2/test/change-set.test.ts",
+    "runner-v2/test/workspace-manager.test.ts",
+    "runner-v2/test/verification-workspace.test.ts",
+    "runner-v2/test/child-environment.test.ts"
+  ]
+}

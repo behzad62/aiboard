@@ -1,0 +1,24 @@
+{
+  "id": "model-free-audit",
+  "startedAt": "2026-09-15T14:47:26.431Z",
+  "finishedAt": "2026-09-15T14:47:27.147Z",
+  "wrapperPid": 43132,
+  "testPid": 55672,
+  "exitCode": 1,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 448,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery-model-free.test.ts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

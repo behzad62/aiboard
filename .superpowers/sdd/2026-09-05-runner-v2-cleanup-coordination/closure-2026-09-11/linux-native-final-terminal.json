@@ -1,0 +1,25 @@
+{
+  "startedAt": "2026-09-11T08:32:43.504429+00:00",
+  "finishedAt": "2026-09-11T08:32:51.630890+00:00",
+  "wrapperPid": 26196,
+  "containerId": "1a9488c567267d8778c9f666a0783ec38ec3766f7350ed56de448ff29c5ac504",
+  "imageId": "sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+  "exitCode": 0,
+  "containerState": {
+    "Status": "exited",
+    "Running": false,
+    "Paused": false,
+    "Restarting": false,
+    "OOMKilled": false,
+    "Dead": false,
+    "Pid": 0,
+    "ExitCode": 0,
+    "Error": "",
+    "StartedAt": "2026-09-11T08:32:43.863170322Z",
+    "FinishedAt": "2026-09-11T08:32:51.223735116Z"
+  },
+  "tmpCopyExit": 0,
+  "containerRemoved": true,
+  "bundleFiles": 33,
+  "platform": "actual Linux amd64, cached maintained Node24 Alpine, isolated namespace with init; no network/ports/capabilities and read-only code mounts"
+}

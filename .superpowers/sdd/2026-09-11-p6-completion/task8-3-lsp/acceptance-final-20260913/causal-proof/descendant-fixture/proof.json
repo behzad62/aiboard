@@ -1,0 +1,129 @@
+{
+  "id": "descendant-fixture",
+  "target": "runner-v2/test/fixtures/lsp-server.mjs",
+  "test": "runner-v2/test/lsp-descendant-fixture.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-reverse-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-restored-green",
+  "sourceFinalSha256": "ae3678d0c109e768249bc2a18d4102c9ceaaaf5bdaab22f57b8fb47949a758f8",
+  "testFinalSha256": "6fa90de2ca5b269eec1b43126310a1c2f7e6e4e7a30740321079badccd907211",
+  "redReceipt": {
+    "id": "descendant-fixture-reverse-red",
+    "startedAt": "2026-09-13T03:00:56.589Z",
+    "finishedAt": "2026-09-13T03:00:57.363Z",
+    "wrapperPid": 144652,
+    "testPid": 103604,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/lsp-descendant-fixture.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "descendant-fixture-restored-green",
+    "startedAt": "2026-09-13T03:00:57.421Z",
+    "finishedAt": "2026-09-13T03:00:58.107Z",
+    "wrapperPid": 157548,
+    "testPid": 150096,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/lsp-descendant-fixture.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-reverse-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/red-terminal.json",
+      "sha256": "c254e1fcbff8196dee4fa4c2f16014b9e75dbf14ba133916157d3ba671dba7dd"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-reverse-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/red-inputs-before.json",
+      "sha256": "39ba3b2a24b602a3e976e13ef7061ce86619eec61db171a7b331bf7d13c36516"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-reverse-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/red-inputs-after.json",
+      "sha256": "39ba3b2a24b602a3e976e13ef7061ce86619eec61db171a7b331bf7d13c36516"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-reverse-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/red-stdout.log",
+      "sha256": "50aead552fc6c6e56020ce0f80c253165de3cd78620908e113e3a3001a3c89a4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-reverse-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-reverse-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/red-wrapper.json",
+      "sha256": "37399047438dcf949225493a5535380232885d71a4e2cbbb54a980fcc95fabfd"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-reverse-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/red-child.json",
+      "sha256": "2576c9e093454d8dc9066666321ddce64d0c1bd4d47c7f10d086a668e45e0c67"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-restored-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/green-terminal.json",
+      "sha256": "34c2c0aa1cf4d1541f631f6133fe9812d7a56bc682dde93ae92450b00faf1016"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-restored-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/green-inputs-before.json",
+      "sha256": "473bf8b61c190dbc680b9cb26030b4572b6a19bc97b5875eb4addf6bf2f12109"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-restored-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/green-inputs-after.json",
+      "sha256": "473bf8b61c190dbc680b9cb26030b4572b6a19bc97b5875eb4addf6bf2f12109"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-restored-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/green-stdout.log",
+      "sha256": "aa1a57ef5e548b1dbea873242c37e0bcec5bad9439d7f97fd7267e35ff559454"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-restored-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-restored-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/green-wrapper.json",
+      "sha256": "d639e5872c6a76d40112989571cf932d5843e17b8ae6ba3660e90b2389a34e42"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/descendant-fixture-restored-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/descendant-fixture/green-child.json",
+      "sha256": "4b103536e753980f75a45fbde97a8368d70b244cdcbd44fa1e6add1989070fbf"
+    }
+  ]
+}

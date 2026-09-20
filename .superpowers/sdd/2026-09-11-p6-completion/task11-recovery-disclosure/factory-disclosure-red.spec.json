@@ -1,0 +1,1 @@
+{"id":"factory-disclosure-red","pattern":"NativeBuildFactory executes","tests":["runner-v2/test/native-final-verification-factory.test.ts"]}

@@ -1,4 +1,7 @@
-export type AgentRole = "architect" | "worker" | "subagent";
+import type { OpaqueExecutionGrant } from "./execution-grants.js";
+import type { FilesystemMutationPermit } from "./filesystem-mutation-fence.js";
+
+export type AgentRole = "architect" | "worker" | "subagent" | "verifier";
 
 export interface AgentActor {
   role: AgentRole;
@@ -82,6 +85,11 @@ export interface ToolDefinition {
 
 export type AgentLifecycleSignal =
   | { type: "submit_task"; changeSetId: string }
+  | {
+      type: "verifier_verdict_submitted";
+      reviewId: string;
+      satisfied: boolean;
+    }
   | { type: "ask_architect"; requestId: string; blocking: boolean }
   | { type: "request_replan"; requestId: string }
   | { type: "return_subagent"; summary: string; artifactHashes: string[] }
@@ -94,6 +102,12 @@ export type AgentLifecycleSignal =
         | "guidance_answered"
         | "review_decided"
         | "integration_requested"
+        | "acceptance_contract_upgraded"
+        | "final_verification_planned"
+        | "final_verification_review_decided"
+        | "verification_repairs_planned"
+        | "user_guidance_acknowledged"
+        | "user_question_requested"
         | "run_completed";
       referenceId?: string;
     };
@@ -110,6 +124,10 @@ export interface ToolExecutionContext {
   signal?: AbortSignal;
   callId?: string;
   toolName?: string;
+  /** Runner-created after authorization. Model input can never populate this field. */
+  executionGrant?: OpaqueExecutionGrant;
+  /** Single-use last-mile ticket, backed by that same original Broker grant. */
+  filesystemMutation?: FilesystemMutationPermit;
 }
 
 export type ToolPathAccessMode = "read" | "write" | "delete";
@@ -124,6 +142,7 @@ export interface ToolAccessRequest {
   paths?: ToolPathAccess[];
   external?: boolean;
   destructive?: boolean;
+  network?: boolean;
   credentialChange?: boolean;
 }
 

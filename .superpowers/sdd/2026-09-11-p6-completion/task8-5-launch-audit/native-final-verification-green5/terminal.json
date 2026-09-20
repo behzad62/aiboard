@@ -1,0 +1,24 @@
+{
+  "id": "native-final-verification-green5",
+  "startedAt": "2026-09-14T11:06:16.569Z",
+  "finishedAt": "2026-09-14T11:08:07.823Z",
+  "wrapperPid": 29592,
+  "testPid": 18044,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/native-final-verification-factory.test.ts"
+  ],
+  "rootCount": 6,
+  "retainedRoots": []
+}

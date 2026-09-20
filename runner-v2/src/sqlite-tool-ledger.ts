@@ -21,12 +21,20 @@ interface EventRow {
   payload_json: string | null;
 }
 
+export interface SqliteToolLedgerOptions {
+  /** Opens an existing durable ledger without schema or journal mutations. */
+  readOnly?: boolean;
+}
+
 export class SqliteToolLedger implements ToolInvocationLedger {
   private readonly database: DatabaseSync;
+  private readonly readOnly: boolean;
 
-  constructor(databasePath: string) {
-    mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new DatabaseSync(databasePath);
+  constructor(databasePath: string, options: SqliteToolLedgerOptions = {}) {
+    this.readOnly = options.readOnly ?? false;
+    if (!this.readOnly) mkdirSync(dirname(databasePath), { recursive: true });
+    this.database = new DatabaseSync(databasePath, { readOnly: this.readOnly });
+    if (this.readOnly) return;
     this.database.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS tool_events (
@@ -72,6 +80,7 @@ export class SqliteToolLedger implements ToolInvocationLedger {
           sessionId: input.sessionId,
           callId: input.callId,
           toolName: input.toolName,
+          ...(input.extensionId ? { extensionId: input.extensionId } : {}),
           effect: input.effect,
           access: input.access,
           outsideWorkspace: input.outsideWorkspace,
@@ -114,11 +123,11 @@ export class SqliteToolLedger implements ToolInvocationLedger {
   }
 
   events(key: string): ToolLedgerEvent[] {
-    return this.readRows(key).map(decodeEvent);
+    return decodeEvents(this.readRows(key));
   }
 
   listRun(runId: string): ToolLedgerEvent[] {
-    return (
+    const rows = (
       this.database
         .prepare(
           `SELECT sequence, invocation_key, event_type, fingerprint,
@@ -127,9 +136,8 @@ export class SqliteToolLedger implements ToolInvocationLedger {
            FROM tool_events ORDER BY sequence ASC`
         )
         .all() as unknown as EventRow[]
-    )
-      .filter((row) => invocationKey(row).startsWith(`${runId}\0`))
-      .map(decodeEvent);
+    ).filter((row) => invocationKey(row).startsWith(`${runId}\0`));
+    return decodeEvents(rows);
   }
 
   close(): void {
@@ -164,10 +172,24 @@ export class SqliteToolLedger implements ToolInvocationLedger {
   }
 }
 
-function decodeEvent(row: EventRow): ToolLedgerEvent {
+function decodeEvents(rows: readonly EventRow[]): ToolLedgerEvent[] {
+  const extensionIds = new Map<string, string>();
+  return rows.map((row) => {
+    const key = invocationKey(row);
+    const event = decodeEvent(row, extensionIds.get(key));
+    if (event.extensionId) extensionIds.set(key, event.extensionId);
+    return event;
+  });
+}
+
+function decodeEvent(
+  row: EventRow,
+  inheritedExtensionId?: string,
+): ToolLedgerEvent {
   const key = invocationKey(row);
   const [runId, sessionId, callId] = key.split("\0");
   let toolName: string | undefined;
+  let extensionId = inheritedExtensionId;
   let metadata: Record<string, unknown> | undefined;
   if (row.event_type === "tool.completed") {
     toolName = decodeResult(row).toolName;
@@ -176,6 +198,9 @@ function decodeEvent(row: EventRow): ToolLedgerEvent {
       const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
       metadata = payload;
       toolName = typeof payload.toolName === "string" ? payload.toolName : undefined;
+      extensionId = validExtensionId(payload.extensionId)
+        ? payload.extensionId
+        : inheritedExtensionId;
     } catch {
       toolName = undefined;
     }
@@ -190,6 +215,7 @@ function decodeEvent(row: EventRow): ToolLedgerEvent {
     ...(sessionId ? { sessionId } : {}),
     ...(callId ? { callId } : {}),
     ...(toolName ? { toolName } : {}),
+    ...(extensionId ? { extensionId } : {}),
     ...(metadata?.effect === "none" ||
     metadata?.effect === "workspace" ||
     metadata?.effect === "external"
@@ -205,6 +231,10 @@ function decodeEvent(row: EventRow): ToolLedgerEvent {
       ? { result: decodeResult(row) }
       : {}),
   };
+}
+
+function validExtensionId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-z][a-z0-9.-]{0,63}$/.test(value);
 }
 
 function invocationKey(row: EventRow): string {

@@ -166,6 +166,87 @@ test("Architect handoff always waits for explicit user selection", () => {
   );
 });
 
+test("verifier selection excludes Architect and accepted-author model identities", () => {
+  const health = new ProviderHealthRegistry({ clock: () => 1_000 });
+  const verifierRuntimes: AgentRuntimeCandidate[] = [
+    ...runtimes,
+    {
+      runtimeId: "openrouter:openai/gpt-code",
+      providerId: "openrouter",
+      modelId: "openai/gpt-code",
+      capabilities: ["code"],
+      priority: 0,
+    },
+    {
+      runtimeId: "bedrock:anthropic/claude-code",
+      providerId: "bedrock",
+      modelId: "anthropic/claude-code",
+      capabilities: ["code"],
+      priority: 0,
+    },
+    {
+      runtimeId: "google:gemini-code",
+      providerId: "google",
+      modelId: "gemini-code",
+      capabilities: ["code"],
+      priority: 4,
+    },
+  ];
+  const router = new RuntimeRouter({ candidates: verifierRuntimes, health });
+
+  const selected = router.selectVerifier({
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: [
+      "openrouter:openai/gpt-code",
+      "bedrock:anthropic/claude-code",
+      "google:gemini-code",
+    ],
+    architectRuntimeId: "openai:gpt-code",
+    acceptedChangeAuthorRuntimeIds: ["anthropic:claude-code"],
+  });
+  assert.equal(selected.status, "assigned");
+  assert.equal(selected.runtime?.runtimeId, "google:gemini-code");
+
+  assert.deepEqual(router.selectVerifier({
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: [
+      "openrouter:openai/gpt-code",
+      "bedrock:anthropic/claude-code",
+    ],
+    architectRuntimeId: "openai:gpt-code",
+    acceptedChangeAuthorRuntimeIds: ["anthropic:claude-code"],
+  }), {
+    status: "unavailable",
+    reason: "no_independent_healthy_capability_match",
+    requiredCapabilities: ["code"],
+  });
+});
+
+test("verifier selection fails closed for unknown configured or author runtimes", () => {
+  const router = new RuntimeRouter({
+    candidates: runtimes,
+    health: new ProviderHealthRegistry({ clock: () => 1_000 }),
+  });
+  assert.throws(
+    () => router.selectVerifier({
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["missing:verifier"],
+      architectRuntimeId: "openai:gpt-code",
+      acceptedChangeAuthorRuntimeIds: [],
+    }),
+    /unknown verifier candidate/i
+  );
+  assert.throws(
+    () => router.selectVerifier({
+      requiredCapabilities: ["code"],
+      candidateRuntimeIds: ["anthropic:claude-code"],
+      architectRuntimeId: "openai:gpt-code",
+      acceptedChangeAuthorRuntimeIds: ["missing:author"],
+    }),
+    /unknown accepted change author/i
+  );
+});
+
 test("provider failures are classified from transport metadata before routing", () => {
   assert.equal(
     classifyProviderFailure({ status: 429, code: "usage_limit_reached", message: "limit" }).kind,

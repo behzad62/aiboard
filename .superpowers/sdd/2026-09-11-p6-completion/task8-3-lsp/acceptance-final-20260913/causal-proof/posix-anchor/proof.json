@@ -1,0 +1,129 @@
+{
+  "id": "posix-anchor",
+  "target": "runner-v2/src/portable-process-supervisor.mjs",
+  "test": "runner-v2/test/posix-anchor-release-takeover.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-reverse-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-restored-green",
+  "sourceFinalSha256": "1148eeb57b4032840d47d781fbbfb6f1b98184850b5eca78f84eff6b8f654f1b",
+  "testFinalSha256": "754bd474272f487dfd0a1d94fda000bb99ca548ee5e4fff24a90f52141876511",
+  "redReceipt": {
+    "id": "posix-anchor-reverse-red",
+    "startedAt": "2026-09-13T02:57:16.788Z",
+    "finishedAt": "2026-09-13T02:57:17.493Z",
+    "wrapperPid": 82300,
+    "testPid": 39556,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 415,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/posix-anchor-release-takeover.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "posix-anchor-restored-green",
+    "startedAt": "2026-09-13T02:57:17.547Z",
+    "finishedAt": "2026-09-13T02:57:18.316Z",
+    "wrapperPid": 112800,
+    "testPid": 71024,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 415,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/posix-anchor-release-takeover.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-reverse-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/red-terminal.json",
+      "sha256": "cf859cb70a06c73ebc497d65117ed5311f16d18d87c46e81ae5407a3b37af486"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-reverse-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/red-inputs-before.json",
+      "sha256": "00a2303609c7345df16f35d60d84a2d72613cfcfe97866c546964ad7bda19f45"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-reverse-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/red-inputs-after.json",
+      "sha256": "00a2303609c7345df16f35d60d84a2d72613cfcfe97866c546964ad7bda19f45"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-reverse-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/red-stdout.log",
+      "sha256": "cf5d072f72bff8f90d70e48e830e2f7a810a0a8e7903198c13341117f13df1c2"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-reverse-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-reverse-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/red-wrapper.json",
+      "sha256": "501949a31566d2ba104b55eb91abf35b5335394a992f9cec9af8b5e35744d5a7"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-reverse-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/red-child.json",
+      "sha256": "f6790553b399c53b905e2bc6e479aa720a2993417d372661802563ae79201888"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-restored-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/green-terminal.json",
+      "sha256": "24d90914d9b6a44c0990c2c2816baeb09c54a0c1f6dab0e5e5cbe073e5c42499"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-restored-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/green-inputs-before.json",
+      "sha256": "00782e3dabfe3dde15afb4dc34ef483d9aa50fc7b22b10d10e9148685043d9c3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-restored-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/green-inputs-after.json",
+      "sha256": "00782e3dabfe3dde15afb4dc34ef483d9aa50fc7b22b10d10e9148685043d9c3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-restored-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/green-stdout.log",
+      "sha256": "6fc02dbbea8ee662a048092449b6cfcca69c3a567197e84e70dc6a51eab5a534"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-restored-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-restored-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/green-wrapper.json",
+      "sha256": "38fbf52b5649835ecd429f3792a28d60e956faa8872f1b887578bcec79876375"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/finish-20260913/posix-anchor-restored-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/posix-anchor/green-child.json",
+      "sha256": "08cce50c6c419b6314723977253dcb26ed7e714c7186b0ecb5f7b9c8de542072"
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "id": "ambient-discovery-fallback",
+  "target": "runner-v2/src/language-server-executable.ts",
+  "test": "runner-v2/test/language-environment.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-green",
+  "sourceFinalSha256": "69b87dd2f216d77bd8737959d44f5106aecad8fb026edd9d83bb57395150c2d6",
+  "testFinalSha256": "eea15c89a0b2d62a58c1185c99f467d9aa37b4b97ac0c2211475fe2b0727a007",
+  "redReceipt": {
+    "id": "fault-ambient-discovery-fallback-red",
+    "startedAt": "2026-09-12T17:26:23.816Z",
+    "finishedAt": "2026-09-12T17:26:24.523Z",
+    "wrapperPid": 93540,
+    "testPid": 97980,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/language-environment.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-env-LoswuF"
+    ]
+  },
+  "greenReceipt": {
+    "id": "fault-ambient-discovery-fallback-green",
+    "startedAt": "2026-09-12T17:26:24.571Z",
+    "finishedAt": "2026-09-12T17:26:25.282Z",
+    "wrapperPid": 110548,
+    "testPid": 62036,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/language-environment.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/red-terminal.json",
+      "sha256": "d2cb53b6d0ff1db3e882b6f50f593b9835b854249ea172ecc200e502c9f37c3c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/red-inputs-before.json",
+      "sha256": "d2fe2d431be80d796adbbc175160c8577036515ff0f96713de4292d06cb09275"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/red-inputs-after.json",
+      "sha256": "d2fe2d431be80d796adbbc175160c8577036515ff0f96713de4292d06cb09275"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/red-stdout.log",
+      "sha256": "e33105530ea13637711038c0d3407ee48db6dfd028e01f4758650f797113408d"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/red-wrapper.json",
+      "sha256": "0d7b617265db0214a5c4d7a3a5598b69425a6bc8aaa085009ade6477602489c9"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/red-child.json",
+      "sha256": "a0f463a459bc6420d2cb15abb65fec729dfb9d2b9ad7119a86c4cb92dfbb3f1b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/green-terminal.json",
+      "sha256": "62d15fd7752778916db6e3b53e2084649484f393b13d911c978a966f3c47c9c2"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/green-inputs-before.json",
+      "sha256": "523db4bf2f142c1e9ddac76ead9ad757c011fe4b0f023a194beb1803457688ac"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/green-inputs-after.json",
+      "sha256": "523db4bf2f142c1e9ddac76ead9ad757c011fe4b0f023a194beb1803457688ac"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/green-stdout.log",
+      "sha256": "1fd73fd3f4ccff5578df1a5b87e0887428f52ac206023c9f39c54b581c723c6a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/green-wrapper.json",
+      "sha256": "0c516030b2959d3bcaacf56092a5baf666b52674622831294bb61eb653992f7a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-ambient-discovery-fallback-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/ambient-discovery-fallback/green-child.json",
+      "sha256": "7f9a5547f0e184d336f1406031bee7336b9391bb40e7202c525b1b878fb057b4"
+    }
+  ]
+}

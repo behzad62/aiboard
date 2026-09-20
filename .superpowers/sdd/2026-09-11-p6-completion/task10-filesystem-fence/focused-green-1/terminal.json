@@ -1,0 +1,27 @@
+{
+  "id": "focused-green-1",
+  "startedAt": "2026-09-14T21:41:58.057Z",
+  "finishedAt": "2026-09-14T21:42:02.399Z",
+  "wrapperPid": 10748,
+  "testPid": 44192,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 439,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/filesystem-mutation-fence.test.ts",
+    "runner-v2/test/filesystem-tools.test.ts",
+    "runner-v2/test/tool-broker.test.ts",
+    "runner-v2/test/execution-grants.test.ts"
+  ],
+  "rootCount": 41,
+  "retainedRoots": []
+}

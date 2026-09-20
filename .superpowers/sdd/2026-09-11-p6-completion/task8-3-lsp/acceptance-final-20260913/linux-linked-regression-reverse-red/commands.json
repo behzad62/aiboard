@@ -1,0 +1,27 @@
+{
+  "testCommands": [
+    [
+      "node",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-timeout=120000",
+      "runner-v2/test/linked-output-spill-storage.test.js"
+    ]
+  ],
+  "exclusions": [
+    {
+      "test": "LSP client launches a safe Windows command-shell shim",
+      "reason": "Windows batch execution is verified on native Windows, not claimed in Linux."
+    },
+    {
+      "files": [
+        "language-provider-compatibility",
+        "language-provider-router"
+      ],
+      "reason": "Their Git-backed consumers are covered in the complete native Windows graph; Linux focus is portable/shared LSP without installing Git into the approved Node image."
+    }
+  ]
+}

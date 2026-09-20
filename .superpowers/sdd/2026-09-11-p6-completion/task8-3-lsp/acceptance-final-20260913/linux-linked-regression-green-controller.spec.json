@@ -1,0 +1,11 @@
+{
+  "id": "linux-linked-regression-green-controller",
+  "args": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-selected-gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-green.linux.json"
+  ],
+  "inputPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-selected-gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-green.linux.json"
+  ]
+}

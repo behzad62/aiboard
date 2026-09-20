@@ -1,6 +1,11 @@
 import type { BudgetLimits } from "./budget-ledger.js";
 import type { PermissionProfile } from "./contracts.js";
 import { assertBudgetLimits } from "./budget-policy.js";
+import {
+  assertRunnerCapabilityContract,
+  cloneRunnerCapabilityContract,
+  type RunnerCapabilityContract,
+} from "./runner-capability-contract.js";
 
 export type NativeBuildRunPolicy = "finish" | "budgeted" | "plan_only";
 
@@ -12,20 +17,35 @@ export interface NativeBuildBenchmarkPolicy {
 }
 
 export interface NativeBuildSpec {
-  version: 1;
+  version: 2;
   runId: string;
   projectId: string;
   objective: string;
   architectRuntimeId: string;
   workerRuntimeIds: string[];
+  verifierRuntimeIds: string[];
+  /** Strengthens low-risk qualification; it never disables the high-risk gate. */
+  alwaysRequireIndependentVerifier: boolean;
   maxConcurrency: number;
   permissionProfile: PermissionProfile;
   runPolicy: NativeBuildRunPolicy;
   budgetLimits: BudgetLimits;
   createdAt: string;
   idempotencyKey: string;
+  /** Durable identity of executable extension and language-provider capabilities. */
+  capabilityContract?: RunnerCapabilityContract;
   benchmark?: NativeBuildBenchmarkPolicy;
 }
+
+export type LegacyNativeBuildSpec = Omit<
+  NativeBuildSpec,
+  "version" | "runPolicy" | "verifierRuntimeIds" | "alwaysRequireIndependentVerifier"
+> & {
+  version: 1;
+} & Partial<Pick<
+  NativeBuildSpec,
+  "runPolicy" | "verifierRuntimeIds" | "alwaysRequireIndependentVerifier"
+>>;
 
 export interface BuildSpecStore {
   save(spec: NativeBuildSpec): NativeBuildSpec;
@@ -35,7 +55,7 @@ export interface BuildSpecStore {
 }
 
 function validateBuildSpecCore(spec: NativeBuildSpec): void {
-  if (spec.version !== 1) throw new Error("Unsupported Build spec version.");
+  if (spec.version !== 2) throw new Error("Unsupported Build spec version.");
   if (
     !spec.runId ||
     !spec.projectId ||
@@ -51,6 +71,27 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     spec.workerRuntimeIds.length < 1 ||
     spec.workerRuntimeIds.some((id) => !id)
   ) throw new Error("Build spec requires at least one worker runtime.");
+  if (
+    !Array.isArray(spec.verifierRuntimeIds) ||
+    spec.verifierRuntimeIds.length < 1
+  ) {
+    throw new Error("Build spec requires at least one verifier runtime.");
+  }
+  if (
+    spec.verifierRuntimeIds.some(
+      (id) => typeof id !== "string" || !id.trim() || id !== id.trim()
+    )
+  ) {
+    throw new Error("Build spec verifier runtime IDs must be non-empty normalized strings.");
+  }
+  if (new Set(spec.verifierRuntimeIds).size !== spec.verifierRuntimeIds.length) {
+    throw new Error("Build spec contains a duplicate verifier runtime.");
+  }
+  if (typeof spec.alwaysRequireIndependentVerifier !== "boolean") {
+    throw new Error(
+      "Build spec independent verifier qualification must be a boolean."
+    );
+  }
   if (!Number.isSafeInteger(spec.maxConcurrency) || spec.maxConcurrency < 1) {
     throw new Error("Build spec maxConcurrency must be positive.");
   }
@@ -61,6 +102,9 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     throw new Error("Build spec run policy is invalid.");
   }
   assertBudgetLimits(spec.budgetLimits);
+  if (spec.capabilityContract !== undefined) {
+    assertRunnerCapabilityContract(spec.capabilityContract);
+  }
   if (spec.benchmark) {
     if (!spec.benchmark.attemptId.trim()) {
       throw new Error("Build spec benchmark attempt identity is incomplete.");
@@ -117,12 +161,23 @@ export function validateBuildSpec(spec: NativeBuildSpec): void {
 }
 
 export function recoverLegacyBuildSpec(
-  spec: Omit<NativeBuildSpec, "runPolicy">
+  spec: LegacyNativeBuildSpec
 ): NativeBuildSpec {
+  if (spec.version !== 1) {
+    throw new Error("Unsupported legacy Build spec version.");
+  }
+  const legacyRunPolicy = spec.runPolicy === undefined;
   const recovered: NativeBuildSpec = {
     ...spec,
-    runPolicy: "finish",
-    budgetLimits: {},
+    version: 2,
+    runPolicy: spec.runPolicy ?? "finish",
+    budgetLimits: legacyRunPolicy ? {} : { ...spec.budgetLimits },
+    verifierRuntimeIds:
+      spec.verifierRuntimeIds === undefined
+        ? [...new Set(spec.workerRuntimeIds)]
+        : [...spec.verifierRuntimeIds],
+    alwaysRequireIndependentVerifier:
+      spec.alwaysRequireIndependentVerifier ?? false,
   };
   validateBuildSpec(recovered);
   return recovered;
@@ -132,7 +187,11 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
   return {
     ...spec,
     workerRuntimeIds: [...spec.workerRuntimeIds],
+    verifierRuntimeIds: [...spec.verifierRuntimeIds],
     budgetLimits: { ...spec.budgetLimits },
+    ...(spec.capabilityContract
+      ? { capabilityContract: cloneRunnerCapabilityContract(spec.capabilityContract) }
+      : {}),
     ...(spec.benchmark
       ? {
           benchmark: {

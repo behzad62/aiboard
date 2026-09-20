@@ -1,0 +1,80 @@
+TAP version 13
+# Subtest: portable supervisor acknowledges only settled callbacks and never overlaps or replays a pending write
+not ok 1 - portable supervisor acknowledges only settled callbacks and never overlaps or replays a pending write
+  ---
+  duration_ms: 6.9168
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\portable-supervisor-input.test.ts:1:2682'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    2 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 2
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\portable-supervisor-input.test.ts:35:42)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# Subtest: portable supervisor refuses stale completed write acknowledgement without reissuing bytes
+not ok 2 - portable supervisor refuses stale completed write acknowledgement without reissuing bytes
+  ---
+  duration_ms: 1.9745
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\portable-supervisor-input.test.ts:1:3347'
+  failureType: 'testCodeFailure'
+  error: 'a concrete callback must own acknowledgement'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: '=='
+  stack: |-
+    Object.complete (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\portable-supervisor-input.test.ts:27:104)
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\portable-supervisor-input.test.ts:43:68)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: portable supervisor retains settled input through temporary coordination refusal
+not ok 3 - portable supervisor retains settled input through temporary coordination refusal
+  ---
+  duration_ms: 1.3113
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\portable-supervisor-input.test.ts:1:3738'
+  failureType: 'testCodeFailure'
+  error: 'a concrete callback must own acknowledgement'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: '=='
+  stack: |-
+    Object.complete (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\portable-supervisor-input.test.ts:27:104)
+    TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\portable-supervisor-input.test.ts:51:30)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:911:7)
+  ...
+# Subtest: portable supervisor settles a synchronous input exception as failed without replay
+ok 4 - portable supervisor settles a synchronous input exception as failed without replay
+  ---
+  duration_ms: 1.5615
+  type: 'test'
+  ...
+# Subtest: portable supervisor observes input stream errors without fabricating terminal ownership
+ok 5 - portable supervisor observes input stream errors without fabricating terminal ownership
+  ---
+  duration_ms: 2.607
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 2
+# fail 3
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 324.498

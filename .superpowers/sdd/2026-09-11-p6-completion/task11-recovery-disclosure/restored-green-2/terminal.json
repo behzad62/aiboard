@@ -1,0 +1,30 @@
+{
+  "id": "restored-green-2",
+  "startedAt": "2026-09-15T09:26:18.768Z",
+  "finishedAt": "2026-09-15T09:27:08.902Z",
+  "wrapperPid": 50500,
+  "testPid": 5844,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 444,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery.test.ts",
+    "runner-v2/test/durable-process-store.test.ts",
+    "runner-v2/test/subprocess-runtime.test.ts",
+    "runner-v2/test/one-shot-command-executor.test.ts",
+    "runner-v2/test/one-shot-output-capture.test.ts",
+    "runner-v2/test/scheduler-store.test.ts",
+    "runner-v2/test/recovery-smoke.test.ts"
+  ],
+  "rootCount": 117,
+  "retainedRoots": []
+}

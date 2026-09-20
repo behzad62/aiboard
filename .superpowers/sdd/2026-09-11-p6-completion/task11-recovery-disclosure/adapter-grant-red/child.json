@@ -1,0 +1,22 @@
+{
+  "pid": 59892,
+  "identity": {
+    "Id": 59892,
+    "StartTimeUtc": "2026-09-15T12:12:16.1771823Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 61356,
+  "spawnedAt": "2026-09-15T12:12:16.513Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=subprocess adapter issues one exact native recovery grant",
+    "runner-v2/test/process-recovery.test.ts"
+  ]
+}

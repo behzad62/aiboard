@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
@@ -9,8 +8,13 @@ import type {
 } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { CommandEvidenceFact, EvidenceStore } from "./evidence-store.js";
-import { runGit } from "./git-command.js";
+import type { RunGitExecutionContext } from "./git-run-context.js";
+import type { GitRunner } from "./git-repository.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
+import {
+  outputFor,
+  type OneShotCommandExecutor,
+} from "./one-shot-command-executor.js";
 
 interface RunEvidenceInput {
   label: string;
@@ -21,6 +25,7 @@ interface RunEvidenceInput {
 }
 
 export interface EvidenceToolsOptions {
+  git?: RunGitExecutionContext;
   store: EvidenceStore;
   artifacts: ArtifactStore;
   taskId: string;
@@ -29,6 +34,8 @@ export interface EvidenceToolsOptions {
   maximumTimeoutMs?: number;
   clock?: () => string;
   allowedCommands?: readonly string[];
+  attempt?: number;
+  execution?: OneShotCommandExecutor;
 }
 
 export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
@@ -36,7 +43,6 @@ export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<u
 }
 
 function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceInput> {
-  const maxOutputBytes = options.maxOutputBytes ?? 16 * 1024 * 1024;
   const defaultTimeoutMs = options.defaultTimeoutMs ?? 120_000;
   const maximumTimeoutMs = options.maximumTimeoutMs ?? 30 * 60_000;
   const clock = options.clock ?? (() => new Date().toISOString());
@@ -76,12 +82,38 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
       try {
         const cwd = await containedDirectory(context.workspacePath, input.cwd);
         const startedAt = clock();
-        const revision = await gitRevision(cwd);
-        const execution = await execute(input, cwd, maxOutputBytes, context.signal);
+        const revision = options.git ? await gitRevision(cwd, options.git.forCall(context).run) : undefined;
+        if (!options.execution || !context.callId) {
+          return failure(
+            "process_runtime_unavailable",
+            "The shared subprocess runtime is unavailable for this evidence command.",
+          );
+        }
+        const commandRequest: Parameters<OneShotCommandExecutor["execute"]>[0] = {
+          executable: input.command,
+          arguments: input.args,
+          workingDirectory: cwd,
+          timeoutMs: input.timeoutMs,
+          context: {
+            runId: context.runId,
+            sessionId: context.sessionId,
+            actor: context.actor,
+            taskId: options.taskId,
+            callId: context.callId,
+            toolName: "run_evidence_command",
+            ...(context.executionGrant ? { executionGrant: context.executionGrant } : {}),
+            ...(context.signal ? { signal: context.signal } : {}),
+          },
+        };
+        const execution = options.git
+          ? await options.git.executeForCall(context, commandRequest)
+          : await options.execution.execute(commandRequest);
         const finishedAt = clock();
+        const stdoutOutput = outputFor(execution.process, "stdout");
+        const stderrOutput = outputFor(execution.process, "stderr");
         const [stdout, stderr] = await Promise.all([
-          options.artifacts.put(execution.stdout, "text/plain", `${input.label} stdout`),
-          options.artifacts.put(execution.stderr, "text/plain", `${input.label} stderr`),
+          artifactForOutput(options.artifacts, stdoutOutput, `${input.label} stdout`),
+          artifactForOutput(options.artifacts, stderrOutput, `${input.label} stderr`),
         ]);
         const fact: CommandEvidenceFact = {
           kind: "command",
@@ -91,11 +123,17 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           cwd,
           startedAt,
           finishedAt,
-          exitCode: execution.exitCode,
-          signal: execution.signal,
-          timedOut: execution.timedOut,
-          cancelled: execution.cancelled,
-          outputTruncated: execution.outputTruncated,
+          exitCode: execution.process.exitCode ?? null,
+          signal: execution.process.signal ?? null,
+          timedOut: execution.process.outcome === "timed_out",
+          cancelled: execution.process.outcome === "cancelled",
+          outputTruncated: execution.process.output.some((entry) => entry.truncated),
+          outputLossy: execution.process.output.some((entry) => entry.lossyBytes > 0) ||
+            stdout.fallbackLossy || stderr.fallbackLossy,
+          cleanup: execution.process.cleanup,
+          enforcement: execution.enforcement,
+          disclosure: execution.disclosure,
+          ...(execution.providerId ? { providerId: execution.providerId } : {}),
           stdoutArtifactHash: stdout.hash,
           stderrArtifactHash: stderr.hash,
           ...(revision ? { repositoryRevision: revision } : {}),
@@ -105,18 +143,32 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           taskId: options.taskId,
           actor: context.actor,
           fact,
-          createdAt: finishedAt,
-          idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
-        });
+        createdAt: finishedAt,
+        idempotencyKey: `evidence:${context.sessionId}:${context.callId}`,
+        ...(options.attempt !== undefined ? { attempt: options.attempt } : {}),
+      });
         return { content: [{ type: "json", value: record }], isError: false };
       } catch (error) {
         return failure(
-          "evidence_command_failed",
+          stableExecutionErrorCode(error) ?? "evidence_command_failed",
           error instanceof Error ? error.message : String(error)
         );
       }
     },
   };
+}
+
+function stableExecutionErrorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && new Set([
+    "isolation_capability_unavailable",
+    "isolation_revocation_failed",
+    "outcome_unknown",
+    "backend_unavailable",
+    "identity_mismatch",
+    "cleanup_blocked",
+    "launch_not_proven",
+  ]).has(code) ? code : undefined;
 }
 
 function inspectEvidenceTool(options: EvidenceToolsOptions): NativeTool<{ taskId?: string }> {
@@ -203,83 +255,30 @@ async function containedDirectory(workspace: string, cwdInput: string): Promise<
   return canonical;
 }
 
-async function gitRevision(cwd: string): Promise<string | undefined> {
+async function gitRevision(cwd: string, execute: GitRunner): Promise<string | undefined> {
   try {
-    const result = await runGit({ cwd, args: ["rev-parse", "--verify", "HEAD"] });
+    const result = await execute({ cwd, args: ["rev-parse", "--verify", "HEAD"], allowFailure: true });
     return result.exitCode === 0 ? result.stdout.trim() || undefined : undefined;
-  } catch {
-    return undefined;
+  } catch (error) {
+    throw error;
   }
 }
 
-async function execute(
-  input: RunEvidenceInput,
-  cwd: string,
-  maxOutputBytes: number,
-  parentSignal?: AbortSignal
-): Promise<{
-  stdout: Buffer;
-  stderr: Buffer;
-  exitCode: number | null;
-  signal: string | null;
-  timedOut: boolean;
-  cancelled: boolean;
-  outputTruncated: boolean;
-}> {
-  return await new Promise((resolveResult, reject) => {
-    const child = spawn(input.command, input.args, {
-      cwd,
-      env: process.env,
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let total = 0;
-    let outputTruncated = false;
-    let timedOut = false;
-    let cancelled = false;
-    const capture = (target: Buffer[], chunk: Buffer) => {
-      if (outputTruncated) return;
-      const remaining = maxOutputBytes - total;
-      if (chunk.byteLength > remaining) {
-        if (remaining > 0) target.push(chunk.subarray(0, remaining));
-        total = maxOutputBytes;
-        outputTruncated = true;
-        child.kill("SIGTERM");
-        return;
-      }
-      target.push(chunk);
-      total += chunk.byteLength;
-    };
-    child.stdout.on("data", (chunk: Buffer) => capture(stdout, chunk));
-    child.stderr.on("data", (chunk: Buffer) => capture(stderr, chunk));
-    const cancel = () => {
-      cancelled = true;
-      child.kill("SIGTERM");
-    };
-    parentSignal?.addEventListener("abort", cancel, { once: true });
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, input.timeoutMs);
-    timeout.unref();
-    child.once("error", reject);
-    child.once("close", (exitCode, signal) => {
-      clearTimeout(timeout);
-      parentSignal?.removeEventListener("abort", cancel);
-      resolveResult({
-        stdout: Buffer.concat(stdout),
-        stderr: Buffer.concat(stderr),
-        exitCode,
-        signal,
-        timedOut,
-        cancelled,
-        outputTruncated,
-      });
-    });
-  });
+async function artifactForOutput(
+  artifacts: ArtifactStore,
+  output: ReturnType<typeof outputFor>,
+  label: string,
+): Promise<{ hash: string; fallbackLossy: boolean }> {
+  if (output.spillArtifactId) {
+    try {
+      await artifacts.verify(output.spillArtifactId);
+      return { hash: output.spillArtifactId, fallbackLossy: false };
+    } catch {
+      // Runtime cleanup remains authoritative; artifact framing degrades to its bounded tail.
+    }
+  }
+  const artifact = await artifacts.put(Buffer.from(output.tail), "text/plain", label);
+  return { hash: artifact.hash, fallbackLossy: output.spillArtifactId !== undefined };
 }
 
 function failure(code: string, message: string): ToolExecutionOutput {

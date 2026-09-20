@@ -1,0 +1,133 @@
+{
+  "id": "job-ack-not-exact",
+  "target": "runner-v2/src/windows-job-process-host.ts",
+  "test": "runner-v2/test/windows-job-output-replay.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-green",
+  "sourceFinalSha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998",
+  "testFinalSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+  "redReceipt": {
+    "id": "rev-job-ack-not-exact-red",
+    "startedAt": "2026-09-12T15:46:27.588Z",
+    "finishedAt": "2026-09-12T15:46:28.635Z",
+    "wrapperPid": 63476,
+    "testPid": 17180,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^Windows\\ Job\\ replay\\ reservation\\ bounds\\ aggregate\\ bytes\\ and\\ refuses\\ a\\ non-exact\\ ACK$",
+      "runner-v2/test/windows-job-output-replay.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-job-replay-KQ2uun"
+    ]
+  },
+  "greenReceipt": {
+    "id": "rev-job-ack-not-exact-green",
+    "startedAt": "2026-09-12T15:46:28.690Z",
+    "finishedAt": "2026-09-12T15:46:29.664Z",
+    "wrapperPid": 64480,
+    "testPid": 64488,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^Windows\\ Job\\ replay\\ reservation\\ bounds\\ aggregate\\ bytes\\ and\\ refuses\\ a\\ non-exact\\ ACK$",
+      "runner-v2/test/windows-job-output-replay.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/red-terminal.json",
+      "sha256": "e44d5fb400c5c74f14f0130f6d5ff719583a8d231e51d4c34519cea17050dc2c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/red-inputs-before.json",
+      "sha256": "9b9bba923b2aff89a0de927f296d0bd96672e04517cfecce96649bd68ccaf9d3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/red-inputs-after.json",
+      "sha256": "9b9bba923b2aff89a0de927f296d0bd96672e04517cfecce96649bd68ccaf9d3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/red-stdout.log",
+      "sha256": "f5fbc3babeb60b6de26440057af3900ebbb8b5a44cc5dccd4505b07588d9c10d"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/red-wrapper.json",
+      "sha256": "6b4403d99e5cdbb0c918465e2caaf97334bd94f1d886838f3580c829b0e576f5"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/red-child.json",
+      "sha256": "11d51937565419044e8fbc38eb03303270f9a6cb606f8e85716780746710cca0"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/green-terminal.json",
+      "sha256": "be460d30e1846a0de82f505d5f270cb1bcabe5783097db2abdba7cd89df1d16f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/green-inputs-before.json",
+      "sha256": "8be1b8fd20f508494bdee671aa9bc285b817c83874b6ba5a2cd16bd25e30c176"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/green-inputs-after.json",
+      "sha256": "8be1b8fd20f508494bdee671aa9bc285b817c83874b6ba5a2cd16bd25e30c176"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/green-stdout.log",
+      "sha256": "d3171d9fd4200963dc7863049805bad6308de00dcf50320adc64450d6e90fa22"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/green-wrapper.json",
+      "sha256": "d98a05bca0aca16f79cb7efdc60c10fef19a96d7a8693c5b9f3dd3f1e1fb2a28"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-ack-not-exact-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-ack-not-exact/green-child.json",
+      "sha256": "0f0e1f2bb9fae2fe84c49f9c593c52a9e5ace8c5609e0bc4011f3b3f2f4d3411"
+    }
+  ]
+}

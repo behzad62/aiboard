@@ -1,0 +1,20 @@
+{
+  "id": "diff-check-acceptance",
+  "startedAt": "2026-09-14T11:22:19.542Z",
+  "finishedAt": "2026-09-14T11:22:20.453Z",
+  "wrapperPid": 43204,
+  "testPid": 29596,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 434,
+  "command": [
+    "C:\\Program Files\\Git\\cmd\\git.exe",
+    "diff",
+    "--check",
+    "--",
+    "runner-v2"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

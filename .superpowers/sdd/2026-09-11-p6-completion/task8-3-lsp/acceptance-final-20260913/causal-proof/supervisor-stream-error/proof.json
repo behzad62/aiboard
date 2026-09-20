@@ -1,0 +1,129 @@
+{
+  "id": "supervisor-stream-error",
+  "target": "runner-v2/src/managed-process-supervisor.mjs",
+  "test": "runner-v2/test/windows-job-supervisor-input.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-green",
+  "sourceFinalSha256": "91c31e2cf41f2d52e45535abb9b8e4afcad1beab37724e134f385240ff5a8202",
+  "testFinalSha256": "42a23e7f516a119c84f35188676a8f98dd1fc2ec311097b3aeb5c9c79db5b43e",
+  "redReceipt": {
+    "id": "fault-supervisor-stream-error-red",
+    "startedAt": "2026-09-12T17:26:08.764Z",
+    "finishedAt": "2026-09-12T17:26:09.448Z",
+    "wrapperPid": 112780,
+    "testPid": 105504,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/windows-job-supervisor-input.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "fault-supervisor-stream-error-green",
+    "startedAt": "2026-09-12T17:26:09.491Z",
+    "finishedAt": "2026-09-12T17:26:10.181Z",
+    "wrapperPid": 104164,
+    "testPid": 54640,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 412,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "runner-v2/test/windows-job-supervisor-input.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/red-terminal.json",
+      "sha256": "03d59934d23444b373c504f515bd3da2eb6dc41e71b876e34efc3daea897c55b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/red-inputs-before.json",
+      "sha256": "0dce7ed7bee44a7c698d750166d2015abe118e9ad1659cc271c129bf6270c533"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/red-inputs-after.json",
+      "sha256": "0dce7ed7bee44a7c698d750166d2015abe118e9ad1659cc271c129bf6270c533"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/red-stdout.log",
+      "sha256": "0bf2bf510cecfa8558ff1c55f2ecaa0e2df269df42e4d71a6db91e5f76bad3ca"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/red-wrapper.json",
+      "sha256": "ca09139745ccdcb637c51f3cbc4dbe9695d08a36612910007de6b5cb59c6d471"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/red-child.json",
+      "sha256": "f83118e905c0f88f04c30e3928af7a77787c36d490109213fcb9a421118f219f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/green-terminal.json",
+      "sha256": "ae09d9380f01fe3650ee2eda0a449cbf7ba52ba4706be4556f64440486d82736"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/green-inputs-before.json",
+      "sha256": "c9f9d4b4581ed9cffb8205c5ba7025cf2d9b9a443e7d7b6e896f70d474868090"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/green-inputs-after.json",
+      "sha256": "c9f9d4b4581ed9cffb8205c5ba7025cf2d9b9a443e7d7b6e896f70d474868090"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/green-stdout.log",
+      "sha256": "eda88bb431523e65701e535571d3901f042b34405635004c6047d3b3cbba0e88"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/green-wrapper.json",
+      "sha256": "44f671179f26befa8a68596bca44afbcdbb6d389adf0daf4e99d3b50fca70224"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/continue-20260912/fault-supervisor-stream-error-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/supervisor-stream-error/green-child.json",
+      "sha256": "97b704f5e6c2fec67c22dd6213603d178b86ca8e3ad53285a0de31e78be37b08"
+    }
+  ]
+}

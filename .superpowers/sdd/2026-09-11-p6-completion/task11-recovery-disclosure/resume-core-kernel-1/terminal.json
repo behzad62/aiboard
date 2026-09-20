@@ -1,0 +1,25 @@
+{
+  "id": "resume-core-kernel-1",
+  "startedAt": "2026-09-15T12:07:31.156Z",
+  "finishedAt": "2026-09-15T12:07:34.220Z",
+  "wrapperPid": 52172,
+  "testPid": 49364,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 445,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/process-recovery.test.ts",
+    "runner-v2/test/process-recovery-kernel.test.ts"
+  ],
+  "rootCount": 48,
+  "retainedRoots": []
+}

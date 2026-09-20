@@ -1,0 +1,19 @@
+{
+  "id": "post-truth-ui",
+  "startedAt": "2026-09-15T14:56:35.633Z",
+  "finishedAt": "2026-09-15T14:56:36.452Z",
+  "wrapperPid": 4632,
+  "testPid": 58424,
+  "exitCode": 0,
+  "signal": null,
+  "inputsUnchanged": true,
+  "inputCount": 451,
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "tsx",
+    "scripts/test-runner-v2-observability.mts"
+  ],
+  "rootCount": 0,
+  "retainedRoots": []
+}

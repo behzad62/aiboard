@@ -1,0 +1,542 @@
+# Review package: 392804c4..a8f972db
+
+## Commits
+a8f972db fix(runner): remint trusted session errors
+6f1ed963 docs(runner): record B1 round seven review
+
+## Files changed
+ .../progress.md                                    | 13 +++
+ .../task-8.0b1-report.md                           | 99 ++++++++++++++++++++++
+ .../task-8.0b1-round-7-review.md                   | 69 +++++++++++++++
+ runner-v2/src/streaming-process-session-runtime.ts | 37 ++++----
+ .../test/streaming-process-session-runtime.test.ts | 55 ++++++++++++
+ 5 files changed, 257 insertions(+), 16 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/progress.md b/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/progress.md
+index 3d384c46..565afb30 100644
+--- a/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/progress.md
++++ b/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/progress.md
+@@ -200,20 +200,33 @@ overlap is expected.
+ - Task 8.0B1 remains blocked. The one owner-authorized exceptional round is
+   consumed, no seventh repair round is authorized, and Packet 8.0B2 remains
+   locked. Broader controller suites were not rerun after the failed semantic
+   gate because they cannot prove either reproduced safety requirement.
+ - Task 8.0B1 repair round 7: after reviewing the distinction between the prior
+   defects and the two residual paths, the owner explicitly authorized fixing
+   both and continuing. Round 7 is limited to the ambiguous pre-marker active
+   host schema and forgeable provider error-provenance paths recorded in
+   `task-8.0b1-exceptional-round-6-review.md`. Packet 8.0B2 remains locked until
+   a fresh independent re-review and controller verification are both green.
++- Task 8.0B1 repair round 7 implementation (`392804c4`) closed the active host
++  generation ambiguity and fresh foreign-error forgery path. Reported gates
++  were B1 88/88, 8.0A 89/89, Task 7 plus Task 3 173/173, typecheck, targeted
++  lint, diff, mutations, scope, and residue green.
++- Task 8.0B1 round 7 re-review: 1 addressed, 1 Important open. Host schema
++  generation/refusal is independently approved. Error provenance remains open
++  because a previously caller-exposed genuine branded error is mutable and can
++  be replayed by a provider; WeakSet identity survives mutation and the normal
++  catch rethrows the same object. The controller reproduced `same:true` with
++  `credential=B1_R7_REPLAY` in both message and cause. See
++  `task-8.0b1-round-7-review.md`. This is the same authorized R7.2 secret-boundary
++  requirement, so it enters the automatic technically-determinate repair loop;
++  B2 remains locked.
+ 
+ ## Breaker rulings
+ 
+ - Ruling: Task 5's unjournaled recovery output-reopen, backend-observe/output-write,
+   and verify-empty effects are real and load-bearing. Carry their durable
+   exclusion into the first prerequisite packet of Task 6, before isolation or
+   grant work. This preserves dependency safety at the cost of coupling one
+   inherited runtime repair to Task 6's dispatch.
+ - Ruling: completed effect markers must name and enforce their exact semantic
+   consumer; unrelated mutations may not clear them. Carry the closed
+diff --git a/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b1-report.md b/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b1-report.md
+index 494df1db..dfbd1c5d 100644
+--- a/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b1-report.md
++++ b/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b1-report.md
+@@ -830,10 +830,109 @@ surface.
+ All SQLite handles close in `finally`; each test removes only its owned temporary
+ root. Final inspection found zero R7 legacy-bound/refusal, host-boundary,
+ host-launch or adoption temp roots. The fake-only tests create no real child,
+ port, endpoint, container or supervisor. Existing bounded timers/listeners,
+ queues, channel detach and output-spool cleanup checks remain green; no active
+ mutation, spill or retained provider sentinel remains. The complete fix-only
+ source/test diff was self-reviewed before commit.
+ 
+ This is implementation evidence for the controller's required fresh independent
+ scoped re-review. It is not approval and does not unlock Packet 8.0B2.
++
++## Repair round 7 follow-up — immutable error replay claims
++
++Entry HEAD: `6f1ed963`; reviewed implementation: `392804c4`. Authority:
++`task-8.0b1-round-7-review.md`. This follow-up addresses only the remaining
++same-object replay finding. The independently approved schema-generation
++boundary is unchanged.
++
++### Root cause and correction
++
++The round-7 private `WeakSet` established where an error object was first
++created, but did not preserve what Runner originally claimed. The public
++`StreamingProcessSessionError` object remained mutable after reaching a caller.
++A caller could retain a genuinely enrolled object, replace its public `code`,
++`message`, and `cause`, and return that same object through a provider. Set
++membership survived, so normal and cancellation catches rethrew the object;
++the delivery facade also unwrapped an enrolled cause without changing identity,
++and cleanup classification read the mutated public code.
++
++The exported class remains unchanged as API shape. Module-private provenance is
++now a `WeakMap` from each Runner-minted error to a frozen private claim containing
++its original closed code and fixed message. No trust decision reads public
++fields. A single private remint operation looks up those claims and creates a
++new cause-free Runner error. Normal, cancellation, bounded-provider, output
++facade, channel callback, late-resource, and cleanup retry boundaries remint
++enrolled errors instead of rethrowing or unwrapping their identity. Cleanup
++classification uses only the private claim. Foreign instances and shapes still
++fail membership and retain the existing phase-owned fixed mappings.
++
++### Exact RED/GREEN evidence
++
++The exact real regression was added before production changes and run with:
++
++`npx tsx --test --test-name-pattern="replayed Runner errors" runner-v2/test/streaming-process-session-runtime.test.ts`
++
++It was RED 0/1 at the first normal-launch assertion: the returned value was the
++same retained object and its rendered graph contained
++`credential=B1_R7_REPLAY` plus the injected payload cause. After correction the
++exact command is GREEN 1/1. The test obtains real Runner-minted errors through a
++public recovery-bound failure, mutates all three public fields, and replays them
++through normal launch, cancellation, output delivery, and host-cleanup
++classification. Normal and cancellation return new objects with the original
++`launch_failed` / `Recovery count bound is invalid.` private claim and no cause.
++Delivery returns a new phase-owned `launch_failed` /
++`Streaming output delivery failed.` error. Cleanup retains the original private
++`launch_failed` classification as the fixed durable
++`cleanup_timeout_or_cancelled` fact. Recursive caller and durable graphs contain
++no replay sentinel.
++
++The affected provenance command matching `replayed Runner errors`,
++`provider-created exported runtime errors`, `foreign error shapes`, and
++`internally minted runtime errors` is GREEN 5/5. The complete streaming runtime
++is GREEN 41/41.
++
++### Mutation evidence
++
++Both mutations were made with `apply_patch`, exercised against the exact replay
++test, reverted, and rerun GREEN:
++
++1. Returning the enrolled object itself from the remint helper was RED 0/1 at
++   `normal must not return the replayed object`. Revert was GREEN 1/1.
++2. Retaining membership but reconstructing claims from the public `code` and
++   `message` fields was RED 0/1: the caller received mutated `cleanup_blocked`
++   and `credential=B1_R7_REPLAY` values instead of the original private claim.
++   Revert was GREEN 1/1.
++
++No mutation branch, old `WeakSet`, public-field authority check, or mutation
++marker remains.
++
++### Validation, scope, and residue
++
++All final commands completed with zero failures, skips, or cancellations:
++
++- B1 focused (`staged-launch-kernel`, `streaming-output-checkpoint`,
++  `streaming-output-v2`, `streaming-process-session-runtime`): 89/89 GREEN.
++- Task 8.0A (`streaming-session-store`, `session-authority`,
++  `interactive-process-channel`, `execution-grants`): 89/89 GREEN.
++- Task 7 plus Task 3 spool (`process-backend-contract`,
++  `durable-process-store`, `subprocess-runtime`,
++  `execution-isolation-provider`, `tool-broker`,
++  `bounded-output-spool`): 173/173 GREEN.
++- `npm run typecheck:runner-v2`: GREEN.
++- Targeted ESLint over the changed source and test: GREEN.
++- `git diff --check 6f1ed963`: GREEN (line-ending notices only).
++
++The production and test diff is confined to the existing fake streaming
++runtime and its focused test. The schema store and its approved generation-2
++boundary have no diff in this follow-up. Static added-line scanning found no
++adapter/CLI/factory/family, child-process import, spawn/kill/exec, shell or
++environment access, OS product branch, second database, exact Node patch pin,
++or mutation marker. The replay test uses fake providers only and creates no
++process, port, endpoint, container, database, or temporary root. The broad B1
++tests closed their SQLite stores and final residue scanning found zero matching
++Runner B1 temporary roots. Final diff inspection found no foreign cause/detail
++copy, public-field trust, same-object Runner error return, or schema-boundary
++change.
++
++This is implementation evidence for the controller's required fresh scoped
++re-review. It is not approval and does not unlock Packet 8.0B2.
+diff --git a/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b1-round-7-review.md b/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b1-round-7-review.md
+new file mode 100644
+index 00000000..afc028e8
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-28-runner-v2-portable-execution-safety/task-8.0b1-round-7-review.md
+@@ -0,0 +1,69 @@
++# Task 8.0B1 round 7 — independent scoped re-review
++
++## Range and verdict
++
++- Fix base: `2643cf75`
++- Head: `392804c4`
++- Review package: `review-2643cf75..392804c4.diff`
++- Finding 1: **ADDRESSED**
++- Finding 2: **NOT ADDRESSED**
++- New Critical/Important breakage outside Finding 2: none
++- Packet 8.0B1 remains unapproved; Packet 8.0B2 remains locked.
++
++## Finding 1 — ADDRESSED
++
++Host-launch schema generation 2 is explicit. New launches use it, while every
++active older-generation row is refused as `unsupported_active_version` before
++content parsing or cleanup. Generation-2 marker history is ordered; handshake
++requires both channel and checkpoint markers; cleanup derives the channel duty
++only after the pre-effect marker. SQLite list/read/transition/reopen share the
++same HMAC/version refusal boundary.
++
++The focused tests cover the exact legacy false-release reproduction, all six
++active legacy boundaries, generation-2 pre/post-marker semantics, marker order,
++valid-HMAC refusal, write-fault non-mutation, and raw-byte preservation. No
++Critical/Important residual remains for the schema finding.
++
++## Finding 2 — NOT ADDRESSED
++
++The private WeakSet proves an error was originally minted by Runner, but it does
++not protect the error's mutable public fields after the object crosses a caller
++boundary. `StreamingProcessSessionError` exposes mutable `code`, `message`, and
++`cause`; `runnerSessionError()` brands that same object; and catch/facade paths
++rethrow a still-branded object unchanged.
++
++A caller can retain a genuine branded error, mutate its message/cause, and a
++provider can later inject the same object. WeakSet membership still passes, so
++the provider-controlled values become caller/model-visible again.
++
++Controller reproduction at `392804c4` exited 0 and printed exactly:
++
++```json
++{"same":true,"name":"StreamingProcessSessionError","code":"launch_failed","message":"credential=B1_R7_REPLAY","cause":{"payload":"credential=B1_R7_REPLAY"}}
++```
++
++Required closure:
++
++- Store immutable private claims for each internally minted error; never trust
++  its public mutable fields after minting.
++- At every public/provider boundary, create a fresh fixed Runner-owned error
++  from the private claims or from the phase mapping. Never rethrow or unwrap the
++  same error object.
++- A replayed branded error with mutated code/message/cause must return a fresh
++  safe object, original fixed code/message, no cause, and no sentinel.
++- Add the exact replay test plus mutation proof. Preserve the already-approved
++  schema fix and all earlier gates.
++
++## Evidence audit
++
++The round-7 report contains genuine RED/GREEN results, four reverted mutations,
++and reported green B1/8.0A/compatibility/type/lint/diff/scope/residue gates. Its
++foreign-error matrix covers fresh exported instances, subclasses, lookalikes,
++aggregates, arbitrary values, and delivery nesting, but not mutation/replay of
++a previously exposed branded object. Therefore the remaining R7.2 requirement
++is not verified.
++
++## Verdict
++
++**Findings remain open** — schema generation is closed; error provenance still
++permits replay of a mutated caller-exposed branded error.
+diff --git a/runner-v2/src/streaming-process-session-runtime.ts b/runner-v2/src/streaming-process-session-runtime.ts
+index 391a7842..99903cd2 100644
+--- a/runner-v2/src/streaming-process-session-runtime.ts
++++ b/runner-v2/src/streaming-process-session-runtime.ts
+@@ -3,26 +3,30 @@ import { registerConsumedExecutionGrantRevoker, type ConsumedExecutionGrantClaim
+ import type { LaunchOperationAuthorizationRequest, OperationAuthorizationAssertion, SessionAuthority, SessionOperationAuthorization, SessionOperationRequest } from "./session-authority.js";
+ import type { HostCleanupFailure, HostCleanupFailureCode, HostCleanupResourceFact, HostLaunchRecord, StreamingSessionBackendBinding, StreamingSessionEnvelope, StreamingSessionLease, StreamingSessionStoreKernel } from "./streaming-session-store.js";
+ import { HOST_CLEANUP_FAILURE_MESSAGES, HOST_LAUNCH_RECORD_VERSION, getStreamingSessionKernelWriter } from "./streaming-session-store.js";
+ import { BoundedProtocolQueue } from "./bounded-protocol-queue.js";
+ import { createProtocolEvidenceTee, type EvidenceSpoolSink } from "./protocol-evidence-tee.js";
+ import { createStreamingOutputController, type StreamingOutputMetadata, type StreamingOutputStream } from "./streaming-output-controller.js";
+ import { BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION, type BackpressuredOutputAcknowledgement, type BackpressuredOutputMetadata } from "./interactive-process-channel.js";
+ 
+ export type StreamingProcessSessionErrorCode = "lossless_output_unavailable" | "launch_failed" | "handshake_refused" | "cleanup_blocked" | "cancelled";
+ export class StreamingProcessSessionError extends Error { constructor(readonly code: StreamingProcessSessionErrorCode, message: string, options?: ErrorOptions) { super(message, options); this.name = "StreamingProcessSessionError"; } }
+-const RUNNER_SESSION_ERRORS = new WeakSet<StreamingProcessSessionError>();
++type RunnerSessionErrorClaims = Readonly<{ code: StreamingProcessSessionErrorCode; message: string }>;
++const RUNNER_SESSION_ERROR_CLAIMS = new WeakMap<StreamingProcessSessionError, RunnerSessionErrorClaims>();
+ function runnerSessionError(code: StreamingProcessSessionErrorCode, message: string): StreamingProcessSessionError {
+-  const error = new StreamingProcessSessionError(code, message); RUNNER_SESSION_ERRORS.add(error); return error;
++  const error = new StreamingProcessSessionError(code, message); RUNNER_SESSION_ERROR_CLAIMS.set(error, Object.freeze({ code, message })); return error;
+ }
+-function isRunnerSessionError(error: unknown): error is StreamingProcessSessionError {
+-  return typeof error === "object" && error !== null && RUNNER_SESSION_ERRORS.has(error as StreamingProcessSessionError);
++function runnerSessionErrorClaims(error: unknown): RunnerSessionErrorClaims | undefined {
++  return typeof error === "object" && error !== null ? RUNNER_SESSION_ERROR_CLAIMS.get(error as StreamingProcessSessionError) : undefined;
++}
++function remintRunnerSessionError(error: unknown): StreamingProcessSessionError | undefined {
++  const claims = runnerSessionErrorClaims(error); return claims ? runnerSessionError(claims.code, claims.message) : undefined;
+ }
+ class CleanupClassificationError extends Error { constructor(readonly failureCode: HostCleanupFailureCode) { super(HOST_CLEANUP_FAILURE_MESSAGES[failureCode]); } }
+ 
+ export interface FakeStreamingChannel {
+   subscribeBackpressuredOutput(sink: (metadata: BackpressuredOutputMetadata, ownedBytes: Uint8Array) => Promise<BackpressuredOutputAcknowledgement>): () => void;
+   observeTerminal?(sink: (result: unknown) => void): () => void;
+   detach(): Promise<void>;
+ }
+ interface ReattachedFakeChannel {
+   readonly version: typeof BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION;
+@@ -129,26 +133,26 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+     if (resource.resource === "output_checkpoint") {
+       if (resource.identity !== `checkpoint:${record.sessionId}`) throw runnerSessionError("cleanup_blocked", "Exact output checkpoint cleanup identity is unavailable.");
+       const checkpoint = options.kernel.store.readOutputCheckpoint(record.sessionId);
+       if (checkpoint) writer.deleteOutputCheckpoint({ sessionId: record.sessionId, ownerId: checkpoint.ownerId, fencingToken: checkpoint.fencingToken, expectedRevision: checkpoint.revision });
+       return;
+     }
+     const capability = hostCleanupChannels.get(record.launchId);
+     if (!record.backendBinding || resource.identity !== channelCleanupIdentity(record.sessionId, record.backendBinding) || !capability || capability.identity !== resource.identity) throw runnerSessionError("cleanup_blocked", "Exact channel cleanup capability is unavailable.");
+     if (capability.detached) return;
+     if (resource.status === "failed" && capability.failed) { capability.detaching = undefined; capability.failed = false; }
+-    capability.detaching ??= Promise.resolve(capability.cleanup ? capability.cleanup() : capability.channel.detach()).then(() => { capability.detached = true; }, (error) => { capability.failed = true; throw error; });
++    capability.detaching ??= Promise.resolve(capability.cleanup ? capability.cleanup() : capability.channel.detach()).then(() => { capability.detached = true; }, (error) => { capability.failed = true; throw remintRunnerSessionError(error) ?? error; });
+     await capability.detaching;
+   };
+   const runCleanupResource = (record: Readonly<HostLaunchRecord>, resource: Readonly<HostCleanupResourceFact>) => {
+     const key = `${record.launchId}\0${resource.resource}\0${resource.identity}`; const existing = cleanupResourceRuns.get(key); if (existing) return existing;
+-    const running = cleanupResource(record, resource).catch((error) => { if (cleanupResourceRuns.get(key) === running) cleanupResourceRuns.delete(key); throw error; });
++    const running = cleanupResource(record, resource).catch((error) => { if (cleanupResourceRuns.get(key) === running) cleanupResourceRuns.delete(key); throw remintRunnerSessionError(error) ?? error; });
+     cleanupResourceRuns.set(key, running); return running;
+   };
+ 
+   const assertV2 = (chunks = options.channel.replayCapacityChunks, bytes = options.channel.replayCapacityBytes) => {
+     if (options.channel.version !== BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION || chunks !== options.output.maxAcceptedChunks || !Number.isSafeInteger(bytes) || bytes! < options.output.maxQueueBytes) throw runnerSessionError("lossless_output_unavailable", "Selected channel does not attest the exact aggregate lossless output v2 window.");
+   };
+   const finalizedEvidence = new Map<string, FinalizedEvidence>();
+   const createAttachment = (sessionId: string, ownerId: string, fencingToken: number, channel: FakeStreamingChannel, onPreAdoptionFailure?: (error: unknown) => Promise<void>): PrivateAttachment => {
+     const queue = new BoundedProtocolQueue({ maxBytes: options.output.maxQueueBytes, maxChunks: options.output.maxQueueChunks, maxFrameBytes: options.output.maxFrameBytes });
+     const tee = createProtocolEvidenceTee({ queue, spool: options.output.createEvidenceSpool(sessionId) });
+@@ -165,21 +169,21 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+     return attachment;
+   };
+   const startAttachment = (sessionId: string, attachment: PrivateAttachment) => {
+     const { channel, output } = attachment;
+     attachment.unsubscribe = channel.subscribeBackpressuredOutput(async (metadata, ownedBytes) => {
+       try { return await output.accept(metadata, ownedBytes); }
+       catch (error) {
+         const session = options.kernel.store.readBySession(sessionId);
+         if (session?.state === "active") await settleAdoptedAttachment(sessionId, attachment, "outcome_unknown", error);
+         else await attachment.onPreAdoptionFailure?.(error);
+-        throw error;
++        throw remintRunnerSessionError(error) ?? error;
+       }
+     });
+     attachment.unobserve = channel.observeTerminal?.(() => {
+       const session = options.kernel.store.readBySession(sessionId);
+       if (session?.state === "active") void settleAdoptedAttachment(sessionId, attachment, "backend_unavailable").catch((error) => { attachment.failure = error; });
+     }) ?? (() => undefined);
+   };
+   const closeAttachment = async (sessionId: string, attachment: PrivateAttachment) => {
+     if (attachment.closed) return attachment.finalizedEvidence!;
+     if (attachment.closing) return await attachment.closing;
+@@ -275,80 +279,80 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+         if (!backendBinding) throw runnerSessionError("launch_failed", "Streaming backend binding is unavailable after launch.");
+         const exactBackendBinding = backendBinding;
+         options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);
+         host = writer.transitionLaunch({ type: "bind_backend", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, backendBinding: exactBackendBinding, at: clock().toISOString() });
+         assertV2(); host = writer.transitionLaunch({ type: "begin_channel", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, at: clock().toISOString() });
+         channel = await effect("channel", async () => {
+           const acquired = await options.channel.acquire(exactBackendBinding);
+           channel = acquired;
+           const cleanupCapability: HostCleanupChannelCapability = { sessionId: request.sessionId, identity: channelCleanupIdentity(request.sessionId, exactBackendBinding), channel: acquired, detached: false };
+           hostCleanupChannels.set(request.launchId, cleanupCapability);
+-          if (request.signal?.aborted) { cleanupCapability.detaching = acquired.detach().then(() => { cleanupCapability.detached = true; }, (error) => { cleanupCapability.failed = true; throw error; }); void cleanupCapability.detaching.catch(() => undefined); }
++          if (request.signal?.aborted) { cleanupCapability.detaching = acquired.detach().then(() => { cleanupCapability.detached = true; }, (error) => { cleanupCapability.failed = true; throw remintRunnerSessionError(error) ?? error; }); void cleanupCapability.detaching.catch(() => undefined); }
+           return acquired;
+         }); options.sessions.validateStagedLaunch(staged, request);
+         const sessionOwnerId = `session-authority:${claims.runId}:${claims.grantId}`;
+         host = writer.claimHostOutputCheckpoint({ launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, at: clock().toISOString(), record: { recordKind: "runner.output-checkpoint", schemaVersion: 1, revision: 0, sessionId: request.sessionId, ownerId: sessionOwnerId, fencingToken: 1, capacity: options.output.maxAcceptedChunks, outcome: "active", streams: [{ stream: "stdout", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }, { stream: "stderr", lastConsumed: null, consumed: [], accepted: [], consumingIntent: null }] } }).host;
+         attachment = createAttachment(request.sessionId, sessionOwnerId, 1, channel, async () => await settleCleanup());
+         const cleanupCapability = hostCleanupChannels.get(request.launchId); if (cleanupCapability) cleanupCapability.cleanup = async () => await closeAttachment(request.sessionId, attachment!);
+         startAttachment(request.sessionId, attachment);
+         options.sessions.validateStagedLaunch(staged, request);
+         const handshakeDigest = await effect("handshake", () => options.handshake.verify(channel!)); options.sessions.validateStagedLaunch(staged, request); throwIfAborted(request.signal);
+         host = writer.transitionLaunch({ type: "verify_handshake", launchId: request.launchId, ownerId, fencingToken: 1, expectedRevision: host.revision, handshakeDigest, at: clock().toISOString() });
+         const adopted = options.sessions.finalizeLaunch({ staged, launchId: request.launchId, sessionId: request.sessionId, ownerId, fencingToken: 1, expectedRevision: host.revision, lease, backendBinding, handshakeDigest, envelope: request.envelope });
+         attachments.set(request.sessionId, attachment); revoker.dispose();
+         return Object.freeze({
+           sessionId: request.sessionId, record: adopted.record,
+           authorizeFirstOperation: (operation: LaunchOperationAuthorizationRequest) => options.sessions.authorizeLaunchOperation(operation),
+           authorizeOperation: (operation: SessionOperationRequest) => options.sessions.authorizeOperation(operation),
+           deliverOutput: async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => {
+             try { return await attachment!.output.deliverNext(authorization, assertion); }
+-            catch (error) { if (error instanceof Error && isRunnerSessionError(error.cause)) throw error.cause; throw error; }
++            catch (error) { if (error instanceof Error) { const reminted = remintRunnerSessionError(error.cause); if (reminted) throw reminted; } throw remintRunnerSessionError(error) ?? error; }
+           },
+           stop: async (authorization: SessionOperationAuthorization, assertion: OperationAuthorizationAssertion) => { options.sessions.assertOperationAuthorization(authorization, { ...assertion, sessionId: request.sessionId, operation: "stop" }); await settleAdoptedAttachment(request.sessionId, attachment!, "backend_unavailable"); return Object.freeze({ record: options.kernel.store.readBySession(request.sessionId), evidence: finalizedEvidence.get(request.sessionId) }); },
+         });
+       } catch (error) {
+         if (request.signal?.aborted && effectPending) {
+           unresolvedProviderEffects.add(request.launchId);
+           blockUnresolvedEffect();
+           const immediateCleanup = runHostCleanup(request.launchId, 25);
+           void activeEffect.then(async () => { unresolvedProviderEffects.delete(request.launchId); try { await immediateCleanup; } catch {} bindKnownResults(); cleanupPromise = undefined; if (hostCleanupChannels.get(request.launchId)?.failed) return; await runHostCleanup(request.launchId, 25); }).catch((failure) => { if (attachment) attachment.failure = failure; });
+           try { await bounded(immediateCleanup, 75); } catch (failure) { if (attachment) attachment.failure = failure; }
+           revoker.dispose();
+-          throw isRunnerSessionError(error) ? error : runnerSessionError("cancelled", "Streaming launch was cancelled.");
++          throw remintRunnerSessionError(error) ?? runnerSessionError("cancelled", "Streaming launch was cancelled.");
+         }
+         await activeEffect;
+         let cleanupError: unknown; try { await cleanupOpenResources(); } catch (failure) { cleanupError = failure; }
+         revoker.dispose();
+         if (cleanupError) throw runnerSessionError("cleanup_blocked", "Streaming launch cleanup failed.");
+-        if (request.signal?.aborted && !isRunnerSessionError(error)) throw runnerSessionError("cancelled", "Streaming launch was cancelled.");
+-        if (isRunnerSessionError(error)) throw error;
++        if (request.signal?.aborted && !runnerSessionErrorClaims(error)) throw runnerSessionError("cancelled", "Streaming launch was cancelled.");
++        const reminted = remintRunnerSessionError(error); if (reminted) throw reminted;
+         throw runnerSessionError(activeEffectKind === "handshake" ? "handshake_refused" : "launch_failed", activeEffectKind === "handshake" ? "Streaming handshake was refused." : "Streaming provider launch phase failed.");
+       }
+     },
+     async reconcileStartup(input: { readonly maxRecords: number; readonly timeoutMs?: number; readonly signal?: AbortSignal }) {
+       if (!Number.isSafeInteger(input.maxRecords) || input.maxRecords < 1) throw runnerSessionError("launch_failed", "Recovery count bound is invalid.");
+       const timeoutMs = input.timeoutMs ?? 1_000; if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw runnerSessionError("launch_failed", "Recovery time bound is invalid.");
+       throwIfAborted(input.signal);
+       const deadline = Date.now() + timeoutMs;
+       const remainingTime = () => { const remaining = deadline - Date.now(); if (remaining <= 0) throw runnerSessionError("launch_failed", "Streaming recovery exhausted its total deadline."); return remaining; };
+       let inspected = 0;
+       const surfacedLateCleanupFailures = new Map([...lateCleanupChannels].map(([sessionId]) => [sessionId, cleanupFailure("channel_detach_failed")]));
+       for (const failure of hostCleanupFailures.values()) surfacedLateCleanupFailures.set(failure.sessionId, failure.failure);
+       for (const launchId of options.kernel.store.listHostLaunchIds()) {
+         const durable = options.kernel.store.readHostLaunch(launchId); const failures = durable && cleanupEffect(durable)?.resources?.filter((resource) => resource.status === "failed").map((resource) => resource.failure).filter((failure): failure is HostCleanupFailure => Boolean(failure));
+         if (durable && failures?.length) surfacedLateCleanupFailures.set(durable.sessionId, failures[0]!);
+       }
+       for (const [sessionId, pending] of lateCleanupChannels) {
+         throwIfAborted(input.signal); if (inspected >= input.maxRecords) break; inspected++;
+         try {
+           if (pending.detached) { lateCleanupChannels.delete(sessionId); continue; }
+-          if (!pending.detaching) pending.detaching = pending.channel.detach().then(() => { pending.detached = true; }, (error) => { pending.detaching = undefined; throw error; });
++          if (!pending.detaching) pending.detaching = pending.channel.detach().then(() => { pending.detached = true; }, (error) => { pending.detaching = undefined; throw remintRunnerSessionError(error) ?? error; });
+           await bounded(pending.detaching, remainingTime(), input.signal); lateCleanupChannels.delete(sessionId);
+         }
+         catch (failure) { pending.failure = failure; lateCleanupChannels.set(sessionId, pending); }
+       }
+       const outcomes: Array<{ launchId: string; disposition: "cleaned" | "blocked" | "outcome_unknown" }> = [];
+       for (const launchId of options.kernel.store.listHostLaunchIds()) {
+         throwIfAborted(input.signal);
+         if (inspected >= input.maxRecords) break; inspected++;
+         const record = options.kernel.store.readHostLaunch(launchId)!; if (record.state === "handed_off" || record.state === "released") continue;
+         let disposition: "cleaned" | "blocked" | "outcome_unknown" = "blocked";
+@@ -418,37 +422,38 @@ export function createStreamingProcessSessionRuntime(options: StreamingRuntimeOp
+ 
+ function throwIfAborted(signal?: AbortSignal): void { if (signal?.aborted) throw runnerSessionError("cancelled", "Streaming operation was cancelled."); }
+ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> { return bounded(promise, undefined, signal); }
+ function bounded<T>(promise: Promise<T>, timeoutMs?: number, signal?: AbortSignal): Promise<T> {
+   throwIfAborted(signal); return new Promise<T>((resolve, reject) => {
+     let timer: ReturnType<typeof setTimeout> | undefined;
+     const finish = (callback: () => void) => { if (timer) clearTimeout(timer); signal?.removeEventListener("abort", abort); callback(); };
+     const abort = () => finish(() => reject(runnerSessionError("cancelled", "Streaming operation was cancelled.")));
+     signal?.addEventListener("abort", abort, { once: true });
+     if (timeoutMs !== undefined) timer = setTimeout(() => finish(() => reject(runnerSessionError("launch_failed", "Streaming operation exceeded its recovery bound."))), timeoutMs);
+-    promise.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
++    promise.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(remintRunnerSessionError(error) ?? error)));
+   });
+ }
+ function boundedLateResource<T>(promise: Promise<T>, timeoutMs: number, signal: AbortSignal | undefined, cleanup: (late: T) => Promise<void>, onCleanupFailure: (late: T, error: unknown) => void): Promise<T> {
+   throwIfAborted(signal);
+   return new Promise<T>((resolve, reject) => {
+     let finished = false;
+     const timer = setTimeout(() => finish(() => reject(runnerSessionError("launch_failed", "Streaming operation exceeded its recovery bound."))), timeoutMs);
+     const abort = () => finish(() => reject(runnerSessionError("cancelled", "Streaming operation was cancelled.")));
+     const finish = (complete: () => void) => { if (finished) return false; finished = true; clearTimeout(timer); signal?.removeEventListener("abort", abort); complete(); return true; };
+     signal?.addEventListener("abort", abort, { once: true });
+-    promise.then((value) => { if (!finish(() => resolve(value))) void cleanup(value).catch((error) => onCleanupFailure(value, error)); }, (error) => { finish(() => reject(error)); });
++    promise.then((value) => { if (!finish(() => resolve(value))) void cleanup(value).catch((error) => onCleanupFailure(value, remintRunnerSessionError(error) ?? error)); }, (error) => { finish(() => reject(remintRunnerSessionError(error) ?? error)); });
+   });
+ }
+ function same(left: unknown, right: unknown): boolean { return JSON.stringify(left) === JSON.stringify(right); }
+ function cleanupFailure(code: HostCleanupFailureCode): HostCleanupFailure { return Object.freeze({ code, message: HOST_CLEANUP_FAILURE_MESSAGES[code] }); }
+ function classifyCleanupFailure(resource: HostCleanupResourceFact["resource"], error: unknown): HostCleanupFailure {
+   if (error instanceof CleanupClassificationError) return cleanupFailure(error.failureCode);
+-  if (isRunnerSessionError(error) && (error.code === "cancelled" || error.code === "launch_failed")) return cleanupFailure("cleanup_timeout_or_cancelled");
++  const claims = runnerSessionErrorClaims(error);
++  if (claims?.code === "cancelled" || claims?.code === "launch_failed") return cleanupFailure("cleanup_timeout_or_cancelled");
+   const code: Record<HostCleanupResourceFact["resource"], HostCleanupFailureCode> = {
+     channel: "channel_detach_failed", output_checkpoint: "output_checkpoint_delete_failed",
+     host: "host_reconciliation_failed", isolation_lease: "isolation_lease_release_failed",
+   };
+   return cleanupFailure(code[resource] ?? "unknown_internal_cleanup_failure");
+ }
+ function leaseCleanupIdentity(lease: StreamingSessionLease): string { return `lease:${createHash("sha256").update(JSON.stringify(lease)).digest("hex")}`; }
+ function channelCleanupIdentity(sessionId: string, binding: StreamingSessionBackendBinding): string { return `channel:${createHash("sha256").update(JSON.stringify({ sessionId, binding })).digest("hex")}`; }
+diff --git a/runner-v2/test/streaming-process-session-runtime.test.ts b/runner-v2/test/streaming-process-session-runtime.test.ts
+index 87c99cea..1c0082b1 100644
+--- a/runner-v2/test/streaming-process-session-runtime.test.ts
++++ b/runner-v2/test/streaming-process-session-runtime.test.ts
+@@ -180,20 +180,75 @@ test("adopted cleanup never exposes provider error graphs to its caller", async
+ test("provider-created exported runtime errors are foreign and cannot cross the launch boundary", async () => {
+   const sentinel = "credential=B1_R7_TYPED_PROVIDER_SENTINEL"; const fixture = await makeFixture(2, "cleaned");
+   fixture.setHostLaunch(async () => { throw new StreamingProcessSessionError("launch_failed", sentinel, { cause: new Error(`payload=${sentinel}`) }); });
+   const thrown = await fixture.runtime.open(fixture.request).then(() => assert.fail("provider launch must fail"), (error: unknown) => error);
+   assert.equal(thrown instanceof StreamingProcessSessionError && thrown.code, "launch_failed");
+   assert.equal(thrown instanceof Error && thrown.message, "Streaming provider launch phase failed.");
+   assert.equal(thrown instanceof Error && thrown.cause, undefined);
+   assert.doesNotMatch(JSON.stringify(errorGraph(thrown)), /B1_R7_TYPED_PROVIDER_SENTINEL|credential=|payload=|cause/);
+ });
+ 
++test("replayed Runner errors are reminted from immutable private claims at every boundary", { timeout: 5_000 }, async () => {
++  const sentinel = "credential=B1_R7_REPLAY";
++  const mintRecoveryBoundError = async () => {
++    const source = await makeFixture(2, "cleaned");
++    const error = await source.runtime.reconcileStartup({ maxRecords: 0 }).then(() => assert.fail("recovery bound must fail"), (failure: unknown) => failure);
++    assert.deepEqual(runtimeErrorFact(error), { code: "launch_failed", message: "Recovery count bound is invalid." });
++    return error as StreamingProcessSessionError;
++  };
++  const mutate = (error: StreamingProcessSessionError) => {
++    Object.defineProperties(error, {
++      code: { configurable: true, value: "cleanup_blocked", writable: true },
++      message: { configurable: true, value: sentinel, writable: true },
++      cause: { configurable: true, value: { payload: sentinel }, writable: true },
++    });
++  };
++  const assertSafeRemint = (actual: unknown, replayed: StreamingProcessSessionError, expected: { readonly code: string; readonly message: string }, label: string) => {
++    assert.notEqual(actual, replayed, `${label} must not return the replayed object`);
++    assert.deepEqual(runtimeErrorFact(actual), expected, label);
++    assert.doesNotMatch(JSON.stringify(errorGraph(actual)), /B1_R7_REPLAY|credential=|payload=/, label);
++  };
++
++  const replayedLaunch = await mintRecoveryBoundError(); mutate(replayedLaunch);
++  const normal = await makeFixture(2, "cleaned"); normal.setHostLaunch(async () => { throw replayedLaunch; });
++  const normalError = await normal.runtime.open(normal.request).then(() => assert.fail("replayed launch must fail"), (error: unknown) => error);
++  assertSafeRemint(normalError, replayedLaunch, { code: "launch_failed", message: "Recovery count bound is invalid." }, "normal");
++
++  const replayedCancellation = await mintRecoveryBoundError(); mutate(replayedCancellation); let providerCancelled = false;
++  const cancellationSignal = {
++    get aborted() { return providerCancelled; }, reason: undefined, onabort: null,
++    addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; }, throwIfAborted() { if (providerCancelled) throw new Error("cancelled"); },
++  } as AbortSignal;
++  const cancellation = await makeFixture(2, "cleaned"); cancellation.setHostLaunch(async () => { providerCancelled = true; throw replayedCancellation; });
++  const cancellationError = await cancellation.runtime.open({ ...cancellation.request, signal: cancellationSignal }).then(() => assert.fail("replayed cancellation must fail"), (error: unknown) => error);
++  assertSafeRemint(cancellationError, replayedCancellation, { code: "launch_failed", message: "Recovery count bound is invalid." }, "cancellation");
++
++  const replayedDelivery = await mintRecoveryBoundError(); mutate(replayedDelivery);
++  const delivery = await makeFixture(2, "cleaned"); delivery.setDeliver(async () => { throw replayedDelivery; });
++  const facade = await delivery.runtime.open(delivery.request); const bytes = Buffer.from("x");
++  const metadata = { stream: "stdout" as const, sequence: 1, startOffset: 0, endOffset: 1, byteLength: 1, digest: createHash("sha256").update(bytes).digest("hex") };
++  const emitted = delivery.emit({ metadata, bytes, acknowledge: async () => undefined }); emitted.catch(() => undefined); await new Promise((resolve) => setImmediate(resolve));
++  const operation = { sessionId: "stream-1", operation: "family_delivery" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
++  const deliveryError = await facade.deliverOutput(facade.authorizeFirstOperation(operation), { ...operation, binding: delivery.request.binding }).then(() => assert.fail("replayed delivery must fail"), (error: unknown) => error);
++  await assert.rejects(emitted);
++  assertSafeRemint(deliveryError, replayedDelivery, { code: "launch_failed", message: "Streaming output delivery failed." }, "delivery");
++
++  const replayedCleanup = await mintRecoveryBoundError(); mutate(replayedCleanup);
++  const cleanup = await makeFixture(2, "cleaned", undefined, [], 4, undefined, async () => { throw replayedCleanup; });
++  cleanup.setChannelAcquire(async () => { throw new Error("force cleanup"); });
++  const cleanupError = await cleanup.runtime.open(cleanup.request).then(() => assert.fail("cleanup classification must fail"), (error: unknown) => error);
++  const cleanupFacts = cleanup.kernel.store.readHostLaunch("launch-1")?.effects.find((effect) => effect.kind === "cleanup")?.resources ?? [];
++  assert.deepEqual(cleanupFacts.find((fact) => fact.resource === "host")?.failure, { code: "cleanup_timeout_or_cancelled", message: "Cleanup timed out or was cancelled." });
++  assert.deepEqual(runtimeErrorFact(cleanupError), { code: "launch_failed", message: "Streaming provider launch phase failed." });
++  assert.doesNotMatch(JSON.stringify({ caller: errorGraph(cleanupError), durable: durableGraph(cleanup) }), /B1_R7_REPLAY|credential=|payload=/);
++});
++
+ test("foreign error shapes are sanitized at every launch provider boundary", { timeout: 5_000 }, async () => {
+   const phases = ["isolation", "host", "channel", "handshake", "output_start"] as const;
+   for (const phase of phases) for (const [shape, makeForeign] of foreignErrorFactories()) {
+     const fixture = await makeFixture(2, "cleaned");
+     if (phase === "isolation") fixture.setIsolationAcquire(async () => { throw makeForeign(); });
+     if (phase === "host") fixture.setHostLaunch(async () => { throw makeForeign(); });
+     if (phase === "channel") fixture.setChannelAcquire(async () => { throw makeForeign(); });
+     if (phase === "handshake") fixture.setHandshake(async () => { throw makeForeign(); });
+     if (phase === "output_start") fixture.setEvidenceSpool(() => { throw makeForeign(); });
+     const thrown = await fixture.runtime.open(fixture.request).then(() => assert.fail(`${phase}/${shape} must fail`), (error: unknown) => error);

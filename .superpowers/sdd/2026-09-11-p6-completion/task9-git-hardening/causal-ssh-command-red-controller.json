@@ -1,0 +1,54 @@
+{
+  "id": "causal-ssh-command-red",
+  "pattern": "repository SSH command overrides",
+  "sentinel": "ssh-sentinel.txt",
+  "expected": "ssh",
+  "beforeHash": "0cd39defd2aec4e54db98641a1e60039f70fe319c532efba58b484194cea4e6a",
+  "afterHash": "0cd39defd2aec4e54db98641a1e60039f70fe319c532efba58b484194cea4e6a",
+  "restoredExact": true,
+  "mutatedHash": "363151f579194da5853b369992bd5486d0ed400fcdb9762d3300f2ec5ce1abb5",
+  "replacements": [
+    {
+      "oldValue": "\"sshcommand\", ",
+      "newValue": ""
+    }
+  ],
+  "childExit": 1,
+  "terminal": {
+    "id": "causal-ssh-command-red",
+    "startedAt": "2026-09-14T15:40:57.762Z",
+    "finishedAt": "2026-09-14T15:41:13.248Z",
+    "wrapperPid": 37292,
+    "testPid": 16744,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 437,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=repository SSH command overrides",
+      "runner-v2/test/git-indirect-execution-policy.test.ts"
+    ],
+    "rootCount": 4,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task9-ssh-lEBg4w"
+    ]
+  },
+  "sentinelProof": {
+    "matches": [
+      {
+        "path": "C:\\Users\\b_a_s\\AppData\\Local\\Temp\\aiboard-task9-ssh-lEBg4w\\ssh-sentinel.txt",
+        "content": "ssh"
+      }
+    ]
+  },
+  "controllerError": null,
+  "finishedAt": "2026-09-14T15:41:13.257Z"
+}

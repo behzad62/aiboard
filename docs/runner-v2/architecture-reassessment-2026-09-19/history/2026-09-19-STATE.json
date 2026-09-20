@@ -1,0 +1,33 @@
+{
+  "status": "PLAN_READY",
+  "entryPoint": "STATE.json",
+  "source": "SOURCE.md",
+  "baseline": "evidence/baseline.json",
+  "decision": "DECISION.md",
+  "plan": "PLAN.md",
+  "executionStarted": false,
+  "controller": "Codex orchestrator/reviewer",
+  "executionMethod": "Cursor CLI; one implementation worker at a time",
+  "planningCoverage": {
+    "sourceRead": true,
+    "repositoryAudit": "COMPLETE",
+    "decision": "COMPLETE",
+    "packetContracts": "COMPLETE",
+    "independentReview": "READY_FOR_PROPOSAL; PR01-PR03 CLOSED; evidence/planning-review.md"
+  },
+  "assignments": [],
+  "integrationQueue": [],
+  "implementationAcceptance": "NOT_STARTED",
+  "nextAction": "After user adoption, execute M0 baseline/amendment reconciliation; Codex assigns one Cursor implementation lane. No implementation worker has started.",
+  "launchPrerequisite": "User adopts the proposed contract amendment; reconcile and preserve the nine pre-existing dirty files before any implementation.",
+  "blockers": [],
+  "repairBudgetPerIssue": 3,
+  "packets": {
+    "M0": "PLANNED",
+    "M1": "PLANNED",
+    "M2": "PLANNED",
+    "M3": "PLANNED",
+    "M4": "PLANNED"
+  },
+  "readinessVerdict": "PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED"
+}

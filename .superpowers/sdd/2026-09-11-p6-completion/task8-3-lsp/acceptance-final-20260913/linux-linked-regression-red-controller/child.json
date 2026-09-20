@@ -1,0 +1,15 @@
+{
+  "pid": 36256,
+  "identity": {
+    "Id": 36256,
+    "StartTimeUtc": "2026-09-13T19:41:17.7707655Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 17088,
+  "spawnedAt": "2026-09-13T19:41:18.051Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-selected-gate.mjs",
+    ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/linux-linked-regression-red.linux.json"
+  ]
+}

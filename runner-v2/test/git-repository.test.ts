@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { GitCommandError, runGit } from "../src/git-command.js";
-import { inspectRepository } from "../src/git-repository.js";
+import { GitCommandError } from "../src/git-command.js";
+import { runGit } from "./support/git-fixture.js";
+import { inspectRepository } from "./support/git-fixture.js";
 
 const identity = {
   GIT_AUTHOR_NAME: "AIBoard Test",

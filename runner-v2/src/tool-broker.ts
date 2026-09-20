@@ -1,4 +1,7 @@
+import type { RunGitExecutionContext } from "./git-run-context.js";
 import { lstat, realpath } from "node:fs/promises";
+import { authorizeFilesystemMutation, captureFilesystemMutation, filesystemMutationFailure,
+  isFilesystemMutation, filesystemMutationWorkspace } from "./filesystem-mutation-fence.js";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ArtifactStore } from "./artifact-store.js";
@@ -17,6 +20,12 @@ import type {
 } from "./agent-contracts.js";
 import type { PermissionProfile } from "./contracts.js";
 import {
+  createExecutionGrantAuthority,
+  type ExecutionGrantAuthority,
+  type OpaqueExecutionGrant,
+} from "./execution-grants.js";
+import { PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES } from "./runner-extension.js";
+import {
   ToolRegistry,
   type AgentToolRuntime,
 } from "./tool-registry.js";
@@ -31,6 +40,7 @@ export interface ToolApprovalRequest {
   sessionId: string;
   callId: string;
   toolName: string;
+  extensionId?: string;
   actor: ToolExecutionContext["actor"];
   permissionProfile: PermissionProfile;
   access: ToolAccessRequest;
@@ -41,6 +51,7 @@ export interface ToolApprovalRequest {
 export interface ToolAuditRecord {
   callId: string;
   toolName: string;
+  extensionId?: string;
   runId: string;
   sessionId: string;
   actor: ToolExecutionContext["actor"];
@@ -54,6 +65,7 @@ export interface ToolAuditRecord {
 }
 
 export interface ToolBrokerOptions {
+  git?: RunGitExecutionContext;
   permissionProfile: PermissionProfile;
   workspacePath: string;
   approve?: (request: ToolApprovalRequest) => Promise<boolean>;
@@ -64,6 +76,7 @@ export interface ToolBrokerOptions {
   ledger?: ToolInvocationLedger;
   budget?: BudgetLedger;
   budgetScopeId?: string;
+  executionGrants?: ExecutionGrantAuthority;
 }
 
 interface InvocationCacheEntry {
@@ -80,6 +93,7 @@ interface InvocationDecision {
 class ToolTimeoutError extends Error {}
 
 export class ToolBroker implements AgentToolRuntime {
+  private readonly git?: RunGitExecutionContext;
   private readonly registry = new ToolRegistry();
   private readonly permissionProfile: PermissionProfile;
   private readonly workspacePath: string;
@@ -91,11 +105,14 @@ export class ToolBroker implements AgentToolRuntime {
   private readonly ledger?: ToolInvocationLedger;
   private readonly budget?: BudgetLedger;
   private readonly budgetScopeId?: string;
+  private readonly executionGrants: ExecutionGrantAuthority;
   private readonly invocationCache = new Map<string, InvocationCacheEntry>();
   private readonly audit: ToolAuditRecord[] = [];
   private readonly decisions = new Map<string, InvocationDecision>();
+  private readonly extensionIds = new Map<string, string>();
 
   constructor(options: ToolBrokerOptions) {
+    this.git = options.git;
     this.permissionProfile = options.permissionProfile;
     this.workspacePath = resolve(options.workspacePath);
     this.approve = options.approve;
@@ -106,6 +123,7 @@ export class ToolBroker implements AgentToolRuntime {
     this.ledger = options.ledger;
     this.budget = options.budget;
     this.budgetScopeId = options.budgetScopeId;
+    this.executionGrants = options.executionGrants ?? createExecutionGrantAuthority();
     if (Boolean(this.budget) !== Boolean(this.budgetScopeId)) {
       throw new Error("Tool budget and budgetScopeId must be configured together.");
     }
@@ -118,12 +136,45 @@ export class ToolBroker implements AgentToolRuntime {
   }
 
   register<TInput>(tool: NativeTool<TInput>): void {
+    this.registerAttributed(tool);
+  }
+
+  registerExtensionTool<TInput>(extensionId: string, tool: NativeTool<TInput>): void {
+    if (!/^[a-z][a-z0-9.-]{0,63}$/.test(extensionId)) {
+      throw new Error(`Extension id ${extensionId} is invalid.`);
+    }
+    if (tool.definition.lifecycle === true) {
+      throw new Error(`Extension ${extensionId} cannot register a lifecycle tool.`);
+    }
+    if (
+      (PROTECTED_RUNNER_LIFECYCLE_TOOL_NAMES as readonly string[]).includes(
+        tool.definition.name,
+      )
+    ) {
+      throw new Error(
+        `Extension ${extensionId} cannot register protected lifecycle tool ${tool.definition.name}.`,
+      );
+    }
+    this.registerAttributed(tool, extensionId);
+  }
+
+  private registerAttributed<TInput>(
+    tool: NativeTool<TInput>,
+    extensionId?: string,
+  ): void {
     this.registry.register({
       definition: tool.definition,
       validate: tool.validate,
-      execute: async (input, context) =>
-        await this.executeAuthorized(tool, input as TInput, context),
+      execute: async (input, context) => {
+        try { return await this.executeAuthorized(tool, input as TInput, context, extensionId); }
+        catch (error) {
+          const refusal = isFilesystemMutation(tool.definition.name) && filesystemMutationFailure(error, this.workspacePath);
+          if (refusal) return refusal;
+          throw error;
+        }
+      },
     });
+    if (extensionId) this.extensionIds.set(tool.definition.name, extensionId);
   }
 
   definitions(): ToolDefinition[] {
@@ -179,11 +230,13 @@ export class ToolBroker implements AgentToolRuntime {
       decision: "rejected" as const,
       outsideWorkspace: false,
     };
+    const extensionId = this.extensionIds.get(call.name);
     this.decisions.delete(call.callId);
     this.audit.push(
       Object.freeze({
         callId: call.callId,
         toolName: call.name,
+        ...(extensionId ? { extensionId } : {}),
         runId: context.runId,
         sessionId: context.sessionId,
         actor: Object.freeze({ ...context.actor }),
@@ -202,19 +255,27 @@ export class ToolBroker implements AgentToolRuntime {
   private async executeAuthorized<TInput>(
     tool: NativeTool<TInput>,
     input: TInput,
-    context: ToolExecutionContext
+    context: ToolExecutionContext,
+    extensionId?: string,
   ): Promise<ToolExecutionOutput> {
-    const toolContext = { ...context, workspacePath: this.workspacePath };
+    const workspacePath = isFilesystemMutation(tool.definition.name) ? filesystemMutationWorkspace(this.workspacePath) : this.workspacePath;
+    const toolContext = { ...context, workspacePath };
     const callId = context.callId ?? "unknown";
     const access = tool.assessAccess?.(input, toolContext) ?? {
       capability: tool.definition.effect,
     };
+    // Capture identities before any approval/grant await can allow substitution.
+    const mutationCapture = isFilesystemMutation(tool.definition.name)
+      ? captureFilesystemMutation(workspacePath, tool.definition.name, access.paths ?? [])
+      : undefined;
     const outsideWorkspace = await this.hasOutsidePath(access);
     const requiresApproval =
       this.permissionProfile !== "full" &&
       (outsideWorkspace ||
         tool.definition.effect === "external" ||
         access.external === true ||
+        access.destructive === true ||
+        access.network === true ||
         access.credentialChange === true ||
         (this.permissionProfile === "guarded" && tool.definition.effect !== "none"));
 
@@ -235,6 +296,7 @@ export class ToolBroker implements AgentToolRuntime {
         sessionId: context.sessionId,
         callId,
         toolName: tool.definition.name,
+        ...(extensionId ? { extensionId } : {}),
         actor: context.actor,
         permissionProfile: this.permissionProfile,
         access,
@@ -269,7 +331,9 @@ export class ToolBroker implements AgentToolRuntime {
     const ledgerFingerprint = toolInvocationFingerprint({
       type: "tool_call",
       callId,
-      name: tool.definition.name,
+      name: extensionId
+        ? `extension:${extensionId}:${tool.definition.name}`
+        : tool.definition.name,
       arguments: input,
     });
     const budgetReservationId = `tool:${context.sessionId}:${callId}`;
@@ -298,6 +362,7 @@ export class ToolBroker implements AgentToolRuntime {
       fingerprint: ledgerFingerprint,
       callId,
       toolName: tool.definition.name,
+      ...(extensionId ? { extensionId } : {}),
       runId: context.runId,
       sessionId: context.sessionId,
       replaySafe: tool.definition.readOnly === true && tool.definition.effect === "none",
@@ -324,8 +389,52 @@ export class ToolBroker implements AgentToolRuntime {
       ? AbortSignal.any([context.signal, timeoutController.signal])
       : timeoutController.signal;
     let timeout: NodeJS.Timeout | undefined;
+    let executionGrant: OpaqueExecutionGrant | undefined;
+    let grantDisposition: "completed" | "cancelled" | "timed_out" = "completed";
     try {
-      const execution = tool.execute(input, { ...toolContext, signal });
+      executionGrant = await this.executionGrants.issue({
+        runId: context.runId,
+        sessionId: context.sessionId,
+        actor: context.actor,
+        toolName: tool.definition.name,
+        callId,
+        // Tool approval policy may be read-only/guarded (e.g. verifier), while
+        // execution retains the actual owner-selected run isolation profile.
+        permissionProfile: this.git?.permissionProfile ?? this.permissionProfile,
+        workspacePath,
+        access: (access.paths !== undefined
+          ? access.paths.map((entry) => ({
+              path: entry.path,
+              mode: entry.access === "read" ? "read" as const : "write" as const,
+            }))
+          : [{
+              path: this.workspacePath,
+              mode: tool.definition.effect === "none" ? "read" as const : "write" as const,
+            }]),
+        externalApproved:
+          outsideWorkspace &&
+          (this.permissionProfile === "full" ||
+            this.decisions.get(callId)?.decision === "approved"),
+        destructiveApproved:
+          access.destructive === true &&
+          (this.permissionProfile === "full" ||
+            this.decisions.get(callId)?.decision === "approved"),
+        networkApproved:
+          access.network === true &&
+          (this.permissionProfile === "full" ||
+            this.decisions.get(callId)?.decision === "approved"),
+        signal,
+      });
+      const filesystemMutation = mutationCapture ? authorizeFilesystemMutation(mutationCapture, {
+        authority: this.executionGrants, grant: executionGrant,
+        binding: { runId: context.runId, sessionId: context.sessionId, actor: context.actor,
+          toolName: tool.definition.name, callId, permissionProfile: this.git?.permissionProfile ?? this.permissionProfile },
+        signal,
+      }) : undefined;
+      const invocationContext = { ...toolContext, signal, executionGrant, filesystemMutation };
+      const execution = this.git
+        ? this.git.withCall(invocationContext, () => tool.execute(input, invocationContext))
+        : tool.execute(input, invocationContext);
       const timeoutResult = new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(() => {
           timeoutController.abort();
@@ -334,13 +443,15 @@ export class ToolBroker implements AgentToolRuntime {
       });
       const output = await this.boundOutput(
         tool.definition.name,
-        await Promise.race([execution, timeoutResult])
+        await Promise.race([execution, timeoutResult]),
+        extensionId,
       );
       this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
       this.settleToolBudget(budgetReservationId);
       return output;
     } catch (error) {
       if (error instanceof ToolTimeoutError) {
+        grantDisposition = "timed_out";
         const output = outputFailure(
           "tool_timeout",
           `Tool ${tool.definition.name} exceeded ${this.toolTimeoutMs} ms.`
@@ -350,15 +461,22 @@ export class ToolBroker implements AgentToolRuntime {
         return output;
       }
       if (signal.aborted) {
+        grantDisposition = "cancelled";
         const output = outputFailure("tool_cancelled", "Tool call was cancelled.");
         this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, output);
         this.settleToolBudget(budgetReservationId);
         return output;
       }
       this.settleToolBudget(budgetReservationId);
+      const refusal = isFilesystemMutation(tool.definition.name) && filesystemMutationFailure(error, this.workspacePath);
+      if (refusal) {
+        this.completeLedger(ledgerKey, ledgerFingerprint, callId, tool.definition.name, refusal);
+        return refusal;
+      }
       throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
+      if (executionGrant) await this.executionGrants.revoke(executionGrant, grantDisposition);
     }
   }
 
@@ -407,7 +525,8 @@ export class ToolBroker implements AgentToolRuntime {
 
   private async boundOutput(
     toolName: string,
-    output: ToolExecutionOutput
+    output: ToolExecutionOutput,
+    extensionId?: string,
   ): Promise<ToolExecutionOutput> {
     let changed = false;
     const content: ToolExecutionOutput["content"] = [];
@@ -429,7 +548,9 @@ export class ToolBroker implements AgentToolRuntime {
         ? await this.artifacts.put(
             Buffer.from(serialized),
             structured ? "application/json" : "text/plain",
-            `${toolName}${structured ? " structured" : ""} output`
+            `${extensionId ? `extension ${extensionId}: ` : ""}${toolName}${
+              structured ? " structured" : ""
+            } output`
           )
         : undefined;
       content.push({

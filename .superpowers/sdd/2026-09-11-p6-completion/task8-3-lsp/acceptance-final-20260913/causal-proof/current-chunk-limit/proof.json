@@ -1,0 +1,160 @@
+{
+  "id": "current-chunk-limit",
+  "target": "runner-v2/src/execution-host-lsp-transport.ts",
+  "test": "runner-v2/test/lsp-transport-authority.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-green",
+  "mutation": {
+    "id": "current-chunk-limit",
+    "file": "runner-v2/src/execution-host-lsp-transport.ts",
+    "old": "const MAX_SHARED_LSP_WRITE_BYTES = 1024 * 1024;",
+    "replacement": "const MAX_SHARED_LSP_WRITE_BYTES = 4 * 1024 * 1024;",
+    "test": "lsp-transport-authority",
+    "pattern": "^LSP shared transport uses the real launching call and fresh exact language request authority$",
+    "originalHash": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+    "faultHash": "24b53693e71cc82cff19a14b30a4a8cd6aaad3767058f56f61cdbfc9b677c523",
+    "red": {
+      "id": "current-chunk-limit-red",
+      "exitCode": 1,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [
+        "not ok 1 - LSP shared transport uses the real launching call and fresh exact language request authority"
+      ],
+      "parseError": false
+    },
+    "restoredHash": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+    "green": {
+      "id": "current-chunk-limit-green",
+      "exitCode": 0,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [],
+      "parseError": false
+    }
+  },
+  "sourceFinalSha256": "75f649f89ea6d9fb8935a5a67c7b0407bed2868e146343ce69ac1cb0256cf576",
+  "testFinalSha256": "afd80dc4269dd4eddf7bb95d59775a931e2fd8990bdf17754fae2bc6049e65bd",
+  "redReceipt": {
+    "id": "current-chunk-limit-red",
+    "startedAt": "2026-09-13T19:40:45.191Z",
+    "finishedAt": "2026-09-13T19:40:46.119Z",
+    "wrapperPid": 24872,
+    "testPid": 36124,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP shared transport uses the real launching call and fresh exact language request authority$",
+      "runner-v2/test/lsp-transport-authority.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "current-chunk-limit-green",
+    "startedAt": "2026-09-13T19:40:46.168Z",
+    "finishedAt": "2026-09-13T19:40:47.129Z",
+    "wrapperPid": 12084,
+    "testPid": 19304,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP shared transport uses the real launching call and fresh exact language request authority$",
+      "runner-v2/test/lsp-transport-authority.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/red-terminal.json",
+      "sha256": "a461167c7ced823595cb360c2dd1e1db72d0d9f69375375f44fe328d81ab155c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/red-inputs-before.json",
+      "sha256": "6b56d7a3755c5a9ccfbdb717c1efe2bfa39fe051ccd6ec3cf1011df92c40650b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/red-inputs-after.json",
+      "sha256": "6b56d7a3755c5a9ccfbdb717c1efe2bfa39fe051ccd6ec3cf1011df92c40650b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/red-stdout.log",
+      "sha256": "fb79710a5e35753d9b6d2489fd7d09e107b1cc8db7a66043f832a97178fbea29"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/red-wrapper.json",
+      "sha256": "b6af91c2262cf90da3eaa1bb3d09bafa00e576004fac7001d0ca019a492eb519"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/red-child.json",
+      "sha256": "962b981763666a71f087f42d403743b4790e96f784c2f254db944cc40494000e"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/green-terminal.json",
+      "sha256": "c42c837aa97d62e8197326ba899c1fa37b08fbb3e183763f69e5b1383a555b5b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/green-inputs-before.json",
+      "sha256": "b9ad072ff60ea988f2a4616c64f5c3370882cf65e953bea1d1088ef10dc510dd"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/green-inputs-after.json",
+      "sha256": "b9ad072ff60ea988f2a4616c64f5c3370882cf65e953bea1d1088ef10dc510dd"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/green-stdout.log",
+      "sha256": "582a7a832bf0c2737d6a175803a63adbd4721e21f378fb10007a2bc49992d93f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/green-wrapper.json",
+      "sha256": "44711397c7e12fa8f54363c270fb0fd94c61d8558105bc6dabeade4d3d07b8ad"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-chunk-limit-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-chunk-limit/green-child.json",
+      "sha256": "7dc07254b39f7ab68e7e8a6344ac508adbd701ed70b2f32162e5ef52ac6b535e"
+    }
+  ]
+}

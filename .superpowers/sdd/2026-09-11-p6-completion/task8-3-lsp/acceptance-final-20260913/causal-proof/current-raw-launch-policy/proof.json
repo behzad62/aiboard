@@ -1,0 +1,159 @@
+{
+  "id": "current-raw-launch-policy",
+  "target": "runner-v2/src/lsp-client.ts",
+  "test": "runner-v2/test/lsp-caller-audit.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-green",
+  "mutation": {
+    "id": "current-raw-launch-policy",
+    "file": "runner-v2/src/lsp-client.ts",
+    "append": "\nimport { spawn as task83ForbiddenSpawn } from \"node:child_process\";\nfunction task83ControlledUncalledLaunch() { return task83ForbiddenSpawn(\"task83-never-executed\"); }\n",
+    "test": "lsp-caller-audit",
+    "pattern": "^LSP migrated family contains no direct launch signal shell or ambient environment fallback$",
+    "originalHash": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+    "faultHash": "8b75728bcee078e041c74149a537c3d5326b2cc1cc4d2a987df47e6364522a28",
+    "red": {
+      "id": "current-raw-launch-policy-red",
+      "exitCode": 1,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [
+        "not ok 1 - LSP migrated family contains no direct launch signal shell or ambient environment fallback"
+      ],
+      "parseError": false
+    },
+    "restoredHash": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+    "green": {
+      "id": "current-raw-launch-policy-green",
+      "exitCode": 0,
+      "sourceInputs": 416,
+      "retainedRoots": [],
+      "failedTests": [],
+      "parseError": false
+    }
+  },
+  "sourceFinalSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+  "testFinalSha256": "8f8336c378b90dcf2a5acf03fa2caf92cb52de052c9269bc97c20eefe8c8b785",
+  "redReceipt": {
+    "id": "current-raw-launch-policy-red",
+    "startedAt": "2026-09-13T19:40:48.656Z",
+    "finishedAt": "2026-09-13T19:40:49.660Z",
+    "wrapperPid": 19272,
+    "testPid": 8608,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP migrated family contains no direct launch signal shell or ambient environment fallback$",
+      "runner-v2/test/lsp-caller-audit.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "current-raw-launch-policy-green",
+    "startedAt": "2026-09-13T19:40:49.709Z",
+    "finishedAt": "2026-09-13T19:40:50.737Z",
+    "wrapperPid": 8940,
+    "testPid": 38252,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 416,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP migrated family contains no direct launch signal shell or ambient environment fallback$",
+      "runner-v2/test/lsp-caller-audit.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/red-terminal.json",
+      "sha256": "961d88b87823facf20d1ab1515ac7fb3c5ea7f3d7af8c6c52ee2154d52d63a7b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/red-inputs-before.json",
+      "sha256": "651a1474f1d61e15228446371ba93bee9434ea98cb89dd821be25493260eacda"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/red-inputs-after.json",
+      "sha256": "651a1474f1d61e15228446371ba93bee9434ea98cb89dd821be25493260eacda"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/red-stdout.log",
+      "sha256": "083150b972f3a1dbfc6486e15fd05cae8fd534e2bc2e3cde9fbce6da277b661c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/red-wrapper.json",
+      "sha256": "071473b6a9197445ab637914d8c2f91d235b47cc1f88531ceb30c5b22c4cd712"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/red-child.json",
+      "sha256": "76558f294b3338603e61516e374a92d05277cf7e4ea83054ede3feb5d611e6bf"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/green-terminal.json",
+      "sha256": "b5d425f4d3baad7f37cdbda39b163fef549435538ec720a4217a2dae25a360ae"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/green-inputs-before.json",
+      "sha256": "4ec175259afcb431742b7c08bd4bf200593c6747461ed39d72ec5fc2a79a3673"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/green-inputs-after.json",
+      "sha256": "4ec175259afcb431742b7c08bd4bf200593c6747461ed39d72ec5fc2a79a3673"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/green-stdout.log",
+      "sha256": "1d14202cc3ef7feebcf877409a1d51c13572fb5c2c805c28264d13e724b18a44"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/green-wrapper.json",
+      "sha256": "7060cdb954633a3e261d29b369059d4794ec42e69869a72d0a027a6d8c3cf7c9"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/current-raw-launch-policy-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/current-raw-launch-policy/green-child.json",
+      "sha256": "c477b219de6e34d1a31d049b93b83d37d5da7d897d0251efc9bfa5ba0a4c9e86"
+    }
+  ]
+}

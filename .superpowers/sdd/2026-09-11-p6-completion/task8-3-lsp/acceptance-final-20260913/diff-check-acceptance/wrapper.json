@@ -1,0 +1,32 @@
+{
+  "pid": 38744,
+  "identity": {
+    "Id": 38744,
+    "StartTimeUtc": "2026-09-13T19:46:22.7834238Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-13T19:46:22.851Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\acceptance-final-20260913\\diff-check-acceptance.spec.json"
+  ],
+  "command": [
+    "git",
+    "diff",
+    "--check",
+    "--",
+    "runner-v2"
+  ],
+  "spec": {
+    "id": "diff-check-acceptance",
+    "executable": "git",
+    "args": [
+      "diff",
+      "--check",
+      "--",
+      "runner-v2"
+    ]
+  }
+}

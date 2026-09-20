@@ -1,0 +1,11 @@
+{
+  "id": "finish-bootstrap",
+  "tests": [
+    "runner-v2/test/git-bootstrap.test.ts"
+  ],
+  "pattern": "baseline bootstrap",
+  "inputPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/final-affected-graph.json",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/finish-source-freeze.json"
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "id": "takeover-wait-before-relinquish",
+  "target": "runner-v2/src/streaming-process-session-runtime.ts",
+  "test": "runner-v2/test/streaming-process-session-runtime.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-green",
+  "sourceFinalSha256": "66784734807114ff6e5362e4445def4f69e01ff41e2035bee867de936cfd4f4b",
+  "testFinalSha256": "909b9f3fd8cc3146df5d009e640b9795985df791cb44401d14596261c89dc044",
+  "redReceipt": {
+    "id": "rev-takeover-wait-before-relinquish-red",
+    "startedAt": "2026-09-12T15:46:14.348Z",
+    "finishedAt": "2026-09-12T15:46:17.087Z",
+    "wrapperPid": 15224,
+    "testPid": 52316,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^C2\\ round7\\ live\\ cleanup\\ takes\\ over\\ accepted\\ output\\ before\\ ACK-gated\\ quiescence$",
+      "runner-v2/test/streaming-process-session-runtime.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "greenReceipt": {
+    "id": "rev-takeover-wait-before-relinquish-green",
+    "startedAt": "2026-09-12T15:46:17.139Z",
+    "finishedAt": "2026-09-12T15:46:17.852Z",
+    "wrapperPid": 60776,
+    "testPid": 60408,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^C2\\ round7\\ live\\ cleanup\\ takes\\ over\\ accepted\\ output\\ before\\ ACK-gated\\ quiescence$",
+      "runner-v2/test/streaming-process-session-runtime.test.ts"
+    ],
+    "rootCount": 0,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/red-terminal.json",
+      "sha256": "c2c237f7f674fcb05da927f9724eb538e68dcdfa51616a3bdefb401c8e3abba4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/red-inputs-before.json",
+      "sha256": "95ecbc61711c29675729bdc784d6eb1613f68e784479b55106a18a10041350c3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/red-inputs-after.json",
+      "sha256": "95ecbc61711c29675729bdc784d6eb1613f68e784479b55106a18a10041350c3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/red-stdout.log",
+      "sha256": "5f48c3ae26921f93e7230760eb86ef9b7ad78256c6b139978f3ff76ef6848142"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/red-wrapper.json",
+      "sha256": "2e9eb9e9eee1e79cca02bbbe2698b4ceb576e3f0d3bba77d58e17b5c9b0954cd"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/red-child.json",
+      "sha256": "5052c5bf571ab2aae43107d9bd65e09c178d24ca621b673eaf729e0fdb7256bf"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/green-terminal.json",
+      "sha256": "419a37770535f45c0bc030efc4aa1990506a61953dae69c63a6d43a67f55de79"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/green-inputs-before.json",
+      "sha256": "83eca2a89ec5d07177f034a9ce1ee411c2d213acd35362d8820cb73d86d2267a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/green-inputs-after.json",
+      "sha256": "83eca2a89ec5d07177f034a9ce1ee411c2d213acd35362d8820cb73d86d2267a"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/green-stdout.log",
+      "sha256": "2238073db867b360e059fc363ec7f3fb2123f395325831ae8b19ca59afbb1584"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/green-wrapper.json",
+      "sha256": "c46e9d2b82ad1b352f1276dcd9f4bfdf2d14106ecf067e26a6306cc42cdff325"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-takeover-wait-before-relinquish-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/takeover-wait-before-relinquish/green-child.json",
+      "sha256": "9cff92e0320f166a3f277f8a945654c8bf7cb0485064ff557cf089897cc2f2a0"
+    }
+  ]
+}

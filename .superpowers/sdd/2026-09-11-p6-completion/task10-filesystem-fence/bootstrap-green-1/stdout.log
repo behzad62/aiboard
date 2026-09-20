@@ -1,0 +1,140 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-3OwctI"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-dG15OP"}
+# Subtest: bootstrap .gitignore symlink cannot mutate an outside object
+ok 1 - bootstrap .gitignore symlink cannot mutate an outside object
+  ---
+  duration_ms: 51.3801
+  type: 'test'
+  ...
+# Subtest: bootstrap .gitignore hardlink cannot mutate an outside object
+ok 2 - bootstrap .gitignore hardlink cannot mutate an outside object
+  ---
+  duration_ms: 44.3665
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-3OwctI","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-task10-bootstrap-dG15OP","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-dirty-OPDkF0"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-new-LsRYC8"}
+# Subtest: dirty repository baseline preserves branch, HEAD, index, status, and files
+ok 3 - dirty repository baseline preserves branch, HEAD, index, status, and files
+  ---
+  duration_ms: 1635.6114
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-unborn-NvWUsA"}
+# Subtest: non-repository bootstrap creates an initial safe baseline without global identity
+ok 4 - non-repository bootstrap creates an initial safe baseline without global identity
+  ---
+  duration_ms: 884.4135
+  type: 'test'
+  ...
+# Subtest: unborn repository bootstrap creates HEAD and applies safe ignore defaults
+ok 5 - unborn repository bootstrap creates HEAD and applies safe ignore defaults
+  ---
+  duration_ms: 790.4822
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-dirty-OPDkF0","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-new-LsRYC8","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-baseline-unborn-NvWUsA","existsAtExit":false}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-Rc63s9"}
+# Subtest: baseline bootstrap full binds the real run/profile and closes its owner before returning
+ok 6 - baseline bootstrap full binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 8.0744
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-WcCgMf"}
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-Rc63s9
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-Rc63s9
+# Subtest: baseline bootstrap project binds the real run/profile and closes its owner before returning
+ok 7 - baseline bootstrap project binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 3.4094
+  type: 'test'
+  ...
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-WcCgMf
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-42x9cG"}
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-WcCgMf
+# Subtest: baseline bootstrap guarded binds the real run/profile and closes its owner before returning
+ok 8 - baseline bootstrap guarded binds the real run/profile and closes its owner before returning
+  ---
+  duration_ms: 3.1211
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-history-zuj8TL"}
+# exact synthetic bootstrap acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-42x9cG
+# synthetic bootstrap fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-bootstrap-42x9cG
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-umWYJR"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-phWOvx"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-GfknDO"}
+# Subtest: historical Git query owns separate transient state and exposes no active-run writer
+ok 9 - historical Git query owns separate transient state and exposes no active-run writer
+  ---
+  duration_ms: 149.3421
+  type: 'test'
+  ...
+# exact non-native historical fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-history-zuj8TL
+# historical fixture removed, original history unchanged: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-history-zuj8TL
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-Rc63s9","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-WcCgMf","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-bootstrap-42x9cG","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-history-zuj8TL","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-umWYJR","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-phWOvx","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-git-inspection-GfknDO","existsAtExit":true}
+# Subtest: Git compatibility wrappers delegate only to the explicit exact runner
+ok 10 - Git compatibility wrappers delegate only to the explicit exact runner
+  ---
+  duration_ms: 1.6767
+  type: 'test'
+  ...
+# Subtest: Git wrappers refuse absent injection before any operating-system effect
+ok 11 - Git wrappers refuse absent injection before any operating-system effect
+  ---
+  duration_ms: 0.595
+  type: 'test'
+  ...
+# Subtest: Git tools bind every subcommand to the actual ToolBroker call
+ok 12 - Git tools bind every subcommand to the actual ToolBroker call
+  ---
+  duration_ms: 0.756
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-caller-ZmdQUa"}
+# Subtest: Repository intelligence uses its injected runner for every Git query
+ok 13 - Repository intelligence uses its injected runner for every Git query
+  ---
+  duration_ms: 6.7262
+  type: 'test'
+  ...
+# exact caller fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-caller-ZmdQUa
+# exact caller fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-caller-ZmdQUa
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-baseline-guard-kh77sF"}
+# Subtest: Baseline refuses missing Git authority before changing a project or its index
+ok 14 - Baseline refuses missing Git authority before changing a project or its index
+  ---
+  duration_ms: 3.3869
+  type: 'test'
+  ...
+# exact baseline guard fixture acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-baseline-guard-kh77sF
+# exact baseline guard fixture removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-git-baseline-guard-kh77sF
+# Subtest: standalone preflight refuses an absent closed owner instead of constructing ambient execution
+ok 15 - standalone preflight refuses an absent closed owner instead of constructing ambient execution
+  ---
+  duration_ms: 0.4969
+  type: 'test'
+  ...
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-caller-ZmdQUa","existsAtExit":false}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-git-baseline-guard-kh77sF","existsAtExit":false}
+1..15
+# tests 15
+# suites 0
+# pass 15
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 7312.241

@@ -1,7 +1,15 @@
 import { createHash } from "node:crypto";
 
 import type { ArtifactStore } from "./artifact-store.js";
-import { runGit } from "./git-command.js";
+import {
+  assertAcceptanceCriteria,
+  assertCriterionEvidenceCoverage,
+  type AcceptanceCriterion,
+  type CriterionEvidenceLink,
+} from "./acceptance-contracts.js";
+import type { EvidenceRecord } from "./evidence-store.js";
+import { requireGitRunner } from "./git-command.js";
+import type { GitRunner } from "./git-repository.js";
 import type { TaskCommit } from "./workspace-manager.js";
 
 export interface ExternalEffectReference {
@@ -20,6 +28,10 @@ export interface ChangeSet {
   changedPaths: string[];
   diffArtifactHash: string;
   evidenceArtifactHashes: string[];
+  /** Immutable criterion-to-evidence contract captured with this submission. */
+  criterionEvidenceLinks?: CriterionEvidenceLink[];
+  acceptanceCriteria?: AcceptanceCriterion[];
+  acceptanceCriteriaVersion?: number;
   externalEffects: ExternalEffectReference[];
   guidanceIds: string[];
   memoryIds: string[];
@@ -27,10 +39,21 @@ export interface ChangeSet {
 }
 
 export interface CreateChangeSetOptions {
+  execute?: GitRunner;
   workspacePath: string;
   taskCommit: TaskCommit;
   artifacts: ArtifactStore;
   evidenceArtifactHashes?: string[];
+  acceptanceCriteria?: readonly AcceptanceCriterion[];
+  acceptanceCriteriaVersion?: number;
+  criterionEvidenceLinks?: readonly CriterionEvidenceLink[];
+  evidenceRecords?: readonly EvidenceRecord[];
+  taskId?: string;
+  attempt?: number;
+  /** Accountable worker whose evidence may support this submission. */
+  assignedWorkerId?: string;
+  /** Compatibility alias for callers that identify the submitting worker. */
+  actorId?: string;
   externalEffects?: ExternalEffectReference[];
   guidanceIds?: string[];
   memoryIds?: string[];
@@ -41,7 +64,36 @@ export async function createChangeSet(
   options: CreateChangeSetOptions
 ): Promise<ChangeSet> {
   const commit = options.taskCommit;
-  const evidence = unique(options.evidenceArtifactHashes ?? []);
+  const hasCriteria = options.acceptanceCriteria !== undefined;
+  let criterionEvidenceLinks: CriterionEvidenceLink[] | undefined;
+  if (hasCriteria) {
+    assertAcceptanceCriteria(options.acceptanceCriteria!);
+    if (!Number.isSafeInteger(options.attempt) || options.attempt! < 1) {
+      throw new Error(`Task ${commit.taskId} requires a current attempt for criterion evidence.`);
+    }
+    const taskId = options.taskId ?? commit.taskId;
+    if (taskId !== commit.taskId) {
+      throw new Error(`Change set task ${taskId} does not match commit task ${commit.taskId}.`);
+    }
+    criterionEvidenceLinks = (options.criterionEvidenceLinks ?? []).map((link) => ({
+      ...link,
+      taskId: link.taskId ?? taskId,
+      attempt: link.attempt ?? options.attempt,
+      artifactHashes: [...link.artifactHashes],
+    }));
+    assertCriterionEvidenceCoverage(options.acceptanceCriteria!, criterionEvidenceLinks, {
+      evidenceRecords: options.evidenceRecords,
+      runId: commit.runId,
+      taskId,
+      attempt: options.attempt,
+      ...(options.assignedWorkerId ?? options.actorId
+        ? { assignedWorkerId: options.assignedWorkerId ?? options.actorId }
+        : {}),
+    });
+  }
+  const evidence = hasCriteria
+    ? unique(criterionEvidenceLinks!.flatMap((link) => link.artifactHashes))
+    : unique(options.evidenceArtifactHashes ?? []);
   if (evidence.length === 0) {
     throw new Error(
       `Task ${commit.taskId} requires durable evidence before submission.`
@@ -55,7 +107,7 @@ export async function createChangeSet(
     if (effect.artifactHash) assertArtifactHash(effect.artifactHash);
   }
 
-  const diff = await runGit({
+  const diff = await requireGitRunner(options.execute)({
     cwd: options.workspacePath,
     args: [
       "diff",
@@ -85,6 +137,15 @@ export async function createChangeSet(
     changedPaths: [...commit.changedPaths],
     diffArtifactHash: artifact.hash,
     evidenceArtifactHashes: evidence,
+    ...(criterionEvidenceLinks
+      ? {
+          criterionEvidenceLinks,
+          acceptanceCriteria: options.acceptanceCriteria!.map((criterion) => ({ ...criterion })),
+          ...(options.acceptanceCriteriaVersion !== undefined
+            ? { acceptanceCriteriaVersion: options.acceptanceCriteriaVersion }
+            : {}),
+        }
+      : {}),
     externalEffects: [...(options.externalEffects ?? [])],
     guidanceIds: unique(options.guidanceIds ?? []),
     memoryIds: unique(options.memoryIds ?? []),

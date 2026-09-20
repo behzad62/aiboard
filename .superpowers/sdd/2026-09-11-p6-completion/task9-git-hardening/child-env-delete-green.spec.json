@@ -1,0 +1,7 @@
+{
+  "id": "child-env-delete-green",
+  "pattern": "^explicit undefined removes an inherited safe variable by canonical name$",
+  "tests": [
+    "runner-v2/test/child-environment.test.ts"
+  ]
+}

@@ -1,0 +1,133 @@
+{
+  "id": "language-phase-budget",
+  "target": "runner-v2/src/lsp-client.ts",
+  "test": "runner-v2/test/lsp-invocation-lifetime.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-restored-green",
+  "sourceFinalSha256": "5ba9adf7500b6ae7f883172e677bcd545eda05b7b7933f8ad8a870bcde46d00c",
+  "testFinalSha256": "c2bff570653a17ab90dadffa5aaf46917bf2447da6832891479bbc95cbcc71e1",
+  "redReceipt": {
+    "id": "lsp-language-budget-causal-red",
+    "startedAt": "2026-09-12T16:11:08.877Z",
+    "finishedAt": "2026-09-12T16:11:09.592Z",
+    "wrapperPid": 62588,
+    "testPid": 10336,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP language operation budget lets the typed write timeout settle before the shared ownership deadline$",
+      "runner-v2/test/lsp-invocation-lifetime.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-language-budget-1vGzqV"
+    ]
+  },
+  "greenReceipt": {
+    "id": "lsp-language-budget-causal-restored-green",
+    "startedAt": "2026-09-12T16:11:22.466Z",
+    "finishedAt": "2026-09-12T16:11:23.139Z",
+    "wrapperPid": 33296,
+    "testPid": 55052,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^LSP language operation budget lets the typed write timeout settle before the shared ownership deadline$",
+      "runner-v2/test/lsp-invocation-lifetime.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/red-terminal.json",
+      "sha256": "e53e1f8455a734e8b40ed78dd57098725e585da399f282cf7b72fd42ac0b71c1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/red-inputs-before.json",
+      "sha256": "b52d8e97d4d3116a3fdc18074c90ef0f2b0ae50f8bebb6c456627534362ee164"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/red-inputs-after.json",
+      "sha256": "b52d8e97d4d3116a3fdc18074c90ef0f2b0ae50f8bebb6c456627534362ee164"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/red-stdout.log",
+      "sha256": "5d315ba33f2ab4495ea01eed1b2046ac3f511229f84468088ceabf41eb90dfd4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/red-wrapper.json",
+      "sha256": "b3db9223fe8192c8fa5500ffcef1ca95c668a6c3f75cdc35c3d920a8dc4f5783"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/red-child.json",
+      "sha256": "0a184d7140fcb69d25ca9f183933b875aee5d3ec4c3c8313d3d265e9a5f73444"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-restored-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/green-terminal.json",
+      "sha256": "9a49a5e7a535e6001e7d63e0c1f2a2300d62515b9bfec233db6147bbe40f4e85"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-restored-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/green-inputs-before.json",
+      "sha256": "bb7e34614724e5e8abc5fe1b38d6b8b8fa5f897163799c1cfe8155fa70cd41f1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-restored-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/green-inputs-after.json",
+      "sha256": "bb7e34614724e5e8abc5fe1b38d6b8b8fa5f897163799c1cfe8155fa70cd41f1"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-restored-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/green-stdout.log",
+      "sha256": "80e08faff3ce9ea443dd19c680380add73e2e610fe45f77aecb7ffcefeec902c"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-restored-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-restored-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/green-wrapper.json",
+      "sha256": "2269edbafff27084727763337f103029657530ab633afe1bad93172115eec9d3"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/lsp-language-budget-causal-restored-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/language-phase-budget/green-child.json",
+      "sha256": "399fa01dd60e8f6393b76f09c1f0491f90b44dee7ff095a5e1de33c2b5af15cc"
+    }
+  ]
+}

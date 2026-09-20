@@ -15,6 +15,7 @@ import type {
   ToolCallBlock,
   ToolExecutionContext,
 } from "../src/agent-contracts.js";
+import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 import { ToolBroker } from "../src/tool-broker.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
 
@@ -305,6 +306,114 @@ test("large outputs become artifacts and timeouts abort the tool", async () => {
     assert.equal(observedAbort, true);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("authorization attaches one Runner-created call-bound grant and revokes leftovers", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "aiboard-broker-grant-"));
+  const authority = createExecutionGrantAuthority({ ttlMs: 5_000 });
+  const broker = new ToolBroker({
+    permissionProfile: "project",
+    workspacePath: workspace,
+    executionGrants: authority,
+    toolTimeoutMs: 100,
+  });
+  let canonicalPath = "";
+  broker.register({
+    definition: {
+      name: "process.run",
+      description: "Run",
+      inputSchema: { type: "object" },
+      readOnly: false,
+      effect: "workspace",
+    },
+    validate: () => ({ ok: true, value: {} }),
+    assessAccess: () => ({
+      capability: "process.run",
+      paths: [{ path: "generated", access: "write" }],
+    }),
+    execute: async (_input, toolContext) => {
+      assert.ok(toolContext.executionGrant);
+      const claims = authority.consume(toolContext.executionGrant, {
+        runId: toolContext.runId,
+        sessionId: toolContext.sessionId,
+        actor: toolContext.actor,
+        toolName: "process.run",
+        callId: toolContext.callId!,
+        permissionProfile: "project",
+      });
+      canonicalPath = claims.access[0]!.canonicalPath;
+      return { content: [], isError: false };
+    },
+  });
+  for (const name of ["fixture.consume_then_throw", "fixture.consume_then_cancel"] as const) {
+    broker.register({
+      definition: { name, description: name, inputSchema: { type: "object" }, readOnly: true, effect: "none" },
+      validate: () => ({ ok: true, value: {} }),
+      execute: async (_input, toolContext) => {
+        assert.ok(toolContext.executionGrant);
+        authority.consume(toolContext.executionGrant, {
+          runId: toolContext.runId, sessionId: toolContext.sessionId, actor: toolContext.actor,
+          toolName: name, callId: toolContext.callId!, permissionProfile: "project",
+        });
+        if (name === "fixture.consume_then_throw") throw new Error("fixture throw after consume");
+        if (toolContext.signal?.aborted) throw new Error("aborted");
+        await new Promise<void>((_resolve, reject) => toolContext.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }));
+        return { content: [], isError: false };
+      },
+    });
+  }
+  broker.register({
+    definition: {
+      name: "fixture.ignore_grant",
+      description: "Ignore the issued grant until timeout",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+    },
+    validate: () => ({ ok: true, value: {} }),
+    execute: async (_input, toolContext) => {
+      assert.ok(toolContext.executionGrant);
+      authority.consume(toolContext.executionGrant, {
+        runId: toolContext.runId, sessionId: toolContext.sessionId, actor: toolContext.actor,
+        toolName: "fixture.ignore_grant", callId: toolContext.callId!, permissionProfile: "project",
+      });
+      await new Promise<void>(() => undefined);
+      return { content: [], isError: false };
+    },
+  });
+  try {
+    const output = await broker.invoke({
+      type: "tool_call",
+      callId: "grant-call",
+      name: "process.run",
+      arguments: {},
+    }, context());
+    assert.equal(output.isError, false);
+    assert.equal(canonicalPath, join(workspace, "generated"));
+    assert.equal(authority.activeSnapshots().length, 0);
+
+    const timedOut = await broker.invoke({
+      type: "tool_call",
+      callId: "ignored-grant",
+      name: "fixture.ignore_grant",
+      arguments: {},
+    }, context());
+    assert.equal(timedOut.error?.code, "tool_timeout");
+    assert.equal(authority.activeSnapshots().length, 0);
+
+    const thrown = await broker.invoke({ type: "tool_call", callId: "throw-grant", name: "fixture.consume_then_throw", arguments: {} }, context());
+    assert.equal(thrown.isError, true);
+    assert.equal(authority.activeSnapshots().length, 0);
+
+    const cancellation = new AbortController();
+    const cancelling = broker.invoke({ type: "tool_call", callId: "cancel-grant", name: "fixture.consume_then_cancel", arguments: {} }, { ...context(), signal: cancellation.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    cancellation.abort();
+    assert.equal((await cancelling).error?.code, "tool_cancelled");
+    assert.equal(authority.activeSnapshots().length, 0);
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
   }
 });
 

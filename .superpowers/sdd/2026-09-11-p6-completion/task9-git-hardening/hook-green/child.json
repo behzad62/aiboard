@@ -1,0 +1,22 @@
+{
+  "pid": 29560,
+  "identity": {
+    "Id": 29560,
+    "StartTimeUtc": "2026-09-14T11:42:53.6819596Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 35008,
+  "spawnedAt": "2026-09-14T11:42:54.056Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^Task 9 production Git commit never executes a repository-controlled pre-commit hook$",
+    "runner-v2/test/git-indirect-execution-policy.test.ts"
+  ]
+}

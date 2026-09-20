@@ -1,0 +1,39 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-hogm7O"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OWrxBd"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-3FpJjp"}
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-ttoeye"}
+# Subtest: real run-owned Git preserves binary bytes and closes exact nested command ownership
+not ok 1 - real run-owned Git preserves binary bytes and closes exact nested command ownership
+  ---
+  duration_ms: 2324.8408
+  type: 'test'
+  location: 'D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\runner-v2\\test\\git-runtime-integration.test.ts:1:643'
+  failureType: 'testCodeFailure'
+  error: 'Process launch was not proven.'
+  code: 'launch_not_proven'
+  name: 'SubprocessRuntimeError'
+  stack: |-
+    RunnerSubprocessRuntime.runClaimed (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\subprocess-runtime.ts:560:13)
+    process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    async Object.execute (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\one-shot-command-executor.ts:211:19)
+    async runBytes (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-runtime-runner.ts:46:24)
+    async Object.run (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\src\git-runtime-runner.ts:89:22)
+    async TestContext.<anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\runner-v2\test\git-runtime-integration.test.ts:24:25)
+    async Test.run (node:internal/test_runner/test:1332:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3)
+  ...
+# acquired exact real Git fixture: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p6-native-git-hogm7O
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p6-native-git-hogm7O","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-duplex-OWrxBd","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-batch-3FpJjp","existsAtExit":true}
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\aiboard-windows-semantic-tree-ttoeye","existsAtExit":true}
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3274.4263

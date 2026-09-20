@@ -1,0 +1,34 @@
+{
+  "pid": 73340,
+  "identity": {
+    "Id": 73340,
+    "StartTimeUtc": "2026-09-12T17:26:17.6631316Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "startedAt": "2026-09-12T17:26:17.697Z",
+  "root": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "argv": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\continue-20260912\\gate.mjs",
+    "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\.superpowers\\sdd\\2026-09-11-p6-completion\\task8-3-lsp\\continue-20260912\\fault-extension-prototype-grant-leak-green.spec.json"
+  ],
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP router never forwards",
+    "runner-v2/test/lsp-server-control.test.ts"
+  ],
+  "spec": {
+    "id": "fault-extension-prototype-grant-leak-green",
+    "tests": [
+      "runner-v2/test/lsp-server-control.test.ts"
+    ],
+    "pattern": "^LSP router never forwards"
+  }
+}

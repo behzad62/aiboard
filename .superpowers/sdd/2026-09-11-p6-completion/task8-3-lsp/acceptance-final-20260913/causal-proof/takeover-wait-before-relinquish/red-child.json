@@ -1,0 +1,17 @@
+{
+  "pid": 52316,
+  "wrapperPid": 15224,
+  "spawnedAt": "2026-09-12T15:46:14.673Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^C2\\ round7\\ live\\ cleanup\\ takes\\ over\\ accepted\\ output\\ before\\ ACK-gated\\ quiescence$",
+    "runner-v2/test/streaming-process-session-runtime.test.ts"
+  ]
+}

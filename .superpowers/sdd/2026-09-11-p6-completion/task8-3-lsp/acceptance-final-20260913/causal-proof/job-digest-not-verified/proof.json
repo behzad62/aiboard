@@ -1,0 +1,133 @@
+{
+  "id": "job-digest-not-verified",
+  "target": "runner-v2/src/windows-job-process-host.ts",
+  "test": "runner-v2/test/windows-job-output-replay.test.ts",
+  "red": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-red",
+  "green": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-green",
+  "sourceFinalSha256": "0bce4d6185215f1622d5de30651412255afc74bba2615e219343e8b4aca2c998",
+  "testFinalSha256": "6a91a24f1e8edde78c9600a7b78540054d683dfd16d09b2499004dfeb9a5ff1c",
+  "redReceipt": {
+    "id": "rev-job-digest-not-verified-red",
+    "startedAt": "2026-09-12T15:46:25.343Z",
+    "finishedAt": "2026-09-12T15:46:26.482Z",
+    "wrapperPid": 57968,
+    "testPid": 45368,
+    "exitCode": 1,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^Windows\\ Job\\ retained\\ replay\\ refuses\\ changed\\ bytes\\ before\\ exposing\\ metadata$",
+      "runner-v2/test/windows-job-output-replay.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": [
+      "C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p683-job-replay-00bndh"
+    ]
+  },
+  "greenReceipt": {
+    "id": "rev-job-digest-not-verified-green",
+    "startedAt": "2026-09-12T15:46:26.548Z",
+    "finishedAt": "2026-09-12T15:46:27.532Z",
+    "wrapperPid": 8584,
+    "testPid": 63304,
+    "exitCode": 0,
+    "signal": null,
+    "inputsUnchanged": true,
+    "inputCount": 410,
+    "command": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "--import",
+      "./runner-v2/test/support/cli-root-observer.mjs",
+      "--import",
+      "tsx",
+      "--test",
+      "--test-concurrency=1",
+      "--test-reporter=tap",
+      "--test-name-pattern=^Windows\\ Job\\ retained\\ replay\\ refuses\\ changed\\ bytes\\ before\\ exposing\\ metadata$",
+      "runner-v2/test/windows-job-output-replay.test.ts"
+    ],
+    "rootCount": 1,
+    "retainedRoots": []
+  },
+  "copies": [
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-red/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/red-terminal.json",
+      "sha256": "73b7b2c1f75418d69f693b9b4d9991ab32bf7dee32aea81d8a6944f17671a41f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-red/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/red-inputs-before.json",
+      "sha256": "638c6f6e153df2b79f668efaaf7dc7b97e768c60b5a07cc8ff6079c816b985d4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-red/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/red-inputs-after.json",
+      "sha256": "638c6f6e153df2b79f668efaaf7dc7b97e768c60b5a07cc8ff6079c816b985d4"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-red/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/red-stdout.log",
+      "sha256": "9c26f5e734cb54f3e79dedbbb55fc07ece3415431956f040841b48fae47924c8"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-red/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/red-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-red/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/red-wrapper.json",
+      "sha256": "c0a16f58b0c89e5c1dcd1478fb0bf69523e098a9d62e39e90ffac159d362fe60"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-red/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/red-child.json",
+      "sha256": "901a1e03fc844884e1847fb428c9c84233fca5ead126866c952f5cf30c72c4bd"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-green/terminal.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/green-terminal.json",
+      "sha256": "52ea82573b4a8048ae43bff075642d32bfe93bf2f1b60402462b9b19a0161a62"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-green/inputs-before.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/green-inputs-before.json",
+      "sha256": "ea9fc1f39656264079b187e40f5183f78452acdc1aae7abf01ea87cb6feaca0f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-green/inputs-after.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/green-inputs-after.json",
+      "sha256": "ea9fc1f39656264079b187e40f5183f78452acdc1aae7abf01ea87cb6feaca0f"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-green/stdout.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/green-stdout.log",
+      "sha256": "91d8afe0fa6ec87c930b2570cad7463349d174e6d5033486e79b65192f9e6db2"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-green/stderr.log",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/green-stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-green/wrapper.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/green-wrapper.json",
+      "sha256": "5917429e773e71f6b750f0fa8c9cc7fbebde121492f881713c6b567c0dc3fd3b"
+    },
+    {
+      "source": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/resume-20260912/rev-job-digest-not-verified-green/child.json",
+      "path": ".superpowers/sdd/2026-09-11-p6-completion/task8-3-lsp/acceptance-final-20260913/causal-proof/job-digest-not-verified/green-child.json",
+      "sha256": "cbf9a6b315968de9396ed614f3edc84db27f6f2c7d8180c125d80f11eeb94178"
+    }
+  ]
+}

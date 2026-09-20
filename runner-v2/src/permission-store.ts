@@ -15,7 +15,8 @@ export interface PermissionRequest {
   sessionId: string;
   callId: string;
   toolName: string;
-  actor: { role: "architect" | "worker" | "subagent"; id: string };
+  extensionId?: string;
+  actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string };
   permissionProfile: PermissionProfile;
   access: ToolAccessRequest;
   outsideWorkspace: boolean;
@@ -99,6 +100,7 @@ export class SqlitePermissionStore {
       sessionId: input.sessionId,
       callId: input.callId,
       toolName: input.toolName,
+      ...(input.extensionId ? { extensionId: input.extensionId } : {}),
       actor: input.actor,
       permissionProfile: input.permissionProfile,
       access: input.access,
@@ -191,7 +193,9 @@ function validateRequest(input: PermissionRequest): void {
   if (
     !input.requestId || !input.runId || !input.sessionId || !input.callId ||
     !input.toolName || !input.actor.id || !input.access.capability ||
-    Number.isNaN(Date.parse(input.occurredAt))
+    Number.isNaN(Date.parse(input.occurredAt)) ||
+    (input.extensionId !== undefined &&
+      !/^[a-z][a-z0-9.-]{0,63}$/.test(input.extensionId))
   ) throw new Error("Permission request identity, access, and timestamp are required.");
 }
 
@@ -202,6 +206,7 @@ function canonicalRequest(input: PermissionRequest): string {
     sessionId: input.sessionId,
     callId: input.callId,
     toolName: input.toolName,
+    ...(input.extensionId ? { extensionId: input.extensionId } : {}),
     actor: input.actor,
     permissionProfile: input.permissionProfile,
     access: input.access,
@@ -217,6 +222,7 @@ function sameRequest(left: PermissionRequest, right: PermissionRequest): boolean
     sessionId: value.sessionId,
     callId: value.callId,
     toolName: value.toolName,
+    ...(value.extensionId ? { extensionId: value.extensionId } : {}),
     actor: value.actor,
     permissionProfile: value.permissionProfile,
     access: value.access,

@@ -1,0 +1,20 @@
+TAP version 13
+# C5 CLI root: {"event":"created","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-managed-strict-ZZM7Vt"}
+# Subtest: strict managed execution refuses host-only identity before backend create and runs bare node only inside its attested OCI image
+ok 1 - strict managed execution refuses host-only identity before backend create and runs bare node only inside its attested OCI image
+  ---
+  duration_ms: 18219.2621
+  type: 'test'
+  ...
+# exact strict managed root acquired: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-managed-strict-ZZM7Vt
+# verified strict managed root removed: C:\\Users\\b_a_s\\AppData\\Local\\Temp\\p684-managed-strict-ZZM7Vt
+# C5 CLI root: {"event":"exit","path":"C:\\\\Users\\\\b_a_s\\\\AppData\\\\Local\\\\Temp\\\\p684-managed-strict-ZZM7Vt","existsAtExit":false}
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 18856.7871

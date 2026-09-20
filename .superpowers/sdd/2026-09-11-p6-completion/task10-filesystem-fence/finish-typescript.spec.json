@@ -1,0 +1,12 @@
+{
+  "id": "finish-typescript",
+  "args": [
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "runner-v2/tsconfig.json",
+    "--noEmit"
+  ],
+  "inputPaths": [
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/finish-source-freeze.json"
+  ]
+}

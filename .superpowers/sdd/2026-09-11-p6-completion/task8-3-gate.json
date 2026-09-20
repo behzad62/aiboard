@@ -1,0 +1,31 @@
+{
+  "task": "8.3",
+  "state": "VERIFIED",
+  "verifiedAt": "2026-09-13T19:53:22.717Z",
+  "inputDigest": "ce13787bb2b1af11feb9a49ef8493b5a6171b0fbce47dbffb8a621bd87248987",
+  "report": "task8-3-lsp/report.md",
+  "acceptance": "task8-3-lsp/acceptance-final-20260913/acceptance.json",
+  "totals": {
+    "windows": {
+      "files": 158,
+      "tests": 2160,
+      "passed": 2159,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 1
+    },
+    "linux": {
+      "tests": 752,
+      "passed": 751,
+      "failed": 0,
+      "cancelled": 0,
+      "skipped": 1
+    },
+    "distinctCausalFaults": 26
+  },
+  "nextTask": "8.4",
+  "nextTaskEligible": true,
+  "nextTaskImplemented": false,
+  "p6Complete": false,
+  "pushed": false
+}

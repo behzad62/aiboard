@@ -1,0 +1,21 @@
+{
+  "pid": 39556,
+  "identity": {
+    "Id": 39556,
+    "StartTimeUtc": "2026-09-13T02:57:17.1620097Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 82300,
+  "spawnedAt": "2026-09-13T02:57:17.456Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "runner-v2/test/posix-anchor-release-takeover.test.ts"
+  ]
+}

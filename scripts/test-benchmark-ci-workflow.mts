@@ -14,6 +14,12 @@ check("benchmark CI workflow exists", existsSync(workflowPath), workflowPath);
 
 const workflow = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") : "";
 
+check(
+  "benchmark CI certifies only Node 24.x",
+  /node-version:\s*\[24\.x\]/.test(workflow) && !/22\.x/.test(workflow),
+  workflow
+);
+
 for (const expected of [
   "npm ci",
   "npm run publish-downloads",

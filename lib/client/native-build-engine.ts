@@ -38,7 +38,7 @@ import {
 } from "./discussion-live-state";
 import {
   effectiveNativeBuildPolicy,
-  MINIMUM_NATIVE_RUNNER_NODE_VERSION,
+  NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   nativeProviderBillingBasis,
   supportsNativeRunnerNodeVersion,
 } from "./native-build-policy";
@@ -48,6 +48,12 @@ type Emit = (event: OrchestratorEvent) => void;
 export type NativeBuildPauseGate =
   | { kind: "resume" }
   | { kind: "project_handoff" }
+  | {
+      kind: "verifier_selection";
+      reason: string;
+      requiredCapabilities: string[];
+      candidateRuntimeIds: string[];
+    }
   | {
       kind: "architect_handoff";
       reason: string;
@@ -59,6 +65,18 @@ export function nativeBuildPauseGate(
 ): NativeBuildPauseGate {
   if (projection.projectHandoff?.status === "requested") {
     return { kind: "project_handoff" };
+  }
+  if (projection.verifierSelection?.status === "required") {
+    return {
+      kind: "verifier_selection",
+      reason: projection.verifierSelection.reason,
+      requiredCapabilities: [
+        ...projection.verifierSelection.requiredCapabilities,
+      ],
+      candidateRuntimeIds: [
+        ...projection.verifierSelection.candidateRuntimeIds,
+      ],
+    };
   }
   const handoff = projection.runtime.architect.handoff;
   if (handoff) {
@@ -129,7 +147,7 @@ export async function runNativeBuildDiscussion(
   const health = await getNativeRunnerHealth(connection);
   if (!supportsNativeRunnerNodeVersion(health.nodeVersion)) {
     throw new Error(
-      `Runner V2 requires Node.js ${MINIMUM_NATIVE_RUNNER_NODE_VERSION} or newer; connected runner uses ${health.nodeVersion}.`
+      `Runner V2 supports ${NATIVE_RUNNER_NODE_POLICY_DESCRIPTION}; connected runner uses ${health.nodeVersion}.`
     );
   }
   let runId = discussion.nativeBuildRunId
@@ -157,7 +175,7 @@ export async function runNativeBuildDiscussion(
   const modelIds = JSON.parse(discussion.modelIds) as string[];
   const architectRuntimeId = discussion.judgeModelId ?? modelIds[0];
   if (!architectRuntimeId) throw new Error("Build mode requires an Architect model.");
-  const { configuredRuntimeIds, workerRuntimeIds } = selectNativeBuildRuntimes(
+  const { configuredRuntimeIds, workerRuntimeIds, verifierRuntimeIds } = selectNativeBuildRuntimes(
     modelIds,
     architectRuntimeId
   );
@@ -188,6 +206,7 @@ export async function runNativeBuildDiscussion(
         objective,
         architectRuntimeId,
         workerRuntimeIds,
+        verifierRuntimeIds,
         maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
         ...nativePolicy,
       },
@@ -225,6 +244,10 @@ export async function runNativeBuildDiscussion(
     const pauseGate = nativeBuildPauseGate(pausedProjection);
     if (pauseGate.kind === "project_handoff") {
       emitProjectHandoffPause(discussion, pausedProjection, emit);
+      return;
+    }
+    if (pauseGate.kind === "verifier_selection") {
+      emitVerifierSelectionPause(discussion, pauseGate, emit);
       return;
     }
     if (pauseGate.kind === "architect_handoff") {
@@ -299,6 +322,10 @@ export async function runNativeBuildDiscussion(
         const pauseGate = nativeBuildPauseGate(projection);
         if (pauseGate.kind === "project_handoff") {
           emitProjectHandoffPause(discussion, projection, emit);
+          return;
+        }
+        if (pauseGate.kind === "verifier_selection") {
+          emitVerifierSelectionPause(discussion, pauseGate, emit);
           return;
         }
         if (pauseGate.kind === "architect_handoff") {
@@ -384,15 +411,44 @@ export function selectNativeBuildRuntimes(
 ): {
   configuredRuntimeIds: string[];
   workerRuntimeIds: string[];
+  verifierRuntimeIds: string[];
 } {
   const workers = [
     ...new Set(modelIds.filter((runtimeId) => runtimeId !== architectRuntimeId)),
   ];
   if (workers.length === 0) workers.push(architectRuntimeId);
+  const configuredRuntimeIds = [...new Set([architectRuntimeId, ...workers])];
   return {
-    configuredRuntimeIds: [...new Set([architectRuntimeId, ...workers])],
+    configuredRuntimeIds,
     workerRuntimeIds: workers,
+    verifierRuntimeIds: [...configuredRuntimeIds],
   };
+}
+
+function emitVerifierSelectionPause(
+  discussion: Discussion,
+  selection: Extract<NativeBuildPauseGate, { kind: "verifier_selection" }>,
+  emit: Emit,
+): void {
+  emit({
+    type: "verifier_selection_required",
+    reason: selection.reason,
+    requiredCapabilities: [...selection.requiredCapabilities],
+    candidateRuntimeIds: [...selection.candidateRuntimeIds],
+  });
+  const now = new Date().toISOString();
+  updateDiscussion(discussion.id, {
+    status: "stopped",
+    buildStopReason: "blocked",
+    buildStoppedAt: now,
+    updatedAt: now,
+  });
+  emit({
+    type: "build_stopped",
+    reason: "blocked",
+    message:
+      "Independent verification requires your selection before the exact revision can be approved.",
+  });
 }
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -586,13 +642,27 @@ function buildObjective(discussion: Discussion): string {
 }
 
 function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void {
+  const verificationState = (task: NativeBuildProjection["tasks"][string]) => {
+    if (task.kind !== "final_verification") return { kind: task.kind };
+    const current = projection.finalVerification?.current;
+    return {
+      kind: task.kind,
+      ...(current && current.taskId === task.id ? { generation: {
+        categories: (current.completedChecks ?? []).map((check) => ({ status: check.green ? "passed" : "failed" })),
+        cleanup: { status: current.cleanup?.status ?? "pending" },
+        review: { status: current.review?.status ?? "pending" },
+        repairs: (current.repairTaskIds ?? []).map((taskId) => ({ status: projection.tasks[taskId]?.status ?? "missing" })),
+      } } : {}),
+    };
+  };
   emit({
     type: "build_plan",
     cycle: projection.planRevision,
     tasks: Object.values(projection.tasks).map((task) => ({
       id: task.id,
       title: task.objective,
-      status: nativeBuildTaskStatus(task.status),
+      status: nativeBuildTaskStatus(task.status, verificationState(task)),
+      kind: task.kind,
     })),
   });
   for (const task of Object.values(projection.tasks)) {
@@ -600,7 +670,8 @@ function emitTaskProjection(projection: NativeBuildProjection, emit: Emit): void
       type: "task_status",
       taskId: task.id,
       title: task.objective,
-      status: nativeBuildTaskStatus(task.status),
+      status: nativeBuildTaskStatus(task.status, verificationState(task)),
+      kind: task.kind,
       worker: task.assignedWorkerId,
       cycle: projection.planRevision,
     });

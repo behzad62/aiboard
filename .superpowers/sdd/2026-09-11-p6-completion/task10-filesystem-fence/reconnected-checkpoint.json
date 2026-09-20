@@ -1,0 +1,63 @@
+{
+  "time": "2026-09-15T06:50:26.145Z",
+  "head": "f2916a21f270a64b8d3e4387350686680cb6bed2",
+  "branch": "codex/runner-v2-robust-build",
+  "index": "",
+  "base": "f2916a21f270a64b8d3e4387350686680cb6bed2",
+  "protectedChecked": 4523,
+  "unexpectedDrift": [],
+  "unexpectedMissing": [],
+  "unrelatedStatusUnchanged": true,
+  "unrelatedStatusCount": 1708,
+  "task11": "| 11 recovery/disclosure | Narrow exceptional proposals with identity/authority/expiry validation and durable redacted audit; routine lifecycle model-free; truthful API/client projection | PENDING |",
+  "sourceHashes": [
+    {
+      "path": "runner-v2/src/agent-contracts.ts",
+      "sha256": "44ad2cb6cb6fd3ce4b9ec46f1074d7c324dd418d6dae2b28bb538e53eb85c9d9"
+    },
+    {
+      "path": "runner-v2/src/execution-grants.ts",
+      "sha256": "6f4d505272a4f70ce55c169fe5d466baa99bf9d915c3f511a05f589afa95e00f"
+    },
+    {
+      "path": "runner-v2/src/filesystem-tools.ts",
+      "sha256": "e5194680fb741ba129c1ebfa4bbfa78f66ac83253d81ad1d0a54f7bdb1bef708"
+    },
+    {
+      "path": "runner-v2/src/git-baseline.ts",
+      "sha256": "23facbeac641010c29b0d58a198680de759ec5aec6f902f1eba085c63d3cebed"
+    },
+    {
+      "path": "runner-v2/src/git-bootstrap.ts",
+      "sha256": "0ff927075699c8f0c93288fe995792b5e26e04eb530adc87d0741a7b47b1a7b3"
+    },
+    {
+      "path": "runner-v2/src/tool-broker.ts",
+      "sha256": "e971fa0203e6e6ed76d8be93b7c23717c4cd1a0021e1ca562a20e92c6e88c2ab"
+    },
+    {
+      "path": "runner-v2/test/language-invocation-propagation.test.ts",
+      "sha256": "95545ed952d8391873d09d03be011214cb479778022f940f02a092dd5ec6730a"
+    },
+    {
+      "path": "runner-v2/test/support/git-fixture.ts",
+      "sha256": "92cf67eb8836334c5b98aa24b26c74ceca0b025ffe355335cd2fd027f724d1aa"
+    },
+    {
+      "path": "runner-v2/src/filesystem-mutation-fence.ts",
+      "sha256": "cffa6c0fe449042be7ba6d16c42122798b631c6815ca26768a1c2f56f6e4750c"
+    },
+    {
+      "path": "runner-v2/test/filesystem-mutation-fence.test.ts",
+      "sha256": "dd96a37b032cefea6d005b2000ceef1cbc0c4a7c693558cb4636db07cb787d30"
+    },
+    {
+      "path": "runner-v2/test/filesystem-mutation-routing.test.ts",
+      "sha256": "d6e72af9db5a834167abbd489b500d1a17a2b72b1853794d500265178d6849db"
+    },
+    {
+      "path": "runner-v2/test/filesystem-bootstrap-fence.test.ts",
+      "sha256": "e8bad9e4c70c03967e6987cd83ba3bc83fc0e0746ee9bdb2d570d60dc934411b"
+    }
+  ]
+}

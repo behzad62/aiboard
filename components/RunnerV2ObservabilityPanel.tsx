@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -24,7 +24,10 @@ import type {
   NativeBuildEvidenceFact,
   NativeBuildObservability,
   NativeBuildProjection,
+  NativeFinalVerificationObservability,
+  NativeIndependentVerifierObservability,
 } from "@/lib/client/runner-v2";
+import { projectNativeAcceptanceContract } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -49,6 +52,78 @@ export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
     providers: snapshot.providers.length,
     events: snapshot.events.length,
   };
+}
+
+export function runnerExecutionSafetyDiagnostics(snapshot: NativeBuildObservability): Array<{
+  key: string;
+  title: string;
+  detail: string;
+}> {
+  const safety = snapshot.executionSafety;
+  if (!safety) {
+    return [{
+      key: "execution-safety:not-reported",
+      title: "Execution safety not reported",
+      detail: "This Runner response predates execution-safety disclosure, so confinement cannot be inferred.",
+    }];
+  }
+  if (safety.availability === "unavailable") {
+    return [{
+      key: "execution-safety:unavailable",
+      title: "Execution safety unavailable",
+      detail: "This historical view cannot prove the original live grant, isolation lease, process identity, and cleanup state.",
+    }];
+  }
+  const items: Array<{ key: string; title: string; detail: string }> = [];
+  const isolationTitle = safety.fullBypass
+    ? "Full permission bypass active"
+    : safety.isolation.status === "write_confinement_exact_grant"
+      ? "Write confinement enforced"
+      : safety.isolation.status === "blocked"
+        ? "Execution isolation blocked"
+        : "Execution confinement unverified";
+  const isolationDetail = safety.fullBypass
+    ? "Full mode is explicitly unconfined; provider isolation is not being claimed as a security boundary."
+    : `${safety.isolation.status} · ${safety.isolation.securityBoundary} · ${safety.isolation.activeLeaseCount} active isolation lease${safety.isolation.activeLeaseCount === 1 ? "" : "s"}${
+        safety.isolation.blockers.length ? ` · blockers: ${safety.isolation.blockers.join("; ")}` : ""
+      }`;
+  items.push({ key: "execution-safety:isolation", title: isolationTitle, detail: isolationDetail });
+  items.push({
+    key: "execution-safety:grants",
+    title: "Execution grants",
+    detail: `${safety.grants.active} active · ${safety.grants.consumed} consumed`,
+  });
+  for (const process of safety.processes) {
+    const backend = process.backend
+      ? `${process.backend.backendId}${process.backend.providerId ? ` via ${process.backend.providerId}` : ""}`
+      : "backend unavailable";
+    const lifecycle = process.lifecycle
+      ? `lifecycle ${process.lifecycle.scope} (termination=${process.lifecycle.termination}, emptiness=${process.lifecycle.emptiness})`
+      : "lifecycle unattested";
+    const requiredScope = process.requiredLifecycleScope
+      ? `required ${process.requiredLifecycleScope}`
+      : "required scope unavailable";
+    const capabilities = Object.entries(process.capabilities)
+      .map(([name, state]) => `${name}=${state}`)
+      .join(", ");
+    const output = process.output.status === "unavailable"
+      ? "output unavailable"
+      : `${process.output.status} output · ${process.output.totalBytes} bytes · ${process.output.lossyBytes} lossy bytes`;
+    items.push({
+      key: `execution-safety:process:${process.invocationId}`,
+      title: `${process.kind} ${process.logicalProcessId}`,
+      detail: `${process.lifecycleState} · ${backend} · ${lifecycle} · ${requiredScope} · ${capabilities} · cleanup ${process.cleanup.state} · ${output}`,
+    });
+  }
+  for (const recovery of safety.recovery) {
+    const state = recovery.state === "user_decision_required" ? "user decision required" : recovery.state.replaceAll("_", " ");
+    items.push({
+      key: `execution-safety:recovery:${recovery.proposalId}`,
+      title: `Exceptional recovery: ${recovery.requestedAction}`,
+      detail: `${state}${recovery.cleanupState ? ` · cleanup ${recovery.cleanupState}` : ""}`,
+    });
+  }
+  return items;
 }
 
 type SearchableObservability = Pick<
@@ -110,7 +185,253 @@ export function runnerBuildControlSummary(projection: NativeBuildProjection | nu
   };
 }
 
-type UserFacingVerificationStatus = "passed" | "failed" | "recorded";
+type UserFacingVerificationStatus = "pending" | "passed" | "failed" | "not_applicable" | "recorded";
+
+export type RunnerAcceptanceEvidenceStatus = "submitted" | "not_submitted";
+export type RunnerAcceptanceVerdictStatus =
+  | "satisfied"
+  | "unsatisfied"
+  | "not_reviewed";
+
+export interface RunnerAcceptanceCriterionSummary {
+  id: string;
+  text: string;
+  evidence: {
+    status: RunnerAcceptanceEvidenceStatus;
+    evidenceIds: string[];
+    artifactHashes: string[];
+  };
+  verdict: {
+    status: RunnerAcceptanceVerdictStatus;
+    rationale?: string;
+    evidenceIds: string[];
+    artifactHashes: string[];
+  };
+}
+
+const ARCHITECT_DECISION_LABELS = {
+  authority_decision: "Authority decision",
+  destructive_action: "Destructive action",
+  requirement_conflict: "Requirement conflict",
+  external_dependency: "External dependency",
+  control_weakening: "Control weakening",
+  repair_budget_exhausted: "Repair budget exhausted",
+} as const;
+
+export type GuidanceReceiptStatus = "complete" | "current" | "pending";
+
+export function architectQuestionAnswerIdempotencyKey(
+  questionId: string,
+  version: number,
+): string {
+  return `architect-question:${questionId}:version:${version}:answer`;
+}
+
+export interface RunnerSteeringQuestion {
+  questionId: string;
+  question: string;
+  version: number;
+  decisionLabel: string;
+}
+
+export type RunnerQuestionAnswerCallback = (
+  questionId: string,
+  version: number,
+  answer: string,
+  idempotencyKey: string,
+) => Promise<void>;
+
+export interface ArchitectQuestionAnswerGate {
+  questionKey: string | null;
+  generation: number;
+}
+
+function architectQuestionKey(question: RunnerSteeringQuestion | undefined): string | null {
+  return question ? `${question.questionId}:version:${question.version}` : null;
+}
+
+export function createArchitectQuestionAnswerGate(
+  question: RunnerSteeringQuestion | undefined,
+): ArchitectQuestionAnswerGate {
+  return { questionKey: architectQuestionKey(question), generation: 0 };
+}
+
+export function alignArchitectQuestionAnswerGate(
+  gate: ArchitectQuestionAnswerGate,
+  question: RunnerSteeringQuestion | undefined,
+): void {
+  const nextKey = architectQuestionKey(question);
+  if (gate.questionKey === nextKey) return;
+  gate.questionKey = nextKey;
+  gate.generation += 1;
+}
+
+export async function submitRunnerArchitectQuestionAnswer(
+  question: RunnerSteeringQuestion,
+  answer: string,
+  onAnswerQuestion: RunnerQuestionAnswerCallback,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const trimmed = answer.trim();
+  if (!trimmed) return { ok: false, error: "Enter your decision before sending it." };
+  try {
+    await onAnswerQuestion(
+      question.questionId,
+      question.version,
+      trimmed,
+      architectQuestionAnswerIdempotencyKey(question.questionId, question.version),
+    );
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error
+        ? error.message
+        : "Runner did not accept this answer. Refresh the Build state and try again.",
+    };
+  }
+}
+
+export async function submitGuardedRunnerArchitectQuestionAnswer(
+  gate: ArchitectQuestionAnswerGate,
+  question: RunnerSteeringQuestion,
+  answer: string,
+  onAnswerQuestion: RunnerQuestionAnswerCallback,
+): Promise<{
+  current: boolean;
+  result: Awaited<ReturnType<typeof submitRunnerArchitectQuestionAnswer>>;
+}> {
+  alignArchitectQuestionAnswerGate(gate, question);
+  const request = { questionKey: gate.questionKey, generation: gate.generation + 1 };
+  gate.generation = request.generation;
+  const result = await submitRunnerArchitectQuestionAnswer(
+    question,
+    answer,
+    onAnswerQuestion,
+  );
+  return {
+    current: gate.questionKey === request.questionKey && gate.generation === request.generation,
+    result,
+  };
+}
+
+export function RunnerQuestionAnswerError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <p role="alert" className="text-xs font-medium text-red-700 dark:text-red-300">
+      {message}
+    </p>
+  );
+}
+
+export function runnerSteeringLedgerView(projection: NativeBuildProjection | null) {
+  const guidance = Object.values(projection?.userGuidance ?? {})
+    .sort((left, right) => left.version - right.version)
+    .map((item) => ({
+      guidanceId: item.guidanceId,
+      text: item.text,
+      version: item.version,
+      state: item.status,
+      acknowledgementRationale: item.resolution?.rationale,
+      receipt: item.status === "acknowledged"
+        ? ([
+            { label: "Sent to Runner", status: "complete" },
+            { label: "Waiting for Architect", status: "complete" },
+            { label: "Acknowledged", status: "complete" },
+          ] as const)
+        : ([
+            { label: "Sent to Runner", status: "complete" },
+            { label: "Waiting for Architect", status: "current" },
+            { label: "Acknowledged", status: "pending" },
+          ] as const),
+    }));
+  const questionId = projection?.blockingArchitectQuestionId;
+  const question = questionId
+    ? projection?.architectQuestions?.[questionId]
+    : undefined;
+  return {
+    guidance,
+    activeQuestion: question?.status === "open" && question.resumeStatus !== "superseded"
+      ? {
+          questionId: question.questionId,
+          question: question.question,
+          version: question.version,
+          decisionLabel: question.decisionKind
+            ? ARCHITECT_DECISION_LABELS[question.decisionKind]
+            : "User decision",
+        }
+      : undefined,
+  };
+}
+
+export interface RunnerAcceptanceTaskSummary {
+  taskId: string;
+  title: string;
+  version?: number;
+  criteria: RunnerAcceptanceCriterionSummary[];
+}
+
+export interface RunnerAcceptanceContractSummary {
+  status: NonNullable<NativeBuildProjection["acceptanceContractStatus"]>;
+  planRevision: number;
+  tasks: RunnerAcceptanceTaskSummary[];
+}
+
+export function runnerAcceptanceContractSummary(
+  projection: NativeBuildProjection | null
+): RunnerAcceptanceContractSummary {
+  if (!projection) {
+    return { status: "current", planRevision: 0, tasks: [] };
+  }
+  const contract = projectNativeAcceptanceContract(projection);
+  return {
+    status: contract.status,
+    planRevision: contract.planRevision,
+    tasks: Object.values(projection.tasks).map((task) => {
+      const projectedTask = contract.tasks[task.id];
+      const linksByCriterion = new Map<string, typeof task.criterionEvidenceLinks>();
+      for (const link of task.criterionEvidenceLinks ?? []) {
+        const links = linksByCriterion.get(link.criterionId) ?? [];
+        links.push(link);
+        linksByCriterion.set(link.criterionId, links);
+      }
+      const verdictsByCriterion = new Map(
+        (projectedTask?.criterionVerdicts ?? []).map((verdict) => [verdict.criterionId, verdict])
+      );
+      return {
+        taskId: task.id,
+        title: task.objective,
+        ...(task.acceptanceCriteriaVersion !== undefined
+          ? { version: task.acceptanceCriteriaVersion }
+          : {}),
+        criteria: (task.acceptanceCriteria ?? []).map((criterion) => {
+          const links = linksByCriterion.get(criterion.id) ?? [];
+          const verdict = verdictsByCriterion.get(criterion.id);
+          return {
+            id: criterion.id,
+            text: criterion.text,
+            evidence: {
+              status: links.length > 0 ? "submitted" : "not_submitted",
+              evidenceIds: links.map((link) => link.evidenceId),
+              artifactHashes: [...new Set(links.flatMap((link) => link.artifactHashes))],
+            },
+            verdict: verdict
+              ? {
+                  status: verdict.verdict,
+                  rationale: verdict.rationale,
+                  evidenceIds: [...verdict.evidenceIds],
+                  artifactHashes: [...(verdict.artifactHashes ?? [])],
+                }
+              : {
+                  status: "not_reviewed",
+                  evidenceIds: [],
+                  artifactHashes: [],
+                },
+          };
+        }),
+      };
+    }),
+  };
+}
 
 export function runnerVerificationTone(
   verification: ReadonlyArray<{ status: UserFacingVerificationStatus }>
@@ -197,6 +518,15 @@ export function runnerEvidenceDiagnosticDetail(fact: NativeBuildEvidenceFact): s
 
 function lifecycleLabel(projection: NativeBuildProjection | null): string {
   if (!projection) return "Waiting for build activity";
+  if (projection.verifierSelection?.status === "required") {
+    return "Choose an independent verifier";
+  }
+  if (projection.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
+    return "Acceptance criteria upgrade required";
+  }
+  if (projection.acceptanceContractStatus === "legacy_completed") {
+    return "Legacy build complete";
+  }
   if (projection.projectHandoff?.status === "requested") {
     return "Ready for your decision";
   }
@@ -275,6 +605,11 @@ export function runnerUserFacingObservability(
     detail: string;
     status: UserFacingVerificationStatus;
   }>;
+  verificationSeal?: {
+    generationId: string;
+    targetRevision: string;
+    status: "checks_pending" | "cleanup_pending" | "review_pending" | "repair_required" | "approved" | "failed" | "stale";
+  };
   problems: UserFacingProblem[];
 } {
   const tasks = projection ? Object.values(projection.tasks) : [];
@@ -293,7 +628,7 @@ export function runnerUserFacingObservability(
     }
   }
 
-  const verification = [...newestEvidence.entries()]
+  const evidenceVerification = [...newestEvidence.entries()]
     .sort(([, left], [, right]) => right.record.createdAt.localeCompare(left.record.createdAt))
     .map(([key, { category, record }]) => {
       const status = evidenceStatus(record.fact);
@@ -305,8 +640,143 @@ export function runnerUserFacingObservability(
         status,
       };
     });
+  const canonical = snapshot.finalVerification?.current;
+  const categoryLabels: Record<string, string> = {
+    build: "Build", tests: "Tests", runtime_smoke: "Runtime", browser: "Browser",
+  };
+  const verification = canonical
+    ? canonical.categories.map((category) => ({
+        key: `${canonical.generationId}:${category.category}`,
+        category: categoryLabels[category.category],
+        title: category.status === "not_applicable"
+          ? "Not needed for this revision"
+          : `Exact revision ${canonical.targetRevision.slice(0, 12)}`,
+        detail: category.status === "pending"
+          ? "Runner is waiting to check this category on the exact integrated revision."
+          : category.status === "not_applicable"
+            ? category.rationale ?? "Repository inspection found no applicable surface."
+            : category.status === "failed"
+              ? category.issues.join(" ") || "This check did not pass; Runner will preserve diagnostics and schedule repair."
+              : "The current integrated revision passed this mechanical check.",
+        status: category.status,
+      }))
+    : evidenceVerification;
 
   const problems: UserFacingProblem[] = [];
+  const executionSafety = snapshot.executionSafety;
+  if (executionSafety?.availability === "live") {
+    if (executionSafety.fullBypass) {
+      problems.push({
+        key: "execution-safety:full-bypass",
+        title: "Full permission bypass is active",
+        detail: "This run explicitly permits unconfined execution in Full mode. Runner does not describe this state as confined.",
+      });
+    } else if (executionSafety.isolation.status === "blocked" || executionSafety.isolation.status === "unverified") {
+      problems.push({
+        key: "execution-safety:isolation",
+        title: executionSafety.isolation.status === "blocked" ? "Execution isolation is blocked" : "Execution confinement is unverified",
+        detail: executionSafety.isolation.status === "blocked"
+          ? "The configured provider could not establish the requested execution boundary."
+          : "No enforced write-confinement record is available, so Runner cannot claim this execution was confined.",
+      });
+    }
+    const exceptionalStates = new Set(["orphaned", "identity_mismatch", "backend_unavailable", "outcome_unknown"]);
+    for (const process of executionSafety.processes) {
+      const unavailableRequired = process.requiredCapabilities.filter((capability) =>
+        process.capabilities[capability as keyof typeof process.capabilities] !== "enforced"
+      );
+      if (unavailableRequired.length > 0) {
+        problems.push({
+          key: `execution-safety:capabilities:${process.invocationId}`,
+          title: "Required execution capability is not enforced",
+          detail: `${process.logicalProcessId}: ${unavailableRequired.join(", ")} is partial, unavailable, or unverified.`,
+        });
+      }
+      if (process.output.status === "lossy" || process.output.status === "truncated") {
+        problems.push({
+          key: `execution-safety:output:${process.invocationId}`,
+          title: "Process output is incomplete",
+          detail: process.output.status === "lossy"
+            ? `${process.logicalProcessId} lost ${process.output.lossyBytes} byte${process.output.lossyBytes === 1 ? "" : "s"} of output; captured output must not be treated as complete.`
+            : `${process.logicalProcessId} output was truncated; captured output must not be treated as complete.`,
+        });
+      }
+      if (process.cleanup.state === "failed" || (exceptionalStates.has(process.lifecycleState) && process.cleanup.state === "pending")) {
+        problems.push({
+          key: `execution-safety:cleanup:${process.invocationId}`,
+          title: process.cleanup.state === "failed" ? "Process cleanup failed" : "Process cleanup is unresolved",
+          detail: process.cleanup.detail ?? "Runner has not proven this process tree empty, so cleanup is not complete.",
+        });
+      }
+    }
+    for (const recovery of executionSafety.recovery) {
+      const authorizedDestructive = recovery.state === "authorized" && recovery.requestedAction !== "inspect";
+      if (!authorizedDestructive && !["user_decision_required", "executing", "outcome_unknown"].includes(recovery.state)) continue;
+      problems.push({
+        key: `execution-safety:recovery:${recovery.proposalId}`,
+        title: recovery.state === "user_decision_required"
+          ? "Exceptional recovery needs your decision"
+          : authorizedDestructive
+            ? "Authorized exceptional recovery is pending"
+            : "Exceptional recovery is unresolved",
+        detail: recovery.state === "user_decision_required"
+          ? "Runner requires an exact user decision before executing this destructive recovery proposal."
+          : authorizedDestructive
+            ? "The exact destructive proposal is authorized but has not completed; the Build remains blocked until execution reaches a proven outcome."
+            : "Runner will not replay or broaden this recovery action until its outcome is known.",
+      });
+    }
+  }
+  let verificationSeal: {
+    generationId: string;
+    targetRevision: string;
+    status: "checks_pending" | "cleanup_pending" | "review_pending" | "repair_required" | "approved" | "failed" | "stale";
+  } | undefined;
+  if (canonical) {
+    const status = canonical.revisionStatus === "stale" ? "stale"
+      : canonical.cleanup.status === "failed" ? "failed"
+      : canonical.mechanicalFailure || canonical.review.status === "repair_required" || canonical.repairs.length > 0 ? "repair_required"
+      : canonical.categories.some((category) => category.status === "failed") ? "failed"
+      : canonical.categories.some((category) => category.status === "pending") ? "checks_pending"
+      : canonical.cleanup.status !== "succeeded" ? "cleanup_pending"
+      : canonical.review.status === "approved" ? "approved"
+      : "review_pending";
+    verificationSeal = { generationId: canonical.generationId, targetRevision: canonical.targetRevision, status };
+    if (canonical.revisionStatus === "stale") problems.push({ key: "final-verification:stale", title: "Verification is stale", detail: "The integrated revision changed. Runner must verify the new exact revision before completion." });
+    if (canonical.mechanicalFailure || canonical.categories.some((category) => category.status === "failed")) problems.push({ key: "final-verification:failure", title: "Final verification found a problem", detail: canonical.cleanup.diagnosticsAvailable ? "Diagnostics were saved. Runner will repair the failed checks and verify the next integrated revision." : "Runner will preserve diagnostics, repair the failed checks, and verify again." });
+    if (canonical.cleanup.status === "failed") problems.push({ key: "final-verification:cleanup", title: "Verification cleanup failed", detail: "Completion is blocked until Runner safely closes verification resources and removes only its owned workspace." });
+    if (canonical.repairs.length > 0 || canonical.review.status === "repair_required") problems.push({ key: "final-verification:repair", title: canonical.repairs.some((repair) => !["integrated", "cancelled"].includes(repair.status)) ? "Verification repair is in progress" : "Verification repair required", detail: "Runner is fixing the failed category. A fresh verification generation will check the repaired revision." });
+  } else if (snapshot.finalVerification && projection && projection.status !== "completed" && projection.runPolicy !== "plan_only") {
+    problems.push({ key: "final-verification:missing", title: "Final verification has not started", detail: "Runner waits for all implementation work, then checks the exact integrated revision before completion." });
+  }
+  const independentVerifier = snapshot.independentVerifier;
+  const currentVerifierReview = independentVerifier?.review.current;
+  if (independentVerifier?.selection?.status === "required") {
+    problems.push({
+      key: "verifier:selection",
+      title: "Choose an independent verifier",
+      detail: independentVerifier.selection.reason,
+    });
+  }
+  if (
+    currentVerifierReview?.state === "current" &&
+    currentVerifierReview.verdict &&
+    !currentVerifierReview.verdict.satisfied
+  ) {
+    problems.push({
+      key: "verifier:repair",
+      title: "Independent verification requires repair",
+      detail:
+        "Runner will repair the unsatisfied criteria, integrate a new revision, and request a fresh independent verdict.",
+    });
+  }
+  if (projection?.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
+    problems.push({
+      key: "acceptance-contract:upgrade",
+      title: "Acceptance criteria need an Architect upgrade",
+      detail: "This legacy run cannot submit or review work until every non-cancelled task has criteria.",
+    });
+  }
   const currentWorkerIds = new Set(
     tasks
       .filter((task) => ACTIVE_WORKER_TASK_STATUSES.has(task.status))
@@ -402,8 +872,166 @@ export function runnerUserFacingObservability(
       })),
     },
     verification,
+    ...(verificationSeal ? { verificationSeal } : {}),
     problems,
   };
+}
+
+export function RunnerV2SteeringPanel({
+  projection,
+  onAnswerQuestion,
+}: {
+  projection: NativeBuildProjection | null;
+  onAnswerQuestion?: (
+    questionId: string,
+    version: number,
+    answer: string,
+    idempotencyKey: string,
+  ) => Promise<void>;
+}) {
+  const view = runnerSteeringLedgerView(projection);
+  const question = view.activeQuestion;
+  const [answer, setAnswer] = useState("");
+  const [answerPending, setAnswerPending] = useState(false);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  const answerGateRef = useRef(createArchitectQuestionAnswerGate(question));
+  alignArchitectQuestionAnswerGate(answerGateRef.current, question);
+  useEffect(() => {
+    setAnswer("");
+    setAnswerPending(false);
+    setAnswerError(null);
+  }, [question?.questionId, question?.version]);
+
+  if (view.guidance.length === 0 && !question) return null;
+
+  const submitAnswer = async () => {
+    const trimmed = answer.trim();
+    if (!question || !onAnswerQuestion || !trimmed || answerPending) return;
+    setAnswerPending(true);
+    setAnswerError(null);
+    const completed = await submitGuardedRunnerArchitectQuestionAnswer(
+      answerGateRef.current,
+      question,
+      trimmed,
+      onAnswerQuestion,
+    );
+    if (!completed.current) return;
+    const { result } = completed;
+    if (result.ok) {
+      setAnswer("");
+    } else {
+      setAnswerError(result.error);
+    }
+    setAnswerPending(false);
+  };
+
+  return (
+    <section aria-labelledby="runner-steering-title" className="space-y-3">
+      {question && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-amber-950 shadow-sm dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 id="runner-steering-title" className="text-sm font-semibold">
+                  Architect needs your decision
+                </h2>
+                <Badge variant="outline" className="border-amber-400/70 font-mono text-[0.65rem]">
+                  {question.decisionLabel} · v{question.version}
+                </Badge>
+              </div>
+              <p className="mt-2 text-sm leading-relaxed">{question.question}</p>
+              <form
+                className="mt-3 space-y-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitAnswer();
+                }}
+              >
+                <label htmlFor={`architect-answer-${question.questionId}`} className="text-xs font-medium">
+                  Your decision
+                </label>
+                <textarea
+                  id={`architect-answer-${question.questionId}`}
+                  value={answer}
+                  onChange={(event) => setAnswer(event.target.value)}
+                  rows={2}
+                  className="w-full resize-y rounded-md border border-amber-300 bg-background px-3 py-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
+                  placeholder="State the decision the Architect should follow."
+                  disabled={answerPending}
+                />
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs opacity-75">Runner applies this answer to this exact question version.</p>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={!answer.trim() || answerPending || !onAnswerQuestion}
+                  >
+                    {answerPending ? "Sending decision…" : "Answer decision"}
+                  </Button>
+                </div>
+                <RunnerQuestionAnswerError message={answerError} />
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {view.guidance.length > 0 && (
+        <div className="rounded-lg border bg-card px-4 py-3 shadow-sm">
+          <div className="flex items-center gap-2">
+            <MessageSquareText className="h-4 w-4 text-primary" />
+            <div>
+              <h2 id={question ? undefined : "runner-steering-title"} className="text-sm font-semibold">
+                Steering ledger
+              </h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Durable text guidance recorded by Runner V2.
+              </p>
+            </div>
+          </div>
+          <ol className="mt-3 space-y-3">
+            {view.guidance.map((item) => (
+              <li key={item.guidanceId} className="rounded-md border bg-muted/10 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm leading-relaxed">{item.text}</p>
+                  <span className={`font-mono text-[0.65rem] ${
+                    item.state === "acknowledged" ? "text-emerald-600 dark:text-emerald-400" : "text-blue-600 dark:text-blue-400"
+                  }`}>
+                    guidance v{item.version}
+                  </span>
+                </div>
+                <div className="mt-3 grid gap-1.5 sm:grid-cols-3" aria-label="Durable guidance receipt">
+                  {item.receipt.map((step) => (
+                    <div
+                      key={step.label}
+                      className={`flex items-center gap-2 rounded border px-2.5 py-1.5 text-[0.7rem] ${
+                        step.status === "complete"
+                          ? "border-emerald-300/70 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
+                          : step.status === "current"
+                            ? "border-blue-300/70 bg-blue-50 text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-300"
+                            : "border-border bg-muted/30 text-muted-foreground"
+                      }`}
+                    >
+                      {step.status === "complete"
+                        ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                        : <CircleDot className="h-3.5 w-3.5 shrink-0" />}
+                      <span>{step.label}</span>
+                    </div>
+                  ))}
+                </div>
+                {item.acknowledgementRationale && (
+                  <p className="mt-2 border-l-2 border-emerald-400 pl-2 text-xs leading-relaxed text-muted-foreground">
+                    {item.acknowledgementRationale}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </section>
+  );
 }
 
 export function RunnerV2ObservabilityPanel({
@@ -438,6 +1066,7 @@ export function RunnerV2ObservabilityPanel({
   const integrationRevision = snapshot.git.integrationRevision || control.revision;
   const visibleCommits = snapshot.git.commits.filter(matches);
   const view = runnerUserFacingObservability(snapshot, projection ?? null, clock);
+  const acceptance = runnerAcceptanceContractSummary(projection ?? null);
   return (
     <section aria-labelledby="runner-activity-title" className="overflow-hidden rounded-lg border bg-card shadow-sm">
       <div className="border-b px-4 py-4 sm:px-5">
@@ -482,7 +1111,71 @@ export function RunnerV2ObservabilityPanel({
           )}
         </UserSection>
 
-        <UserSection
+        {(acceptance.tasks.length > 0 || acceptance.status !== "current") && (
+          <UserSection
+            title="Acceptance contract"
+            icon={<ShieldCheck className="h-4 w-4" />}
+            accent={acceptance.status === "acceptance_contract_upgrade_required" ? "warning" : "progress"}
+          >
+            <p className="mb-3 text-[0.7rem] leading-relaxed text-muted-foreground">
+              Evidence is mechanical; Architect verdict is semantic.
+            </p>
+            {acceptance.status === "acceptance_contract_upgrade_required" && (
+              <p className="mb-3 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-xs">
+                The Architect must upgrade criteria before this legacy run can submit or review work.
+              </p>
+            )}
+            {acceptance.tasks.length > 0 ? (
+              <ul className="space-y-3">
+                {acceptance.tasks.map((task) => (
+                  <li key={task.taskId} className="rounded-md border bg-muted/10 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="min-w-0 truncate text-xs font-medium">
+                        <span className="font-mono text-[0.68rem] text-muted-foreground">{task.taskId}</span>{" "}
+                        {task.title}
+                      </p>
+                      {task.version !== undefined && (
+                        <Badge variant="secondary" className="shrink-0 text-[0.65rem]">v{task.version}</Badge>
+                      )}
+                    </div>
+                    <ul className="mt-2 space-y-2 border-t pt-2">
+                      {task.criteria.map((criterion) => (
+                        <li key={criterion.id} className="space-y-1.5 text-xs">
+                          <p className="leading-relaxed">
+                            <span className="font-mono text-[0.68rem] text-muted-foreground">{criterion.id}</span>{" "}
+                            {criterion.text}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge variant={criterion.evidence.status === "submitted" ? "success" : "secondary"} className="text-[0.65rem]">
+                              {criterion.evidence.status === "submitted"
+                                ? `Evidence submitted${criterion.evidence.evidenceIds.length > 0 ? ` · ${criterion.evidence.evidenceIds.join(", ")}` : ""}`
+                                : "Evidence not submitted"}
+                            </Badge>
+                            <Badge
+                              variant={criterion.verdict.status === "satisfied" ? "success" : criterion.verdict.status === "unsatisfied" ? "destructive" : "secondary"}
+                              className="text-[0.65rem]"
+                            >
+                              Architect verdict: {criterion.verdict.status === "satisfied" ? "Satisfied" : criterion.verdict.status === "unsatisfied" ? "Unsatisfied" : "Not reviewed"}
+                            </Badge>
+                          </div>
+                          {criterion.verdict.rationale && (
+                            <p className="leading-relaxed text-muted-foreground">{criterion.verdict.rationale}</p>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-muted-foreground">No acceptance criteria are recorded for this run.</p>
+            )}
+          </UserSection>
+        )}
+
+        {snapshot.finalVerification?.current ? (
+          <FinalVerificationManifest verification={snapshot.finalVerification} />
+        ) : <UserSection
           title="Verification"
           icon={<ShieldCheck className="h-4 w-4" />}
           accent={runnerVerificationTone(view.verification)}
@@ -507,7 +1200,14 @@ export function RunnerV2ObservabilityPanel({
               Verification results will appear after the runner records its first check.
             </p>
           )}
-        </UserSection>
+        </UserSection>}
+
+        {snapshot.independentVerifier && (
+          <IndependentVerifierManifest
+            verifier={snapshot.independentVerifier}
+            projection={projection ?? null}
+          />
+        )}
 
         <UserSection
           title="Problems requiring attention"
@@ -641,6 +1341,12 @@ export function RunnerV2ObservabilityPanel({
           ]}
         />
         <ObservationList
+          icon={<ShieldCheck className="h-3.5 w-3.5" />}
+          title="Execution safety"
+          empty="Execution safety disclosure is unavailable."
+          items={runnerExecutionSafetyDiagnostics(snapshot).filter(matches)}
+        />
+        <ObservationList
           icon={<Server className="h-3.5 w-3.5" />}
           title="Provider health"
           empty="No provider health transitions recorded."
@@ -713,9 +1419,217 @@ export function RunnerV2ObservabilityPanel({
   );
 }
 
+export function FinalVerificationManifest({
+  verification,
+}: {
+  verification: NativeFinalVerificationObservability;
+}) {
+  const current = verification.current;
+  if (!current) {
+    return (
+      <UserSection title="Final verification" icon={<ShieldCheck className="h-4 w-4" />} accent="progress">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Runner waits for the exact integrated revision, then checks Build, Tests, Runtime, and Browser before completion.
+        </p>
+      </UserSection>
+    );
+  }
+  const labels: Record<string, string> = { build: "Build", tests: "Tests", runtime_smoke: "Runtime", browser: "Browser" };
+  const label = (status: string) => status === "not_applicable" ? "N/A" : status[0].toUpperCase() + status.slice(1);
+  const seal = current.review.status === "approved" ? "Architect approved"
+    : current.review.status === "repair_required" || current.repairs.length > 0 ? "Repair required"
+    : current.review.status === "requested" ? "Architect review in progress"
+    : "Architect review pending";
+  return (
+    <section aria-label="Final verification manifest" className="min-w-0 rounded-lg border border-primary/25 bg-muted/10 p-3.5 text-foreground xl:col-span-2">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-primary/15 pb-3">
+        <div>
+          <div className="flex items-center gap-2 text-primary"><ShieldCheck className="h-4 w-4" /><h3 className="text-xs font-semibold text-foreground">Final verification</h3></div>
+          <p className="mt-2 font-mono text-[0.68rem] text-muted-foreground">Revision {current.targetRevision.slice(0, 12)} · Generation {current.generationId}</p>
+        </div>
+        <Badge variant={current.revisionStatus === "current" ? "secondary" : "warning"}>{current.revisionStatus === "current" ? "Exact revision" : "Stale revision"}</Badge>
+      </div>
+      <div className="grid gap-2 py-3 sm:grid-cols-2 lg:grid-cols-4">
+        {current.categories.map((category) => (
+          <div key={category.category} className="rounded-md border bg-card px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold">{labels[category.category]}</p><span className={`text-[0.68rem] font-semibold ${verificationStatusClass(category.status)}`}>{label(category.status)}</span></div>
+            <p className="mt-1.5 text-[0.68rem] leading-relaxed text-muted-foreground">{category.status === "pending" ? "Waiting for the exact revision check." : category.status === "not_applicable" ? category.rationale : category.status === "failed" ? category.issues.join(" ") || "Check failed." : "Current revision passed."}</p>
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-2 border-t border-primary/15 pt-3 text-[0.7rem] sm:grid-cols-3">
+        <p><span className="font-medium">Cleanup</span><br /><span className="text-muted-foreground">{current.cleanup.status === "succeeded" ? "Complete" : label(current.cleanup.status)}{current.cleanup.diagnosticsAvailable ? " · Diagnostics saved" : ""}</span></p>
+        <p><span className="font-medium">Release seal</span><br /><span className="text-muted-foreground">{seal}</span></p>
+        <p><span className="font-medium">Repair</span><br /><span className="text-muted-foreground">{current.repairs.length > 0 ? "Repair in progress" : "No repair scheduled"}</span></p>
+      </div>
+    </section>
+  );
+}
+
+export function IndependentVerifierManifest({
+  verifier,
+  projection,
+}: {
+  verifier: NativeIndependentVerifierObservability;
+  projection: NativeBuildProjection | null;
+}) {
+  const risk = verifier.risk.current;
+  const review = verifier.review.current;
+  const verdict = review?.state === "current" ? review.verdict : undefined;
+  const strictQualification =
+    verifier.policy?.alwaysRequireIndependentVerifier ?? false;
+  const required = risk
+    ? risk.risk === "high" || strictQualification
+    : undefined;
+  const accent = verdict?.satisfied
+    ? "success"
+    : verdict && !verdict.satisfied
+      ? "error"
+      : required === true
+        ? "warning"
+        : "progress";
+  const riskLabel = !risk
+    ? "Not assessed"
+    : risk.risk === "high"
+      ? "High risk"
+      : "Low risk";
+  const verdictLabel = !risk
+    ? "Risk assessment pending"
+    : required === false
+      ? "Not required"
+      : !review
+      ? verifier.selection?.status === "required"
+        ? "Verifier choice required"
+        : "Waiting for verifier"
+      : !verdict
+        ? "Review in progress"
+        : verdict.satisfied
+          ? "Satisfied"
+          : "Repair required";
+
+  return (
+    <UserSection
+      title="Independent verification"
+      icon={<ShieldCheck className="h-4 w-4" />}
+      accent={accent}
+    >
+      <div className="space-y-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          High-risk builds always require an independent verifier.
+          {strictQualification
+            ? " This run also independently verifies low-risk revisions."
+            : " Low-risk revisions skip this gate unless the run opts into stricter qualification."}
+        </p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="rounded-md border bg-card px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold">Build risk</p>
+              <Badge
+                variant={risk?.risk === "high" ? "warning" : "secondary"}
+                className="text-[0.65rem]"
+              >
+                {riskLabel}
+              </Badge>
+            </div>
+            {risk?.architectRationale && (
+              <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
+                {risk.architectRationale}
+              </p>
+            )}
+            {risk?.reasons.length ? (
+              <ul className="mt-2 space-y-1 text-[0.68rem] text-muted-foreground">
+                {risk.reasons.map((reason) => (
+                  <li key={`${reason.code}:${reason.evidence.join(":")}`}>
+                    {riskReasonLabel(reason.code)}
+                    {reason.evidence.length > 0
+                      ? ` · ${reason.evidence.join(", ")}`
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
+          <div className="rounded-md border bg-card px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold">Verifier verdict</p>
+              <Badge
+                variant={
+                  verdict?.satisfied
+                    ? "success"
+                    : verdict
+                      ? "destructive"
+                      : "secondary"
+                }
+                className="text-[0.65rem]"
+              >
+                {verdictLabel}
+              </Badge>
+            </div>
+            <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
+              {review
+                ? `${review.runtime.runtimeId} · revision ${review.targetRevision.slice(0, 12)}`
+                : verifier.selection?.status === "required"
+                  ? verifier.selection.reason
+                  : !risk
+                    ? "Runner is assessing the exact integrated revision before deciding whether independent verification is required."
+                  : required === true
+                    ? "Runner will bind a distinct verifier to the exact integrated revision."
+                    : "The current low-risk revision does not require an independent verdict."}
+            </p>
+          </div>
+        </div>
+        {verdict && (
+          <ul className="space-y-2 border-t pt-3">
+            {verdict.criterionVerdicts.map((criterion) => (
+              <li
+                key={`${criterion.taskId}:${criterion.criterionId}`}
+                className="rounded-md border bg-card px-3 py-2.5"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs font-medium">
+                    {projection?.tasks[criterion.taskId]?.objective ??
+                      criterion.taskId}{" "}
+                    · {criterion.criterionId}
+                  </p>
+                  <Badge
+                    variant={
+                      criterion.verdict === "satisfied"
+                        ? "success"
+                        : "destructive"
+                    }
+                    className="text-[0.65rem]"
+                  >
+                    {criterion.verdict === "satisfied"
+                      ? "Satisfied"
+                      : "Unsatisfied"}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-[0.7rem] leading-relaxed text-muted-foreground">
+                  {criterion.rationale}
+                </p>
+                <p className="mt-1 font-mono text-[0.65rem] text-muted-foreground">
+                  Evidence: {criterion.evidenceIds.join(", ")}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </UserSection>
+  );
+}
+
+function riskReasonLabel(code: string): string {
+  return code
+    .split("_")
+    .map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
+    .join(" ");
+}
+
 function verificationStatusClass(status: UserFacingVerificationStatus): string {
   if (status === "passed") return "text-emerald-600 dark:text-emerald-400";
   if (status === "failed") return "text-destructive";
+  if (status === "not_applicable") return "text-muted-foreground";
   return "text-amber-600 dark:text-amber-400";
 }
 

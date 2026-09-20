@@ -1,0 +1,108 @@
+{
+  "duration_api_ms": 290609,
+  "stop_reason": "tool_use",
+  "session_id": "de0efb24-81f9-47aa-acc6-53569e50ca05",
+  "total_cost_usd": 8.024981999999998,
+  "usage": {
+    "input_tokens": 188,
+    "cache_creation_input_tokens": 161454,
+    "cache_read_input_tokens": 9943970,
+    "output_tokens": 52534,
+    "output_tokens_details": {
+      "thinking_tokens": 14159
+    },
+    "server_tool_use": {
+      "web_search_requests": 0,
+      "web_fetch_requests": 0
+    },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 161454,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 2,
+        "output_tokens": 2977,
+        "cache_read_input_tokens": 160931,
+        "cache_creation_input_tokens": 523,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 523
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 2620,
+      "outputTokens": 18,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.0027099999999999997,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000,
+      "thinkingTokens": 0,
+      "canonicalModel": "claude-haiku-4-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    },
+    "claude-opus-5": {
+      "inputTokens": 190,
+      "outputTokens": 52916,
+      "cacheReadInputTokens": 10105424,
+      "cacheCreationInputTokens": 164571,
+      "webSearchRequests": 0,
+      "costUSD": 8.022271999999997,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000,
+      "thinkingTokens": 14159,
+      "canonicalModel": "claude-opus-5",
+      "provider": "firstParty",
+      "costBasis": "list"
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "budget_exhausted",
+  "fast_mode_state": "off",
+  "fast_mode_disabled_reason": "sdk_opt_in_required",
+  "subagent_stats": {
+    "spawned": 0,
+    "requested": {
+      "background": 0,
+      "foreground": 0,
+      "unset": 0
+    },
+    "started_in_background": 0,
+    "max_depth": 0,
+    "spawned_by_subagents": 0,
+    "completed": 0,
+    "failed": 0,
+    "killed": {
+      "parent": 0,
+      "user": 0,
+      "system": 0
+    },
+    "refused": {
+      "depth_limit": 0,
+      "concurrency_limit": 0,
+      "budget": 0
+    },
+    "by_type": {}
+  },
+  "is_error": true,
+  "num_turns": 109,
+  "subtype": "error_max_budget_usd",
+  "errors": [
+    "Reached maximum budget ($8)"
+  ],
+  "type": "result",
+  "duration_ms": 505114,
+  "uuid": "0afd0263-e361-4845-a1da-b76733257e5a",
+  "queued_turn_count": 0,
+  "result_index": 0
+}

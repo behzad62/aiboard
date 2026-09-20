@@ -1,0 +1,10 @@
+{
+  "startedAt": "2026-09-15T09:19:12.428Z",
+  "wrapperPid": 51920,
+  "childPid": 44572,
+  "cwd": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build",
+  "model": "opus",
+  "maximumBudgetUsd": 8,
+  "briefSha256": "aa5e3b8326b04d2deffc58498248a6228397883f1034a198d84567bd069a3b08",
+  "head": "284743e980514ecebc1d3143d427f4f3abf86225"
+}

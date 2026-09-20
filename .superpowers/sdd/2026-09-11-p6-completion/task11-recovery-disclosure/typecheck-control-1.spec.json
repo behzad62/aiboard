@@ -1,0 +1,9 @@
+{
+  "id": "typecheck-control-1",
+  "args": [
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "runner-v2/tsconfig.json",
+    "--noEmit"
+  ]
+}

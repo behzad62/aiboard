@@ -1,0 +1,22 @@
+{
+  "pid": 52812,
+  "identity": {
+    "Id": 52812,
+    "StartTimeUtc": "2026-09-15T08:04:38.4146494Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 48228,
+  "spawnedAt": "2026-09-15T08:04:38.771Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=concurrent managers cannot delete",
+    ".superpowers/sdd/2026-09-11-p6-completion/task10-filesystem-fence/integration-fixture-green.probe.test.ts"
+  ]
+}

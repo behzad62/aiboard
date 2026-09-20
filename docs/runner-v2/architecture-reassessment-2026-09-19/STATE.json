@@ -1,0 +1,130 @@
+{
+  "status": "EXECUTION_IN_PROGRESS",
+  "entryPoint": "STATE.json",
+  "source": "SOURCE.md",
+  "baseline": "evidence/baseline.json",
+  "decision": "DECISION.md",
+  "plan": "PLAN.md",
+  "executionStarted": true,
+  "controller": "Codex orchestrator/reviewer",
+  "executionMethod": "Cursor CLI; one implementation worker at a time",
+  "planningCoverage": {
+    "sourceRead": true,
+    "repositoryAudit": "COMPLETE",
+    "decision": "COMPLETE",
+    "packetContracts": "COMPLETE",
+    "independentReview": "READY_FOR_PROPOSAL; PR01-PR03 CLOSED; evidence/planning-review.md"
+  },
+  "assignments": [],
+  "integrationQueue": [],
+  "implementationAcceptance": "M0_ACCEPTED; M1_M2_M3_LOCAL_ACCEPTED_READY_FOR_M4; M4_IN_PROGRESS_PENDING_FRESH_REMOTE_EVIDENCE; GATE_G_OPEN",
+  "nextAction": "Freeze the locally validated qualification refactor, commit/push it, then obtain required CI and Windows/Linux/macOS/OCI qualification on the pushed SHA. No global Runner V2 suite. No merge.",
+  "launchPrerequisite": "SATISFIED — user adopted scoped-lifecycle amendment 2026-09-20; M0 recorded; dirty patch preserved.",
+  "blockers": [
+    {
+      "id": "GATE-D-DARWIN-FOLLOWUP",
+      "summary": "Broader Darwin raw-vs-canonical fixture/expectation portability failures retained for matrix acceptance",
+      "source": "docs/runner-v2/task-12-status.md"
+    },
+    {
+      "id": "M4-EXACT-CANDIDATE-CI",
+      "summary": "Architecture SHA 2ffb8054 has green required CI but failed coupled qualification run 35492714608. The isolated qualification refactor is locally validated and ready to push; exact pushed-SHA hosted acceptance remains pending.",
+      "source": "evidence/M4.md"
+    }
+  ],
+  "closedRepairFindings": [
+    {
+      "id": "IR-2026-09-20-IMPORTANT-1",
+      "summary": "Observability/client projection missing lifecycle.scope / requiredLifecycleScope — repaired; closed by post-repair READY review",
+      "source": "evidence/implementation-review-before-repair.md",
+      "closedBy": "evidence/implementation-review-after-repair.txt"
+    },
+    {
+      "id": "IR-2026-09-20-IMPORTANT-2",
+      "summary": "Live families never passed requireCompleteCleanup / knownUnavoidableDetachment — repaired; MCP production path follow-up also closed",
+      "source": "evidence/implementation-review-before-repair.md",
+      "closedBy": "evidence/implementation-review-after-repair.txt"
+    },
+    {
+      "id": "IR-2026-09-20-IMPORTANT-3",
+      "summary": "full + contained_workload selection missing Job/OCI-preferred honest unconfined fallback — repaired; closed by post-repair READY review",
+      "source": "evidence/implementation-review-before-repair.md",
+      "closedBy": "evidence/implementation-review-after-repair.txt"
+    }
+  ],
+  "repairBudgetPerIssue": 3,
+  "packets": {
+    "M0": "ACCEPTED",
+    "M1": "LOCAL_ACCEPTED_READY_FOR_M4",
+    "M2": "LOCAL_ACCEPTED_READY_FOR_M4",
+    "M3": "LOCAL_ACCEPTED_READY_FOR_M4",
+    "M4": "IN_PROGRESS_PENDING_FRESH_REMOTE_EVIDENCE"
+  },
+  "readinessVerdict": "M0 accepted; M1/M2/M3 locally accepted after independent READY review. M4 qualification refactor authorized by the 2026-09-20 handoff. Required CI at 2ffb8054 is green, hosted qualification failed. Final-candidate hosted acceptance is pending. Gate G not PASS; PR #95 unmerged.",
+  "independentImplementationReview": {
+    "historicalPreRepair": {
+      "artifact": "evidence/implementation-review-before-repair.md",
+      "sessionId": "1c259a99-12ed-4242-8a76-90cd4809d4a6",
+      "verdict": "NOT READY",
+      "blocking": 0,
+      "important": 3,
+      "disposition": "REPAIR_HISTORY_ONLY"
+    },
+    "finalAfterRepair": {
+      "artifact": "evidence/implementation-review-after-repair.txt",
+      "verdict": "READY",
+      "findings": "none",
+      "confirmsClosed": [
+        "IR-2026-09-20-IMPORTANT-1",
+        "IR-2026-09-20-IMPORTANT-2",
+        "IR-2026-09-20-IMPORTANT-3",
+        "MCP_PRODUCTION_LIFECYCLE_PROPAGATION"
+      ]
+    }
+  },
+  "repairEvidence": {
+    "focusedSuiteFindings1to3": "69/69",
+    "focusedMcpSuite": "60/60",
+    "observabilityScript": "PASS",
+    "clientScript": "PASS",
+    "typecheck": "clean",
+    "diffCheck": "exit 0 (controller independently reran after repairs)",
+    "fullRunnerV2SuiteRerun": false
+  },
+  "scopeReviewSource": "SOURCE-scope-review-2026-09-20.md",
+  "scopeReviewSourceSha256": "DC1A237D374D65DEFA09D45AD3AC16F41CCAE49F5E50B56636C6BA0EF4DD6CFE",
+  "prMergeAuthorized": false,
+  "gateG": "IN_PROGRESS",
+  "qualificationRefactor": {
+    "source": "SOURCE-qualification-refactor-2026-09-20.md",
+    "sourceSha256": "C14F684015D99177014275381151F48E7CDB5E8BD072884E6515FFF3D33A8C3E",
+    "startingRevision": "2ffb805436dd768a1986246275f4c84a89d74f18",
+    "evidence": "evidence/M4-qualification-refactor.md",
+    "status": "LOCAL_VALIDATION_COMPLETE_READY_TO_PUSH",
+    "cursorSession": "937c9d2d-c35f-4d0e-82f5-501ef9816c98",
+    "priorRequiredRuns": [
+      "35492673910",
+      "35492673923"
+    ],
+    "priorFailedQualification": "35492714608",
+    "fullRunnerV2SuiteAuthorized": false,
+    "review": {
+      "artifact": "evidence/qualification-review-before-repair.md",
+      "sessionId": "b3ea7279-19bb-43aa-8cbc-bf2af05aa155",
+      "verdict": "NOT_READY",
+      "blocking": 2,
+      "important": 3,
+      "disposition": "REPAIRED_HISTORY_ONLY",
+      "snapshotManifestSha256": "BBEDF1351F8F37990B0DC2B79236B7458AC902D0C78E7C09A465028F8C409569"
+    },
+    "postRepairReview": {
+      "artifact": "evidence/qualification-review-after-repair.md",
+      "completeReviewBlocking": 0,
+      "completeReviewImportant": 1,
+      "completeReviewVerdict": "NOT_READY",
+      "importantDisposition": "REPAIRED_AND_FRESHLY_VALIDATED",
+      "laterFinalReviewAttempt": "CURSOR_QUOTA_LIMITED_NO_VERDICT_INVENTED",
+      "freezeDecision": "READY_FOR_FINAL_SHA_HOSTED_ACCEPTANCE"
+    }
+  }
+}

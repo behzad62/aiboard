@@ -1,0 +1,22 @@
+{
+  "pid": 71332,
+  "identity": {
+    "Id": 71332,
+    "StartTimeUtc": "2026-09-12T17:26:25.6806341Z",
+    "Path": "C:\\Program Files\\nodejs\\node.exe"
+  },
+  "wrapperPid": 104476,
+  "spawnedAt": "2026-09-12T17:26:26.007Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--import",
+    "./runner-v2/test/support/cli-root-observer.mjs",
+    "--import",
+    "tsx",
+    "--test",
+    "--test-concurrency=1",
+    "--test-reporter=tap",
+    "--test-name-pattern=^LSP worker architect",
+    "runner-v2/test/lsp-caller-audit.test.ts"
+  ]
+}

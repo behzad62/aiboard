@@ -1,0 +1,15 @@
+{
+  "pid": 54492,
+  "identity": {
+    "pid": 54492,
+    "unavailable": true
+  },
+  "wrapperPid": 47144,
+  "spawnedAt": "2026-09-15T07:54:21.398Z",
+  "command": [
+    "C:\\Program Files\\nodejs\\node.exe",
+    "--input-type=module",
+    "-e",
+    "import {spawnSync} from 'node:child_process';const r=spawnSync('git',['diff','--check','--','runner-v2'],{stdio:'inherit',windowsHide:true});if(r.error)throw r.error;process.exitCode=r.status??1;"
+  ]
+}

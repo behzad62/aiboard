@@ -177,7 +177,7 @@ export function reconcileNativeBuildTranscript(
   const byId = new Map(retained.map((message) => [message.id, message]));
   for (const turn of page.turns) {
     if (
-      !["architect", "worker", "subagent"].includes(turn.actor.role) ||
+      !["architect", "worker", "subagent", "verifier"].includes(turn.actor.role) ||
       !turn.text.trim()
     ) continue;
     const runtimeId = nativeActorRuntimeId(turn.actor, projection);
@@ -218,10 +218,14 @@ function compareCodeUnits(left: string, right: string): number {
 }
 
 function nativeActorRuntimeId(
-  actor: { role: "architect" | "worker" | "subagent"; id: string },
+  actor: {
+    role: "architect" | "worker" | "subagent" | "verifier";
+    id: string;
+  },
   projection: Pick<NativeBuildProjection, "runtime">
 ): string | undefined {
   if (actor.role === "architect") return projection.runtime.architect.runtimeId;
+  if (actor.role === "verifier") return actor.id;
   const assignments = projection.runtime.workerAssignments;
   const workerId = Object.keys(assignments)
     .filter((candidate) => actor.id === candidate || actor.id.startsWith(`${candidate}:`))
@@ -468,6 +472,11 @@ export function durableBuildHandoffPanels(
   runState?: NativeRunProjection["state"]
 ): {
   architect: { reason: string; candidateRuntimeIds: string[] } | null;
+  verifier: {
+    reason: string;
+    requiredCapabilities: string[];
+    candidateRuntimeIds: string[];
+  } | null;
   project: {
     summary: string;
     options: NativeProjectHandoffChoice[];
@@ -479,14 +488,27 @@ export function durableBuildHandoffPanels(
       runState === "running" &&
       (projection.runPolicy === "finish" || projection.runPolicy === "budgeted")
     ) {
-      return { architect: null, project: null };
+      return { architect: null, verifier: null, project: null };
     }
     return {
       architect: null,
+      verifier: null,
       project: {
         summary: projectHandoff.summary,
         options: [...projectHandoff.options],
       },
+    };
+  }
+  const verifierSelection = projection.verifierSelection;
+  if (verifierSelection?.status === "required") {
+    return {
+      architect: null,
+      verifier: {
+        reason: verifierSelection.reason,
+        requiredCapabilities: [...verifierSelection.requiredCapabilities],
+        candidateRuntimeIds: [...verifierSelection.candidateRuntimeIds],
+      },
+      project: null,
     };
   }
   const architectHandoff = projection.runtime.architect.handoff;
@@ -497,13 +519,31 @@ export function durableBuildHandoffPanels(
           candidateRuntimeIds: [...architectHandoff.candidateRuntimeIds],
         }
       : null,
+    verifier: null,
     project: null,
   };
 }
 
 export function nativeBuildTaskStatus(
-  status: string
+  status: string,
+  verification?: {
+    kind?: string;
+    generation?: {
+      categories: Array<{ status: string }>;
+      cleanup: { status: string };
+      review: { status: string };
+      repairs: Array<{ status: string }>;
+    };
+  },
 ): "planned" | "in_progress" | "review" | "fixing" | "done" | "failed" {
+  if (verification?.kind === "final_verification" && verification.generation) {
+    const generation = verification.generation;
+    if (generation.repairs.length > 0 || generation.review.status === "repair_required") return "fixing";
+    if (generation.categories.some((category) => category.status === "failed") || generation.cleanup.status === "failed") return "failed";
+    if (generation.review.status === "approved") return "done";
+    if (generation.cleanup.status === "succeeded" || generation.review.status === "requested") return "review";
+    return "in_progress";
+  }
   if (status === "planned") return "planned";
   if (["assigned", "running", "waiting_guidance"].includes(status)) {
     return "in_progress";
