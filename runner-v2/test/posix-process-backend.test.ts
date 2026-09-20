@@ -1033,6 +1033,59 @@ test("C4 POSIX membership keeps an exact owned group when a foreign Darwin STAT 
   );
 });
 
+test("C4 POSIX membership keeps an exact owned group when a foreign Darwin Mach first-state is present", async () => {
+  const control = await import("../src/portable-process-posix-control.mjs");
+  // Apple ps mach_state_table is " RUSITH?": H = TH_STATE_HALTED, ? = unknown /
+  // failed thread info. Hosted Gate G run 35525961170 retained an exact child
+  // prepared identity while supervisor reattest via ps -e returned unknown.
+  assert.deepEqual(
+    control.parsePosixGroupMembers(
+      "1 1 Ss\n42 42 ?\n88 88 Hs\n99 99 H+\n111 111 ?s\n9002 9002 Ss\n9003 9002 S\n",
+      9002,
+    ),
+    [9002, 9003],
+    "documented Darwin Mach first-states on unrelated rows must not void an otherwise exact owned-group snapshot",
+  );
+  assert.deepEqual(
+    control.parsePosixGroupMembers("1 1 Ss\n9002 9002 Hs\n", 9002),
+    [9002],
+    "a halted owned leader remains exact group membership, not missing identity",
+  );
+  assert.equal(
+    control.parsePosixGroupMembers("1 1 Ss\n9002 9002 mystery\n", 9002),
+    undefined,
+    "an unrecognized process state must still fail closed",
+  );
+});
+
+test("C4 POSIX reattest stays ready when the host snapshot includes Darwin Mach first-states H and ?", async () => {
+  const control = await import("../src/portable-process-posix-control.mjs");
+  const workloadGroup = {
+    groupId: 9651,
+    leaderPid: 9651,
+    leaderBirth: "Sun Sep 20 17:29:57 2026",
+  } as const;
+  const snapshot = [
+    "1 1 Ss",
+    "42 42 ?",
+    "88 88 Hs",
+    "99 99 H+",
+    "9651 9651 Ss",
+  ].join("\n");
+  assert.deepEqual(
+    control.reattestOwnedPosixAnchor(
+      workloadGroup,
+      () => ({
+        state: "present",
+        value: { pid: 9651, groupId: 9651, birth: workloadGroup.leaderBirth },
+      }),
+      (groupId: number) => control.parsePosixGroupMembers(snapshot, groupId),
+    ),
+    { state: "ready", members: [9651] },
+    "an exact child-prepared identity must reattest ready when only foreign Darwin Mach first-states share the host ps -e snapshot",
+  );
+});
+
 test("C4 POSIX tick preserves the bootstrap identity error when workload capture never completed", () => {
   const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
   const publications: Array<{ status: string; error?: string | null }> = [];
