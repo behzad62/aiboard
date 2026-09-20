@@ -15,7 +15,7 @@ import {
   exceptionalRecoveryCallId,
   type SubprocessRuntime,
 } from "./subprocess-runtime.js";
-import type { ExecutionSafetyCapabilities, ProcessCleanupStatus } from "./execution-safety-contracts.js";
+import { lifecycleScopeSatisfies, type ExecutionSafetyCapabilities, type ProcessCleanupStatus } from "./execution-safety-contracts.js";
 import type { StreamingSessionRecord, StreamingSessionStore } from "./streaming-session-store.js";
 import { isExceptionalProcessState, makeRecoveryAudit, parseRecoveryProposal, ProcessRecoveryError,
   recoveryScope, sameRecoveryIdentity, sameRecoveryScope, type RecoveryAuditRecord, type RecoveryProposal,
@@ -86,6 +86,8 @@ export function createSubprocessProcessRecoveryRuntime(options: {
         tree_termination: "unverified", crash_cleanup: "unverified",
         verified_emptiness: "unverified", write_confinement: "unverified",
       },
+      ...(binding?.lifecycle ? { lifecycle: structuredClone(binding.lifecycle) } : {}),
+      ...(record.requiredLifecycleScope ? { requiredLifecycleScope: record.requiredLifecycleScope } : {}),
       cleanup: structuredClone(record.cleanup),
       ...(binding ? { backend: Object.freeze({ backendId: binding.backendId, implementationDigest: binding.implementationDigest }) } : {}),
       leaseExpiresAt: record.leaseExpiresAt,
@@ -202,6 +204,7 @@ export function createStreamingProcessRecoveryRuntime(options: {
         tree_termination: "unverified", crash_cleanup: "unverified",
         verified_emptiness: "unverified", write_confinement: "unverified",
       } satisfies ExecutionSafetyCapabilities),
+      ...(binding.lifecycle ? { lifecycle: structuredClone(binding.lifecycle) } : {}),
       cleanup,
       backend: Object.freeze({
         backendId: binding.backendId,
@@ -209,7 +212,7 @@ export function createStreamingProcessRecoveryRuntime(options: {
         providerId: record.lease.providerId,
       }),
       leaseExpiresAt: record.leaseExpiresAt,
-      requiredCapabilities: Object.freeze(["tree_termination", "verified_emptiness"] as const),
+      requiredCapabilities: Object.freeze([]),
     });
   };
   return Object.freeze({
@@ -326,7 +329,7 @@ export function createAgentProcessRecoveryGenerator(options: {
           kind: scope.kind,
           logicalProcessId: scope.logicalProcessId,
           allowedActions: ["inspect", "terminate"],
-          allowedCapabilities: ["tree_termination", "crash_cleanup", "verified_emptiness", "write_confinement"],
+          allowedCapabilities: ["crash_cleanup", "write_confinement"],
         }) },
       ],
     });
@@ -504,6 +507,10 @@ export class ProcessRecoveryController {
     if (!target.owned) throw new ProcessRecoveryError("recovery_ownership_unavailable");
     if (target.pendingEffects) throw new ProcessRecoveryError("recovery_outcome_unknown");
     if (![target.scope.backendIdentity, target.scope.birthFingerprint].every(v => /^[a-f0-9]{64}$/.test(v))) throw new ProcessRecoveryError("recovery_identity_unavailable");
+    if (!target.lifecycle || target.lifecycle.termination !== "enforced" || target.lifecycle.emptiness !== "enforced" ||
+        (target.requiredLifecycleScope !== undefined && !lifecycleScopeSatisfies(target.lifecycle.scope, target.requiredLifecycleScope))) {
+      throw new ProcessRecoveryError("recovery_capability_unavailable");
+    }
     return target;
   }
   private validate(proposal: Omit<RecoveryProposal, "rationale">): void {
@@ -513,9 +520,10 @@ export class ProcessRecoveryController {
     const remaining = Date.parse(proposal.expiresAt) - this.now().getTime();
     if (!Number.isFinite(remaining) || remaining <= 0 || remaining > 300_000) throw new ProcessRecoveryError("recovery_expired");
     if (proposal.requestedAction === "remove_owned_artifact") throw new ProcessRecoveryError("recovery_action_unsupported");
-    const required = new Set([...proposal.requestedCapabilities,
-      ...(proposal.requestedAction === "terminate" ? ["tree_termination", "verified_emptiness"] as const : [])]);
-    for (const capability of required) if (target.capabilities[capability] !== "enforced") throw new ProcessRecoveryError("recovery_capability_unavailable");
+    if (proposal.requestedCapabilities.some(capability => capability === "tree_termination" || capability === "verified_emptiness"))
+      throw new ProcessRecoveryError("recovery_capability_unavailable");
+    for (const capability of proposal.requestedCapabilities) if (target.capabilities[capability] !== "enforced")
+      throw new ProcessRecoveryError("recovery_capability_unavailable");
   }
   private now(): Date { return this.options.clock?.() ?? new Date(); }
   private timeoutMs(): number {

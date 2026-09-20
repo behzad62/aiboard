@@ -91,10 +91,8 @@ export async function createRealStreamingHarness(input: {
     executable: process.execPath,
     arguments: Object.freeze([input.childScript]),
     workingDirectory: input.projectDirectory,
-    requestedCapabilities: Object.freeze([
-      "tree_termination" as const,
-      "verified_emptiness" as const,
-    ]),
+    requiredLifecycleScope: "process_group",
+    requestedCapabilities: Object.freeze([]),
   });
   const kernel = Object.freeze({
     store: Object.freeze({

@@ -641,6 +641,7 @@ test("native empty verification performs final output validation inside its exis
     stateDirectory: fixture.root,
     platform: "windows",
     backendId: "runner-windows-supervisor-v1",
+    lifecycleScope: "process_group",
     capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "unavailable" },
     operations: {
       inspectProcessBirth: () => ({ state: "absent" }),

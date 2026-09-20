@@ -2,22 +2,25 @@ import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-const descendantMarker = process.argv[2];
-const serverMarker = process.argv[3];
-const lazy = process.argv[4] === "--lazy";
-let treeStarted = false;
+const arguments_ = process.argv.slice(2);
+const lazy = arguments_.includes("--lazy");
+const detached = arguments_.includes("--detached");
+const markerArguments = arguments_.filter((value) => !value.startsWith("--"));
+const [descendantMarker, serverMarker] = markerArguments;
+let descendantPid;
 function startTree() {
-  if (treeStarted) return;
-  treeStarted = true;
+  if (descendantPid) return descendantPid;
   if (serverMarker) writeFileSync(serverMarker, String(process.pid), { flag: "wx" });
   const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1_000)"], {
-    detached: true,
+    detached,
     stdio: "ignore",
     windowsHide: true,
   });
   if (!descendant.pid) throw new Error("MCP tree fixture descendant has no PID.");
+  descendantPid = descendant.pid;
   descendant.unref();
-  writeFileSync(descendantMarker, String(descendant.pid), { flag: "wx" });
+  if (descendantMarker) writeFileSync(descendantMarker, String(descendantPid), { flag: "wx" });
+  return descendantPid;
 }
 if (!lazy) startTree();
 
@@ -30,7 +33,7 @@ lines.on("line", (line) => {
     serverInfo: { name: "descendant-fixture", version: "1" },
   });
   if (message.method === "tools/list") reply(message.id, { tools: lazy ? [{ name: "probe", inputSchema: { type: "object" }, annotations: { readOnlyHint: true, destructiveHint: false } }] : [] });
-  if (message.method === "tools/call" && message.params.name === "probe") { startTree(); reply(message.id, { content: [{ type: "text", text: "tree-alive" }] }); }
+  if (message.method === "tools/call" && message.params.name === "probe") { const pid = startTree(); reply(message.id, { content: [{ type: "text", text: `tree-alive:${pid}` }] }); }
 });
 
 function reply(id, result) {

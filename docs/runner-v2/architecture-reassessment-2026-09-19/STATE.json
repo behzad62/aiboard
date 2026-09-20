@@ -1,0 +1,98 @@
+{
+  "status": "EXECUTION_IN_PROGRESS",
+  "entryPoint": "STATE.json",
+  "source": "SOURCE.md",
+  "baseline": "evidence/baseline.json",
+  "decision": "DECISION.md",
+  "plan": "PLAN.md",
+  "executionStarted": true,
+  "controller": "Codex orchestrator/reviewer",
+  "executionMethod": "Cursor CLI; one implementation worker at a time",
+  "planningCoverage": {
+    "sourceRead": true,
+    "repositoryAudit": "COMPLETE",
+    "decision": "COMPLETE",
+    "packetContracts": "COMPLETE",
+    "independentReview": "READY_FOR_PROPOSAL; PR01-PR03 CLOSED; evidence/planning-review.md"
+  },
+  "assignments": [],
+  "integrationQueue": [],
+  "implementationAcceptance": "M0_ACCEPTED; M1_M2_M3_LOCAL_ACCEPTED_READY_FOR_M4; M4_IN_PROGRESS_PENDING_FRESH_REMOTE_EVIDENCE; GATE_G_OPEN",
+  "nextAction": "Freeze exact candidate, commit/push, run fresh required PR CI and Windows/Linux/macOS + configured OCI qualification; repair only actual blockers; finalize evidence/clean tree; leave merge for explicit user approval. Do not casually rerun historical full npm run test:runner-v2. Do not claim Gate G PASS.",
+  "launchPrerequisite": "SATISFIED — user adopted scoped-lifecycle amendment 2026-09-20; M0 recorded; dirty patch preserved.",
+  "blockers": [
+    {
+      "id": "GATE-D-DARWIN-FOLLOWUP",
+      "summary": "Broader Darwin raw-vs-canonical fixture/expectation portability failures retained for matrix acceptance",
+      "source": "docs/runner-v2/task-12-status.md"
+    },
+    {
+      "id": "M4-EXACT-CANDIDATE-CI",
+      "summary": "Exact candidate not yet frozen/committed/pushed; fresh required PR CI, platform qualification, configured OCI, package parity/reproducibility outstanding",
+      "source": "evidence/M4.md"
+    }
+  ],
+  "closedRepairFindings": [
+    {
+      "id": "IR-2026-09-20-IMPORTANT-1",
+      "summary": "Observability/client projection missing lifecycle.scope / requiredLifecycleScope — repaired; closed by post-repair READY review",
+      "source": "evidence/implementation-review-before-repair.md",
+      "closedBy": "evidence/implementation-review-after-repair.txt"
+    },
+    {
+      "id": "IR-2026-09-20-IMPORTANT-2",
+      "summary": "Live families never passed requireCompleteCleanup / knownUnavoidableDetachment — repaired; MCP production path follow-up also closed",
+      "source": "evidence/implementation-review-before-repair.md",
+      "closedBy": "evidence/implementation-review-after-repair.txt"
+    },
+    {
+      "id": "IR-2026-09-20-IMPORTANT-3",
+      "summary": "full + contained_workload selection missing Job/OCI-preferred honest unconfined fallback — repaired; closed by post-repair READY review",
+      "source": "evidence/implementation-review-before-repair.md",
+      "closedBy": "evidence/implementation-review-after-repair.txt"
+    }
+  ],
+  "repairBudgetPerIssue": 3,
+  "packets": {
+    "M0": "ACCEPTED",
+    "M1": "LOCAL_ACCEPTED_READY_FOR_M4",
+    "M2": "LOCAL_ACCEPTED_READY_FOR_M4",
+    "M3": "LOCAL_ACCEPTED_READY_FOR_M4",
+    "M4": "IN_PROGRESS_PENDING_FRESH_REMOTE_EVIDENCE"
+  },
+  "readinessVerdict": "M0 accepted. M1/M2/M3 locally accepted and READY-for-M4 after repair + final independent READY review (findings none). Historical pre-repair review (evidence/implementation-review-before-repair.md) NOT READY with three IMPORTANT findings preserved as repair history only. M4 pending freeze/commit/push and fresh required CI / Windows-Linux-macOS qualification / configured OCI / Darwin follow-up / package parity & reproducibility. Gate G not PASS. PR unmerged.",
+  "independentImplementationReview": {
+    "historicalPreRepair": {
+      "artifact": "evidence/implementation-review-before-repair.md",
+      "sessionId": "1c259a99-12ed-4242-8a76-90cd4809d4a6",
+      "verdict": "NOT READY",
+      "blocking": 0,
+      "important": 3,
+      "disposition": "REPAIR_HISTORY_ONLY"
+    },
+    "finalAfterRepair": {
+      "artifact": "evidence/implementation-review-after-repair.txt",
+      "verdict": "READY",
+      "findings": "none",
+      "confirmsClosed": [
+        "IR-2026-09-20-IMPORTANT-1",
+        "IR-2026-09-20-IMPORTANT-2",
+        "IR-2026-09-20-IMPORTANT-3",
+        "MCP_PRODUCTION_LIFECYCLE_PROPAGATION"
+      ]
+    }
+  },
+  "repairEvidence": {
+    "focusedSuiteFindings1to3": "69/69",
+    "focusedMcpSuite": "60/60",
+    "observabilityScript": "PASS",
+    "clientScript": "PASS",
+    "typecheck": "clean",
+    "diffCheck": "exit 0 (controller independently reran after repairs)",
+    "fullRunnerV2SuiteRerun": false
+  },
+  "scopeReviewSource": "SOURCE-scope-review-2026-09-20.md",
+  "scopeReviewSourceSha256": "DC1A237D374D65DEFA09D45AD3AC16F41CCAE49F5E50B56636C6BA0EF4DD6CFE",
+  "prMergeAuthorized": false,
+  "gateG": "IN_PROGRESS"
+}

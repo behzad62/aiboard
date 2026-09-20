@@ -1,0 +1,78 @@
+{
+  "recordedAt": "2026-09-19T23:06:55.9368263+04:00",
+  "worktree": "D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-task12-bounded",
+  "head": "6e33354e7e3bed9e16ad9cb0416ef5e9f4b75940",
+  "branch": "codex/runner-v2-task12-bounded",
+  "sourceSha256": "56AE7ECF33689E4EB9BF3E7001F3B520915CC0DD56694D078DD4B49CE489713B",
+  "dirtyFiles": [
+    {
+      "path": ".github/workflows/runner-v2-qualification.yml",
+      "sha256": "9D116B21B32879A19DAFE85BD3713D76D6F0F98ABCD592F172726230D4AA2428"
+    },
+    {
+      "path": "runner-v2/src/portable-process-posix-control.d.mts",
+      "sha256": "291FA9400CD49258C030BD8D0DC72EE090EEF4B7C9D574952136DCE6BDA1E361"
+    },
+    {
+      "path": "runner-v2/src/portable-process-posix-control.mjs",
+      "sha256": "09D386F15B1A805073DE38A7C4937EE94B8D5FA657C8B3E6AEA650880508AFD7"
+    },
+    {
+      "path": "runner-v2/src/portable-process-supervisor.mjs",
+      "sha256": "1A60A39C9B89DB9CA2C4C3FCEE580B2607249ADB1A68CE4B008B98859C5EC496"
+    },
+    {
+      "path": "runner-v2/test/portable-process-channel.test.ts",
+      "sha256": "327330A3E25F050DC8B2F08F13FB1A8F1440DC805FBF840EAE03C9E92987AFEF"
+    },
+    {
+      "path": "runner-v2/test/posix-process-backend.test.ts",
+      "sha256": "E19643CBBB48C230EB8B92BA9464E765C62CC9A350476EA5D46DA11FFB49417D"
+    },
+    {
+      "path": "runner-v2/test/recovery-smoke.test.ts",
+      "sha256": "2AEFF5A11DCC6124DDB22B807F840E5B7B89A55617F3FB24F0273620C33E9682"
+    },
+    {
+      "path": "runner-v2/test/support/late-birth-fixture.ts",
+      "sha256": "55A9844B113D38899A56035FD5B6E8F3D333776346B9B836D86632307A4CFF71"
+    },
+    {
+      "path": "runner-v2/test/windows-process-backend.test.ts",
+      "sha256": "2ED3EFEC7555A63C0CF4EB056371FB909B3688602BC6A74959201BD2FD80D501"
+    }
+  ],
+  "projectSources": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "1097026E19DD55DED340ADBD143DE2A3F76BC1A697004259A88144780C1643FF"
+    },
+    {
+      "path": "docs/runner-v2/task-12-bounded-gates.md",
+      "sha256": "EC3424F2B1E8D189A383C8E96FE38EB8ACC2CB3F26FA28AC267E9965AA29AE9F"
+    },
+    {
+      "path": "docs/runner-v2/task-12-status.md",
+      "sha256": "D31C2488ADF5CE903F7E3EE3CCB9C3E6A44D02432201315A08BB3966A80DAB9A"
+    },
+    {
+      "path": "docs/runner-v2/security.md",
+      "sha256": "401D3FCD6DFEB7FDAA4AB541F43E470E7C116AE30EC45B5A1B9B96AAE4335FD7"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-08-28-runner-v2-portable-execution-safety.md",
+      "sha256": "16015928534454AC30D89C1D58A2CD008B08403D1C452A939A28680C65762AE3",
+      "inspectionScope": "Relevant execution doctrine, retained constraints, Tasks 5/12 and canonical P6 requirements; not a re-audit of unrelated phases"
+    },
+    {
+      "path": "docs/superpowers/plans/2026-08-26-runner-v2-robust-build-improvements.md",
+      "sha256": "6436D0AA1448F5AECD1D1A55807C45B64D9767C4450E45A7303025A228FF0309",
+      "inspectionScope": "Relevant execution doctrine, retained constraints, Tasks 5/12 and canonical P6 requirements; not a re-audit of unrelated phases"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-09-05-runner-v2-cleanup-coordination-design.md",
+      "sha256": "0183CA25796F7A4474F226485E227A44B33BB22823E975BD75A2DAFC1F2E9D05",
+      "inspectionScope": "Relevant execution doctrine, retained constraints, Tasks 5/12 and canonical P6 requirements; not a re-audit of unrelated phases"
+    }
+  ]
+}

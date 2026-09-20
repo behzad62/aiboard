@@ -7,8 +7,11 @@ import { types as nodeTypes } from "node:util";
 
 import {
   assertDurableExecutionSafetyValue,
+  parseExecutionLifecycleAttestation,
   parseExecutionSafetyCapabilities,
   parseProcessOutputDisposition,
+  type ExecutionLifecycleAttestation,
+  type ExecutionLifecycleScope,
   type ExecutionSafetyCapabilities,
   type ExecutionSafetyCapabilityName,
   type ProcessCleanupStatus,
@@ -51,6 +54,8 @@ export interface DurableBackendBinding {
   readonly attestationDigest: string;
   /** Exact semantic states reported by the selected backend attestation. */
   readonly capabilities?: ExecutionSafetyCapabilities;
+  /** Lifecycle scope is governed by the nested backend attestation version. */
+  readonly lifecycle?: ExecutionLifecycleAttestation;
   readonly opaqueIdentity: string;
   readonly birthFingerprint: {
     readonly observedAt: string;
@@ -163,6 +168,8 @@ export interface DurableSubprocessRecord {
   readonly outputPrepared: boolean;
   readonly state: DurableSubprocessState;
   readonly history: readonly DurableSubprocessHistoryEntry[];
+  /** Missing only on legacy records created before lifecycle-scope versioning. */
+  readonly requiredLifecycleScope?: ExecutionLifecycleScope;
   readonly requiredCapabilities: readonly ExecutionSafetyCapabilityName[];
   readonly environmentAudit: DurableEnvironmentAudit;
   readonly escalation: readonly DurableEscalationEntry[];
@@ -183,8 +190,8 @@ export type PreparedSubprocessRecord = DurableSubprocessRecord & {
 };
 export type PreparedSubprocessClaim = Omit<
   PreparedSubprocessRecord,
-  "fencingToken" | "mutations" | "pendingEffects" | "emptyVerification"
->;
+  "fencingToken" | "mutations" | "pendingEffects" | "emptyVerification" | "requiredLifecycleScope"
+> & { readonly requiredLifecycleScope: ExecutionLifecycleScope };
 export interface DurableClaimResult {
   readonly record: DurableSubprocessRecord;
   readonly won: boolean;
@@ -905,6 +912,7 @@ const BASE_KEYS = [
   "outputPrepared",
   "state",
   "history",
+  "requiredLifecycleScope",
   "requiredCapabilities",
   "environmentAudit",
   "escalation",
@@ -1003,6 +1011,7 @@ function parseRecordShape(
     outputPrepared: requiredBoolean(object.outputPrepared, "outputPrepared"),
     state,
     history: parseHistory(object.history, state),
+    ...(object.requiredLifecycleScope === undefined ? {} : { requiredLifecycleScope: parseLifecycleScope(object.requiredLifecycleScope) }),
     requiredCapabilities: parseCapabilities(object.requiredCapabilities),
     environmentAudit: parseAudit(object.environmentAudit),
     escalation: parseEscalation(object.escalation),
@@ -1058,6 +1067,7 @@ function initializePreparedRecord(
     "outputPrepared",
     "state",
     "history",
+    "requiredLifecycleScope",
     "requiredCapabilities",
     "environmentAudit",
     "escalation",
@@ -1099,6 +1109,7 @@ function initializePreparedRecord(
       retryKey: digest(o.retryKey, "retryKey"),
       leaseExpiresAt: dateText(o.leaseExpiresAt, "leaseExpiresAt"),
       outputOwnerId: safeId(o.outputOwnerId, "outputOwnerId"),
+      requiredLifecycleScope: parseLifecycleScope(o.requiredLifecycleScope),
       requiredCapabilities: parseCapabilities(o.requiredCapabilities),
     },
   });
@@ -1183,7 +1194,7 @@ function parseMutation(value: unknown): DurableProcessMutation {
         "outputOwnerId",
         "requiredCapabilities",
       ],
-      optional: ["taskId", "sessionId"],
+      optional: ["taskId", "sessionId", "requiredLifecycleScope"],
     },
     renew_lease: { required: ["leaseExpiresAt"] },
     takeover_lease: { required: ["leaseExpiresAt"] },
@@ -1279,6 +1290,7 @@ function deriveRecord(
     outputPrepared: false,
     state: "prepared",
     history: [{ state: "prepared", at: first.at }],
+    ...(initial.requiredLifecycleScope === undefined ? {} : { requiredLifecycleScope: parseLifecycleScope(initial.requiredLifecycleScope) }),
     requiredCapabilities: parseCapabilities(initial.requiredCapabilities),
     environmentAudit: {
       inheritedNames: [],
@@ -2349,6 +2361,7 @@ function parseBinding(value: unknown): DurableBackendBinding {
       "attestationVersion",
       "attestationDigest",
       "capabilities",
+      "lifecycle",
       "opaqueIdentity",
       "birthFingerprint",
       "rootPid",
@@ -2362,6 +2375,11 @@ function parseBinding(value: unknown): DurableBackendBinding {
     new Set(["observedAt", "discriminator"]),
     "birth fingerprint",
   );
+  const attestationVersion = requiredInteger(o.attestationVersion, "attestationVersion", 1);
+  if (attestationVersion !== 1 && attestationVersion !== 2) throw new Error("Backend binding attestation version is unsupported.");
+  const lifecycle = o.lifecycle === undefined ? undefined : parseExecutionLifecycleAttestation(o.lifecycle);
+  if (attestationVersion === 1 && lifecycle !== undefined) throw new Error("Legacy backend binding cannot claim v2 lifecycle scope.");
+  if (attestationVersion === 2 && lifecycle === undefined) throw new Error("V2 backend binding is missing lifecycle scope.");
   return {
     registryId: safeId(o.registryId, "registryId"),
     backendId: text(o.backendId, "backendId"),
@@ -2373,13 +2391,10 @@ function parseBinding(value: unknown): DurableBackendBinding {
       o.implementationDigest,
       "implementationDigest",
     ),
-    attestationVersion: requiredInteger(
-      o.attestationVersion,
-      "attestationVersion",
-      1,
-    ),
+    attestationVersion,
     attestationDigest: digest(o.attestationDigest, "attestationDigest"),
     ...(o.capabilities === undefined ? {} : { capabilities: parseExecutionSafetyCapabilities(o.capabilities) }),
+    ...(lifecycle === undefined ? {} : { lifecycle }),
     opaqueIdentity: text(o.opaqueIdentity, "opaqueIdentity"),
     birthFingerprint: {
       observedAt: text(birth.observedAt, "observedAt"),
@@ -2623,6 +2638,13 @@ function parseCleanup(value: unknown): ProcessCleanupStatus {
     code: text(o.code, "code"),
     detail: text(o.detail, "detail"),
   };
+}
+function parseLifecycleScope(value: unknown): ExecutionLifecycleScope {
+  return requiredEnum(
+    value,
+    new Set<ExecutionLifecycleScope>(["process_group", "contained_workload"]),
+    "requiredLifecycleScope",
+  );
 }
 function parseCapabilities(value: unknown): ExecutionSafetyCapabilityName[] {
   if (!Array.isArray(value) || value.some((v) => typeof v !== "string"))

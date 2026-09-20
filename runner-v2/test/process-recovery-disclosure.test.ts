@@ -89,3 +89,35 @@ test("execution disclosure does not call a past confinement record currently act
   assert.equal(result.isolation.status, "unverified");
   assert.equal(result.isolation.activeLeaseCount, 0);
 });
+
+test("execution disclosure surfaces recorded lifecycle attestation and required scope without synthesizing containment", () => {
+  const withLifecycle = projectExecutionSafetyObservability({
+    permissionProfile: "full",
+    isolation: { version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [] },
+    activeIsolationLeaseCount: 0,
+    grantStates: [],
+    processes: [{
+      ...target,
+      lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
+      requiredLifecycleScope: "process_group",
+    }],
+    recovery: {},
+  });
+  assert.deepEqual(withLifecycle.processes[0]?.lifecycle, {
+    scope: "process_group", termination: "enforced", emptiness: "enforced",
+  });
+  assert.equal(withLifecycle.processes[0]?.requiredLifecycleScope, "process_group");
+
+  const legacy = projectExecutionSafetyObservability({
+    permissionProfile: "full",
+    isolation: { version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [] },
+    activeIsolationLeaseCount: 0,
+    grantStates: [],
+    processes: [target],
+    recovery: {},
+  });
+  assert.equal("lifecycle" in legacy.processes[0]!, false);
+  assert.equal("requiredLifecycleScope" in legacy.processes[0]!, false);
+  assert.equal(legacy.processes[0]?.lifecycle, undefined);
+  assert.equal(legacy.processes[0]?.requiredLifecycleScope, undefined);
+});

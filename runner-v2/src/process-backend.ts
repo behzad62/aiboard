@@ -2,23 +2,36 @@ import { createHash, randomUUID } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 import {
   EXECUTION_SAFETY_CAPABILITY_NAMES,
+  lifecycleScopeSatisfies,
+  parseExecutionLifecycleAttestation,
   parseExecutionSafetyCapabilities,
   type ExactPathAccess,
   type ExecutionInvocationIntent,
+  type ExecutionLifecycleAttestation,
+  type ExecutionLifecycleScope,
   type ExecutionSafetyCapabilities,
   type ExecutionSafetyCapabilityName,
   type ProcessEscalationAction,
   type ProcessOutputStream,
 } from "./execution-safety-contracts.js";
 
-export const PROCESS_BACKEND_ATTESTATION_VERSION = 1 as const;
-export interface ProcessBackendProbe {
+export const PROCESS_BACKEND_ATTESTATION_VERSION = 2 as const;
+export interface LegacyProcessBackendProbe {
   readonly attestationVersion: 1;
   readonly backendId: string;
   readonly verified: true;
   readonly platformLabel: string;
   readonly capabilities: ExecutionSafetyCapabilities;
 }
+export interface ProcessBackendProbe {
+  readonly attestationVersion: 2;
+  readonly backendId: string;
+  readonly verified: true;
+  readonly platformLabel: string;
+  readonly lifecycle: ExecutionLifecycleAttestation;
+  readonly capabilities: ExecutionSafetyCapabilities;
+}
+export type ParsedProcessBackendProbe = LegacyProcessBackendProbe | ProcessBackendProbe;
 export interface ProcessBackendRegistration {
   readonly kind: "runner-process-backend-registration";
 }
@@ -58,6 +71,8 @@ export interface ProcessBackendBinding {
   readonly implementationDigest: string;
   readonly attestationVersion: number;
   readonly attestationDigest: string;
+  /** Present for v2+ bindings; absent legacy bindings carry no lifecycle-scope authority. */
+  readonly lifecycle?: ExecutionLifecycleAttestation;
   readonly opaqueIdentity: string;
   readonly birthFingerprint: {
     readonly observedAt: string;
@@ -239,27 +254,30 @@ export function assertProcessBackendRegistryAuthority(
   return registry;
 }
 
-export function parseProcessBackendProbe(value: unknown): ProcessBackendProbe {
+export function parseProcessBackendProbe(value: unknown): ParsedProcessBackendProbe {
   const o = record(value);
-  keys(o, [
-    "attestationVersion",
-    "backendId",
-    "verified",
-    "platformLabel",
-    "capabilities",
-  ]);
-  if (o.attestationVersion !== 1 || o.verified !== true) bad();
-  const caps = record(o.capabilities);
-  const parsed = Object.freeze(parseExecutionSafetyCapabilities(caps));
+  if (o.attestationVersion === 1) {
+    keys(o, ["attestationVersion", "backendId", "verified", "platformLabel", "capabilities"]);
+    if (o.verified !== true) bad();
+    return freeze({
+      attestationVersion: 1,
+      backendId: text(o.backendId),
+      verified: true,
+      platformLabel: text(o.platformLabel),
+      capabilities: freeze(parseExecutionSafetyCapabilities(record(o.capabilities))),
+    });
+  }
+  keys(o, ["attestationVersion", "backendId", "verified", "platformLabel", "lifecycle", "capabilities"]);
+  if (o.attestationVersion !== 2 || o.verified !== true) bad();
   return freeze({
-    attestationVersion: 1,
+    attestationVersion: 2,
     backendId: text(o.backendId),
     verified: true,
     platformLabel: text(o.platformLabel),
-    capabilities: parsed,
+    lifecycle: freeze(parseExecutionLifecycleAttestation(o.lifecycle)),
+    capabilities: freeze(parseExecutionSafetyCapabilities(record(o.capabilities))),
   });
-}
-export function parseProcessLaunchResult(value: unknown): ProcessLaunchResult {
+}export function parseProcessLaunchResult(value: unknown): ProcessLaunchResult {
   const o = record(value);
   keys(o, ["opaqueIdentity", "birthFingerprint", "rootPid", "startedAt"]);
   const birth = record(o.birthFingerprint);
@@ -342,6 +360,7 @@ export function parseProcessReleaseResult(
 export async function selectProcessBackend(
   registry: ProcessBackendRegistry,
   required: readonly ExecutionSafetyCapabilityName[],
+  requiredLifecycleScope: ExecutionLifecycleScope,
   fence?: ProcessEffectFence,
 ): Promise<SelectedProcessBackend> {
   const entries = trustedEntries(registry);
@@ -355,7 +374,11 @@ export async function selectProcessBackend(
         await entry.backend.probe(fence),
       );
       if (
+        attestation.attestationVersion === 2 &&
         attestation.backendId === entry.backendId &&
+        lifecycleScopeSatisfies(attestation.lifecycle.scope, requiredLifecycleScope) &&
+        attestation.lifecycle.termination === "enforced" &&
+        attestation.lifecycle.emptiness === "enforced" &&
         required.every((name) => attestation.capabilities[name] === "enforced")
       )
         return freeze({
@@ -413,12 +436,12 @@ export async function adoptProcessBackendAfterRestart(
   return attest(matches[0]!, binding, fence);
 }
 export function digestProcessBackendAttestation(
-  attestation: ProcessBackendProbe,
+  attestation: ParsedProcessBackendProbe,
 ): string {
   return digestAttestation(parseProcessBackendProbe(attestation));
 }
 
-function digestAttestation(value: ProcessBackendProbe): string {
+function digestAttestation(value: ParsedProcessBackendProbe): string {
   return createHash("sha256").update(canonical(value)).digest("hex");
 }
 async function attest(
@@ -429,7 +452,7 @@ async function attest(
   >,
   fence?: ProcessEffectFence,
 ): Promise<SelectedProcessBackend> {
-  let attestation: ProcessBackendProbe;
+  let attestation: ParsedProcessBackendProbe;
   try {
     attestation = parseProcessBackendProbe(await entry.backend.probe(fence));
   } catch (error) {
@@ -437,6 +460,7 @@ async function attest(
   }
   const attestationDigest = digestAttestation(attestation);
   if (
+    attestation.attestationVersion !== 2 ||
     attestation.backendId !== binding.backendId ||
     attestation.attestationVersion !== binding.attestationVersion ||
     attestationDigest !== binding.attestationDigest

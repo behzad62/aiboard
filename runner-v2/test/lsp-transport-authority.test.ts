@@ -28,9 +28,9 @@ test("LSP shared transport uses the real launching call and fresh exact language
       assert.equal(expected.operation, "language_request");
       return await perform({ write: async (bytes) => { assert.ok(bytes.byteLength <= 1024 * 1024, "shared LSP transport must respect the concrete channel write bound"); writeSizes.push(bytes.byteLength); calls.push("write"); }, waitForOutput: async (signal) => signal?.aborted ? false : new Promise<boolean>((resolve) => signal?.addEventListener("abort", () => resolve(false), { once: true })), deliverOutput: async () => false });
     } };
-  const run = { runId: "run", openStreaming: async (request: { sessionId: string; binding: unknown; grant: unknown; intent: { kind: string; requestedCapabilities: string[] }; envelope: { access: unknown[] } }) => {
+  const run = { runId: "run", openStreaming: async (request: { sessionId: string; binding: unknown; grant: unknown; intent: { kind: string; requiredLifecycleScope: string; requestedCapabilities: string[] }; envelope: { access: unknown[] } }) => {
     sessionId = request.sessionId; assert.equal(request.grant, first.executionGrant); assert.equal(request.intent.kind, "language_server");
-    assert.deepEqual(request.intent.requestedCapabilities, ["tree_termination", "verified_emptiness"]); assert.deepEqual(request.envelope.access, []);
+    assert.equal(request.intent.requiredLifecycleScope, "process_group"); assert.deepEqual(request.intent.requestedCapabilities, []); assert.deepEqual(request.envelope.access, []);
     return facade;
   }, streamingState: { readSession: () => ({ state }) }, streamingRuntime: { cleanupOwnedSession: async (request: { sessionId: string }) => { assert.equal(request.sessionId, sessionId); calls.push("cleanup"); state = "released"; } } } as unknown as ExecutionHostRunBinding;
   const factory = createExecutionHostLspTransportFactory({ run, permissionProfile: "full", environment: {} });
@@ -49,6 +49,23 @@ test("LSP shared transport uses the real launching call and fresh exact language
   assert.equal(state, "released"); assert.equal(calls.filter((call) => call === "cleanup").length, 1);
 });
 
+for (const flag of ["requireCompleteCleanup", "knownUnavoidableDetachment"] as const) {
+  test(`LSP launch request with ${flag} requests contained_workload`, async () => {
+    const identity = await resolveLanguageServerExecutable(process.execPath, { environment: {} });
+    let observed: string | undefined;
+    const stop = new Error("controlled lsp lifecycle boundary");
+    const run = { runId: "run", openStreaming: async (request: { intent: { requiredLifecycleScope: string } }) => {
+      observed = request.intent.requiredLifecycleScope; throw stop;
+    }, streamingState: { readHostLaunch: () => undefined } } as unknown as ExecutionHostRunBinding;
+    const factory = createExecutionHostLspTransportFactory({ run, permissionProfile: "full", environment: {} });
+    await assert.rejects(factory.open({
+      command: identity.path, attestedCommand: identity, arguments: [], workspaceRoot: process.cwd(),
+      invocation: context(flag), lifecycleRequirements: { [flag]: true },
+      initialize: async () => assert.fail("no backend is being launched"), onOutput: () => undefined, onFailure: () => undefined,
+    }), (error: unknown) => error instanceof LspClientError && error.cause === stop);
+    assert.equal(observed, "contained_workload");
+  });
+}
 
 test("LSP failed initialization retains its typed cause and joins exact shared launch cleanup", async () => {
   const failure = new LspClientError("protocol_error", "unsupported position encoding");

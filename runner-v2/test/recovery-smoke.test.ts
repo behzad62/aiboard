@@ -21,9 +21,9 @@ interface Readiness {
   stateDirectory: string;
 }
 
-// Outer readiness guard only: this file runs concurrently in the portable contract.
-// Product process and cleanup deadlines are unchanged.
-const CLI_STARTUP_FIXTURE_BUDGET_MS = 30_000;
+// Outer readiness guard only. Hosted Windows can spend most of 30s in the
+// real semantic probes before readiness; product process/cleanup deadlines stay unchanged.
+const CLI_STARTUP_FIXTURE_BUDGET_MS = process.platform === "win32" ? 90_000 : 30_000;
 const token = "recovery-test-token";
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxPath = fileURLToPath(
@@ -72,10 +72,10 @@ test("CLI recovers a paused run and preserves event continuity after restart", a
       method: "POST", headers: headers(), body: JSON.stringify({ runId: "strict-no-provider", projectPath,
         permissionProfile: "project", idempotencyKey: "strict-no-provider" }),
     });
-    assert.equal(refused.status, 412, await refused.clone().text());
+    assert.equal(refused.status, 412, `${await refused.clone().text()}\nRunner stderr:\n${firstStart.diagnostics()}`);
     assert.equal((await refused.json() as { code: string }).code, "isolation_capability_unavailable");
     assert.equal(existsSync(join(projectPath, ".git")), false, "strict bootstrap must not fall back to host Git");
-    const created = await createRun(firstStart.readiness.url, projectPath);
+    const created = await createRun(firstStart.readiness.url, projectPath, firstStart.diagnostics);
     assert.match(String(created.baselineRevision), /^[a-f0-9]{40,64}$/);
     assert.equal(
       (
@@ -143,6 +143,7 @@ async function startRunner(
 ): Promise<{
   child: ChildProcessWithoutNullStreams;
   readiness: Readiness;
+  diagnostics(): string;
 }> {
   const child = spawn(
     process.execPath,
@@ -184,17 +185,27 @@ async function startRunner(
         );
       }),
     ]);
+  } catch (error) {
+    try { await stopProcess(child); }
+    catch (cleanup) {
+      throw new AggregateError(
+        [error, cleanup],
+        `Runner readiness failed and fixture cleanup did not settle. stderr: ${diagnostics.join("")}`,
+      );
+    }
+    throw error;
   } finally {
     if (timeout) clearTimeout(timeout);
   }
   lines.close();
   assert.equal(readiness.token, token);
-  return { child, readiness };
+  return { child, readiness, diagnostics: () => diagnostics.join("") };
 }
 
 async function createRun(
   url: string,
-  projectPath: string
+  projectPath: string,
+  diagnostics: () => string,
 ): Promise<Record<string, unknown>> {
   const response = await fetch(`${url}/v2/runs`, {
     method: "POST",
@@ -207,7 +218,7 @@ async function createRun(
     }),
   });
   const text = await response.text();
-  assert.equal(response.status, 201, text);
+  assert.equal(response.status, 201, `${text}\nRunner stderr:\n${diagnostics()}`);
   return JSON.parse(text) as Record<string, unknown>;
 }
 

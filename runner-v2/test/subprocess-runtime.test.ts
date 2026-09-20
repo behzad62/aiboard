@@ -42,7 +42,8 @@ const intent = (
   executable: command,
   arguments: ["--secret-value"],
   workingDirectory: "C:\\host\\project",
-  requestedCapabilities: ["tree_termination", "verified_emptiness"],
+  requiredLifecycleScope: "process_group",
+  requestedCapabilities: [],
 });
 
 const grantValue = (
@@ -168,10 +169,11 @@ class Backend implements ProcessBackend {
   readonly calls: string[] = [];
   readonly fences: unknown[] = [];
   probeValue: unknown = {
-    attestationVersion: 1,
+    attestationVersion: 2,
     backendId: "fake",
     verified: true,
     platformLabel: "fixture",
+    lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
     capabilities,
   };
   launchValue: unknown = {

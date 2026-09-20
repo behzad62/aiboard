@@ -13,7 +13,7 @@ import {
   type ProcessEffectFence,
   type ProcessLaunchRequest,
 } from "./process-backend.js";
-import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
+import type { ExecutionLifecycleScope, ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
 import { parsePosixGroupMembers } from "./portable-process-posix-control.mjs";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshotSync } from "./portable-process-protocol.mjs";
@@ -32,6 +32,7 @@ export interface NativeOwnedProcessBackendOptions {
   readonly pollIntervalMs?: number;
   readonly platform: "posix" | "windows";
   readonly backendId: string;
+  readonly lifecycleScope: ExecutionLifecycleScope;
   readonly capabilities: ExecutionSafetyCapabilities;
   readonly operations?: NativeProcessOperations;
   readonly replayCapacityChunks?: number;
@@ -157,10 +158,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async probe(): Promise<unknown> {
     return Object.freeze({
-      attestationVersion: 1,
+      attestationVersion: 2,
       backendId: this.options.backendId,
       verified: true,
       platformLabel: this.options.platform,
+      lifecycle: Object.freeze({
+        scope: this.options.lifecycleScope,
+        termination: this.options.capabilities.tree_termination,
+        emptiness: this.options.capabilities.verified_emptiness,
+      }),
       capabilities: Object.freeze({ ...this.options.capabilities }),
     });
   }

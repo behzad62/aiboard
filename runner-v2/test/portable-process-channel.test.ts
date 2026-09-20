@@ -331,7 +331,9 @@ test("round4 native observation boundary rejects ownership changed during its aw
 
 async function round4Within<T>(operation: Promise<T>): Promise<T> {
   let timer!: ReturnType<typeof setTimeout>;
-  try { return await Promise.race([operation, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("terminal proof did not settle within the synthetic bound")), 2_000); })]); }
+  // Test-only guard: hosted Windows can spend >2s starting the exact birth inspector.
+  // Product observation/control deadlines are unchanged.
+  try { return await Promise.race([operation, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error("terminal proof did not settle within the synthetic bound")), 5_000); })]); }
   finally { clearTimeout(timer); }
 }
 
@@ -344,7 +346,7 @@ test("round4 POSIX workload identity is revalidated after asynchronous birth ins
     exitCode: null, signal: null, error: null, updatedAt: "now", workloadGroupRetirement: { state: "active" } };
   for (const path of ["channel/output", "channel/input", "channel/ack"]) mkdirSync(join(root, path), { recursive: true });
   writeOutputCheckpoint(root); writeFileSync(join(root, "state.json"), JSON.stringify(state));
-  const backend = new NativeOwnedProcessBackend({ stateDirectory: root, pollIntervalMs: 1, platform: "posix", backendId: "synthetic-posix",
+  const backend = new NativeOwnedProcessBackend({ stateDirectory: root, pollIntervalMs: 1, platform: "posix", backendId: "synthetic-posix", lifecycleScope: "process_group",
     capabilities: { tree_termination: "unavailable", crash_cleanup: "unavailable", verified_emptiness: "unavailable", write_confinement: "unavailable" },
     operations: {
       inspectProcessBirth: () => ({ state: "present", fingerprint: "birth" }),
@@ -1616,7 +1618,7 @@ const fence = { ownerId: "portable-channel-owner", fencingToken: 7 } as const;
 function immediateSnapshot<T>(read: () => T) { return { status: "applied" as const, value: read() }; }
 function request(args: string[]) {
   return {
-    intent: { invocationId: "portable-channel", runId: "run", kind: "command" as const, executable: process.execPath, arguments: args, workingDirectory: process.cwd(), requestedCapabilities: ["tree_termination"] as const },
+    intent: { invocationId: "portable-channel", runId: "run", kind: "command" as const, executable: process.execPath, arguments: args, workingDirectory: process.cwd(), requiredLifecycleScope: "process_group" as const, requestedCapabilities: [] as const },
     grant: { grantId: "grant", runId: "run", invocationId: "portable-channel", issuedAt: new Date().toISOString(), access: [] },
     environment: fixtureEnvironment(), outputOwnerId: "output", fence,
   };

@@ -25,7 +25,8 @@ const semantic = {
     executable: "tool",
     arguments: ["--token=secret-value"],
     workingDirectory: "C:\\host\\project",
-    requestedCapabilities: ["verified_emptiness"],
+    requiredLifecycleScope: "contained_workload",
+    requestedCapabilities: [],
   },
   ambientEnvironment: { API_KEY: "secret-value", PATH: "safe" },
   grantId: "grant-1",
@@ -51,7 +52,8 @@ const prepared = (
   outputPrepared: false,
   state: "prepared",
   history: [{ state: "prepared", at: "2026-01-01T00:00:00.000Z" }],
-  requiredCapabilities: ["verified_emptiness"],
+  requiredLifecycleScope: "contained_workload",
+  requiredCapabilities: [],
   environmentAudit: {
     inheritedNames: [],
     removedNames: [],
@@ -90,6 +92,16 @@ function writerFor(kernel: DurableProcessStoreKernel): {
   }
   throw new Error("missing test writer");
 }
+
+test("current prepared claims durably bind explicit lifecycle scope", () => {
+  const kernel = createInMemoryDurableProcessKernel(stateKey);
+  const claim = {
+    ...prepared(),
+    requiredLifecycleScope: "process_group",
+  } as unknown as PreparedSubprocessClaim;
+  const record = writerFor(kernel).claim(claim).record;
+  assert.equal((record as DurableSubprocessRecord & { requiredLifecycleScope?: string }).requiredLifecycleScope, "process_group");
+});
 
 test("Runner-created store kernel rejects structural authority and claims output intent durably", () => {
   const kernel = createInMemoryDurableProcessKernel(stateKey);

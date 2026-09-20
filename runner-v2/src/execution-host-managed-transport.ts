@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import type { ToolExecutionContext } from "./agent-contracts.js";
+import {
+  freezeExecutionLifecycleRequirements,
+  resolveRequiredLifecycleScope,
+} from "./execution-lifecycle-policy.js";
 import type { PermissionProfile } from "./contracts.js";
 import { assertCurrentConsumedExecutionGrantClaims, type ExecutionGrantBinding } from "./execution-grants.js";
 import type { ExecutionHostRunBinding } from "./execution-host.js";
@@ -96,7 +100,11 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
             envelope: { access: [{ canonicalPath: cwd, mode: "write" }], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false },
             ...(imageExecutable ? { imageExecutable } : {}),
             intent: { invocationId: launchId(id), runId: run.runId, sessionId: request.identity.sessionId, kind: "command",
-              executable: launchExecutable, arguments: request.args, workingDirectory: cwd, requestedCapabilities: ["tree_termination", "verified_emptiness"] },
+              executable: launchExecutable, arguments: request.args, workingDirectory: cwd,
+              requiredLifecycleScope: resolveRequiredLifecycleScope({
+                permissionProfile: options.permissionProfile,
+                lifecycleRequirements: freezeExecutionLifecycleRequirements(request.lifecycleRequirements),
+              }), requestedCapabilities: [] },
             // Arbitrary commands have no application handshake. The shared host
             // has already authenticated launch and channel ownership at this seam.
             verifyHandshake: async () => createHash("sha256").update(JSON.stringify({ id, executable: launchIdentity, args: request.args, cwd })).digest("hex"),

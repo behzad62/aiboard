@@ -369,6 +369,82 @@ test("Full is the sole ordinary bypass and reports it without invoking a provide
   }
 });
 
+test("full + contained_workload prefers a qualifying OCI provider before any full fallback", async () => {
+  const fixture = await isolationFixture("full");
+  try {
+    const provider = fakeProvider("fixture-full-contained-oci", { mechanism: "docker-compatible-oci", ociIdentity: true });
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([
+      createExecutionIsolationProviderRegistration({
+        stableProviderId: "fixture-full-contained-oci",
+        codeDigest: "a".repeat(64),
+        configDigest: "b".repeat(64),
+        provider,
+      }),
+    ]), fixture.selectorOptions);
+    const selection = await selector.acquire({
+      permissionProfile: "full",
+      intent: { ...fixture.intent, requiredLifecycleScope: "contained_workload" },
+      grant: fixture.claims,
+    });
+    assert.equal(selection.enforcement, "write_confinement_exact_grant");
+    assert.equal(provider.acquisitions, 1);
+    assert.equal(fixture.intent.requiredLifecycleScope, "process_group");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("full + contained_workload without OCI falls back to explicit-full while preserving contained requirement", async () => {
+  const fixture = await isolationFixture("full");
+  const statePath = join(fixture.root, "full-contained-fallback.json");
+  try {
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([]), {
+      ...fixture.selectorOptions,
+      statePath,
+    });
+    const intent = { ...fixture.intent, requiredLifecycleScope: "contained_workload" as const };
+    const selection = await selector.acquire({
+      permissionProfile: "full",
+      intent,
+      grant: fixture.claims,
+    });
+    assert.deepEqual(selection, {
+      enforcement: "unconfined_explicit_full",
+      disclosure: "unconfined_explicit_full",
+    });
+    assert.equal(intent.requiredLifecycleScope, "contained_workload");
+    const state = await readExecutionEnforcementState(statePath);
+    assert.equal(state.records.at(-1)?.status, "unconfined_explicit_full");
+    assert.equal(state.records.at(-1)?.enforcement, "unconfined_explicit_full");
+    assert.notEqual(state.records.at(-1)?.status, "selection_blocked");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("non-full without a qualifying provider stays selection-blocked", async () => {
+  const fixture = await isolationFixture("project");
+  const statePath = join(fixture.root, "non-full-blocked.json");
+  try {
+    const selector = createExecutionIsolationSelector(createExecutionIsolationRegistry([]), {
+      ...fixture.selectorOptions,
+      statePath,
+    });
+    await assert.rejects(
+      selector.acquire({
+        permissionProfile: "project",
+        intent: fixture.intent,
+        grant: fixture.claims,
+      }),
+      (error: unknown) => error instanceof ExecutionIsolationError && error.code === "isolation_capability_unavailable",
+    );
+    const state = await readExecutionEnforcementState(statePath);
+    assert.equal(state.records.at(-1)?.status, "selection_blocked");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("durable enforcement projection reopens Full, strict lease, revocation, and blocker state", async () => {
   const strict = await isolationFixture();
   const full = await isolationFixture("full");
@@ -820,7 +896,7 @@ function fakeProvider(providerId: string, mutation: {
     acknowledgementFails: mutation.acknowledgementFails ?? false,
     async attest() {
       return {
-        attestationVersion: 1,
+        attestationVersion: 2,
         providerId,
         verified: mutation.verified ?? true,
         mechanism: mutation.mechanism ?? "fixture",
@@ -830,6 +906,7 @@ function fakeProvider(providerId: string, mutation: {
         } : {}),
         implementationDigest: mutation.implementationDigest,
         exactGrantWriteConfinement: mutation.exact ?? true,
+        lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
         expiresAt: mutation.expiresAt,
         capabilities: {
           tree_termination: "enforced",
@@ -990,6 +1067,7 @@ async function isolationFixture(
       executable: "node",
       arguments: ["script.mjs"],
       workingDirectory: workspace,
+      requiredLifecycleScope: permissionProfile === "full" ? "process_group" as const : "contained_workload" as const,
       requestedCapabilities: ["write_confinement" as const],
     },
     claims: authority.consume(grant, binding),

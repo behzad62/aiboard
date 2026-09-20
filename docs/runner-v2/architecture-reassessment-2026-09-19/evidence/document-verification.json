@@ -1,0 +1,17 @@
+{
+  "checkedAt": "2026-09-19T23:27:26.9679617+04:00",
+  "method": "Document structure, relative-link checks, JSON parsing, source/dirty-file SHA256 comparison and tracked diff inventory",
+  "passed": true,
+  "originalDirtyFilesChecked": 9,
+  "originalDirtyFilesChanged": 0,
+  "newTrackedModifications": 0,
+  "sourceMatches": true,
+  "decisionSections": 14,
+  "requirements": 19,
+  "packets": 5,
+  "checkedLocalLinks": 8,
+  "brokenLinks": [],
+  "implementationTestsRun": false,
+  "runtimeAcceptance": "NOT_CLAIMED",
+  "planningReview": "READY_FOR_PROPOSAL; all findings closed"
+}

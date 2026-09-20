@@ -28,10 +28,11 @@ const capabilities = {
 function backend(
   id = "fake",
   probe: unknown = {
-    attestationVersion: 1,
+    attestationVersion: 2,
     backendId: id,
     verified: true,
     platformLabel: "fixture",
+    lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
     capabilities,
   },
 ): ProcessBackend {
@@ -71,16 +72,17 @@ test("Runner registry snapshot rejects structural forgeries and ignores array an
   const trusted = createProcessBackendRegistry(entries);
   entries[0] = registration(backend());
   original.probe = async () => ({
-    attestationVersion: 1,
+    attestationVersion: 2,
     backendId: "replacement",
     verified: true,
     platformLabel: "replacement",
+    lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
     capabilities,
   });
-  const selected = await selectProcessBackend(trusted, []);
+  const selected = await selectProcessBackend(trusted, [], "process_group");
   assert.equal(selected.attestation.backendId, "fake");
   await assert.rejects(
-    selectProcessBackend({} as never, []),
+    selectProcessBackend({} as never, [], "process_group"),
     /registry authority/i,
   );
 });
@@ -93,7 +95,7 @@ test("fresh revalidation returns the exact immutable implementation snapshot use
     return { released: true };
   };
   const trusted = createProcessBackendRegistry(registry(source));
-  const selected = await selectProcessBackend(trusted, []);
+  const selected = await selectProcessBackend(trusted, [], "process_group");
   source.release = async () => {
     throw new Error("replacement");
   };
@@ -102,7 +104,7 @@ test("fresh revalidation returns the exact immutable implementation snapshot use
     backendId: "fake",
     implementationGeneration: selected.implementationGeneration,
     implementationDigest: selected.implementationDigest,
-    attestationVersion: 1,
+    attestationVersion: selected.attestation.attestationVersion,
     attestationDigest: selected.attestationDigest,
   };
   const fresh = await reattestProcessBackend(trusted, binding);
@@ -118,10 +120,28 @@ test("fresh revalidation returns the exact immutable implementation snapshot use
   assert.equal(releases, 1);
 });
 
+test("v2 backend selection enforces lifecycle scope without treating process groups as containment", async () => {
+  const scoped = backend("fake", {
+    attestationVersion: 2,
+    backendId: "fake",
+    verified: true,
+    platformLabel: "fixture",
+    lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
+    capabilities,
+  });
+  const trusted = createProcessBackendRegistry(registry(scoped));
+  const selected = await selectProcessBackend(trusted, [], "process_group" as never);
+  assert.equal(selected.attestation.lifecycle.scope, "process_group");
+  await assert.rejects(
+    selectProcessBackend(trusted, [], "contained_workload" as never),
+    /required semantic capabilities|lifecycle/i,
+  );
+});
 test("selects by verified semantic capability and returns immutable registry-bound attestation digest", async () => {
   const selected = await selectProcessBackend(
     createProcessBackendRegistry(registry()),
     ["tree_termination"],
+    "process_group",
   );
   assert.match(selected.registryId, /^registry-/);
   assert.match(selected.attestationDigest, /^[a-f0-9]{64}$/);
@@ -147,6 +167,7 @@ test("rejects duplicate registry identities and false or identity-conflicting at
         ),
       ),
       [],
+      "process_group",
     ),
     /verified process backend/i,
   );
@@ -164,6 +185,7 @@ test("rejects duplicate registry identities and false or identity-conflicting at
         ),
       ),
       [],
+      "process_group",
     ),
     /verified process backend/i,
   );
@@ -261,16 +283,17 @@ test("all backend parsers reject accessors and proxies without consulting them",
 
 test("fresh re-attestation must match registry identity, implementation, backend id, version, and digest", async () => {
   let probeValue: unknown = {
-    attestationVersion: 1,
+    attestationVersion: 2,
     backendId: "fake",
     verified: true,
     platformLabel: "fixture",
+    lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
     capabilities,
   };
   const source = backend();
   source.probe = async () => probeValue;
   const trusted = createProcessBackendRegistry(registry(source));
-  const selected = await selectProcessBackend(trusted, []);
+  const selected = await selectProcessBackend(trusted, [], "process_group");
   const binding = {
     registryId: selected.registryId,
     backendId: selected.attestation.backendId,
@@ -281,10 +304,11 @@ test("fresh re-attestation must match registry identity, implementation, backend
   };
   await assert.doesNotReject(reattestProcessBackend(trusted, binding));
   probeValue = {
-    attestationVersion: 1,
+    attestationVersion: 2,
     backendId: "fake",
     verified: true,
     platformLabel: "changed",
+    lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
     capabilities,
   };
   await assert.rejects(
@@ -295,13 +319,13 @@ test("fresh re-attestation must match registry identity, implementation, backend
 
 test("normal reattestation rejects copied identity while explicit trusted restart adoption selects the new exact instance", async () => {
   const first = createProcessBackendRegistry(registry(backend()));
-  const selected = await selectProcessBackend(first, []);
+  const selected = await selectProcessBackend(first, [], "process_group");
   const binding = {
     registryId: selected.registryId,
     backendId: selected.attestation.backendId,
     implementationGeneration: selected.implementationGeneration,
     implementationDigest: selected.implementationDigest,
-    attestationVersion: 1,
+    attestationVersion: selected.attestation.attestationVersion,
     attestationDigest: selected.attestationDigest,
   };
   const replacement = backend();
@@ -334,7 +358,7 @@ test("normal reattestation rejects copied identity while explicit trusted restar
 });
 
 test("portable Windows baseline is available without Job Objects but strict guarantees require the Job enhancement", async () => {
-  const baseline = createWindowsProcessBackend({ jobObjects: "unavailable" });
+  const baseline = createWindowsProcessBackend({ jobObjects: "unavailable", semanticFacts: { portableDuplex: "verified", exactTreeBirth: "verified", windowsBatchArgv: "verified", jobContainment: "unavailable" } });
   const job = new WindowsJobObjectProcessBackend(jobService(true));
   const trusted = createProcessBackendRegistry([
     createProcessBackendRegistration({
@@ -352,8 +376,8 @@ test("portable Windows baseline is available without Job Objects but strict guar
       backend: job,
     }),
   ]);
-  assert.equal((await selectProcessBackend(trusted, [])).attestation.backendId, "runner-windows-supervisor-v1");
-  assert.equal((await selectProcessBackend(trusted, ["tree_termination", "crash_cleanup"])).attestation.backendId, "runner-windows-job-v1");
+  assert.equal((await selectProcessBackend(trusted, [], "process_group")).attestation.backendId, "runner-windows-supervisor-v1");
+  assert.equal((await selectProcessBackend(trusted, ["crash_cleanup"], "contained_workload")).attestation.backendId, "runner-windows-job-v1");
   const baselineOnly = createProcessBackendRegistry([
     createProcessBackendRegistration({
       stableAdapterId: "windows-portable-only",
@@ -363,7 +387,7 @@ test("portable Windows baseline is available without Job Objects but strict guar
       backend: baseline,
     }),
   ]);
-  await assert.rejects(selectProcessBackend(baselineOnly, ["tree_termination"]), /required semantic capabilities/i);
+  await assert.rejects(selectProcessBackend(baselineOnly, [], "contained_workload"), /required semantic capabilities/i);
   const unavailableJob = createProcessBackendRegistry([
     createProcessBackendRegistration({
       stableAdapterId: "windows-job-unavailable",
@@ -373,7 +397,7 @@ test("portable Windows baseline is available without Job Objects but strict guar
       backend: new WindowsJobObjectProcessBackend(jobService(false)),
     }),
   ]);
-  await assert.rejects(selectProcessBackend(unavailableJob, ["crash_cleanup"]), /required semantic capabilities/i);
+  await assert.rejects(selectProcessBackend(unavailableJob, ["crash_cleanup"], "contained_workload"), /required semantic capabilities/i);
 });
 
 function jobService(available: boolean): WindowsJobProcessService {

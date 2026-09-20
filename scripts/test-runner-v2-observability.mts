@@ -393,6 +393,8 @@ const executionSafetySnapshot = {
       kind: "subprocess", invocationId: "invocation-1", logicalProcessId: "logical-1",
       lifecycleState: "outcome_unknown", owned: true, pendingEffects: false,
       backend: { backendId: "runner-windows-job-v1", implementationDigest: "a".repeat(64) },
+      lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
+      requiredLifecycleScope: "process_group",
       capabilities: {
         tree_termination: "enforced", crash_cleanup: "enforced",
         verified_emptiness: "enforced", write_confinement: "unverified",
@@ -411,6 +413,8 @@ const executionSafetySnapshot = {
 const safetyDiagnostics = runnerExecutionSafetyDiagnostics(executionSafetySnapshot);
 assert.ok(safetyDiagnostics.some((item) => item.title === "Full permission bypass active"));
 assert.ok(safetyDiagnostics.some((item) => item.detail.includes("runner-windows-job-v1")));
+assert.ok(safetyDiagnostics.some((item) => item.detail.includes("lifecycle process_group")));
+assert.ok(safetyDiagnostics.some((item) => item.detail.includes("required process_group")));
 assert.ok(safetyDiagnostics.some((item) => item.detail.includes("lossy")));
 assert.ok(safetyDiagnostics.some((item) => item.detail.includes("user decision")));
 assert.deepEqual(problemKeys(executionSafetySnapshot, projectionWithoutHandoff), [

@@ -16,6 +16,11 @@ import vm from "node:vm";
 import ts from "typescript";
 import { inspectWindowsFixtureBirth, runLateBirthFixture } from "./support/late-birth-fixture.js";
 import { createLateBirthFixtureClock } from "./support/late-birth-clock.js";
+import { withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
+
+// Test-only outer guard. Several real Windows fixtures deliberately exercise
+// product-owned 15-30s bounds; the harness must outlive those bounds on hosted VMs.
+const WINDOWS_HOST_FIXTURE_TIMEOUT_MS = 90_000;
 
 test("Windows portable supervisor retries transient lock-holder read contention at the fence effect boundary", () => {
   const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
@@ -648,7 +653,7 @@ test("Windows portable launch consumes the caller's shared absolute startup dead
   }
 });
 
-test("Windows portable launch rejects a birth result that arrives after its absolute deadline", { timeout: 30_000 }, async (t) => {
+test("Windows portable launch rejects a birth result that arrives after its absolute deadline", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-late-birth-deadline-"));
   console.log(`C5 round9 late-birth root created: ${root}`);
   const stateDirectory = join(root, "state");
@@ -668,7 +673,7 @@ test("Windows portable launch rejects a birth result that arrives after its abso
       // Capture a genuine identity first. The old pre-query sleep could let the
       // supervisor exit before observation and therefore tested a missing birth,
       // not a present birth result returned after its absolute deadline.
-      firstObservation = lateClock.observeBeforeExpiry(() => inspectWindowsFixtureBirth(pid, platform, 2_000));
+      firstObservation = lateClock.observeBeforeExpiry(() => inspectWindowsFixtureBirth(pid, platform, 10_000));
       t.diagnostic(`C5 late birth observed: ${JSON.stringify({ root, pid, state: firstObservation.state, wallAt: realNow(), deadlineAt: startupDeadlineAt, fixtureAt: lateClock.now() })}`);
       return firstObservation;
     },
@@ -927,7 +932,7 @@ test("Windows portable supervisor reuses one birth-tagged tree snapshot per owne
     "transient Windows sharing conflicts must leave control pending for the next tick");
 });
 
-test("Windows portable supervisor preserves historical proof without traversing a PID replacement", { timeout: 30_000 }, async (t) => {
+test("Windows portable supervisor preserves historical proof without traversing a PID replacement", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows PID-reuse fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-recycled-tree-"));
   const directory = join(root, "owned-recycled-tree");
@@ -977,7 +982,7 @@ test("Windows portable supervisor preserves historical proof without traversing 
   }
 });
 
-test("Windows portable supervisor rejects a child edge whose birth predates its exact parent", { timeout: 30_000 }, async (t) => {
+test("Windows portable supervisor rejects a child edge whose birth predates its exact parent", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows stale-parent fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-stale-parent-edge-"));
   const directory = join(root, "owned-stale-parent-edge");
@@ -1359,7 +1364,7 @@ test("Windows supervisor treats unavailable CIM inspection as unknown and ignore
   }
 });
 
-test("Windows supervisor watchdog terminates a hung CIM inspector and reaches durable unknown", { timeout: 30_000 }, async (t) => {
+test("Windows supervisor watchdog terminates a hung CIM inspector and reaches durable unknown", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows CIM watchdog fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cim-watchdog-"));
   const directory = join(root, "owned-hung-query"); mkdirSync(directory);
@@ -1401,7 +1406,7 @@ test("Windows supervisor watchdog terminates a hung CIM inspector and reaches du
   }
 });
 
-test("Windows portable startup retries an exact birth inspection with an adaptive bounded budget", { timeout: 30_000 }, async (t) => {
+test("Windows portable startup retries an exact birth inspection with an adaptive bounded budget", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows adaptive birth fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-adaptive-birth-"));
   const directory = join(root, "owned-adaptive-birth"); mkdirSync(directory);
@@ -1450,7 +1455,7 @@ test("portable backend does not cap Windows supervisor birth discovery at the fo
   assert.match(source, /WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS/);
 });
 
-test("Windows supervisor adapts its default inventory attempt budget to a slower host", { timeout: 30_000 }, async (t) => {
+test("Windows supervisor adapts its default inventory attempt budget to a slower host", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows adaptive CIM fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-adaptive-cim-"));
   const directory = join(root, "owned-adaptive-query"); mkdirSync(directory);
@@ -1495,7 +1500,7 @@ test("Windows supervisor adapts its default inventory attempt budget to a slower
   }
 });
 
-test("Windows destructive control bounds a hung fresh inspector and never signals under uncertainty", { timeout: 30_000 }, async (t) => {
+test("Windows destructive control bounds a hung fresh inspector and never signals under uncertainty", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows control inspector fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-control-watchdog-"));
   const directory = join(root, "owned-control-query"); mkdirSync(directory);
@@ -1512,12 +1517,7 @@ test("Windows destructive control bounds a hung fresh inspector and never signal
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const running = await waitForPortableState(directory, (value) => value.status === "running" && !!value.rootProcess);
-    writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
-      nonce,
-      holderPid: child.pid,
-      holderBirth: windowsBirth(child.pid!),
-    }));
-    writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
+    publishWindowsFixtureFenceAuthority(directory, nonce, child.pid);
     writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1, sequence: 1, action: "force_terminate" }));
     const unknown = await waitForPortableState(directory, (value) => value.handledControl === 0 && value.status === "outcome_unknown" && /timed out|ETIMEDOUT|inspection/i.test(String(value.error)));
     assert.match(String(unknown.error), /timed out|inspection|control/i);
@@ -1546,7 +1546,21 @@ function windowsBirth(pid: number): string {
   return output.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
 }
 
-test("Windows destructive control bounds taskkill and treats timeout as durable uncertainty", { timeout: 30_000 }, async (t) => {
+function publishWindowsFixtureFenceAuthority(directory: string, nonce: string, holderPid: number): void {
+  const holderBirth = windowsBirth(holderPid);
+  writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid, holderBirth }));
+  // Establish the same durable SQLite coordination protocol used by production.
+  // The no-op releases this setup acquisition while retaining active protocol metadata
+  // for the supervisor's later exact-holder effect acquisition.
+  withOwnedFenceLockSync(join(directory, ".fence.lock"), () => undefined, {
+    holderPid,
+    holderBirth,
+    inspectHolder: () => "same",
+  });
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
+}
+
+test("Windows destructive control bounds taskkill and treats timeout as durable uncertainty", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows taskkill watchdog fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-taskkill-watchdog-"));
   const directory = join(root, "owned-taskkill"); mkdirSync(directory);
@@ -1563,12 +1577,7 @@ test("Windows destructive control bounds taskkill and treats timeout as durable 
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const running = await waitForPortableState(directory, (value) => value.status === "running" && !!value.rootProcess);
-    writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
-      nonce,
-      holderPid: child.pid,
-      holderBirth: windowsBirth(child.pid!),
-    }));
-    writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
+    publishWindowsFixtureFenceAuthority(directory, nonce, child.pid);
     writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1, sequence: 1, action: "force_terminate" }));
     const unknown = await waitForPortableState(directory, (value) => value.handledControl === 1 && value.status === "outcome_unknown");
     assert.match(String(unknown.error), /taskkill|timed out|control/i);
@@ -1610,12 +1619,7 @@ test("Windows supervisor reattests exact live members before a higher-sequence f
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     await waitForPortableState(directory, (value) => value.status === "running" && !!value.rootProcess, 10_000);
-    writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
-      nonce,
-      holderPid: child.pid,
-      holderBirth: windowsBirth(child.pid!),
-    }));
-    writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
+    publishWindowsFixtureFenceAuthority(directory, nonce, child.pid);
     writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1, sequence: 1, action: "terminate" }));
     await waitForPortableState(directory, (value) => value.handledControl === 1 && value.status === "outcome_unknown");
 
@@ -1637,7 +1641,7 @@ test("Windows supervisor reattests exact live members before a higher-sequence f
   }
 });
 
-test("Windows supervisor rejects successful empty CIM inventory as consecutive uncertainty", { timeout: 30_000 }, async (t) => {
+test("Windows supervisor rejects successful empty CIM inventory as consecutive uncertainty", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows CIM empty-inventory fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cim-empty-")); const directory = join(root, "owned-empty-query"); mkdirSync(directory);
   const supervisor = join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs");
@@ -1821,7 +1825,7 @@ test("Windows portable launch failure verifies owned cleanup instead of killing 
   }
 });
 
-test("Windows launch rollback authenticates force termination at the real live supervisor seam", { timeout: 30_000 }, async (t) => {
+test("Windows launch rollback authenticates force termination at the real live supervisor seam", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows live rollback fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-live-rollback-"));
   const operations: NativeProcessOperations = {
@@ -1874,7 +1878,7 @@ test("Windows launch rollback authenticates force termination at the real live s
   }
 });
 
-test("Windows portable fixture supervisor argv excludes ambient credential sentinels", { timeout: 30_000 }, async (t) => {
+test("Windows portable fixture supervisor argv excludes ambient credential sentinels", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows supervisor argv fixture requires Windows."); return; }
   const key = "AIBOARD_FIXTURE_AMBIENT_SECRET"; const value = `sentinel-${Date.now()}-${Math.random()}`;
   const previous = process.env[key]; process.env[key] = value;
@@ -2226,7 +2230,7 @@ test("Windows Job terminal and release fail closed when owned output evidence di
   }
 });
 
-test("Windows Job output read fails closed when evidence disappears after attach re-attestation", { timeout: 30_000 }, async (t) => {
+test("Windows Job output read fails closed when evidence disappears after attach re-attestation", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows Job output read fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-read-missing-"));
   const stateDirectory = join(root, "state"); const workspace = join(root, "workspace"); mkdirSync(workspace);
@@ -2357,7 +2361,7 @@ test("Windows Job coalesced read acknowledges every exact retained chunk boundar
   }
 });
 
-test("Windows Job signal reports exact empty while retained output drains and exits after acknowledgement", { timeout: 30_000 }, async (t) => {
+test("Windows Job signal reports exact empty while retained output drains and exits after acknowledgement", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows Job retained signal fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-signal-retained-")); const stateDirectory = join(root, "state"); const workspace = join(root, "workspace"); mkdirSync(workspace);
   const host = createWindowsJobProcessHost({ stateDirectory, stopDeadlineMs: 500 }); const backend = new WindowsJobObjectProcessBackend(host);
@@ -2556,7 +2560,7 @@ test("Windows Job unsubscribe during held host acknowledgement never delivers th
   finally { resume(); await first.detach(); await second.detach(); }
 });
 
-test("Windows Job sink failure leaves a durable unknown terminal until retained output is acknowledged", { timeout: 30_000 }, async (t) => {
+test("Windows Job sink failure leaves a durable unknown terminal until retained output is acknowledged", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") {
     t.skip("Windows Job Object retained-output recovery requires a Windows host.");
     return;
@@ -2598,7 +2602,7 @@ test("Windows Job sink failure leaves a durable unknown terminal until retained 
   }
 });
 
-test("Windows Job acknowledgement failure cannot report clean terminal or release retained output", { timeout: 30_000 }, async (t) => {
+test("Windows Job acknowledgement failure cannot report clean terminal or release retained output", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") {
     t.skip("Windows Job Object retained-output recovery requires a Windows host.");
     return;
@@ -2985,7 +2989,7 @@ test("Windows Job backend restart activates an existing binding with the claimed
   assert.deepEqual(reconciledFences, [higher, higher]);
 });
 
-test("Windows Job host signal returns the post-effect stopped snapshot", { timeout: 30_000 }, async (t) => {
+test("Windows Job host signal returns the post-effect stopped snapshot", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows Job signal snapshot fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-signal-snapshot-"));
   const workspace = join(root, "workspace"); mkdirSync(workspace);
@@ -3015,7 +3019,8 @@ function request(args: string[]) {
       executable: process.execPath,
       arguments: args,
       workingDirectory: process.cwd(),
-      requestedCapabilities: ["tree_termination", "verified_emptiness"] as const,
+      requiredLifecycleScope: "process_group" as const,
+      requestedCapabilities: [] as const,
     },
     grant: {
       grantId: "grant",

@@ -182,6 +182,20 @@ test("durable execution-safety parsers reject undeclared fields at every frozen 
   );
 });
 
+test("v2 invocation lifecycle scope is explicit and broad lifecycle capability names are not requested", () => {
+  const parsed = parseExecutionInvocationIntent({
+    ...validInvocation(),
+    requestedCapabilities: ["write_confinement"],
+    requiredLifecycleScope: "contained_workload",
+  });
+  assert.equal(parsed.requiredLifecycleScope, "contained_workload");
+  assert.deepEqual(parsed.requestedCapabilities, ["write_confinement"]);
+  assert.throws(() => parseExecutionInvocationIntent({
+    ...validInvocation(),
+    requestedCapabilities: ["tree_termination"],
+    requiredLifecycleScope: "process_group",
+  }), /lifecycle|deprecated|tree_termination/i);
+});
 test("model invocation parsing rejects forged grants while Runner-created grants are branded and call-bound", () => {
   assert.throws(
     () => parseModelExecutionInvocationIntent({
@@ -237,7 +251,8 @@ function validInvocation(): Record<string, unknown> {
     executable: "fixture-command",
     arguments: ["--fixture"],
     workingDirectory: "C:\\fixture",
-    requestedCapabilities: ["tree_termination"],
+    requiredLifecycleScope: "process_group",
+    requestedCapabilities: [],
   };
 }
 

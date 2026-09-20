@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import { types } from "node:util";
+import {
+  freezeExecutionLifecycleRequirements,
+  type ExecutionLifecycleRequirements,
+} from "./execution-lifecycle-policy.js";
 
 export interface McpDeclaredEnvelope {
   readonly paths?: readonly Readonly<{ path: string; mode: "read" | "write" }>[];
@@ -12,6 +16,8 @@ export interface McpServerSpec {
   command: string;
   /** Fixed configuration authority, never derived from model tool arguments. */
   envelope?: McpDeclaredEnvelope;
+  /** Trusted lifecycle requirements; never inferred from model text. */
+  lifecycleRequirements?: ExecutionLifecycleRequirements;
 }
 export interface McpFixedEnvelope {
   readonly paths: readonly Readonly<{ path: string; mode: "read" | "write" }>[];
@@ -85,11 +91,34 @@ export function fixedMcpEnvelope(value: McpDeclaredEnvelope | undefined): McpFix
 
 export function snapshotMcpServerSpec(value: McpServerSpec): Readonly<McpServerSpec> {
   const error = () => new McpConfigurationError("mcp_command_invalid", "MCP server configuration is invalid.");
-  const object = plainData(value, ["name", "command", "envelope"], error);
+  const object = plainData(value, ["name", "command", "envelope", "lifecycleRequirements"], error);
   if (typeof object.name !== "string" || !/^[a-z][a-z0-9_-]{0,31}$/u.test(object.name) || typeof object.command !== "string") throw error();
   parseMcpCommand(object.command);
   const envelope = fixedMcpEnvelope(object.envelope as McpDeclaredEnvelope | undefined);
-  return Object.freeze({ name: object.name, command: object.command, envelope });
+  const lifecycleRequirements = fixedMcpLifecycleRequirements(object.lifecycleRequirements);
+  return Object.freeze({
+    name: object.name,
+    command: object.command,
+    envelope,
+    ...(lifecycleRequirements ? { lifecycleRequirements } : {}),
+  });
+}
+
+/** Reject unknown/non-plain lifecycle shapes; canonicalize true flags through shared freeze. */
+function fixedMcpLifecycleRequirements(value: unknown): ExecutionLifecycleRequirements | undefined {
+  if (value === undefined) return undefined;
+  const error = () => new McpConfigurationError("mcp_command_invalid", "MCP server configuration is invalid.");
+  const object = plainData(value, ["requireCompleteCleanup", "knownUnavoidableDetachment"], error);
+  if (object.requireCompleteCleanup !== undefined && typeof object.requireCompleteCleanup !== "boolean") throw error();
+  if (object.knownUnavoidableDetachment !== undefined && typeof object.knownUnavoidableDetachment !== "boolean") throw error();
+  return freezeExecutionLifecycleRequirements({
+    ...(typeof object.requireCompleteCleanup === "boolean"
+      ? { requireCompleteCleanup: object.requireCompleteCleanup }
+      : {}),
+    ...(typeof object.knownUnavoidableDetachment === "boolean"
+      ? { knownUnavoidableDetachment: object.knownUnavoidableDetachment }
+      : {}),
+  });
 }
 
 export function mcpConfigurationDigest(value: McpServerSpec): string {

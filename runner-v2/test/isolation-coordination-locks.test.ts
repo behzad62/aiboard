@@ -167,6 +167,7 @@ async function writeFullProjection(root: string, statePath: string, suffix: stri
     executable: process.execPath,
     arguments: [] as string[],
     workingDirectory: workspace,
+    requiredLifecycleScope: "process_group" as const,
     requestedCapabilities: [] as const,
   };
   const grant = await authority.issue({

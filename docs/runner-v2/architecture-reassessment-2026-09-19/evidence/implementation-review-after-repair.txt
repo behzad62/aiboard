@@ -1,0 +1,19 @@
+## Findings
+
+none
+
+## Invariant checklist (non-findings)
+
+- **Observability / legacy (prior #1):** `process-recovery.ts` only copies recorded `lifecycle` / `requiredLifecycleScope`; `projectExecutionSafetyObservability` pass-throughs without inventing containment; legacy v1 bindings remain scope-less and terminate-blocked (`process-recovery-kernel.test.ts`).
+- **Trusted requirements ÔåÆ policy (prior #2):** Central `resolveRequiredLifecycleScope` is used by one-shot, managed, MCP, and LSP transports; flags are exact-`true` only; ordinary full ÔåÆ `process_group`, non-full / explicit flags ÔåÆ `contained_workload`; no argv/model/ancestry inference.
+- **full + contained composition (prior #3):** Isolation prefers qualifying OCI; else full-only `unconfined_explicit_full` while preserving `contained_workload` on the intent; non-full stays selection-blocked; `selectProcessBackend` still requires contained/Job semantics (POSIX / non-Job Windows stay `process_group` and cannot satisfy contained).
+- **MCP follow-up:** `lifecycleRequirements` on `McpServerSpec` are plain-data/boolean-validated, folded into `mcpConfigurationDigest`, carried on WeakMap attestation + `resolveMcpRuntimeLaunches` digests, and checked/consumed in `execution-host-mcp-transport`; omission stays compatible and does not default full MCP to contained (production resolve path covered).
+- **Legacy v1 fail-closed:** v1 probes/bindings parse but cannot be selected/reattested for live control; missing scope does not upgrade to containment or authorize destructive recovery.
+- **OCI host attach vs workload:** OCI lease attests `contained_workload`; `prepareExecution` rewrites only the host attach intent to `process_group` (container retirement remains lease-scoped).
+- **No PPID/ancestry ownership authority:** experimental symbols absent; negative source guard retained.
+- **No product deadline widening:** `AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS` unchanged; fixture/harness outer guards only.
+- **Tests:** native MCP tree case is inherited (non-`--detached`); strict detached coverage is OCI-scoped; hand-crafted MCP launch maps exist but production resolve+digest path is also tested.
+
+## Verdict
+
+READY

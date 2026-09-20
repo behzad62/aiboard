@@ -3727,8 +3727,9 @@ test(`MCP isolation cleanup ownership ${mode} never outlives an unowned original
   const grant = await f.grants.issue({ ...binding, workspacePath: process.cwd(), access: [], externalApproved: false, destructiveApproved: false, networkApproved: false });
   let releases = 0;
   const provider: import("../src/execution-isolation-provider.js").ExecutionIsolationProvider = {
-    attest: async () => ({ attestationVersion: 1, providerId: "strict-fixture", verified: true, mechanism: "synthetic-exact",
+    attest: async () => ({ attestationVersion: 2, providerId: "strict-fixture", verified: true, mechanism: "synthetic-exact",
       exactGrantWriteConfinement: true, interactiveAttach: true,
+      lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
       capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "enforced" } }),
     attestExecution: async () => undefined,
     acquire: async (input) => ({ leaseId: "strict-real-lease", providerId: input.providerId, invocationId: input.intent.invocationId,
@@ -3742,7 +3743,7 @@ test(`MCP isolation cleanup ownership ${mode} never outlives an unowned original
   const runtime = createStreamingProcessSessionRuntime({ ...f.runtimeOptions, isolation: {
     acquire: async ({ claims, launchId }) => {
       selected = await selector.acquire({ permissionProfile: "project", grant: claims, intent: { invocationId: launchId,
-        runId: claims.runId, sessionId: claims.sessionId, kind: "mcp_server", executable: "fixture", arguments: [], workingDirectory: process.cwd(), requestedCapabilities: ["write_confinement"] } });
+        runId: claims.runId, sessionId: claims.sessionId, kind: "mcp_server", executable: "fixture", arguments: [], workingDirectory: process.cwd(), requiredLifecycleScope: "contained_workload", requestedCapabilities: ["write_confinement"] } });
       assert.equal(selected.enforcement, "write_confinement_exact_grant");
       if (selected.enforcement !== "write_confinement_exact_grant") assert.fail("strict selection required");
       return { leaseId: selected.lease.leaseId, providerId: selected.providerId, invocationId: selected.lease.invocationId,

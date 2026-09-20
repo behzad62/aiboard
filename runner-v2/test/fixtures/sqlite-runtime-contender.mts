@@ -18,10 +18,11 @@ const capabilities = {
 } as const;
 const backend: ProcessBackend = {
   probe: async () => ({
-    attestationVersion: 1,
+    attestationVersion: 2,
     backendId: "fake",
     verified: true,
     platformLabel: "fixture",
+    lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
     capabilities,
   }),
   launch: async () => {
@@ -145,6 +146,7 @@ const result = await kernel.runtime.invoke({
     executable: "tool",
     arguments: [],
     workingDirectory: "C:\\safe",
+    requiredLifecycleScope: "process_group",
     requestedCapabilities: [],
   },
   grantId: "grant-shared",

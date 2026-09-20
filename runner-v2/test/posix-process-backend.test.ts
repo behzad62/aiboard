@@ -938,6 +938,18 @@ test("C4 POSIX rejects malformed nonempty ps identity and membership rows", asyn
     "a non-numeric membership row must fail closed");
 });
 
+test("C4 POSIX native lifecycle never reconstructs ownership from PPID ancestry", () => {
+  const root = resolve("runner-v2");
+  const controlSource = readFileSync(join(root, "src", "portable-process-posix-control.mjs"), "utf8");
+  const supervisorSource = readFileSync(join(root, "src", "portable-process-supervisor.mjs"), "utf8");
+  for (const forbidden of ["listPosixProcessParents", "parsePosixProcessParents", "collectPosixDescendantPids"]) {
+    assert.doesNotMatch(controlSource, new RegExp(forbidden), `${forbidden} must not participate in native POSIX ownership`);
+    assert.doesNotMatch(supervisorSource, new RegExp(forbidden), `${forbidden} must not participate in native POSIX control`);
+  }
+  for (const forbidden of ["posixEscapedMembers", "captureOwnedPosixDescendantClosure", "signalOwnedPosixEscapedDescendants"]) {
+    assert.doesNotMatch(supervisorSource, new RegExp(forbidden), `${forbidden} would reintroduce ancestry-derived control authority`);
+  }
+});
 test("C4 POSIX membership excludes zombies but fails closed on unknown process state", async () => {
   const control = await import("../src/portable-process-posix-control.mjs");
   assert.deepEqual(
@@ -3809,7 +3821,8 @@ function request(args: string[]) {
       executable: process.execPath,
       arguments: args,
       workingDirectory: process.cwd(),
-      requestedCapabilities: ["tree_termination", "verified_emptiness"] as const,
+      requiredLifecycleScope: "process_group" as const,
+      requestedCapabilities: [] as const,
     },
     grant: {
       grantId: "grant",

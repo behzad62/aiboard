@@ -15,12 +15,14 @@ function target(state = "orphaned"): RecoveryTarget {
     taskId: "task", sessionId: "session", revision: 3, ownerId: "owner", fencingToken: 2, rootPid: 123,
     state, backendIdentity: "a".repeat(64), birthFingerprint: "b".repeat(64) },
     owned: true, pendingEffects: false,
+    lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
+    requiredLifecycleScope: "process_group",
     capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "unverified" },
     cleanup: { state: "pending" } };
 }
 function proposal(t: RecoveryTarget, id = "proposal"): RecoveryProposal {
   return { version: 1, proposalId: id, callId: "recovery:" + id, scope: recoveryScope(t),
-    requestedAction: "inspect", targetScope: [t.scope.logicalProcessId], requestedCapabilities: ["verified_emptiness"],
+    requestedAction: "inspect", targetScope: [t.scope.logicalProcessId], requestedCapabilities: [],
     expiresAt: new Date(now.getTime() + 60000).toISOString(), rationale: "Inspect exact owned process" };
 }
 function fixture(name: string, run: (f: { controller: ProcessRecoveryController; store: SqliteSchedulerStore;
@@ -68,7 +70,7 @@ fixture("same PID with recycled birth invalidates an authorized action",async f=
   assert.equal((await f.controller.execute("proposal",receipt.proposalFingerprint)).state,"rejected");assert.deepEqual(f.effects,[]);
 });
 fixture("destructive action pauses and binds exact local-user approval",async f=>{
-  const p={...proposal(f.current),requestedAction:"terminate" as const,requestedCapabilities:["tree_termination" as const,"verified_emptiness" as const]};
+  const p={...proposal(f.current),requestedAction:"terminate" as const,requestedCapabilities:[]};
   const r=await f.controller.submit(p);assert.equal(r.state,"user_decision_required");
   await assert.rejects(()=>f.controller.execute(p.proposalId,r.proposalFingerprint),{code:"recovery_approval_required"});
   await assert.rejects(()=>f.controller.decide(p.proposalId,"0".repeat(64),"approve"),{code:"recovery_scope_mismatch"});
@@ -82,12 +84,23 @@ for(const invalid of ["expired","scope","call","shell","capability","ownership",
     if(invalid==="scope")p.targetScope=["logical","other"];
     if(invalid==="call")p.callId="different";
     if(invalid==="shell")p.command="powershell -Command Remove-Item *";
-    if(invalid==="capability")f.current={...f.current,capabilities:{...f.current.capabilities,verified_emptiness:"unverified"}};
+    if(invalid==="capability") { p.requestedCapabilities=["crash_cleanup"]; f.current={...f.current,capabilities:{...f.current.capabilities,crash_cleanup:"unverified"}}; }
     if(invalid==="ownership")f.current={...f.current,owned:false};
     if(invalid==="identity")f.current={...f.current,scope:{...f.current.scope,backendIdentity:""}};
     if(invalid==="pending")f.current={...f.current,pendingEffects:true};
     await assert.rejects(()=>f.controller.submit(p));assert.deepEqual(f.effects,[]);
   });
+fixture("scope-less legacy target is inspectable but cannot generate or submit new recovery authority", async f=>{
+  f.current={...f.current,lifecycle:undefined,requiredLifecycleScope:undefined};
+  await assert.rejects(()=>f.controller.generate("invocation","legacy-scope"),{code:"recovery_capability_unavailable"});
+  await assert.rejects(()=>f.controller.submit(proposal(f.current,"legacy-submit")),{code:"recovery_capability_unavailable"});
+  assert.deepEqual(f.generated,[]);assert.deepEqual(f.effects,[]);
+});
+fixture("new proposals cannot request deprecated lifecycle capability names",async f=>{
+  await assert.rejects(()=>f.controller.submit({...proposal(f.current,"legacy-cap"),requestedCapabilities:["verified_emptiness"]}),
+    {code:"recovery_capability_unavailable"});
+  assert.deepEqual(f.effects,[]);
+});
 fixture("durable replay executes at most once and stores no raw model secrets",async f=>{
   const secret="unusual-password-without-a-known-prefix";
   const r=await f.controller.submit({...proposal(f.current),rationale:secret});
@@ -105,7 +118,7 @@ fixture("a terminate whose cleanup stays pending is never reported as executed",
   const controller=new ProcessRecoveryController({runId:"run",store,clock:()=>now,
     runtime:{inspect:()=>structuredClone(inspected),execute:async()=>({observation:"running",cleanup:{state:"pending"}})}});
   const p={...proposal(f.current,"pending-terminate"),requestedAction:"terminate" as const,
-    requestedCapabilities:["tree_termination" as const,"verified_emptiness" as const]};
+    requestedCapabilities:[]};
   const r=await controller.submit(p);
   await controller.decide(p.proposalId,r.proposalFingerprint,"approve");
   const done=await controller.execute(p.proposalId,r.proposalFingerprint);
@@ -163,7 +176,7 @@ fixture("concurrent execution requests share one durable claim",async f=>{
 // Task11.SPEC.restart-inflight-becomes-unknown
 fixture("an in-flight claim observed after restart becomes outcome_unknown and never replays",async f=>{
   const p={...proposal(f.current,"inflight"),requestedAction:"terminate" as const,
-    requestedCapabilities:["tree_termination" as const,"verified_emptiness" as const]};
+    requestedCapabilities:[]};
   const r=await f.controller.submit(p);
   await f.controller.decide(p.proposalId,r.proposalFingerprint,"approve");
   let started=0;
@@ -209,8 +222,8 @@ test("process recovery: subprocess adapter issues one exact native recovery gran
   const executionGrants = createExecutionGrantAuthority({ clock: () => now });
   const binding = {
     registryId: "registry", backendId: "backend", implementationGeneration: "generation",
-    implementationDigest: "1".repeat(64), attestationVersion: 1, attestationDigest: "2".repeat(64),
-    capabilities: target().capabilities, opaqueIdentity: "opaque",
+    implementationDigest: "1".repeat(64), attestationVersion: 2, attestationDigest: "2".repeat(64),
+    capabilities: target().capabilities, lifecycle: target().lifecycle, opaqueIdentity: "opaque",
     birthFingerprint: { observedAt: now.toISOString(), discriminator: "birth" },
     rootPid: 123, startedAt: now.toISOString(),
   };
@@ -218,7 +231,7 @@ test("process recovery: subprocess adapter issues one exact native recovery gran
     runId: "run", invocationId: "invocation", logicalProcessId: "logical", taskId: "task", sessionId: "session",
     revision: 3, ownerId: "other-owner", fencingToken: 2,
     leaseExpiresAt: new Date(now.getTime() + 60_000).toISOString(), state: "orphaned",
-    pendingEffects: [], cleanup: { state: "pending" }, requiredCapabilities: ["verified_emptiness"], backendBinding: binding,
+    pendingEffects: [], cleanup: { state: "pending" }, requiredLifecycleScope: "process_group", requiredCapabilities: [], backendBinding: binding,
   } as never;
   try {
     const runtime = createSubprocessProcessRecoveryRuntime({
@@ -238,7 +251,7 @@ test("process recovery: model generator cannot author scope, target, call identi
   const seen: unknown[] = [];
   const generate = createAgentProcessRecoveryGenerator({
     model: { complete: async request => { seen.push(request); return { stopReason: "end_turn" as const, blocks: [{ type: "text" as const,
-      text: JSON.stringify({ requestedAction: "inspect", requestedCapabilities: ["verified_emptiness"], rationale: "Inspect the exact exceptional process" }) }] }; } },
+      text: JSON.stringify({ requestedAction: "inspect", requestedCapabilities: [], rationale: "Inspect the exact exceptional process" }) }] }; } },
     clock: () => now,
   });
   const t = target("orphaned");
@@ -286,7 +299,7 @@ test("process recovery: outcome_unknown resolves from durable verified-empty pro
   const crashing = new ProcessRecoveryController({ runId: "run", store: f.store, clock: () => now,
     runtime: { inspect: () => structuredClone(f.current), execute: async () => { effects += 1; throw Error("lost response"); } } });
   const p = { ...proposal(f.current, "unknown-clean"), requestedAction: "terminate" as const,
-    requestedCapabilities: ["tree_termination" as const, "verified_emptiness" as const] };
+    requestedCapabilities: [] };
   const accepted = await crashing.submit(p);
   await crashing.decide(p.proposalId, accepted.proposalFingerprint, "approve");
   assert.equal((await crashing.execute(p.proposalId, accepted.proposalFingerprint)).state, "outcome_unknown");
@@ -312,7 +325,7 @@ test("process recovery: later verified cleanup resolves older unknown recovery f
       return { observation: "exited" as const, cleanup: { state: "verified_empty" as const, verifiedAt: now.toISOString() } };
     } } });
   const terminate = (id: string) => ({ ...proposal(f.current, id), requestedAction: "terminate" as const,
-    requestedCapabilities: ["tree_termination" as const, "verified_emptiness" as const] });
+    requestedCapabilities: [] });
   const first = terminate("unknown-first");
   const firstReceipt = await controller.submit(first);
   await controller.decide(first.proposalId, firstReceipt.proposalFingerprint, "approve");
@@ -333,12 +346,12 @@ test("process recovery: grant issuance failure is failed before dispatch, never 
   scheduler.append({ runId: "run", type: "run.initialized", actor: { role: "runner", id: "scheduler" },
     occurredAt: now.toISOString(), idempotencyKey: "init", payload: {} });
   const binding = { registryId: "registry", backendId: "backend", implementationGeneration: "generation",
-    implementationDigest: "1".repeat(64), attestationVersion: 1, attestationDigest: "2".repeat(64),
-    capabilities: target().capabilities, opaqueIdentity: "opaque",
+    implementationDigest: "1".repeat(64), attestationVersion: 2, attestationDigest: "2".repeat(64),
+    capabilities: target().capabilities, lifecycle: target().lifecycle, opaqueIdentity: "opaque",
     birthFingerprint: { observedAt: now.toISOString(), discriminator: "birth" }, rootPid: 123, startedAt: now.toISOString() };
   const record = { runId: "run", invocationId: "invocation", logicalProcessId: "logical", taskId: "task", sessionId: "session",
     revision: 3, ownerId: "owner", fencingToken: 2, leaseExpiresAt: new Date(now.getTime() + 60_000).toISOString(),
-    state: "orphaned", pendingEffects: [], cleanup: { state: "pending" }, requiredCapabilities: ["verified_emptiness"],
+    state: "orphaned", pendingEffects: [], cleanup: { state: "pending" }, requiredLifecycleScope: "process_group", requiredCapabilities: [],
     backendBinding: binding } as never;
   let dispatched = 0;
   const executionGrants = createExecutionGrantAuthority({ clock: () => now, beforeIssueCommit: async () => { throw Error("issuer unavailable"); } });
@@ -426,7 +439,7 @@ test("process recovery: restarted executing inspect fails closed without becomin
 test("process recovery: model generator rejects unsupported artifact-removal action", async () => {
   const generate = createAgentProcessRecoveryGenerator({
     model: { complete: async () => ({ stopReason: "end_turn" as const, blocks: [{ type: "text" as const,
-      text: JSON.stringify({ requestedAction: "remove_owned_artifact", requestedCapabilities: ["verified_emptiness"], rationale: "remove it" }) }] }) },
+      text: JSON.stringify({ requestedAction: "remove_owned_artifact", requestedCapabilities: [], rationale: "remove it" }) }] }) },
     clock: () => now,
   });
   await assert.rejects(() => generate(recoveryScope(target("orphaned")), "unsupported-action", new AbortController().signal),

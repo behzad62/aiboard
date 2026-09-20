@@ -97,6 +97,12 @@ export function runnerExecutionSafetyDiagnostics(snapshot: NativeBuildObservabil
     const backend = process.backend
       ? `${process.backend.backendId}${process.backend.providerId ? ` via ${process.backend.providerId}` : ""}`
       : "backend unavailable";
+    const lifecycle = process.lifecycle
+      ? `lifecycle ${process.lifecycle.scope} (termination=${process.lifecycle.termination}, emptiness=${process.lifecycle.emptiness})`
+      : "lifecycle unattested";
+    const requiredScope = process.requiredLifecycleScope
+      ? `required ${process.requiredLifecycleScope}`
+      : "required scope unavailable";
     const capabilities = Object.entries(process.capabilities)
       .map(([name, state]) => `${name}=${state}`)
       .join(", ");
@@ -106,7 +112,7 @@ export function runnerExecutionSafetyDiagnostics(snapshot: NativeBuildObservabil
     items.push({
       key: `execution-safety:process:${process.invocationId}`,
       title: `${process.kind} ${process.logicalProcessId}`,
-      detail: `${process.lifecycleState} · ${backend} · ${capabilities} · cleanup ${process.cleanup.state} · ${output}`,
+      detail: `${process.lifecycleState} · ${backend} · ${lifecycle} · ${requiredScope} · ${capabilities} · cleanup ${process.cleanup.state} · ${output}`,
     });
   }
   for (const recovery of safety.recovery) {

@@ -179,6 +179,10 @@ export interface ExecutionSafetyObservability {
     owned: boolean;
     pendingEffects: boolean;
     backend?: { backendId: string; implementationDigest: string; providerId?: string };
+    /** Recorded workload-boundary attestation; omitted for legacy targets. */
+    lifecycle?: RecoveryTarget["lifecycle"];
+    /** Original required scope when durably available; never synthesized. */
+    requiredLifecycleScope?: RecoveryTarget["requiredLifecycleScope"];
     capabilities: RecoveryTarget["capabilities"];
     requiredCapabilities: string[];
     leaseExpiresAt?: string;
@@ -246,6 +250,8 @@ export function projectExecutionSafetyObservability(input: {
       owned: process.owned,
       pendingEffects: process.pendingEffects,
       ...(process.backend ? { backend: { ...process.backend } } : {}),
+      ...(process.lifecycle ? { lifecycle: { ...process.lifecycle } } : {}),
+      ...(process.requiredLifecycleScope ? { requiredLifecycleScope: process.requiredLifecycleScope } : {}),
       capabilities: { ...process.capabilities },
       requiredCapabilities: [...(process.requiredCapabilities ?? [])],
       ...(process.leaseExpiresAt ? { leaseExpiresAt: process.leaseExpiresAt } : {}),

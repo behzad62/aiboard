@@ -104,6 +104,7 @@ export function createRunnerInternalProcessKernel(options: {
       });
       const invocationId = boundedIdentity(input.callId, "callId");
       const probe = parseProcessBackendProbe(await backend.probe(fence));
+      if (probe.attestationVersion !== 2) throw new Error("Runner internal process backend uses a legacy lifecycle attestation.");
       const rawLaunch = await backend.launch({
         intent: {
           invocationId,
@@ -112,10 +113,8 @@ export function createRunnerInternalProcessKernel(options: {
           executable: input.executable,
           arguments: Object.freeze([...input.arguments]),
           workingDirectory: input.workingDirectory,
-          requestedCapabilities: Object.freeze([
-            "tree_termination",
-            "verified_emptiness",
-          ]),
+          requiredLifecycleScope: "process_group",
+          requestedCapabilities: Object.freeze([]),
         },
         grant: {
           grantId: `internal-grant-${randomUUID()}`,

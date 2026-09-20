@@ -813,6 +813,12 @@ export type NativeBuildExecutionSafetyObservability =
         owned: boolean;
         pendingEffects: boolean;
         backend?: { backendId: string; implementationDigest: string; providerId?: string };
+        lifecycle?: {
+          scope: "process_group" | "contained_workload";
+          termination: NativeExecutionSafetyCapabilityState;
+          emptiness: NativeExecutionSafetyCapabilityState;
+        };
+        requiredLifecycleScope?: "process_group" | "contained_workload";
         capabilities: Record<NativeExecutionSafetyCapabilityName, NativeExecutionSafetyCapabilityState>;
         requiredCapabilities: string[];
         leaseExpiresAt?: string;

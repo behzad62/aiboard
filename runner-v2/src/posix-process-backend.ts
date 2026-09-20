@@ -15,6 +15,7 @@ export class PosixProcessBackend extends NativeOwnedProcessBackend {
       ...options,
       platform: "posix",
       backendId: "runner-posix-process-group-v1",
+      lifecycleScope: "process_group",
       capabilities: {
         tree_termination: "enforced",
         crash_cleanup: "unavailable",

@@ -65,10 +65,12 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
       verified: boolean;
       mechanism: string;
       exactGrantWriteConfinement: boolean;
+      lifecycle: { scope: string; termination: string; emptiness: string };
     };
     assert.equal(attestation.verified, true);
     assert.equal(attestation.mechanism, "docker-compatible-oci");
     assert.equal(attestation.exactGrantWriteConfinement, true);
+    assert.deepEqual(attestation.lifecycle, { scope: "contained_workload", termination: "enforced", emptiness: "enforced" });
 
     const lease = await provider.acquire({
       providerId: "oci-fixture",
@@ -102,6 +104,7 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
     const launch = await provider.prepareExecution!(lease as never, fixture.intent);
     assert.equal(launch.executable, fixture.cli);
     assert.equal(launch.invocationId, fixture.intent.invocationId);
+    assert.equal(launch.requiredLifecycleScope, "process_group");
     assert.deepEqual(launch.arguments.slice(0, 2), ["start", "--attach"]);
     assert.match(launch.arguments[2]!, /^container-fixture-/);
     assert.equal(
@@ -1574,6 +1577,7 @@ async function ociFixture(networkApproved = false) {
         join(external, "input.txt"),
       ],
       workingDirectory: workspace,
+      requiredLifecycleScope: "contained_workload" as const,
       requestedCapabilities: ["write_confinement" as const],
     },
     close: async () => await rm(root, { recursive: true, force: true }),

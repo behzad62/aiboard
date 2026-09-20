@@ -1,5 +1,5 @@
 /** Portable, model-visible execution-safety contracts. No live OS resource belongs here. */
-export const EXECUTION_SAFETY_CONTRACT_VERSION = 1 as const;
+export const EXECUTION_SAFETY_CONTRACT_VERSION = 2 as const;
 
 export const EXECUTION_SAFETY_CAPABILITY_NAMES = Object.freeze([
   "tree_termination",
@@ -19,6 +19,29 @@ export type ExecutionSafetyCapabilityName =
   (typeof EXECUTION_SAFETY_CAPABILITY_NAMES)[number];
 export type ExecutionSafetyCapabilityState =
   (typeof EXECUTION_SAFETY_CAPABILITY_STATES)[number];
+export const EXECUTION_LIFECYCLE_SCOPES = Object.freeze([
+  "process_group",
+  "contained_workload",
+] as const);
+export type ExecutionLifecycleScope = (typeof EXECUTION_LIFECYCLE_SCOPES)[number];
+export interface ExecutionLifecycleAttestation {
+  readonly scope: ExecutionLifecycleScope;
+  readonly termination: ExecutionSafetyCapabilityState;
+  readonly emptiness: ExecutionSafetyCapabilityState;
+}
+
+export function parseExecutionLifecycleAttestation(value: unknown): ExecutionLifecycleAttestation {
+  const object = closedObject(value, ["scope", "termination", "emptiness"], "execution lifecycle attestation");
+  return {
+    scope: requiredEnum(object.scope, EXECUTION_LIFECYCLE_SCOPES, "lifecycle scope"),
+    termination: requiredEnum(object.termination, EXECUTION_SAFETY_CAPABILITY_STATES, "lifecycle termination"),
+    emptiness: requiredEnum(object.emptiness, EXECUTION_SAFETY_CAPABILITY_STATES, "lifecycle emptiness"),
+  };
+}
+
+export function lifecycleScopeSatisfies(advertised: ExecutionLifecycleScope, required: ExecutionLifecycleScope): boolean {
+  return advertised === "contained_workload" || advertised === required;
+}
 export type ExecutionSafetyCapabilities = Readonly<
   Record<ExecutionSafetyCapabilityName, ExecutionSafetyCapabilityState>
 >;
@@ -54,6 +77,9 @@ export interface ExecutionInvocationIntent {
   readonly executable: string;
   readonly arguments: readonly string[];
   readonly workingDirectory: string;
+  /** Workload lifecycle boundary required by this v2 invocation. */
+  readonly requiredLifecycleScope: ExecutionLifecycleScope;
+  /** Non-lifecycle semantic capabilities. Legacy tree/emptiness names are invalid here. */
   readonly requestedCapabilities: readonly ExecutionSafetyCapabilityName[];
 }
 
@@ -296,7 +322,7 @@ export function parseIsolationProviderAttestation(value: unknown): IsolationProv
 export function parseExecutionInvocationIntent(value: unknown): ExecutionInvocationIntent {
   const object = closedObject(value, [
     "invocationId", "runId", "taskId", "sessionId", "kind", "executable",
-    "arguments", "workingDirectory", "requestedCapabilities",
+    "arguments", "workingDirectory", "requiredLifecycleScope", "requestedCapabilities",
   ], "execution invocation intent");
   return {
     invocationId: requiredString(object.invocationId, "invocationId"),
@@ -309,7 +335,8 @@ export function parseExecutionInvocationIntent(value: unknown): ExecutionInvocat
     executable: requiredString(object.executable, "executable"),
     arguments: stringArray(object.arguments, "arguments"),
     workingDirectory: requiredString(object.workingDirectory, "workingDirectory"),
-    requestedCapabilities: capabilityNameArray(object.requestedCapabilities),
+    requiredLifecycleScope: requiredEnum(object.requiredLifecycleScope, EXECUTION_LIFECYCLE_SCOPES, "requiredLifecycleScope"),
+    requestedCapabilities: invocationCapabilityNameArray(object.requestedCapabilities),
   };
 }
 
@@ -691,6 +718,14 @@ function capabilityNameArray(value: unknown): ExecutionSafetyCapabilityName[] {
     throw new Error("requestedCapabilities contains an unknown capability.");
   }
   return names as ExecutionSafetyCapabilityName[];
+}
+
+function invocationCapabilityNameArray(value: unknown): ExecutionSafetyCapabilityName[] {
+  const names = capabilityNameArray(value);
+  if (names.includes("tree_termination") || names.includes("verified_emptiness")) {
+    throw new Error("Lifecycle requirements must use requiredLifecycleScope; legacy tree_termination/verified_emptiness request names are deprecated.");
+  }
+  return names;
 }
 
 function objectArray<T>(

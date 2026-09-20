@@ -14,6 +14,8 @@ export interface ManagedProcessLaunchRequest {
   readonly startTimeoutMs: number;
   readonly cleanupTimeoutMs: number;
   readonly maxOutputBytes: number;
+  /** Trusted lifecycle requirements; never inferred from argv or model text. */
+  readonly lifecycleRequirements?: import("./execution-lifecycle-policy.js").ExecutionLifecycleRequirements;
   /** Terminal metadata only; never a protocol callback, byte stream or control capability. */
   readonly onTerminal: (observation: Readonly<{ exitCode: number | null; signal: NodeJS.Signals | null }>) => void;
 }

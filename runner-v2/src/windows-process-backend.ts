@@ -50,6 +50,7 @@ export class WindowsProcessBackend extends NativeOwnedProcessBackend {
       removeRetiredAuthority: options.removeRetiredAuthority,
       platform: "windows",
       backendId: "runner-windows-supervisor-v1",
+      lifecycleScope: "process_group",
       capabilities: {
         tree_termination: exactTreeBirth === "verified" ? "enforced" : exactTreeBirth === "partial" ? "partial" : "unavailable",
         crash_cleanup: "unavailable",
@@ -90,10 +91,11 @@ export class WindowsJobObjectProcessBackend implements ProcessBackend {
     if (this.jobContainment !== "verified" && !(await this.service.probeActiveJobCreateClose()))
       throw new Error("Authenticated Windows Job Object enhancement is unavailable.");
     return {
-      attestationVersion: 1,
+      attestationVersion: 2,
       backendId: "runner-windows-job-v1",
       verified: true,
       platformLabel: "windows",
+      lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
       capabilities: {
         tree_termination: "enforced",
         crash_cleanup: "enforced",
