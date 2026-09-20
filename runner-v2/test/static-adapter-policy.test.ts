@@ -108,6 +108,29 @@ test("authorized stop cleanup budget reaches every production joiner and physica
   assert.doesNotMatch(jobHost, /Math\.Min\(30000, deadlineMs\)/);
   const harness = readFileSync(join(runnerRoot, "test", "support", "real-streaming-harness.ts"), "utf8");
   assert.match(harness, /AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS/);
+});
+test("Windows Job host LimitFlags and CreateProcess flags never enable breakaway", () => {
+  const jobHost = readFileSync(join(sourceRoot, "managed-process-job-host.ps1"), "utf8");
+  assert.match(
+    jobHost,
+    /limits\.BasicLimitInformation\.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;/,
+    "Job limits must stay exactly KILL_ON_JOB_CLOSE",
+  );
+  assert.doesNotMatch(jobHost, /JOB_OBJECT_LIMIT_BREAKAWAY_OK/);
+  assert.doesNotMatch(jobHost, /JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK/);
+  assert.doesNotMatch(jobHost, /CREATE_BREAKAWAY_FROM_JOB/);
+  assert.doesNotMatch(jobHost, /\b0x00000800\b/);
+  assert.doesNotMatch(jobHost, /\b0x00001000\b/);
+  assert.doesNotMatch(jobHost, /\b0x01000000\b/);
+  const createProcessFlags = [...jobHost.matchAll(/CreateProcess\([\s\S]*?true, ([^,]+),/g)].map((match) => match[1]!.trim());
+  assert.deepEqual(
+    createProcessFlags,
+    [
+      "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
+      "CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW",
+    ],
+    "CreateProcess must not request CREATE_BREAKAWAY_FROM_JOB",
+  );
 });function sourceCodeFiles(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);

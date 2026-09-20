@@ -508,7 +508,7 @@ export class ProcessRecoveryController {
     if (target.pendingEffects) throw new ProcessRecoveryError("recovery_outcome_unknown");
     if (![target.scope.backendIdentity, target.scope.birthFingerprint].every(v => /^[a-f0-9]{64}$/.test(v))) throw new ProcessRecoveryError("recovery_identity_unavailable");
     if (!target.lifecycle || target.lifecycle.termination !== "enforced" || target.lifecycle.emptiness !== "enforced" ||
-        (target.requiredLifecycleScope !== undefined && !lifecycleScopeSatisfies(target.lifecycle.scope, target.requiredLifecycleScope))) {
+        !target.requiredLifecycleScope || !lifecycleScopeSatisfies(target.lifecycle.scope, target.requiredLifecycleScope)) {
       throw new ProcessRecoveryError("recovery_capability_unavailable");
     }
     return target;
