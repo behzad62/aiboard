@@ -31,7 +31,7 @@ for (const flag of ["requireCompleteCleanup", "knownUnavoidableDetachment"] as c
     const runtime = createExecutionHostManagedRuntime({
       run,
       permissionProfile: "full",
-      environment: process.env,
+      environment: {},
     });
     try {
       await assert.rejects(runtime.start({
@@ -86,7 +86,7 @@ test("managed ordinary full launch still requests process_group", async () => {
   const runtime = createExecutionHostManagedRuntime({
     run,
     permissionProfile: "full",
-    environment: process.env,
+    environment: {},
   });
   try {
     await assert.rejects(runtime.start({

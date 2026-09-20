@@ -38,6 +38,7 @@ import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import { createLiveMcpStatusRegistry } from "../src/mcp-tools.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { runnerRunStateSegment } from "../src/run-state-identity.js";
+import { EXECUTION_SAFETY_CONTRACT_VERSION } from "../src/execution-safety-contracts.js";
 import {
   createRunnerCapabilityContractSnapshot,
   RunnerCapabilityContractError,
@@ -655,7 +656,7 @@ test("NativeBuildFactory persists and validates a capability contract before rec
     });
     const prepared = await factory.prepareSpec(buildSpec("capability_recovery_contract"));
     assert.match(prepared.capabilityContract?.digest ?? "", /^[a-f0-9]{64}$/);
-    assert.equal(prepared.capabilityContract?.executionSafetyVersion, 1);
+    assert.equal(prepared.capabilityContract?.executionSafetyVersion, EXECUTION_SAFETY_CONTRACT_VERSION);
 
     await factory.validateRecoveryCapabilityContract(prepared);
     const structurallyTampered = structuredClone(prepared);

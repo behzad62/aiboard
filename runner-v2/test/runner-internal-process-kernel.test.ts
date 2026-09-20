@@ -150,10 +150,11 @@ function faultBackend(options: {
   };
   const backend: TestBackend = {
     probe: async () => ({
-      attestationVersion: 1,
+      attestationVersion: 2,
       backendId: "runner-internal-fault-backend",
       verified: true,
       platformLabel: "test",
+      lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
       capabilities: {
         tree_termination: "enforced",
         crash_cleanup: "unavailable",
