@@ -1498,6 +1498,42 @@ test("C4 POSIX child retains its exact prepared breadcrumb through a pre-go cras
   assert.equal(spawnCalls, 0, "pre-go supervisor loss cannot release an executable");
 });
 
+test("C4 POSIX supervisor retries transient inner anchor inspection before go", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const nonce = "transient-inner-go";
+  const publications: Array<{ status: string; error?: string }> = [];
+  const writes: Array<{ path: string; value: unknown }> = [];
+  let anchorChecks = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Number, Int32Array, SharedArrayBuffer, PortableAuthorityUnavailableError: Error,
+    child: { pid: workloadGroup.leaderPid }, childGoPath: "root/child-go.json", childPreparedPath: "root/child-prepared.json",
+    config: { directory: "root", nonce, platform: "posix" }, fencePath: "root/fence.json", join, lockHolderPath: "root/lock-holder.json",
+    launchEffect: "prepared", parsePosixBootstrapPrepared, posixBarrierWaiter: new Int32Array(new SharedArrayBuffer(4)),
+    posixSupervisorBirth: null, posixWorkloadGroup: null, process: { pid: 9001 },
+    targetExited: false, targetExitCode: null, targetSignal: null, posixTerminalError: null,
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    readFileSync: (path: string) => {
+      if (path === "root/child-prepared.json") return JSON.stringify({ protocol: "aiboard-portable-process/v2-posix-prepared", nonce, ...workloadGroup });
+      if (path === "root/lock-holder.json") return JSON.stringify({ nonce, holderPid: 9001, holderBirth: "supervisor-birth" });
+      if (path === "root/fence.json") return JSON.stringify({ nonce, ownerId: "owner", fencingToken: 1 });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    reattestOwnedPosixAnchor: () => { anchorChecks += 1; return anchorChecks === 2 ? { state: "outcome_unknown" } : { state: "ready", members: [workloadGroup.leaderPid] }; },
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    writeAtomic: (path: string, value: unknown) => { writes.push({ path, value }); },
+    inspectPosixProcessIdentity: () => ({ state: "present", value: { pid: 9001, groupId: 9001, birth: "supervisor-birth" } }),
+    waitForPosixChildStartup: () => ({ status: "started" }),
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readJson")}\n${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractFenceEffectFunctions(supervisorSource)}\n${extractNamedFunction(supervisorSource, "waitForPosixPrepared")}\n${extractNamedFunction(supervisorSource, "hasExactPosixLockHolder")}\n${extractNamedFunction(supervisorSource, "waitForExactPosixLockHolder")}\n${extractNamedFunction(supervisorSource, "initializePosixBootstrap")}`, context);
+  vm.runInContext("initializePosixBootstrap()", context);
+  assert.ok(anchorChecks >= 3, "transient passive inner inspection must be retried under the unchanged exact fence");
+  assert.equal(writes.filter(({ path }) => path === "root/child-go.json").length, 1);
+  assert.equal(vm.runInContext("launchEffect", context), "started");
+  assert.equal(publications.at(-1)?.status, "running");
+  assert.equal(publications.some(({ status }) => status === "outcome_unknown"), false);
+});
+
 test("C4 POSIX supervisor does not publish go when the fenced publication is interrupted", () => {
   const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
   const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
@@ -2511,6 +2547,57 @@ test("C4 POSIX supervisor refuses anchor release when membership changes inside 
   assert.deepEqual(writes, [], "a descendant that appears inside the fence must block release publication");
   assert.equal(vm.runInContext("posixAnchorReleaseRequested", context), false);
   assert.equal(publications.at(-1)?.status, "outcome_unknown");
+});
+
+test("C4 POSIX supervisor retries transient inner anchor inspection while publishing release", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const nonce = "anchor-release-inner-inspection-retry";
+  const writes: Array<{ path: string; value: unknown }> = [];
+  const publications: Array<{ status: string; error?: string }> = [];
+  let reattestations = 0;
+  const context = vm.createContext({
+    child: { stdout: { readableLength: 0 }, stderr: { readableLength: 0 } },
+    Error, JSON, Number, PortableAuthorityUnavailableError: Error,
+    anchorReleasePath: "root/anchor-release.json", channelAckDirectory: "root/channel/ack", channelDirectory: "root/channel", channelOutputDirectory: "root/channel/output",
+    config: { directory: "root", nonce, platform: "posix" }, fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json", join,
+    handleChannelAcks: () => undefined, handleChannelInput: () => undefined, handleControl: () => undefined, launchEffect: "started",
+    posixAnchorExited: false, posixControlInspectionDeferred: false, posixControlInspectionFailures: 0, posixControlInspectionDetail: "", posixDeferredControlSignature: null, POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixAnchorReleaseAuthority: null, posixAnchorReleaseRequested: false, posixForceControlApplied: false, posixStderrClosed: false, posixStdoutClosed: false,
+    posixSupervisorBirth: "supervisor-birth", posixTerminalError: null, posixWorkloadGroup: workloadGroup, posixWorkloadRetirement: { state: "active" },
+    process: { pid: 9001, exit: () => assert.fail("retryable inner inspection must retain the supervisor") },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => {
+      reattestations += 1;
+      return reattestations === 2
+        ? { state: "outcome_unknown" }
+        : { state: "ready", members: [workloadGroup.leaderPid] };
+    },
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce, ownerId: "owner", fencingToken: 1 });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce, holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    readdirSync: () => [], retained: new Map(),
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => ({ status: "applied", value: options.effect() }),
+    stdoutPath: "root/stdout.log", stderrPath: "root/stderr.log", targetExited: true, targetExitCode: 0, targetSignal: null, timer: "synthetic-timer",
+    clearInterval: () => assert.fail("retryable inner inspection must retain the supervisor"), drainOutput: () => undefined, refreshPosixChildStatus: () => undefined,
+    writeAtomic: (path: string, value: string) => { writes.push({ path, value: JSON.parse(value) }); }, existsSync: () => false,
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractFenceEffectFunctions(supervisorSource)}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractNamedFunction(supervisorSource, "requestPosixAnchorRelease")}\n${extractNamedFunction(supervisorSource, "posixOutputPipesDrained")}\n${extractTickPosix(supervisorSource)}`, context);
+
+  vm.runInContext("tickPosix()", context);
+  assert.equal(reattestations, 2, "release publication must re-attest the exact anchor inside the fence");
+  assert.deepEqual(writes, [], "transient inner inspection uncertainty must not publish a release");
+  assert.equal(vm.runInContext("posixAnchorReleaseRequested", context), false);
+  assert.equal(publications.at(-1)?.status, "running", "transient passive inspection must remain retryable");
+
+  vm.runInContext("tickPosix()", context);
+  assert.equal(reattestations, 4, "the unchanged release attempt must retry both outer and fenced inspection");
+  assert.equal(writes.length, 1);
+  assert.equal(vm.runInContext("posixAnchorReleaseRequested", context), true);
+  assert.equal(publications.at(-1)?.status, "running");
 });
 
 test("C4 POSIX supervisor retries transient coordination while publishing anchor release", () => {

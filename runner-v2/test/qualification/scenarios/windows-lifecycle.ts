@@ -31,7 +31,7 @@ async function runNativeDescendant(): Promise<void> {
   const backend = createWindowsProcessBackend({ jobObjects: "unavailable", stateDirectory: root, pollIntervalMs: 20 });
   const launch = parseProcessLaunchResult(await backend.launch(processLaunchRequest({
     invocationId: "windows-native-descendant",
-    args: ["-e", "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore',detached:true});c.unref();console.log(c.pid);setTimeout(()=>process.exit(0),1500)"],
+    args: ["-e", "const{spawn}=require('node:child_process');const c=spawn(process.execPath,['-e',\"process.on('SIGTERM',()=>{});setInterval(()=>{},1000)\"],{stdio:'ignore',detached:true});c.unref();console.log(c.pid);setTimeout(()=>process.exit(0),7000)"],
   })));
   const binding = bindingFor(launch, "runner-windows-supervisor-v1");
   const directory = opaqueDirectory(launch);
@@ -39,7 +39,7 @@ async function runNativeDescendant(): Promise<void> {
   await withCertifiedRoot({
     fixtureName: "windows-native-descendant", root,
     body: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1_800));
+      await new Promise((resolve) => setTimeout(resolve, 7_300));
       await boundedConverge({
         label: "windows native running after launcher exit", deadlineMs: 5_000, pollMs: 100,
         sample: async () => {

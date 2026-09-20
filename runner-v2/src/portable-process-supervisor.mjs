@@ -460,19 +460,24 @@ function drainOutput(stream, readable, evidencePath) {
 }
 
 function handleChannelAcks() {
-  const current = readCurrentFence();
-  if (!current) throw new PortableAuthorityUnavailableError("Portable output retirement authority is unavailable.");
-  const resumed = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => resumePortableOutputRetirement({
-    channelDirectory,
-    nonce: config.nonce,
-    fence: { ownerId: current.ownerId, fencingToken: current.fencingToken },
-    atomicWrite: writeAtomic,
-  }));
-  if (resumed.status === "applied" && resumed.value) forgetRetiredOutput(resumed.value.name, resumed.value.metadata);
-  else if ((resumed.status === "unavailable" && resumed.cause === "authority") || resumed.status === "outcome_unknown")
-    throw resumed.error;
-  else if (resumed.status === "stale" || (resumed.status === "unavailable" && resumed.cause === "coordination")) return;
-  for (const name of readdirSync(channelAckDirectory).filter((entry) => entry.endsWith(".json"))) {
+  const retirementIntentPath = join(channelDirectory, "output-retirement.json");
+  const ackNames = readdirSync(channelAckDirectory).filter((entry) => entry.endsWith(".json"));
+  if (!existsSync(retirementIntentPath) && ackNames.length === 0) return;
+  if (existsSync(retirementIntentPath)) {
+    const current = readCurrentFence();
+    if (!current) throw new PortableAuthorityUnavailableError("Portable output retirement authority is unavailable.");
+    const resumed = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => resumePortableOutputRetirement({
+      channelDirectory,
+      nonce: config.nonce,
+      fence: { ownerId: current.ownerId, fencingToken: current.fencingToken },
+      atomicWrite: writeAtomic,
+    }));
+    if (resumed.status === "applied" && resumed.value) forgetRetiredOutput(resumed.value.name, resumed.value.metadata);
+    else if ((resumed.status === "unavailable" && resumed.cause === "authority") || resumed.status === "outcome_unknown")
+      throw resumed.error;
+    else if (resumed.status === "stale" || (resumed.status === "unavailable" && resumed.cause === "coordination")) return;
+  }
+  for (const name of ackNames) {
     let ack;
     try { ack = JSON.parse(readFileSync(join(channelAckDirectory, name), "utf8")); } catch { continue; }
     const key = name.slice(0, -5);
@@ -723,20 +728,28 @@ function initializePosixBootstrap() {
     publish("outcome_unknown", "POSIX go barrier cannot be bound because the current fence is unavailable.");
     return;
   }
-  const outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
-    const currentAnchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
-    if (currentAnchor.state !== "ready") throw new Error("POSIX detached bootstrap identity changed before go.");
-    writeAtomic(childGoPath, JSON.stringify({
-      protocol: "aiboard-portable-process/v2-posix-go",
-      nonce: config.nonce,
-      supervisorPid: process.pid,
-      supervisorBirth: posixSupervisorBirth,
-      ownerId: current.ownerId,
-      fencingToken: current.fencingToken,
-      workloadGroup: posixWorkloadGroup,
-    }));
-  });
-  if (outcome.status !== "applied") {
+  const goDeadline = Date.now() + 5_000;
+  let outcome;
+  for (;;) {
+    outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
+      const currentAnchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
+      if (currentAnchor.state === "outcome_unknown") return "deferred";
+      if (currentAnchor.state !== "ready") throw new Error("POSIX detached bootstrap identity changed before go.");
+      writeAtomic(childGoPath, JSON.stringify({
+        protocol: "aiboard-portable-process/v2-posix-go",
+        nonce: config.nonce,
+        supervisorPid: process.pid,
+        supervisorBirth: posixSupervisorBirth,
+        ownerId: current.ownerId,
+        fencingToken: current.fencingToken,
+        workloadGroup: posixWorkloadGroup,
+      }));
+    });
+    if (outcome.status !== "applied" || outcome.value !== "deferred") break;
+    if (Date.now() >= goDeadline) break;
+    Atomics.wait(posixBarrierWaiter, 0, 0, 10);
+  }
+  if (outcome.status !== "applied" || outcome.value === "deferred") {
     launchEffect = "unknown";
     publish("outcome_unknown", "POSIX go barrier could not be committed under the current fence.");
     return;
@@ -854,6 +867,7 @@ function requestPosixAnchorRelease() {
   if (samePosixFenceAuthority(posixAnchorReleaseAuthority, current)) return "requested";
   const outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
     const anchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
+    if (anchor.state === "outcome_unknown") return "deferred";
     if (anchor.state !== "ready" || anchor.members.length !== 1 || anchor.members[0] !== posixWorkloadGroup.leaderPid)
       throw new Error("POSIX workload no longer consists of its exact anchor alone.");
     writeAtomic(anchorReleasePath, JSON.stringify({
@@ -866,6 +880,7 @@ function requestPosixAnchorRelease() {
       workloadGroup: posixWorkloadGroup,
     }));
   });
+  if (outcome.status === "applied" && outcome.value === "deferred") return "deferred";
   if (outcome.status !== "applied")
     return outcome.status === "stale" || outcome.status === "unavailable" && outcome.cause === "coordination"
       ? "deferred"
@@ -1291,6 +1306,7 @@ function activeOwnedPids() {
   if (!lastWindowsProcesses) return undefined;
   const active = [];
   for (const [pid, birth] of knownProcesses) {
+    if (targetExited && (pid === rootProcess?.pid || lastWindowsParents?.get(pid) === rootProcess?.pid)) continue;
     const observed = lastWindowsProcesses.get(pid);
     if (observed && sameBirth(observed, birth)) active.push(pid);
   }

@@ -905,6 +905,22 @@ test("unverified batch argv rejects Job batch targets without disabling native J
   assert.equal(launches, 1, "the batch fact must not disable a native executable");
 });
 
+test("Windows terminal membership ignores the exited bootstrap and direct workload while retaining a known descendant", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const context = vm.createContext({
+    Map,
+    config: { platform: "windows" },
+    targetExited: true,
+    rootProcess: { pid: 9001, birth: "root-birth" },
+    knownProcesses: new Map([[9001, "root-birth"], [9002, "workload-birth"], [9003, "descendant-birth"]]),
+    lastWindowsProcesses: new Map([[9001, "root-birth"], [9002, "workload-birth"], [9003, "descendant-birth"]]),
+    lastWindowsParents: new Map([[9001, 1], [9002, 9001], [9003, 9002]]),
+  });
+  vm.runInContext(`${extractNamedFunction(source, "normalizeBirth")}\n${extractNamedFunction(source, "sameBirth")}\n${extractNamedFunction(source, "activeOwnedPids")}`, context);
+  assert.deepEqual(Array.from(vm.runInContext("activeOwnedPids()", context)), [9003],
+    "stale rows for the exited bootstrap and its direct workload cannot hold terminal state open, while an exact known descendant remains live");
+});
+
 test("Windows portable supervisor reuses one birth-tagged tree snapshot per ownership tick", () => {
   const source = readFileSync(join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), "utf8");
   assert.equal(source.match(/Get-CimInstance Win32_Process/g)?.length, 1);
