@@ -96,6 +96,12 @@ fixture("scope-less legacy target is inspectable but cannot generate or submit n
   await assert.rejects(()=>f.controller.submit(proposal(f.current,"legacy-submit")),{code:"recovery_capability_unavailable"});
   assert.deepEqual(f.generated,[]);assert.deepEqual(f.effects,[]);
 });
+fixture("enforced lifecycle without requiredLifecycleScope cannot generate or submit", async f=>{
+  f.current={...f.current,requiredLifecycleScope:undefined};
+  await assert.rejects(()=>f.controller.submit(proposal(f.current,"missing-scope-submit")),{code:"recovery_capability_unavailable"});
+  await assert.rejects(()=>f.controller.generate("invocation","missing-scope"),{code:"recovery_capability_unavailable"});
+  assert.deepEqual(f.generated,[]);assert.deepEqual(f.effects,[]);
+});
 fixture("new proposals cannot request deprecated lifecycle capability names",async f=>{
   await assert.rejects(()=>f.controller.submit({...proposal(f.current,"legacy-cap"),requestedCapabilities:["verified_emptiness"]}),
     {code:"recovery_capability_unavailable"});
