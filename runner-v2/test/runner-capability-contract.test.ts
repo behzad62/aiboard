@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -145,7 +147,7 @@ test("current capability snapshots bind the execution-safety contract version in
 });
 
 test("capability contracts bind optional OCI configuration without probing or discovering Docker", async () => {
-  const root = mkdtempSync(join(tmpdir(), "runner-capability-oci-"));
+  const root = aliasTemp("runner-capability-oci-");
   const cli = join(root, process.platform === "win32" ? "configured.exe" : "configured");
   writeFileSync(cli, "not executed by capability projection");
   try {
@@ -172,7 +174,7 @@ test("capability contracts bind optional OCI configuration without probing or di
     const boundProviders = runnerCapabilitiesForContract(config, contract).isolationProviders;
     assert.deepEqual(
       boundProviders?.map(({ cliIdentity: _identity, ...provider }) => provider),
-      [{ ...config.isolationProviders![0]!, cliPath: realpathSync(cli) }],
+      [{ ...config.isolationProviders![0]!, cliPath: canonicalPath(cli) }],
     );
     assert.deepEqual(boundProviders?.[0]?.cliIdentity, contract.isolationProviders?.[0]?.executable);
     assert.notEqual(
@@ -272,7 +274,7 @@ test("language-server command search preserves POSIX PATH and Windows cwd semant
 });
 
 test("language-server executable resolution follows a PATH symlink to its canonical launcher", async (context) => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-capability-executable-symlink-"));
+  const root = aliasTemp("aiboard-capability-executable-symlink-");
   const bin = join(root, "bin");
   const command = process.platform === "win32" ? "fixture-lsp.cmd" : "fixture-lsp";
   const target = join(root, process.platform === "win32" ? "target.cmd" : "target-lsp");
@@ -296,14 +298,14 @@ test("language-server executable resolution follows a PATH symlink to its canoni
       commandSearchDirectory: root,
       environment: { ...process.env, PATH: bin },
     });
-    assert.equal(identity.path, realpathSync(target));
+    assert.equal(identity.path, canonicalPath(target));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("language-server executable resolution skips shadowed unusable PATH candidates", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-capability-executable-shadow-"));
+  const root = aliasTemp("aiboard-capability-executable-shadow-");
   const first = join(root, "first-bin");
   const second = join(root, "second-bin");
   const command = process.platform === "win32" ? "fixture-lsp.cmd" : "fixture-lsp";
@@ -325,7 +327,7 @@ test("language-server executable resolution skips shadowed unusable PATH candida
       commandSearchDirectory: root,
       environment,
     });
-    assert.equal(identity.path, realpathSync(fallback));
+    assert.equal(identity.path, canonicalPath(fallback));
 
     await assert.rejects(
       resolveLanguageServerExecutable(command, {
@@ -340,7 +342,7 @@ test("language-server executable resolution skips shadowed unusable PATH candida
 });
 
 test("capability contracts attest the resolved launcher and reject a PATH replacement", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aiboard-capability-executable-"));
+  const root = aliasTemp("aiboard-capability-executable-");
   const first = join(root, "first-bin");
   const second = join(root, "second-bin");
   mkdirSync(first);
@@ -374,7 +376,7 @@ test("capability contracts attest the resolved launcher and reject a PATH replac
       commandSearchDirectory: root,
       environment: firstEnvironment,
     });
-    const canonicalFirstLauncher = realpathSync(firstLauncher);
+    const canonicalFirstLauncher = canonicalPath(firstLauncher);
     assert.equal(contract.languageServerExecutableIdentityVersion, 1);
     assert.equal(contract.languageServers[0]?.executable?.path, canonicalFirstLauncher);
     const bound = runnerCapabilitiesForContract(config, contract);
@@ -412,6 +414,26 @@ function writeLauncher(path: string, marker: string): void {
   }
   writeFileSync(path, `#!/bin/sh\n# ${marker}\nexit 0\n`);
   chmodSync(path, 0o755);
+}
+
+function canonicalPath(path: string): string {
+  return realpathSync.native(path);
+}
+
+function aliasTemp(prefix: string): string {
+  const created = mkdtempSync(join(process.platform === "darwin" ? "/var/tmp" : tmpdir(), prefix));
+  if (process.platform !== "win32") return created;
+  try {
+    const short = execFileSync("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `$fso = New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder(${JSON.stringify(created)}).ShortPath`,
+    ], { encoding: "utf8" }).trim();
+    if (short && existsSync(short) && short.toLowerCase() !== created.toLowerCase()) return short;
+  } catch {
+    return created;
+  }
+  return created;
 }
 
 function fixtureDigest(value: unknown): string {

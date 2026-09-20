@@ -590,11 +590,15 @@ async function attestConfiguredOciExecutable(
   if (!metadata.isFile() || metadata.isSymbolicLink()) {
     throw new Error("Configured OCI executable must be a real file.");
   }
-  const actual = resolve(await realpath(candidate));
-  if (normalizePath(actual) !== normalizePath(candidate) &&
-      !isTrustedRunnerHostAliasResolution(candidate, actual)) {
-    throw new Error("Configured OCI executable resolves through a symbolic path.");
+  try {
+    await assertNoSymbolicPathComponents(candidate, "Configured OCI executable");
+  } catch (error) {
+    if (error instanceof Error && /symbolic link/i.test(error.message)) {
+      throw new Error("Configured OCI executable resolves through a symbolic path.");
+    }
+    throw error;
   }
+  const actual = resolve(await realpath(candidate));
   return { path: actual, digest: digest(await readFile(actual)) };
 }
 

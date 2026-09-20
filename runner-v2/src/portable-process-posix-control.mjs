@@ -77,9 +77,11 @@ export function parsePosixGroupMembers(output, groupId) {
     const pgid = Number(match[2]);
     const state = match[3];
     // The first ps state character is the execution state; remaining BSD
-    // modifiers describe priority/session/foreground attributes. Refuse an
-    // unknown token rather than guessing whether that process can execute.
-    if (!/^[DRSTtXxIZU][<NLsl+]*$/.test(state)) return undefined;
+    // modifiers describe priority/session/foreground attributes. Linux extra
+    // flags are <NLsl+; Darwin also documents >AESVWX. Refuse an unknown
+    // token rather than guessing whether that process can execute. A foreign
+    // documented modifier must not void an otherwise exact owned-group snapshot.
+    if (!/^[DRSTtXxIZU][<NLsl+>AESVWX]*$/.test(state)) return undefined;
     // Linux kernel threads report a positive PID with pgid 0. Only that row
     // is skipped; pid 0 or any other non-positive identity fails closed.
     if (positivePid(pid) && pgid === 0) continue;

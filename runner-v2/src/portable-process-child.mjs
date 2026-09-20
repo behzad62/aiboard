@@ -17,7 +17,16 @@ else runWindowsBootstrap();
 
 function runPosixBootstrap() {
   const identity = inspectPosixProcessIdentity(process.pid);
-  if (identity.state !== "present" || identity.value.groupId !== process.pid) {
+  if (identity.state !== "present") {
+    publishPosixStatus({
+      status: "error",
+      error: identity.state === "unknown"
+        ? "POSIX bootstrap identity inspection was unavailable."
+        : "POSIX bootstrap process disappeared before identity capture.",
+    });
+    process.exit(1);
+  }
+  if (identity.value.groupId !== process.pid) {
     publishPosixStatus({ status: "error", error: "POSIX bootstrap did not become its detached workload group leader." });
     process.exit(1);
   }

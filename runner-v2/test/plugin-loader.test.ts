@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -58,7 +59,7 @@ test("allowlisted local plugins preflight atomically, start in order, and close 
       projectDirectory: fixture.project,
       stateDirectory: fixture.state,
       reservedToolNames: ["filesystem.read"],
-      importModule: async (entryPath) => modules.get(entryPath),
+      importModule: async (entryPath) => lookupModule(modules, entryPath),
     }).load();
 
     assert.deepEqual(lifecycle, ["start:first", "start:second"]);
@@ -362,7 +363,7 @@ test("duplicate extension IDs and tool names reject before any plugin starts", a
         pluginDirectories: [first.directory, second.directory],
         projectDirectory: fixture.project,
         stateDirectory: fixture.state,
-        importModule: async (entryPath) => modules.get(entryPath),
+        importModule: async (entryPath) => lookupModule(modules, entryPath),
       }).load(),
       /duplicate extension id/i,
     );
@@ -380,7 +381,7 @@ test("duplicate extension IDs and tool names reject before any plugin starts", a
         pluginDirectories: [first.directory, second.directory],
         projectDirectory: fixture.project,
         stateDirectory: fixture.state,
-        importModule: async (entryPath) => modules.get(entryPath),
+        importModule: async (entryPath) => lookupModule(modules, entryPath),
       }).load(),
       /duplicate tool.*shared\.tool/i,
     );
@@ -577,7 +578,7 @@ test("partial start failure closes the failing plugin and every earlier plugin i
         projectDirectory: fixture.project,
         stateDirectory: fixture.state,
         importModule: async (entryPath) =>
-          entryPath === first.entry
+          sameEntry(entryPath, first.entry)
             ? extensionModule("first", lifecycle, emptyCapabilities())
             : extensionModule("second", lifecycle, emptyCapabilities(), true),
       }).load(),
@@ -606,7 +607,7 @@ test("a failed close retains only the failed extension for an exact retry", asyn
       projectDirectory: fixture.project,
       stateDirectory: fixture.state,
       importModule: async (entryPath) =>
-        entryPath === first.entry
+        sameEntry(entryPath, first.entry)
           ? extensionModule("first", lifecycle, emptyCapabilities())
           : {
               createExtension: () => ({
@@ -647,8 +648,44 @@ function loaderFor(
   });
 }
 
+function hostNativeAliasDirectory(created: string): string {
+  if (process.platform !== "win32") return created;
+  try {
+    const short = execFileSync("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `$fso = New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder(${JSON.stringify(created)}).ShortPath`,
+    ], { encoding: "utf8" }).trim();
+    if (short && existsSync(short) && short.toLowerCase() !== created.toLowerCase()) return short;
+  } catch {
+    return created;
+  }
+  return created;
+}
+
+function canonicalPath(path: string): string {
+  return realpathSync.native(path);
+}
+
+function lookupModule<T>(modules: Map<string, T>, entryPath: string): T | undefined {
+  try {
+    return modules.get(canonicalPath(entryPath)) ?? modules.get(entryPath);
+  } catch {
+    return modules.get(entryPath);
+  }
+}
+
+function sameEntry(left: string, right: string): boolean {
+  try {
+    return canonicalPath(left) === canonicalPath(right);
+  } catch {
+    return left === right;
+  }
+}
+
 function createFixture(name: string) {
-  const root = mkdtempSync(join(tmpdir(), `aiboard-plugin-${name}-`));
+  const created = mkdtempSync(join(tmpdir(), `aiboard-plugin-${name}-`));
+  const root = hostNativeAliasDirectory(created);
   const project = join(root, "project");
   const state = join(root, "runner state");
   mkdirSync(project);
@@ -680,7 +717,7 @@ function createFixture(name: string) {
         options.apiVersion ?? 1,
         entryName,
       );
-      return { directory, entry: existsSync(entry) ? realpathSync(entry) : entry };
+      return { directory, entry: existsSync(entry) ? canonicalPath(entry) : entry };
     },
     manifest(
       directory: string,

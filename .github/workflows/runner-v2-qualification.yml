@@ -2,6 +2,26 @@ name: Runner V2 hosted qualification
 
 on:
   workflow_dispatch:
+    inputs:
+      job:
+        description: Qualification job to run (full keeps the existing matrix)
+        required: false
+        default: full
+        type: choice
+        options:
+          - full
+          - recovery
+          - native-lifecycle
+      host:
+        description: Optional host filter (full keeps every job's existing hosts)
+        required: false
+        default: full
+        type: choice
+        options:
+          - full
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
   schedule:
     - cron: '17 2 * * *'
   pull_request:
@@ -16,7 +36,10 @@ env:
 jobs:
   native-lifecycle:
     name: Native lifecycle qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: >-
+      (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification')
+      && (github.event_name != 'workflow_dispatch' || inputs.job == 'full' || inputs.job == 'native-lifecycle')
+      && (github.event_name != 'workflow_dispatch' || inputs.host == 'full' || inputs.host == matrix.os)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -52,7 +75,10 @@ jobs:
 
   cli-readiness:
     name: CLI readiness qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: >-
+      (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification')
+      && (github.event_name != 'workflow_dispatch' || inputs.job == 'full')
+      && (github.event_name != 'workflow_dispatch' || inputs.host == 'full' || inputs.host == matrix.os)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -88,7 +114,10 @@ jobs:
 
   recovery:
     name: Recovery qualification (${{ matrix.os }}, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: >-
+      (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification')
+      && (github.event_name != 'workflow_dispatch' || inputs.job == 'full' || inputs.job == 'recovery')
+      && (github.event_name != 'workflow_dispatch' || inputs.host == 'full' || inputs.host == matrix.os)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -124,7 +153,10 @@ jobs:
 
   windows-portable-channel:
     name: Windows portable channel qualification (Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: >-
+      (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification')
+      && (github.event_name != 'workflow_dispatch' || inputs.job == 'full')
+      && (github.event_name != 'workflow_dispatch' || inputs.host == 'full' || inputs.host == 'windows-latest')
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
@@ -159,7 +191,10 @@ jobs:
 
   docker-oci-integration:
     name: Docker OCI qualification (Linux, Node ${{ matrix.node-version }})
-    if: github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification'
+    if: >-
+      (github.event_name != 'pull_request' || github.event.label.name == 'runner-v2-qualification')
+      && (github.event_name != 'workflow_dispatch' || inputs.job == 'full')
+      && (github.event_name != 'workflow_dispatch' || inputs.host == 'full' || inputs.host == 'ubuntu-latest')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:

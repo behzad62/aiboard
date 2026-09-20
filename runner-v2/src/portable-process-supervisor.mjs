@@ -304,7 +304,7 @@ function tickPosix() {
   drainOutput("stdout", child.stdout, stdoutPath);
   drainOutput("stderr", child.stderr, stderrPath);
   if (!posixWorkloadGroup || !posixSupervisorBirth) {
-    publish("outcome_unknown", "POSIX workload identity was not captured before executable release.");
+    publish("outcome_unknown", posixTerminalError ?? "POSIX workload identity was not captured before executable release.");
     return;
   }
   const childStatusRefresh = refreshPosixChildStatus();
@@ -381,6 +381,11 @@ function tickPosix() {
     if (exhaustedControlInspection) {
       publish("outcome_unknown", posixControlInspectionDetail ||
         `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`);
+      return;
+    }
+    if (!posixAnchorExited && (posixChildReleasedAnchorRelease ||
+        posixAnchorReleaseRequested && hasCurrentPosixAnchorReleaseAuthority())) {
+      publish("running");
       return;
     }
     publish("outcome_unknown", "POSIX workload anchor identity or group membership is unavailable.");
@@ -694,25 +699,28 @@ function waitForChildStartup(timeoutMs) {
   return undefined;
 }
 
+function publishPosixBootstrapUnknown(message) {
+  launchEffect = "unknown";
+  posixTerminalError = message;
+  publish("outcome_unknown", message);
+}
+
 function initializePosixBootstrap() {
   const supervisor = inspectPosixProcessIdentity(process.pid);
   if (supervisor.state !== "present") {
-    launchEffect = "unknown";
-    publish("outcome_unknown", "POSIX supervisor birth identity was unavailable before bootstrap release.");
+    publishPosixBootstrapUnknown("POSIX supervisor birth identity was unavailable before bootstrap release.");
     return;
   }
   posixSupervisorBirth = supervisor.value.birth;
   const prepared = waitForPosixPrepared(5_000);
   const workloadGroup = prepared && parsePosixBootstrapPrepared(prepared, config.nonce, child.pid);
   if (!workloadGroup) {
-    launchEffect = "unknown";
-    publish("outcome_unknown", "POSIX detached bootstrap did not publish an exact prepared workload identity.");
+    publishPosixBootstrapUnknown("POSIX detached bootstrap did not publish an exact prepared workload identity.");
     return;
   }
   const exactAnchor = reattestOwnedPosixAnchor(workloadGroup);
   if (exactAnchor.state !== "ready") {
-    launchEffect = "unknown";
-    publish("outcome_unknown", "POSIX detached bootstrap identity could not be independently re-attested before go.");
+    publishPosixBootstrapUnknown("POSIX detached bootstrap identity could not be independently re-attested before go.");
     return;
   }
   posixWorkloadGroup = workloadGroup;

@@ -210,6 +210,8 @@ function captureFixtureTree(sourceRoot: string, destRoot: string): void {
     "state.json",
     "lock-holder.json",
     "control.json",
+    "child-prepared.json",
+    "child-status.json",
     "fence.sqlite",
     "fence.sqlite-wal",
     "fence.sqlite-shm",

@@ -32,6 +32,7 @@ import {
 } from "../src/process-backend.js";
 import type { NativeProcessOperations } from "../src/native-process-backend.js";
 import { withOwnedFenceLock } from "../src/owned-fence-lock.mjs";
+import { writeQualificationDiagnostics } from "./support/qualification-harness.js";
 
 test("POSIX backend attests session ownership without claiming host-crash cleanup", async () => {
   const backend = createPosixProcessBackend();
@@ -950,6 +951,40 @@ test("C4 POSIX rejects malformed nonempty ps identity and membership rows", asyn
     "a non-numeric membership row must fail closed");
 });
 
+test("qualification diagnostics retain POSIX prepared and child-status identity evidence", () => {
+  const evidence = mkdtempSync(join(tmpdir(), "posix-qual-identity-"));
+  const fixture = mkdtempSync(join(tmpdir(), "posix-qual-fixture-"));
+  try {
+    writeFileSync(join(fixture, "state.json"), JSON.stringify({ marker: "supervisor-state" }));
+    writeFileSync(join(fixture, "child-prepared.json"), JSON.stringify({
+      protocol: "aiboard-portable-process/v2-posix-prepared",
+      nonce: "identity",
+      groupId: 9002,
+      leaderPid: 9002,
+      leaderBirth: "anchor-birth",
+    }));
+    writeFileSync(join(fixture, "child-status.json"), JSON.stringify({
+      protocol: "aiboard-portable-process/v2-posix-child",
+      nonce: "identity",
+      status: "prepared",
+      workloadGroup: { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" },
+    }));
+    const mapDir = join(evidence, "fixture-roots", "posix-identity");
+    mkdirSync(mapDir, { recursive: true });
+    writeFileSync(join(mapDir, "1-posix-identity.path.txt"), `${fixture}\n`);
+    writeQualificationDiagnostics({ evidenceRoot: evidence, scenario: "posix-identity" });
+    const capturedPrepared = findNamedFile(join(evidence, "diagnostics"), "child-prepared.json");
+    const capturedStatus = findNamedFile(join(evidence, "diagnostics"), "child-status.json");
+    assert.ok(capturedPrepared, "hosted POSIX identity failures must retain child-prepared.json");
+    assert.ok(capturedStatus, "hosted POSIX identity failures must retain child-status.json");
+    assert.match(readFileSync(capturedPrepared, "utf8"), /v2-posix-prepared/);
+    assert.match(readFileSync(capturedStatus, "utf8"), /v2-posix-child/);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+    rmSync(evidence, { recursive: true, force: true });
+  }
+});
+
 test("C4 POSIX native lifecycle never reconstructs ownership from PPID ancestry", () => {
   const root = resolve("runner-v2");
   const controlSource = readFileSync(join(root, "src", "portable-process-posix-control.mjs"), "utf8");
@@ -979,6 +1014,83 @@ test("C4 POSIX membership excludes zombies but fails closed on unknown process s
     undefined,
     "an unrecognized process state must fail closed instead of being treated as live or dead",
   );
+});
+
+test("C4 POSIX membership keeps an exact owned group when a foreign Darwin STAT modifier is present", async () => {
+  const control = await import("../src/portable-process-posix-control.mjs");
+  assert.deepEqual(
+    control.parsePosixGroupMembers(
+      "1 1 Ss\n2 0 I\n123 123 SW\n456 456 UE\n789 789 Ss+\n9002 9002 Ss\n9003 9002 S\n",
+      9002,
+    ),
+    [9002, 9003],
+    "documented Darwin STAT modifiers on unrelated rows must not void an otherwise exact owned-group snapshot",
+  );
+  assert.equal(
+    control.parsePosixGroupMembers("1 1 Ss\n9002 9002 mystery\n", 9002),
+    undefined,
+    "an unrecognized process state must still fail closed",
+  );
+});
+
+test("C4 POSIX tick preserves the bootstrap identity error when workload capture never completed", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const publications: Array<{ status: string; error?: string | null }> = [];
+  const bootstrapError = "POSIX detached bootstrap identity could not be independently re-attested before go.";
+  const context = vm.createContext({
+    Array, Error, JSON, Number, PortableAuthorityUnavailableError: Error,
+    config: { directory: "root", nonce: "bootstrap-error", platform: "posix" },
+    child: { pid: 9002, stdout: {}, stderr: {} },
+    stdoutPath: "root/stdout.log", stderrPath: "root/stderr.log",
+    handleChannelAcks: () => undefined, handleChannelInput: () => undefined, drainOutput: () => undefined,
+    launchEffect: "unknown",
+    posixSupervisorBirth: "Sun Sep 20 16:39:00 2026",
+    posixTerminalError: bootstrapError,
+    posixWorkloadGroup: null,
+    posixWorkloadRetirement: { state: "active" },
+    posixAnchorExited: false,
+    posixControlInspectionDeferred: false,
+    posixControlInspectionFailures: 0,
+    posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null,
+    POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixForceControlApplied: false,
+    publish: (status: string, error?: string | null) => { publications.push({ status, error }); },
+  });
+  vm.runInContext(extractTickPosix(supervisorSource), context);
+  vm.runInContext("tickPosix()", context);
+  assert.equal(publications.at(-1)?.status, "outcome_unknown");
+  assert.equal(publications.at(-1)?.error, bootstrapError,
+    "tickPosix must retain the initial bootstrap identity error instead of overwriting it");
+});
+
+test("C4 POSIX child reports unavailable identity inspection separately from not becoming group leader", () => {
+  const childSource = readFileSync(new URL("../src/portable-process-child.mjs", import.meta.url), "utf8");
+  const published: unknown[] = [];
+  let exits = 0;
+  const context = vm.createContext({
+    Error, JSON,
+    config: {
+      platform: "posix", nonce: "inspect-unknown", executable: "synthetic", arguments: [],
+      workingDirectory: "root", environment: {}, goPath: "root/go", preparedPath: "root/prepared.json",
+      statusPath: "root/status.json", posixSupervisor: { pid: 9001, birth: "supervisor-birth" },
+    },
+    inspectPosixProcessIdentity: () => ({ state: "unknown" }),
+    process: { pid: 9002, on: () => undefined, exit: (code?: number) => { exits += 1; throw new Error(`synthetic child exit ${code}`); } },
+    publishAtomic: (_path: string, value: unknown) => { published.push(value); },
+    spawn: () => assert.fail("unknown identity inspection must not release an executable"),
+    waiter: new Int32Array(new SharedArrayBuffer(4)),
+    Atomics: { wait: () => undefined },
+    existsSync: () => false,
+    isExactPosixAnchorRelease: () => false,
+    parsePosixBootstrapGo: () => undefined,
+    runPortableFenceEffectSync: () => ({ status: "stale" }),
+  });
+  vm.runInContext(`${extractNamedFunction(childSource, "publishPosixStatus")}\n${extractNamedFunction(childSource, "runPosixBootstrap")}`, context);
+  assert.throws(() => vm.runInContext("runPosixBootstrap()", context), /synthetic child exit 1/);
+  assert.equal(exits, 1);
+  assert.equal((published[0] as { error?: string }).error, "POSIX bootstrap identity inspection was unavailable.");
+  assert.notEqual((published[0] as { error?: string }).error, "POSIX bootstrap did not become its detached workload group leader.");
 });
 
 test("C4 POSIX descendant reattestation refuses a recycled PGID without a recorded birth witness", async () => {
@@ -2467,6 +2579,167 @@ test("C4 POSIX supervisor releases an exact lone anchor only after executable ex
   assert.equal(exits, 1);
   assert.equal(intervalsCleared, 1);
   assert.ok(publications.some(({ status }) => status === "stopped"));
+});
+
+test("C4 POSIX tick keeps an exact in-flight release running when the leader disappears before the exit event", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const publications: Array<{ status: string; error?: string }> = [];
+  const context = vm.createContext({
+    Error, JSON, Number, PortableAuthorityUnavailableError: Error,
+    child: { stdout: {}, stderr: {} },
+    config: { directory: "root", nonce: "ubuntu-release-race", platform: "posix" },
+    fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json", join,
+    handleChannelAcks: () => undefined, handleChannelInput: () => undefined, handleControl: () => undefined,
+    drainOutput: () => undefined, refreshPosixChildStatus: () => "unchanged",
+    launchEffect: "started",
+    posixAnchorExited: false,
+    posixControlInspectionDeferred: false, posixControlInspectionFailures: 0, posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null, POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixForceControlApplied: false,
+    posixAnchorReleaseRequested: true,
+    posixAnchorReleaseAuthority: { ownerId: "owner", fencingToken: 1 },
+    posixChildReleasedAnchorRelease: null,
+    posixSupervisorBirth: "supervisor-birth", posixTerminalError: null,
+    posixWorkloadGroup: workloadGroup, posixWorkloadRetirement: { state: "active" },
+    process: { pid: 9001 },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: "ubuntu-release-race", ownerId: "owner", fencingToken: 1 });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: "ubuntu-release-race", holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    stdoutPath: "root/stdout.log", stderrPath: "root/stderr.log",
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractFenceEffectFunctions(supervisorSource)}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractTickPosix(supervisorSource)}`, context);
+  vm.runInContext("tickPosix()", context);
+  assert.equal(publications.at(-1)?.status, "running",
+    "a blocking reattest that loses a released leader must wait for the pending Node exit event, not publish outcome_unknown");
+  assert.equal(publications.some(({ status }) => status === "outcome_unknown"), false);
+  assert.equal(vm.runInContext("posixWorkloadRetirement.state", context), "active",
+    "retirement still requires the later causal exit observation");
+});
+
+test("C4 POSIX tick waits for the pending exit after an exact consumed release receipt", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+  const receipt = {
+    protocol: "aiboard-portable-process/v2-posix-anchor-release",
+    nonce: "ubuntu-release-receipt",
+    supervisorPid: 9001,
+    supervisorBirth: "supervisor-birth",
+    ownerId: "owner",
+    fencingToken: 1,
+    workloadGroup,
+  } as const;
+  const publications: Array<{ status: string; error?: string }> = [];
+  const context = vm.createContext({
+    Error, JSON, Number, PortableAuthorityUnavailableError: Error,
+    child: { stdout: {}, stderr: {} },
+    config: { directory: "root", nonce: "ubuntu-release-receipt", platform: "posix" },
+    fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json", join,
+    handleChannelAcks: () => undefined, handleChannelInput: () => undefined, handleControl: () => undefined,
+    drainOutput: () => undefined, refreshPosixChildStatus: () => "updated",
+    launchEffect: "started",
+    posixAnchorExited: false,
+    posixControlInspectionDeferred: false, posixControlInspectionFailures: 0, posixControlInspectionDetail: "",
+    posixDeferredControlSignature: null, POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+    posixForceControlApplied: false,
+    posixAnchorReleaseRequested: true,
+    posixAnchorReleaseAuthority: { ownerId: "owner", fencingToken: 1 },
+    posixChildReleasedAnchorRelease: receipt,
+    posixSupervisorBirth: "supervisor-birth", posixTerminalError: null,
+    posixWorkloadGroup: workloadGroup, posixWorkloadRetirement: { state: "active" },
+    process: { pid: 9001 },
+    publish: (status: string, error?: string) => { publications.push({ status, error }); },
+    reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: "ubuntu-release-receipt", ownerId: "owner", fencingToken: 1 });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: "ubuntu-release-receipt", holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+    stdoutPath: "root/stdout.log", stderrPath: "root/stderr.log",
+  });
+  vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractFenceEffectFunctions(supervisorSource)}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractTickPosix(supervisorSource)}`, context);
+  vm.runInContext("tickPosix()", context);
+  assert.equal(publications.at(-1)?.status, "running");
+  assert.equal(publications.some(({ status }) => status === "outcome_unknown"), false,
+    "an exact consumed receipt must not be overwritten by a same-tick unavailable reattest");
+});
+
+test("C4 POSIX tick still fails closed for identity mismatch, foreign fence, and unproven startup during release", () => {
+  const supervisorSource = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const workloadGroup = { groupId: 9002, leaderPid: 9002, leaderBirth: "anchor-birth" } as const;
+
+  function tickWith(overrides: Record<string, unknown>) {
+    const publications: Array<{ status: string; error?: string }> = [];
+    const context = vm.createContext({
+      Error, JSON, Number, PortableAuthorityUnavailableError: Error,
+      child: { stdout: {}, stderr: {} },
+      config: { directory: "root", nonce: "ubuntu-release-negatives", platform: "posix" },
+      fencePath: "root/fence.json", lockHolderPath: "root/lock-holder.json", join,
+      handleChannelAcks: () => undefined, handleChannelInput: () => undefined, handleControl: () => undefined,
+      drainOutput: () => undefined, refreshPosixChildStatus: () => "unchanged",
+      launchEffect: "started",
+      posixAnchorExited: false,
+      posixControlInspectionDeferred: false, posixControlInspectionFailures: 0, posixControlInspectionDetail: "",
+      posixDeferredControlSignature: null, POSIX_CONTROL_INSPECTION_FAILURE_LIMIT: 3,
+      posixForceControlApplied: false,
+      posixAnchorReleaseRequested: true,
+      posixAnchorReleaseAuthority: { ownerId: "owner", fencingToken: 1 },
+      posixChildReleasedAnchorRelease: null,
+      posixSupervisorBirth: "supervisor-birth", posixTerminalError: null,
+      posixWorkloadGroup: workloadGroup, posixWorkloadRetirement: { state: "active" },
+      process: { pid: 9001 },
+      publish: (status: string, error?: string) => { publications.push({ status, error }); },
+      reattestOwnedPosixAnchor: () => ({ state: "outcome_unknown" }),
+      readFileSync: (path: string) => {
+        const normalized = path.replace(/\\/g, "/");
+        if (normalized === "root/fence.json") return JSON.stringify({ nonce: "ubuntu-release-negatives", ownerId: "owner", fencingToken: 1 });
+        if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: "ubuntu-release-negatives", holderPid: 9001, holderBirth: "supervisor-birth" });
+        throw new Error(`unexpected synthetic read ${path}`);
+      },
+      stdoutPath: "root/stdout.log", stderrPath: "root/stderr.log",
+      ...overrides,
+    });
+    vm.runInContext(`${extractNamedFunction(supervisorSource, "readCurrentFence")}\n${extractNamedFunction(supervisorSource, "readCurrentFenceStrict")}\n${extractFenceEffectFunctions(supervisorSource)}\n${extractNamedFunction(supervisorSource, "samePosixFenceAuthority")}\n${extractNamedFunction(supervisorSource, "hasCurrentPosixAnchorReleaseAuthority")}\n${extractTickPosix(supervisorSource)}`, context);
+    vm.runInContext("tickPosix()", context);
+    return publications.at(-1);
+  }
+
+  const mismatch = tickWith({ reattestOwnedPosixAnchor: () => ({ state: "identity_mismatch" }) });
+  assert.equal(mismatch?.status, "outcome_unknown");
+  assert.match(mismatch?.error ?? "", /birth or group identity changed/);
+
+  const foreign = tickWith({
+    posixAnchorReleaseAuthority: { ownerId: "owner", fencingToken: 1 },
+    readFileSync: (path: string) => {
+      const normalized = path.replace(/\\/g, "/");
+      if (normalized === "root/fence.json") return JSON.stringify({ nonce: "ubuntu-release-negatives", ownerId: "takeover", fencingToken: 2 });
+      if (normalized === "root/lock-holder.json") return JSON.stringify({ nonce: "ubuntu-release-negatives", holderPid: 9001, holderBirth: "supervisor-birth" });
+      throw new Error(`unexpected synthetic read ${path}`);
+    },
+  });
+  assert.equal(foreign?.status, "outcome_unknown");
+  assert.match(foreign?.error ?? "", /identity or group membership is unavailable/);
+
+  const unproven = tickWith({
+    launchEffect: "unknown",
+    posixAnchorReleaseRequested: false,
+    posixAnchorReleaseAuthority: null,
+  });
+  assert.equal(unproven?.status, "outcome_unknown");
+  assert.match(unproven?.error ?? "", /startup was never proven/);
+
+  const lost = tickWith({
+    posixAnchorReleaseRequested: false,
+    posixAnchorReleaseAuthority: null,
+  });
+  assert.equal(lost?.status, "outcome_unknown");
+  assert.match(lost?.error ?? "", /identity or group membership is unavailable/);
 });
 
 test("C4 POSIX supervisor refuses anchor release when membership changes inside its fence", () => {
@@ -4000,6 +4273,18 @@ function portableV2Binding(
   });
 }
 
+function findNamedFile(root: string, name: string): string | undefined {
+  if (!existsSync(root)) return undefined;
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const candidate = join(root, entry.name);
+    if (entry.isFile() && entry.name === name) return candidate;
+    if (entry.isDirectory()) {
+      const nested = findNamedFile(candidate, name);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
 function extractOptionalNamedFunction(source: string, name: string): string {
   const file = ts.createSourceFile("portable-process-supervisor.mjs", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
   const declaration = file.statements.find((statement): statement is ts.FunctionDeclaration =>
