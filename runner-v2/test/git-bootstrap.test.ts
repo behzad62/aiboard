@@ -38,6 +38,49 @@ for (const profile of ["full", "project", "guarded"] as const) test(`baseline bo
   } finally { await rm(root, { recursive: true }); t.diagnostic(`synthetic bootstrap fixture removed: ${root}`); }
 });
 
+test("baseline bootstrap retries one transient binding close before returning success", async () => {
+  const root = await mkdtemp(join(tmpdir(), "p6-git-bootstrap-close-retry-"));
+  const project = join(root, "project"); const state = join(root, "state");
+  await mkdir(project); await mkdir(state);
+  const revision = "b".repeat(40); let closes = 0;
+  const host = { bindRun: async () => ({
+    git: { lifecycle: () => ({ run: async (request: { args: readonly string[] }) => {
+      const key = request.args.join(" ");
+      if (key.includes("--is-inside-work-tree")) return { exitCode: 0, stdout: "true\n", stderr: "" };
+      if (key.includes("--show-toplevel")) return { exitCode: 0, stdout: project, stderr: "" };
+      if (request.args[0] === "status") return { exitCode: 0, stdout: "", stderr: "" };
+      if (request.args[0] === "symbolic-ref") return { exitCode: 0, stdout: "main\n", stderr: "" };
+      if (request.args[0] === "show") return { exitCode: 0, stdout: "existing baseline\n", stderr: "" };
+      return { exitCode: 0, stdout: revision, stderr: "" };
+    } }) },
+    close: async () => { closes += 1; if (closes === 1) throw new Error("transient close"); },
+  }) } as unknown as ExecutionHost;
+  try {
+    const result = await captureRunGitBaseline({ host, projectPath: project, stateDirectory: state, runId: "retry-close-run",
+      permissionProfile: "full", capabilitiesConfig: emptyRunnerCapabilitiesConfig() });
+    assert.equal(result.revision, revision);
+    assert.equal(closes, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("baseline bootstrap preserves the primary failure after one transient close retry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "p6-git-bootstrap-primary-retry-"));
+  const project = join(root, "project"); const state = join(root, "state");
+  await mkdir(project); await mkdir(state);
+  const primary = new Error("primary baseline failure"); let closes = 0;
+  const host = { bindRun: async () => ({
+    git: { lifecycle: () => ({ run: async () => { throw primary; } }) },
+    close: async () => { closes += 1; if (closes === 1) throw new Error("transient close"); },
+  }) } as unknown as ExecutionHost;
+  try {
+    await assert.rejects(
+      captureRunGitBaseline({ host, projectPath: project, stateDirectory: state, runId: "primary-retry-run",
+        permissionProfile: "project", capabilitiesConfig: emptyRunnerCapabilitiesConfig() }),
+      (error: unknown) => error === primary,
+    );
+    assert.equal(closes, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 test("historical Git query owns separate transient state and exposes no active-run writer", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "p6-git-history-"));
   const project = join(root, "project"); const state = join(root, "state");

@@ -210,11 +210,18 @@ test("historical capability contracts remain readable but cannot recover an acti
 
 test("unsupported execution-safety versions remain readable but are refused for active recovery", async () => {
   const current = await createRunnerCapabilityContract({ extensions: [], languageServers: [] });
-  const unsupportedPayload = { ...current, executionSafetyVersion: 2, digest: undefined };
+  const unsupportedPayload = {
+    ...current,
+    executionSafetyVersion: EXECUTION_SAFETY_CONTRACT_VERSION + 1,
+    digest: undefined,
+  };
   const { digest: _digest, ...payload } = unsupportedPayload;
   const unsupported = { ...payload, digest: fixtureDigest(payload) };
   assert.doesNotThrow(() => assertRunnerCapabilityContract(unsupported));
-  assert.equal(cloneRunnerCapabilityContract(unsupported).executionSafetyVersion, 2);
+  assert.equal(
+    cloneRunnerCapabilityContract(unsupported).executionSafetyVersion,
+    EXECUTION_SAFETY_CONTRACT_VERSION + 1,
+  );
   await assert.rejects(
     validateRunnerCapabilityContract(unsupported, { extensions: [], languageServers: [] }),
     (error: unknown) => (error as { code?: unknown }).code === "capability_contract_mismatch",

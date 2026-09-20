@@ -365,8 +365,20 @@ test("POSIX native session fixture owns descendants after launcher exit", async 
       Date.now() + 5_000,
       "POSIX live fixture did not receive the descendant output through the backpressured channel.",
     );
-    await new Promise((resolve) => setTimeout(resolve, 150));
-    assert.deepEqual(parseProcessReconciliation(await backend.reconcile(liveBinding, fence)), { state: "running" });
+    const runningDeadline = Date.now() + 5_000;
+    for (;;) {
+      const reconciliation = parseProcessReconciliation(await backend.reconcile(liveBinding, fence));
+      if (reconciliation.state === "running") break;
+      if (reconciliation.state === "exited" || reconciliation.state === "identity_mismatch") {
+        const state = readFileSync(join(authorityDirectory, "state.json"), "utf8");
+        throw new Error(`POSIX live fixture reached definitive non-running state after launcher exit: ${JSON.stringify(reconciliation)}; supervisor=${state}`);
+      }
+      if (Date.now() >= runningDeadline) {
+        const state = readFileSync(join(authorityDirectory, "state.json"), "utf8");
+        throw new Error(`POSIX live fixture did not converge to running after launcher exit: ${JSON.stringify(reconciliation)}; supervisor=${state}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     assert.deepEqual(await backend.signal(liveBinding, "terminate", fence), { state: "running" });
     await new Promise((resolve) => setTimeout(resolve, 100));
     if (!parseProcessEmptyVerification(await backend.verifyEmpty(liveBinding, fence)).empty)

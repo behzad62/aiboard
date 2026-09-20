@@ -29,6 +29,8 @@ Ancestry-reconstruction / native POSIX arbitrary-descendant containment is **not
 
 ## Current gate
 
+2026-09-20 qualification continuation: pushed architecture SHA `2ffb8054` has green required PR CI; qualification run `35492714608` failed. The user authorized small isolated real-host qualification entrypoints, preservation of the diagnosed bootstrap/CLI/POSIX repairs, targeted local checks, fresh independent Cursor review, commit/push, and final-SHA hosted acceptance. Current execution and per-hunk dispositions are recorded in `architecture-reassessment-2026-09-19/evidence/M4-qualification-refactor.md`. Gate G remains open. Do not run the global Runner V2 suite or merge PR #95.
+
 T12-G / M4 — final integrated acceptance remains open. Pre-freeze IMPORTANT review findings are repaired and closed (`evidence/implementation-review-after-repair.txt` = READY, findings none); that is not Gate G PASS. Freeze the exact candidate, commit/push, then run fresh required CI and Windows/Linux/macOS + configured OCI qualification. Repair only actual blockers; finalize evidence/clean tree; leave merge for explicit user approval. Keep the PR unmerged. Retained Darwin matrix follow-up from Gate D is still required before claiming full platform acceptance. Do not casually rerun the historical broad `npm run test:runner-v2` suite; that one earlier full run was already consumed, repaired with targeted validation and later required CI, and must not be represented as newly rerun in the Finding 1–3 / MCP follow-up repairs unless explicitly authorized.
 
 Gate F benchmark acceptance remains complete as recorded below. Product support remains Node.js 24.x only.

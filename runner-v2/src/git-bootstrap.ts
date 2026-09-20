@@ -31,8 +31,16 @@ export async function captureRunGitBaseline(input: Readonly<{
       runId: input.runId, execute: binding.git.lifecycle("baseline").run,
       filesystemAuthorization: { authority: binding.executionGrants, permissionProfile: input.permissionProfile } });
   } catch (error) { failed = true; primary = error; }
-  try { await binding?.close(); }
-  catch (cleanup) { throw new AggregateError(failed ? [primary, cleanup] : [cleanup], "Git baseline ownership cleanup remains unverified."); }
+  const cleanupFailures: unknown[] = [];
+  if (binding) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try { await binding.close(); cleanupFailures.length = 0; break; }
+      catch (cleanup) { cleanupFailures.push(cleanup); }
+    }
+  }
+  if (cleanupFailures.length > 0) {
+    throw new AggregateError(failed ? [primary, ...cleanupFailures] : cleanupFailures, "Git baseline ownership cleanup remains unverified.");
+  }
   if (failed) throw primary;
   return result!;
 }

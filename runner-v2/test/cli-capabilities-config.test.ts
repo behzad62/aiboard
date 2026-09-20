@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -24,7 +24,7 @@ import { cliRootCaptureArgs, forwardCliRootRecords } from "./support/cli-root-ca
 
 // Outer test-process budget only: the portable contract runs test files concurrently.
 // Product startup, Git, MCP, and cleanup deadlines remain unchanged.
-const CLI_STARTUP_FIXTURE_BUDGET_MS = 30_000;
+const CLI_STARTUP_FIXTURE_BUDGET_MS = process.platform === "win32" ? 90_000 : 30_000;
 
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxPath = fileURLToPath(
@@ -338,6 +338,7 @@ test("CLI rejects an active legacy Build without a capability contract before li
     permissionProfile: "project",
     idempotencyKey: `create:${runId}`,
   });
+  supervisor.captureBaseline(runId, `baseline:${runId}`, "a".repeat(40), `refs/aiboard/baselines/${runId}`);
   specs.save({
     version: 2,
     runId,
@@ -385,13 +386,14 @@ test("CLI records an unsupported persisted execution-safety version as a per-run
   const token = "cli-execution-safety-version-token";
   mkdirSync(project);
   mkdirSync(state);
+  initializeGitRepository(project);
   writeCapabilitiesConfig(config, []);
   const contract = await createRunnerCapabilityContractSnapshot({
     extensions: [],
     languageServers: [],
   }, state);
-  saveActiveBuild(state, project, runId, contract);
-  replacePersistedExecutionSafetyVersion(state, runId, 2);
+  saveActiveBuild(state, project, runId, contract, true);
+  replacePersistedExecutionSafetyVersion(state, runId, 3);
 
   try {
     const outcome = await runCliToExit(project, state, config, token);
@@ -971,6 +973,15 @@ function runnerStreams(child: ChildProcess) {
 
 function writeCapabilitiesConfig(config: string, extensions: readonly string[]): void {
   writeFileSync(config, JSON.stringify({ version: 1, extensions, languageServers: [] }));
+}
+
+function initializeGitRepository(project: string): void {
+  const result = spawnSync("git", ["init", "--quiet"], {
+    cwd: project,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `Git fixture init failed: ${result.stderr ?? result.error?.message ?? "unknown"}`);
 }
 
 function writeExtension(

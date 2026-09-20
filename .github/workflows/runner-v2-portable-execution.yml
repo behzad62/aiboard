@@ -34,15 +34,29 @@ jobs:
           node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/process-backend-contract.test.ts
           runner-v2/test/runner-capabilities-config.test.ts
+          runner-v2/test/runner-capability-contract.test.ts
+          runner-v2/test/plugin-loader.test.ts
+          runner-v2/test/qualification-harness.test.ts
           runner-v2/test/native-build-manager.test.ts
           runner-v2/test/runner-resource-cleanup.test.ts
           runner-v2/test/static-adapter-policy.test.ts
+      - name: Run targeted legacy CLI fixture regressions
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          --test-name-pattern="CLI rejects an active legacy Build without a capability contract before listening|CLI records an unsupported persisted execution-safety version as a per-run capability refusal"
+          runner-v2/test/cli-capabilities-config.test.ts
       - name: Run owned-fence protocol and channel contracts on POSIX hosts
         if: runner.os != 'Windows'
         run: >-
           node node_modules/tsx/dist/cli.mjs --test
           runner-v2/test/portable-process-protocol.test.ts
           runner-v2/test/portable-process-channel.test.ts
+      - name: Run targeted legacy POSIX lifecycle observation regression
+        if: runner.os != 'Windows'
+        run: >-
+          node node_modules/tsx/dist/cli.mjs --test --test-concurrency=1
+          --test-name-pattern="POSIX native session fixture owns descendants after launcher exit"
+          runner-v2/test/posix-process-backend.test.ts
 
   native-smoke:
     name: Native adapter probe (${{ matrix.os }}, Node ${{ matrix.node-version }})

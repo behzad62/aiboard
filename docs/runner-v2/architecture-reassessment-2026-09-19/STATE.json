@@ -18,7 +18,7 @@
   "assignments": [],
   "integrationQueue": [],
   "implementationAcceptance": "M0_ACCEPTED; M1_M2_M3_LOCAL_ACCEPTED_READY_FOR_M4; M4_IN_PROGRESS_PENDING_FRESH_REMOTE_EVIDENCE; GATE_G_OPEN",
-  "nextAction": "Freeze exact candidate, commit/push, run fresh required PR CI and Windows/Linux/macOS + configured OCI qualification; repair only actual blockers; finalize evidence/clean tree; leave merge for explicit user approval. Do not casually rerun historical full npm run test:runner-v2. Do not claim Gate G PASS.",
+  "nextAction": "Freeze the locally validated qualification refactor, commit/push it, then obtain required CI and Windows/Linux/macOS/OCI qualification on the pushed SHA. No global Runner V2 suite. No merge.",
   "launchPrerequisite": "SATISFIED — user adopted scoped-lifecycle amendment 2026-09-20; M0 recorded; dirty patch preserved.",
   "blockers": [
     {
@@ -28,7 +28,7 @@
     },
     {
       "id": "M4-EXACT-CANDIDATE-CI",
-      "summary": "Exact candidate not yet frozen/committed/pushed; fresh required PR CI, platform qualification, configured OCI, package parity/reproducibility outstanding",
+      "summary": "Architecture SHA 2ffb8054 has green required CI but failed coupled qualification run 35492714608. The isolated qualification refactor is locally validated and ready to push; exact pushed-SHA hosted acceptance remains pending.",
       "source": "evidence/M4.md"
     }
   ],
@@ -60,7 +60,7 @@
     "M3": "LOCAL_ACCEPTED_READY_FOR_M4",
     "M4": "IN_PROGRESS_PENDING_FRESH_REMOTE_EVIDENCE"
   },
-  "readinessVerdict": "M0 accepted. M1/M2/M3 locally accepted and READY-for-M4 after repair + final independent READY review (findings none). Historical pre-repair review (evidence/implementation-review-before-repair.md) NOT READY with three IMPORTANT findings preserved as repair history only. M4 pending freeze/commit/push and fresh required CI / Windows-Linux-macOS qualification / configured OCI / Darwin follow-up / package parity & reproducibility. Gate G not PASS. PR unmerged.",
+  "readinessVerdict": "M0 accepted; M1/M2/M3 locally accepted after independent READY review. M4 qualification refactor authorized by the 2026-09-20 handoff. Required CI at 2ffb8054 is green, hosted qualification failed. Final-candidate hosted acceptance is pending. Gate G not PASS; PR #95 unmerged.",
   "independentImplementationReview": {
     "historicalPreRepair": {
       "artifact": "evidence/implementation-review-before-repair.md",
@@ -94,5 +94,37 @@
   "scopeReviewSource": "SOURCE-scope-review-2026-09-20.md",
   "scopeReviewSourceSha256": "DC1A237D374D65DEFA09D45AD3AC16F41CCAE49F5E50B56636C6BA0EF4DD6CFE",
   "prMergeAuthorized": false,
-  "gateG": "IN_PROGRESS"
+  "gateG": "IN_PROGRESS",
+  "qualificationRefactor": {
+    "source": "SOURCE-qualification-refactor-2026-09-20.md",
+    "sourceSha256": "C14F684015D99177014275381151F48E7CDB5E8BD072884E6515FFF3D33A8C3E",
+    "startingRevision": "2ffb805436dd768a1986246275f4c84a89d74f18",
+    "evidence": "evidence/M4-qualification-refactor.md",
+    "status": "LOCAL_VALIDATION_COMPLETE_READY_TO_PUSH",
+    "cursorSession": "937c9d2d-c35f-4d0e-82f5-501ef9816c98",
+    "priorRequiredRuns": [
+      "35492673910",
+      "35492673923"
+    ],
+    "priorFailedQualification": "35492714608",
+    "fullRunnerV2SuiteAuthorized": false,
+    "review": {
+      "artifact": "evidence/qualification-review-before-repair.md",
+      "sessionId": "b3ea7279-19bb-43aa-8cbc-bf2af05aa155",
+      "verdict": "NOT_READY",
+      "blocking": 2,
+      "important": 3,
+      "disposition": "REPAIRED_HISTORY_ONLY",
+      "snapshotManifestSha256": "BBEDF1351F8F37990B0DC2B79236B7458AC902D0C78E7C09A465028F8C409569"
+    },
+    "postRepairReview": {
+      "artifact": "evidence/qualification-review-after-repair.md",
+      "completeReviewBlocking": 0,
+      "completeReviewImportant": 1,
+      "completeReviewVerdict": "NOT_READY",
+      "importantDisposition": "REPAIRED_AND_FRESHLY_VALIDATED",
+      "laterFinalReviewAttempt": "CURSOR_QUOTA_LIMITED_NO_VERDICT_INVENTED",
+      "freezeDecision": "READY_FOR_FINAL_SHA_HOSTED_ACCEPTANCE"
+    }
+  }
 }
