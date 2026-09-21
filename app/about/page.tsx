@@ -134,7 +134,7 @@ export default function AboutPage() {
             games
           </Link>
           . That last one is the fun part — you can play chess, Connect Four,
-          Battleship, Codenames, or Fireworks against GPT-5.5, or sit out and
+          Battleship, Codenames, Fireworks, or Quoridor against GPT-5.5, or sit out and
           watch two models play each other.
         </p>
         <p>
