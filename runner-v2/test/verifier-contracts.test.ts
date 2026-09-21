@@ -19,7 +19,12 @@ import {
 import { assessBuildRisk, type BuildRiskAssessmentInput } from "../src/risk-policy.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
-import type { VerifierCriterionVerdict } from "../src/verifier-contracts.js";
+import {
+  parseVerifierCriterionVerdicts,
+  parseVerifierVerdict,
+  type VerifierCriterionVerdict,
+  type VerifierReviewProjection,
+} from "../src/verifier-contracts.js";
 import { SchedulerVerifierVerdictAuthority } from "../src/verifier-verdict-authority.js";
 import {
   acceptFinalVerificationProfile,
@@ -1064,6 +1069,116 @@ test("verifier repair kernel rejects incomplete, unrelated, duplicated, forged, 
       fixture.close();
     }
   }
+});
+
+function criterionVerdictInput(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    taskId: "task-api",
+    criterionId: "shared",
+    verdict: "satisfied",
+    rationale: "The recorded evidence supports the criterion.",
+    evidenceIds: ["evidence-1"],
+    ...overrides,
+  };
+}
+
+test("parseVerifierCriterionVerdicts omits acceptedFailures when the field is absent", () => {
+  const [verdict] = parseVerifierCriterionVerdicts([criterionVerdictInput()]);
+  assert.equal(verdict!.acceptedFailures, undefined);
+  assert.equal(Object.hasOwn(verdict!, "acceptedFailures"), false);
+});
+
+test("parseVerifierCriterionVerdicts keeps a valid acceptedFailures entry", () => {
+  const [verdict] = parseVerifierCriterionVerdicts([criterionVerdictInput({
+    acceptedFailures: [{ evidenceId: "red", rationale: "Intentional pre-fix failure." }],
+  })]);
+  assert.deepEqual(verdict!.acceptedFailures, [
+    { evidenceId: "red", rationale: "Intentional pre-fix failure." },
+  ]);
+});
+
+test("parseVerifierCriterionVerdicts trims acceptedFailures evidenceId and rationale", () => {
+  const [verdict] = parseVerifierCriterionVerdicts([criterionVerdictInput({
+    acceptedFailures: [{
+      evidenceId: "  red  ",
+      rationale: "  Intentional pre-fix failure.  ",
+    }],
+  })]);
+  assert.deepEqual(verdict!.acceptedFailures, [
+    { evidenceId: "red", rationale: "Intentional pre-fix failure." },
+  ]);
+});
+
+test("parseVerifierCriterionVerdicts rejects malformed acceptedFailures", () => {
+  const invalid = /acceptedFailures is invalid/;
+  const cases: Array<{ name: string; acceptedFailures: unknown }> = [
+    { name: "not-array", acceptedFailures: { evidenceId: "red", rationale: "no" } },
+    { name: "null-entry", acceptedFailures: [null] },
+    { name: "array-entry", acceptedFailures: [["red"]] },
+    { name: "non-object-entry", acceptedFailures: ["red"] },
+    { name: "missing-evidenceId", acceptedFailures: [{ rationale: "Intentional pre-fix failure." }] },
+    { name: "blank-evidenceId", acceptedFailures: [{ evidenceId: "   ", rationale: "Intentional pre-fix failure." }] },
+    { name: "missing-rationale", acceptedFailures: [{ evidenceId: "red" }] },
+    { name: "blank-rationale", acceptedFailures: [{ evidenceId: "red", rationale: "   " }] },
+    {
+      name: "duplicate-evidenceId",
+      acceptedFailures: [
+        { evidenceId: "red", rationale: "first" },
+        { evidenceId: "red", rationale: "second" },
+      ],
+    },
+  ];
+  for (const scenario of cases) {
+    assert.throws(
+      () => parseVerifierCriterionVerdicts([
+        criterionVerdictInput({ acceptedFailures: scenario.acceptedFailures }),
+      ]),
+      invalid,
+      scenario.name,
+    );
+  }
+});
+
+test("parseVerifierVerdict clones acceptedFailures so mutation cannot alias the source", () => {
+  const acceptedFailures = [
+    { evidenceId: "red", rationale: "Intentional pre-fix failure." },
+  ];
+  const payload = {
+    reviewId: REVIEW_ID,
+    targetRevision: REVISION,
+    sessionId: SESSION_ID,
+    criterionVerdicts: [criterionVerdictInput({ acceptedFailures })],
+  };
+  const review: VerifierReviewProjection = {
+    reviewId: REVIEW_ID,
+    targetRevision: REVISION,
+    finalVerificationGenerationId: GENERATION_ID,
+    runtime: {
+      runtimeId: "google:verifier",
+      providerId: "google",
+      modelId: "google/verifier-model",
+      modelIdentity: "verifier-model",
+      sessionId: SESSION_ID,
+    },
+    excludedModels: [],
+    criteria: [{ taskId: "task-api", criterionId: "shared" }],
+    status: "requested",
+    state: "current",
+    requestedAt: "2026-08-27T00:00:00.000Z",
+  };
+  const parsed = parseVerifierVerdict(payload, review, "2026-08-27T00:00:03.000Z");
+  const cloned = parsed.criterionVerdicts[0]!.acceptedFailures!;
+  assert.deepEqual(cloned, [
+    { evidenceId: "red", rationale: "Intentional pre-fix failure." },
+  ]);
+  assert.notEqual(cloned, acceptedFailures);
+  assert.notEqual(cloned[0], acceptedFailures[0]);
+  cloned[0]!.rationale = "mutated";
+  cloned.push({ evidenceId: "other", rationale: "extra" });
+  assert.equal(acceptedFailures[0]!.rationale, "Intentional pre-fix failure.");
+  assert.equal(acceptedFailures.length, 1);
 });
 
 interface Fixture {
