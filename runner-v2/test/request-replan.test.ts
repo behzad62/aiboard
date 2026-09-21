@@ -132,6 +132,58 @@ test("reconciling the plan answers the open replan request and satisfies guidanc
   }
 });
 
+test("reconciling with action revise moves a waiting_guidance task to planned and answers the replan", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-replan-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    store.append(event("run.initialized", "init", { runId: RUN_ID }));
+    store.append(event("plan.created", "plan:1", {
+      revision: 1,
+      tasks: [{
+        id: "T1", objective: "Add caching", dependencies: [], status: "planned",
+        requiredCapabilities: ["code"], attempt: 0,
+        acceptanceCriteria: [{ id: "AC-1", text: "Cache invalidates on membership change." }],
+        acceptanceCriteriaVersion: 1,
+        assignedWorkerId: "stale-worker",
+        changeSetId: "stale-change",
+        failureReason: "stale failure",
+        criterionEvidenceLinks: [{
+          criterionId: "AC-1", evidenceId: "stale-evidence", artifactHashes: ["stale-hash"],
+        }],
+      }],
+    }, { role: "architect", id: "architect_1" }));
+    store.append(event("task.transitioned", "T1:assigned", {
+      taskId: "T1", status: "assigned", patch: { attempt: 1, assignedWorkerId: "worker:T1:1" },
+    }, { role: "runner", id: "scheduler" }));
+    store.append(event("task.transitioned", "T1:running", { taskId: "T1", status: "running" },
+      { role: "runner", id: "scheduler" }));
+    store.append(event("guidance.requested", "g:replan-revise", {
+      requestId: "replan-revise", taskId: "T1", question: "Replan requested.", blocking: true,
+      evidenceSequence: 4, kind: "replan",
+      replan: { reason: "scope_exceeded", summary: "s", proposedChange: "split" },
+    }, { role: "worker", id: "worker:T1:1" }));
+    store.append(event("plan.reconciled", "plan:2", {
+      revision: 2,
+      summary: "Revise T1 in place after the replan request.",
+      taskUpdates: [{ taskId: "T1", action: "revise", objective: "Add org-scoped caching." }],
+    }, { role: "architect", id: "architect_1" }));
+    const projection = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    const revised = projection.tasks.T1;
+    assert.equal(revised.status, "planned");
+    assert.equal(revised.objective, "Add org-scoped caching.");
+    assert.equal(revised.guidanceRequestId, undefined);
+    assert.equal(revised.criterionEvidenceLinks, undefined);
+    assert.equal(revised.assignedWorkerId, undefined);
+    assert.equal(revised.changeSetId, undefined);
+    assert.equal(revised.failureReason, undefined);
+    assert.equal(projection.guidance["replan-revise"].status, "answered");
+    assert.equal(projection.guidance["replan-revise"].answer, "plan_reconciled:2");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("an open replan request survives store reopen as waiting_guidance", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-replan-"));
   const database = join(root, "scheduler.sqlite");
@@ -152,6 +204,54 @@ test("an open replan request survives store reopen as waiting_guidance", () => {
     assert.equal(projection.tasks.T1.status, "waiting_guidance");
     assert.equal(projection.guidance["replan-replay"].status, "open");
     assert.equal(projection.guidance["replan-replay"].kind, "replan");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reconciling with action cancel answers an open blocking question on that task", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-replan-"));
+  const store = seededStore(root);
+  try {
+    store.append(event("guidance.requested", "g:question-cancel", {
+      requestId: "question-cancel", taskId: "T1",
+      question: "Should the cache be org-scoped?", blocking: true, evidenceSequence: 2,
+    }, { role: "worker", id: "worker:T1:1" }));
+    store.append(event("plan.reconciled", "plan:2", {
+      revision: 2,
+      summary: "Cancel T1 around the blocking question.",
+      taskUpdates: [{ taskId: "T1", action: "cancel" }],
+    }, { role: "architect", id: "architect_1" }));
+    const projection = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(projection.tasks.T1.status, "cancelled");
+    assert.equal(projection.guidance["question-cancel"].kind, "question");
+    assert.equal(projection.guidance["question-cancel"].status, "answered");
+    assert.equal(projection.guidance["question-cancel"].answer, "plan_reconciled:2");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reconciling with action revise answers an open blocking question on that task", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-replan-"));
+  const store = seededStore(root);
+  try {
+    store.append(event("guidance.requested", "g:question-revise", {
+      requestId: "question-revise", taskId: "T1",
+      question: "Should the cache be org-scoped?", blocking: true, evidenceSequence: 2,
+    }, { role: "worker", id: "worker:T1:1" }));
+    store.append(event("plan.reconciled", "plan:2", {
+      revision: 2,
+      summary: "Revise T1 around the blocking question.",
+      taskUpdates: [{ taskId: "T1", action: "revise", objective: "Add org-scoped caching." }],
+    }, { role: "architect", id: "architect_1" }));
+    const projection = rebuildSchedulerProjection(store.readRun(RUN_ID));
+    assert.equal(projection.tasks.T1.status, "planned");
+    assert.equal(projection.guidance["question-revise"].kind, "question");
+    assert.equal(projection.guidance["question-revise"].status, "answered");
+    assert.equal(projection.guidance["question-revise"].answer, "plan_reconciled:2");
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

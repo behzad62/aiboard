@@ -4477,11 +4477,7 @@ function applyPlanReconciliation(
       candidateTasks[update.taskId] = {
         ...applyTaskTransition(task, "planned", {
           ...patch,
-          assignedWorkerId: undefined,
-          changeSetId: undefined,
-          criterionEvidenceLinks: undefined,
           guidanceRequestId: undefined,
-          failureReason: undefined,
         }),
         ...(criteriaChanged
           ? { acceptanceCriteriaVersion: (task.acceptanceCriteriaVersion ?? 0) + 1 }
@@ -4588,7 +4584,6 @@ function applyPlanReconciliation(
   const touchedTaskIds = new Set(reconciliation.taskUpdates.map((update) => update.taskId));
   for (const guidance of Object.values(projection.guidance)) {
     if (
-      guidance.kind === "replan" &&
       guidance.status === "open" &&
       touchedTaskIds.has(guidance.taskId)
     ) {

@@ -162,6 +162,97 @@ test("guidanceOutcomeFromProjection maps an open replan request to a blocking gu
   });
 });
 
+test("native worker maps a replan_requested loop result to a blocking guidance outcome", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-replan-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let scheduler: SqliteSchedulerStore | undefined;
+  let evidence: SqliteEvidenceStore | undefined;
+  let memory: SqliteProjectMemoryStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_1",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_1",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_a");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+    evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+    seedRunningTask(scheduler);
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "primary:code",
+      providerId: "primary",
+      modelId: "code",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const driver = new NativeWorkerDriver({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([
+        toolTurn("replan", "request_replan", {
+          requestId: "replan-1",
+          reason: "scope_exceeded",
+          summary: "The cache key factory lives outside this task.",
+          proposedChange: "Split the task.",
+          evidenceSequence: 3,
+        }),
+      ])]]),
+      permissionProfile: "full",
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore: evidence,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      projectId: "project_1",
+      projectRoot: project,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
+    });
+    const outcome = await driver.run({
+      runId: "run_1",
+      task: rebuildTask(scheduler),
+      attempt: 1,
+      workerId: "worker_task_a_1",
+      workspacePath: workspace.path,
+    });
+    assert.deepEqual(outcome, {
+      type: "guidance",
+      requestId: "replan-1",
+      blocking: true,
+      question:
+        "Replan requested (scope_exceeded): The cache key factory lives outside this task.\nProposed change: Split the task.",
+      evidenceSequence: 3,
+    });
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    scheduler?.close();
+    evidence?.close();
+    memory?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
 test("native worker fails over with the same session, context, tools, and evidence", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-"));
   const project = join(root, "project");
