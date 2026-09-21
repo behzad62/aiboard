@@ -520,6 +520,17 @@ export interface NativeBuildProjection {
     history: NativeBuildRiskAssessmentProjection[];
   };
   verifierSelection?: NativeIndependentVerifierObservability["selection"];
+  repairCycles?: {
+    limit: number;
+    used: number;
+    extensions: number;
+    pause?: {
+      source: "final_verification" | "verifier";
+      targetRevision: string;
+      used: number;
+      limit: number;
+    };
+  };
   verifier?: {
     current?: NativeVerifierReviewProjection;
     history: NativeVerifierReviewProjection[];
@@ -1535,6 +1546,25 @@ export async function selectNativeVerifierRuntime(
     {
       method: "POST",
       body: JSON.stringify({ runtimeId, idempotencyKey }),
+      signal,
+    },
+    fetchImpl,
+  );
+}
+
+export async function extendNativeRepairCycles(
+  connection: NativeRunnerConnection,
+  runId: string,
+  input: { additionalRepairPlans: number; idempotencyKey: string },
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/repair-cycles`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
       signal,
     },
     fetchImpl,

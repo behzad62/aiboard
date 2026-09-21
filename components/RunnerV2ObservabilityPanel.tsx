@@ -518,6 +518,9 @@ export function runnerEvidenceDiagnosticDetail(fact: NativeBuildEvidenceFact): s
 
 function lifecycleLabel(projection: NativeBuildProjection | null): string {
   if (!projection) return "Waiting for build activity";
+  if (projection.repairCycles?.pause) {
+    return "Repair budget exhausted";
+  }
   if (projection.verifierSelection?.status === "required") {
     return "Choose an independent verifier";
   }
@@ -785,6 +788,13 @@ export function runnerUserFacingObservability(
       detail: "This legacy run cannot submit or review work until every non-cancelled task has criteria.",
     });
   }
+  if (projection?.repairCycles?.pause) {
+    problems.push({
+      key: "repair-cycles:limit",
+      title: "Repair budget exhausted",
+      detail: `Runner used ${projection.repairCycles.used} of ${projection.repairCycles.limit} repair plans. Extend the budget or stop the build.`,
+    });
+  }
   const currentWorkerIds = new Set(
     tasks
       .filter((task) => ACTIVE_WORKER_TASK_STATUSES.has(task.status))
@@ -1046,13 +1056,16 @@ export function RunnerV2ObservabilityPanel({
   snapshot,
   projection,
   onDownloadAudit,
+  onExtendRepairCycles,
 }: {
   snapshot: NativeBuildObservability | null;
   projection?: NativeBuildProjection | null;
   onDownloadAudit?: () => void;
+  onExtendRepairCycles?: (additionalRepairPlans: number, idempotencyKey: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState("");
   const [clock, setClock] = useState(() => Date.now());
+  const [repairExtension, setRepairExtension] = useState(1);
   const nextCooldownExpiry = runnerNextCooldownExpiry(snapshot?.providers ?? [], clock);
   useEffect(() => {
     if (nextCooldownExpiry === null) return;
@@ -1237,6 +1250,35 @@ export function RunnerV2ObservabilityPanel({
             <div className="flex items-start gap-2.5 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
               <p className="text-xs leading-relaxed">No active blockers remain.</p>
+            </div>
+          )}
+          {projection?.repairCycles?.pause && onExtendRepairCycles && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
+              <label className="text-[0.7rem] text-muted-foreground" htmlFor="repair-cycle-extension">
+                Additional repair plans
+              </label>
+              <input
+                id="repair-cycle-extension"
+                type="number"
+                min={1}
+                max={10}
+                value={repairExtension}
+                onChange={(event) => {
+                  const next = Number(event.target.value);
+                  setRepairExtension(Number.isFinite(next) ? Math.min(10, Math.max(1, Math.trunc(next))) : 1);
+                }}
+                className="h-8 w-16 rounded-md border bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring"
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void onExtendRepairCycles(
+                  repairExtension,
+                  `repair-cycles:${projection.runId}:${projection.repairCycles?.used}:${projection.repairCycles?.extensions}`,
+                )}
+              >
+                Extend repair budget
+              </Button>
             </div>
           )}
         </UserSection>

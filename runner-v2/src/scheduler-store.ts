@@ -141,7 +141,10 @@ export type SchedulerEventType =
   | "verifier.selection_selected"
   | "verifier.review_requested"
   | "verifier.verdict_submitted"
-  | "verifier.repairs_planned";
+  | "verifier.repairs_planned"
+  | "repair.policy_configured"
+  | "repair.cycle_limit_reached"
+  | "repair.cycle_limit_extended";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -417,6 +420,21 @@ export interface VerifierSelectionProjection {
   selectedRuntimeId?: string;
 }
 
+export const DEFAULT_REPAIR_PLAN_LIMIT = 3;
+export const MAX_REPAIR_CYCLE_EXTENSION = 10;
+
+export interface RepairCyclesProjection {
+  limit: number;
+  used: number;
+  extensions: number;
+  pause?: {
+    source: "final_verification" | "verifier";
+    targetRevision: string;
+    used: number;
+    limit: number;
+  };
+}
+
 export interface SchedulerProjection {
   processRecovery?: Record<string, RecoveryAuditRecord>;
   runId: string;
@@ -461,6 +479,7 @@ export interface SchedulerProjection {
   verifierPolicy?: VerifierPolicyProjection;
   buildRisk?: BuildRiskProjection;
   verifierSelection?: VerifierSelectionProjection;
+  repairCycles?: RepairCyclesProjection;
   verifier?: VerifierProjection;
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
@@ -477,6 +496,22 @@ export interface SchedulerStore {
   append(input: NewSchedulerEvent): SchedulerEvent;
   readRun(runId: string, afterSequence?: number): SchedulerEvent[];
   close(): void;
+}
+
+export function repairCyclesExhausted(projection: SchedulerProjection): boolean {
+  const cycles = projection.repairCycles;
+  return cycles !== undefined && cycles.used >= cycles.limit;
+}
+
+export function consumeRepairCycle(projection: SchedulerProjection): void {
+  const cycles = projection.repairCycles;
+  if (!cycles) return;
+  if (cycles.used >= cycles.limit) {
+    throw new Error(
+      `Repair plan limit reached: ${cycles.used} of ${cycles.limit} repair plans used; the user must extend the repair-cycle budget.`,
+    );
+  }
+  projection.repairCycles = { ...cycles, used: cycles.used + 1 };
 }
 
 export function assertPendingUserGuidanceAllowsEvent(
@@ -1557,6 +1592,9 @@ export function reduceSchedulerEvent(
           },
         }
       : {}),
+    ...(current.repairCycles
+      ? { repairCycles: cloneRepairCyclesProjection(current.repairCycles) }
+      : {}),
     ...(current.projectHandoff
       ? {
           projectHandoff: {
@@ -1840,6 +1878,66 @@ export function reduceSchedulerEvent(
         throw new Error("Only the Architect may plan verifier repairs.");
       }
       createVerifierRepairTasks(next, event.payload);
+      break;
+    }
+    case "repair.policy_configured": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure repair policy.");
+      }
+      const limit = event.payload.repairPlanLimit;
+      if (!Number.isSafeInteger(limit) || (limit as number) < 0) {
+        throw new Error("repairPlanLimit must be a non-negative integer.");
+      }
+      if (current.repairCycles && current.repairCycles.limit !== limit) {
+        throw new Error("Repair policy is already configured differently.");
+      }
+      next.repairCycles = current.repairCycles ?? { limit: limit as number, used: 0, extensions: 0 };
+      break;
+    }
+    case "repair.cycle_limit_reached": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may report a repair-cycle limit.");
+      }
+      const cycles = current.repairCycles;
+      if (!cycles) throw new Error("Repair-cycle limit requires configured repair policy.");
+      const source = event.payload.source;
+      if (source !== "final_verification" && source !== "verifier") {
+        throw new Error("Repair-cycle limit source is invalid.");
+      }
+      const used = requiredNumber(event.payload, "used");
+      const limit = requiredNumber(event.payload, "limit");
+      if (used !== cycles.used || limit !== cycles.limit || used < limit) {
+        throw new Error("Repair-cycle limit event does not match the kernel repair-cycle count.");
+      }
+      next.repairCycles = {
+        ...cycles,
+        pause: { source, targetRevision: requiredString(event.payload, "targetRevision"), used, limit },
+      };
+      next.status = "paused";
+      next.pauseReason = { reason: "repair_cycle_limit" };
+      break;
+    }
+    case "repair.cycle_limit_extended": {
+      if (event.actor.role !== "user") {
+        throw new Error("Repair-cycle extension requires the user.");
+      }
+      const cycles = current.repairCycles;
+      if (!cycles?.pause) throw new Error("There is no repair-cycle pause to extend.");
+      const additional = event.payload.additionalRepairPlans;
+      if (
+        !Number.isSafeInteger(additional) ||
+        (additional as number) < 1 ||
+        (additional as number) > MAX_REPAIR_CYCLE_EXTENSION
+      ) {
+        throw new Error(`additionalRepairPlans must be an integer between 1 and ${MAX_REPAIR_CYCLE_EXTENSION}.`);
+      }
+      next.repairCycles = {
+        limit: cycles.limit + (additional as number),
+        used: cycles.used,
+        extensions: cycles.extensions + 1,
+      };
+      next.status = "running";
+      delete next.pauseReason;
       break;
     }
     case "task.revised": {
@@ -3478,6 +3576,7 @@ function createVerifierRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
 ): void {
+  consumeRepairCycle(projection);
   const current = projection.verifier?.current;
   if (
     !current || current.state !== "current" ||
@@ -3646,6 +3745,7 @@ function createFinalVerificationRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
 ): void {
+  consumeRepairCycle(projection);
   const current = requireCurrentFinalVerification(projection, {
     ...payload,
     taskId: payload.finalVerificationTaskId,
@@ -4776,6 +4876,17 @@ function acceptanceContractStatusForTasks(
   ).length > 0
     ? "acceptance_contract_upgrade_required"
     : "current";
+}
+
+function cloneRepairCyclesProjection(
+  cycles: RepairCyclesProjection,
+): RepairCyclesProjection {
+  return {
+    limit: cycles.limit,
+    used: cycles.used,
+    extensions: cycles.extensions,
+    ...(cycles.pause ? { pause: { ...cycles.pause } } : {}),
+  };
 }
 
 function cloneUserGuidanceItem(guidance: UserGuidanceItem): UserGuidanceItem {

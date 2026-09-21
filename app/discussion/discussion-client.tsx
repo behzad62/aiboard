@@ -142,6 +142,7 @@ import {
   resolveNativeBuildRunId,
   selectNativeArchitectHandoff,
   selectNativeVerifierRuntime,
+  extendNativeRepairCycles,
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
   type NativeBuildObservability,
@@ -1365,6 +1366,33 @@ function DiscussionPageInner() {
     }
   };
 
+  const handleExtendRepairCycles = async (
+    additionalRepairPlans: number,
+    idempotencyKey: string,
+  ) => {
+    if (
+      !discussion?.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) return;
+    try {
+      const projection = await extendNativeRepairCycles(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion.nativeBuildRunId,
+        { additionalRepairPlans, idempotencyKey },
+      );
+      setNativeProjection(projection);
+      setError(null);
+      nativeAttachmentControllerRef.current?.wake();
+    } catch (extensionError) {
+      setError(
+        extensionError instanceof Error
+          ? extensionError.message
+          : "Could not extend the repair budget."
+      );
+    }
+  };
+
   const handleProjectHandoff = async (choice: NativeProjectHandoffChoice) => {
     if (
       !discussion?.runnerUrl ||
@@ -2222,6 +2250,9 @@ function DiscussionPageInner() {
           projection={nativeProjection}
           onDownloadAudit={
             discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined
+          }
+          onExtendRepairCycles={
+            discussion.nativeBuildRunId ? handleExtendRepairCycles : undefined
           }
         />
       )}

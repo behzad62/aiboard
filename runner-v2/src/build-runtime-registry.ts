@@ -37,6 +37,11 @@ export interface BuildControlPlane {
     runtimeId: string,
     idempotencyKey: string,
   ): Promise<SchedulerProjection>;
+  extendRepairCycles(
+    runId: string,
+    additionalRepairPlans: number,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection>;
   selectProjectHandoff(
     runId: string,
     choice: ProjectHandoffChoice,
@@ -187,6 +192,14 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     idempotencyKey: string,
   ): Promise<SchedulerProjection> {
     return this.require(runId).selectVerifierRuntime(runtimeId, idempotencyKey);
+  }
+
+  async extendRepairCycles(
+    runId: string,
+    additionalRepairPlans: number,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection> {
+    return this.require(runId).extendRepairCycles(additionalRepairPlans, idempotencyKey);
   }
 
   async selectProjectHandoff(

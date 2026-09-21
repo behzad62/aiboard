@@ -26,6 +26,8 @@ export interface NativeBuildSpec {
   verifierRuntimeIds: string[];
   /** Strengthens low-risk qualification; it never disables the high-risk gate. */
   alwaysRequireIndependentVerifier: boolean;
+  /** Kernel-counted repair plans per run; omitted means the runtime default. */
+  repairPlanLimit?: number;
   maxConcurrency: number;
   permissionProfile: PermissionProfile;
   runPolicy: NativeBuildRunPolicy;
@@ -91,6 +93,12 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     throw new Error(
       "Build spec independent verifier qualification must be a boolean."
     );
+  }
+  if (
+    spec.repairPlanLimit !== undefined &&
+    (!Number.isSafeInteger(spec.repairPlanLimit) || spec.repairPlanLimit < 0)
+  ) {
+    throw new Error("Build spec repairPlanLimit must be a non-negative integer.");
   }
   if (!Number.isSafeInteger(spec.maxConcurrency) || spec.maxConcurrency < 1) {
     throw new Error("Build spec maxConcurrency must be positive.");
@@ -192,6 +200,7 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
     ...(spec.capabilityContract
       ? { capabilityContract: cloneRunnerCapabilityContract(spec.capabilityContract) }
       : {}),
+    ...(spec.repairPlanLimit !== undefined ? { repairPlanLimit: spec.repairPlanLimit } : {}),
     ...(spec.benchmark
       ? {
           benchmark: {

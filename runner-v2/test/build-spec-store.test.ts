@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   cloneBuildSpec,
+  recoverLegacyBuildSpec,
   validateBuildSpec,
   type NativeBuildSpec,
 } from "../src/build-spec.js";
@@ -99,6 +100,46 @@ test("native Build specs enforce policy-specific limit shapes", () => {
       }),
     /Budgeted runs require a positive maxEstimatedCostMicros or maxActiveMs/
   );
+});
+
+test("native Build specs persist a non-negative integer repairPlanLimit", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-repair-limit-"));
+  const database = join(root, "build-specs.sqlite");
+  try {
+    const spec = { ...validSpec, repairPlanLimit: 0 };
+    const store = new SqliteBuildSpecStore(database);
+    try {
+      store.save(spec);
+      assert.equal(store.get(spec.runId).repairPlanLimit, 0);
+      assert.equal(cloneBuildSpec(spec).repairPlanLimit, 0);
+    } finally {
+      store.close();
+    }
+    assert.throws(
+      () => validateBuildSpec({ ...validSpec, repairPlanLimit: -1 }),
+      /Build spec repairPlanLimit must be a non-negative integer/,
+    );
+    assert.throws(
+      () => validateBuildSpec({ ...validSpec, repairPlanLimit: 1.5 }),
+      /Build spec repairPlanLimit must be a non-negative integer/,
+    );
+    const recovered = recoverLegacyBuildSpec({
+      version: 1,
+      runId: "run_legacy_repair",
+      projectId: "project_legacy_repair",
+      objective: "Recover a pre-P6.5 build.",
+      architectRuntimeId: "chatgpt:gpt-5.5",
+      workerRuntimeIds: ["chatgpt:gpt-5.4"],
+      maxConcurrency: 1,
+      permissionProfile: "full",
+      budgetLimits: {},
+      createdAt: "2026-07-12T00:00:00.000Z",
+      idempotencyKey: "build-spec:run_legacy_repair",
+    });
+    assert.equal(recovered.repairPlanLimit, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("native Build specs validate and clone benchmark command policy", () => {

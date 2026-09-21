@@ -614,6 +614,31 @@ assert.ok(
   ),
 );
 
+const repairPauseView = runnerUserFacingObservability(observability, {
+  ...projectionWithoutHandoff,
+  status: "paused",
+  repairCycles: {
+    limit: 3,
+    used: 3,
+    extensions: 0,
+    pause: {
+      source: "verifier",
+      targetRevision: "a".repeat(40),
+      used: 3,
+      limit: 3,
+    },
+  },
+});
+assert.equal(repairPauseView.lifecycle, "Repair budget exhausted");
+assert.ok(
+  repairPauseView.problems.some(
+    (problem) =>
+      problem.key === "repair-cycles:limit" &&
+      problem.title === "Repair budget exhausted" &&
+      problem.detail.includes("Runner used 3 of 3 repair plans"),
+  ),
+);
+
 const replanView = runnerUserFacingObservability(observability, {
   ...projectionWithoutHandoff,
   guidance: {
@@ -859,6 +884,8 @@ for (const copy of [
   "High-risk builds always require an independent verifier.",
   "Evidence is mechanical; Architect verdict is semantic.",
   "Problems requiring attention",
+  "Repair budget exhausted",
+  "Extend repair budget",
   "<details",
 ]) {
   assert.ok(panelSource.includes(copy), `expected panel source to contain ${copy}`);

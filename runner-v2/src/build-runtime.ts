@@ -14,8 +14,10 @@ import type {
 } from "./scheduler-store.js";
 import {
   architectLifecycleEventMatchesReason,
+  DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
   rebuildSchedulerProjection,
+  repairCyclesExhausted,
 } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -170,6 +172,7 @@ export interface BuildRuntimeOptions {
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
   independentVerifier?: IndependentVerifierDriver;
+  repairPlanLimit?: number;
 }
 
 export interface BuildStepResult {
@@ -198,6 +201,7 @@ export class BuildRuntime {
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
   private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
   private readonly independentVerifier?: IndependentVerifierDriver;
+  private readonly repairPlanLimit: number;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
@@ -221,6 +225,7 @@ export class BuildRuntime {
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
     this.independentVerifier = options.independentVerifier;
+    this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
     if (
       this.independentVerifier &&
       (
@@ -237,6 +242,7 @@ export class BuildRuntime {
     this.initializeRun();
     this.configureRunPolicy();
     this.configureVerifierPolicy();
+    this.configureRepairPolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
       store: options.store,
@@ -314,6 +320,9 @@ export class BuildRuntime {
         "This Build is awaiting the user's independent verifier selection."
       );
     }
+    if (projection.repairCycles?.pause) {
+      throw new Error("This Build is awaiting the user's repair-cycle decision.");
+    }
     const occurredAt = this.clock();
     if (
       renewBudgetWindow &&
@@ -359,6 +368,18 @@ export class BuildRuntime {
       actor: { role: "user", id: "local-user" },
       idempotencyKey,
       payload: { runtimeId },
+    });
+    return this.projection();
+  }
+
+  extendRepairCycles(additionalRepairPlans: number, idempotencyKey: string): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "repair.cycle_limit_extended",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { additionalRepairPlans },
     });
     return this.projection();
   }
@@ -802,6 +823,12 @@ export class BuildRuntime {
         if (!decision) {
           throw new Error("Final verification repair review lacks a structured decision.");
         }
+        const pausedForRepair = this.pauseIfRepairCyclesExhausted(
+          this.projection(),
+          "final_verification",
+          generation.targetRevision,
+        );
+        if (pausedForRepair) return pausedForRepair;
         await this.runArchitect({
           type: "final_verification_repair_plan_required",
           finalVerificationTaskId: generation.taskId,
@@ -886,6 +913,12 @@ export class BuildRuntime {
         return await this.advanceFinalVerificationCleanup(generation);
       }
       if (generation.repairTaskIds?.length) return undefined;
+      const pausedForRepair = this.pauseIfRepairCyclesExhausted(
+        this.projection(),
+        "final_verification",
+        generation.targetRevision,
+      );
+      if (pausedForRepair) return pausedForRepair;
       await this.runArchitect({
         type: "final_verification_repair_plan_required",
         finalVerificationTaskId: generation.taskId,
@@ -1087,6 +1120,12 @@ export class BuildRuntime {
       currentReview.verdict?.satisfied === false
     ) {
       if (currentReview.repairTaskIds?.length) return undefined;
+      const pausedForRepair = this.pauseIfRepairCyclesExhausted(
+        projection,
+        "verifier",
+        currentReview.targetRevision,
+      );
+      if (pausedForRepair) return pausedForRepair;
       const unsatisfiedCriteria = currentReview.verdict.criterionVerdicts
         .filter((criterion) => criterion.verdict === "unsatisfied")
         .map((criterion) => ({
@@ -1510,6 +1549,38 @@ export class BuildRuntime {
         ...expected,
       },
     });
+  }
+
+  private configureRepairPolicy(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.some((event) => event.type === "repair.policy_configured")) return;
+    if (events.some((event) => event.type === "plan.created")) return; // in-flight pre-P6.5 runs stay uncapped
+    this.store.append({
+      runId: this.runId,
+      type: "repair.policy_configured",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "repair-policy",
+      payload: { repairPlanLimit: this.repairPlanLimit },
+    });
+  }
+
+  private pauseIfRepairCyclesExhausted(
+    projection: SchedulerProjection,
+    source: "final_verification" | "verifier",
+    targetRevision: string,
+  ): BuildStepResult | undefined {
+    if (!repairCyclesExhausted(projection)) return undefined;
+    const cycles = projection.repairCycles!;
+    this.store.append({
+      runId: this.runId,
+      type: "repair.cycle_limit_reached",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `repair-cycle-limit:${targetRevision}:${cycles.used}:${cycles.extensions}`,
+      payload: { source, targetRevision, used: cycles.used, limit: cycles.limit },
+    });
+    return { status: "paused", action: "repair_cycle_limit_reached" };
   }
 }
 

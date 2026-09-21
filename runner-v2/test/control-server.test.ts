@@ -985,6 +985,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
       verifierRuntimeChoice = runtimeId;
       return projection;
     },
+    extendRepairCycles: async () => projection,
     selectProjectHandoff: async (_runId: string, choice: "keep_integration_branch" | "apply_to_project") => {
       projectHandoffChoice = choice;
       return {
@@ -1631,6 +1632,117 @@ test("control API rejects request bodies larger than one MiB", async () => {
       })
     );
     assert.equal(response.status, 413);
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("repair-cycle extension is a user POST that rejects a zero additional budget", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-repair-cycles-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const projection = {
+    runId: "run_1",
+    status: "running" as const,
+    planRevision: 1,
+    tasks: {},
+    guidance: {},
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 2,
+    repairCycles: { limit: 4, used: 1, extensions: 1 },
+  };
+  let received: { additionalRepairPlans: number; idempotencyKey: string } | undefined;
+  const builds = {
+    projection: () => projection,
+    events: () => [],
+    transcript: async () => ({ turns: [], cursor: 0 }),
+    files: async () => ({
+      source: "integration" as const,
+      revision: "",
+      appliedToProject: false,
+      omittedFileCount: 0,
+      files: [],
+    }),
+    usage: () => ({
+      scopeId: "run_1",
+      reservations: {},
+      activeSegments: {},
+      effective: {
+        modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+        estimatedCostMicros: 0, activeMs: 0, artifactBytes: 0,
+      },
+      lastSequence: 2,
+    }),
+    observability: async () => ({
+      runId: "run_1", toolCallCount: 0, budget: {
+        scopeId: "run_1", reservations: {}, activeSegments: {},
+        effective: {
+          modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+          estimatedCostMicros: 0, activeMs: 0, artifactBytes: 0,
+        },
+        lastSequence: 2,
+      },
+      agents: [], tools: [], evidence: [], memories: [], skills: [], processes: [],
+      providers: [], events: [], git: { integrationBranch: "", integrationRevision: "", commits: [] },
+    }),
+    step: async () => ({ status: "idle" as const }),
+    runUntilBlocked: async () => ({ status: "idle" as const }),
+    activate: () => undefined,
+    pause: () => projection,
+    resume: () => projection,
+    continue: () => projection,
+    selectArchitectHandoff: () => projection,
+    selectVerifierRuntime: async () => projection,
+    extendRepairCycles: async (
+      _runId: string,
+      additionalRepairPlans: number,
+      idempotencyKey: string,
+    ) => {
+      received = { additionalRepairPlans, idempotencyKey };
+      return projection;
+    },
+    selectProjectHandoff: async () => projection,
+    submitUserGuidance: async () => projection,
+    answerArchitectQuestion: async () => projection,
+  } as unknown as BuildControlPlane;
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => gitReady,
+    bootstrapRun,
+    builds,
+  });
+  try {
+    const { url } = await server.start(0);
+    const rejected = await fetch(
+      `${url}/v2/runs/run_1/build/repair-cycles`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({ additionalRepairPlans: 0, idempotencyKey: "extend:0" }),
+      }),
+    );
+    assert.equal(rejected.status, 400);
+    const tooLarge = await fetch(
+      `${url}/v2/runs/run_1/build/repair-cycles`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({ additionalRepairPlans: 11, idempotencyKey: "extend:11" }),
+      }),
+    );
+    assert.equal(tooLarge.status, 400);
+    const accepted = await fetch(
+      `${url}/v2/runs/run_1/build/repair-cycles`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({ additionalRepairPlans: 2, idempotencyKey: "extend:2" }),
+      }),
+    );
+    assert.equal(accepted.status, 200);
+    const body = await json(accepted);
+    assert.deepEqual(body.repairCycles, { limit: 4, used: 1, extensions: 1 });
+    assert.deepEqual(received, { additionalRepairPlans: 2, idempotencyKey: "extend:2" });
   } finally {
     await server.close();
     supervisor.close();

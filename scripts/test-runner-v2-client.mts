@@ -17,6 +17,7 @@ import {
   getNativeRunnerHealth,
   selectNativeProjectHandoff,
   selectNativeVerifierRuntime,
+  extendNativeRepairCycles,
   submitNativeBuildUserGuidance,
   answerNativeArchitectQuestion,
   NativeRunnerError,
@@ -630,6 +631,42 @@ assert.deepEqual(JSON.parse(String(calls[5].init.body)), {
   runtimeId: "google:verifier",
   idempotencyKey: "verifier:google",
 });
+
+const repairCycleCalls: Array<{ url: string; init: RequestInit }> = [];
+const repairCycleFetch: typeof fetch = async (input, init) => {
+  repairCycleCalls.push({ url: String(input), init: init ?? {} });
+  return Response.json({
+    runId: "run_1",
+    status: "running",
+    planRevision: 1,
+    tasks: {},
+    guidance: {},
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 2,
+    repairCycles: { limit: 4, used: 1, extensions: 1 },
+  });
+};
+const extended = await extendNativeRepairCycles(
+  connection,
+  "run_1",
+  { additionalRepairPlans: 2, idempotencyKey: "extend:2" },
+  repairCycleFetch,
+  requestController.signal,
+);
+assert.equal(extended.repairCycles?.limit, 4);
+assert.equal(extended.repairCycles?.extensions, 1);
+assert.equal(repairCycleCalls[0]?.url, "http://127.0.0.1:8787/v2/runs/run_1/build/repair-cycles");
+assert.deepEqual(JSON.parse(String(repairCycleCalls[0]?.init.body)), {
+  additionalRepairPlans: 2,
+  idempotencyKey: "extend:2",
+});
+assert.equal(
+  new Headers(repairCycleCalls[0]?.init.headers).get("authorization"),
+  "Bearer runner-control-token",
+);
+assert.equal(repairCycleCalls[0]?.init.signal, requestController.signal);
+
 assert.equal(calls[6].url, "http://127.0.0.1:8787/v2/runs/run_1/build/project-handoff");
 assert.equal(JSON.parse(String(calls[6].init.body)).choice, "keep_integration_branch");
 assert.equal(calls[7].url, "http://127.0.0.1:8787/v2/runs/run_1/build/usage");

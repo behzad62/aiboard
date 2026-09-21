@@ -1096,6 +1096,7 @@ export class NativeBuildFactory {
         }
       },
       independentVerifier,
+      repairPlanLimit: spec.repairPlanLimit,
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {
@@ -1607,6 +1608,7 @@ export class NativeBuildFactory {
         continue: () => readOnlyError(),
         selectArchitectHandoff: () => readOnlyError(),
         selectVerifierRuntime: () => readOnlyError(),
+        extendRepairCycles: () => readOnlyError(),
         submitUserGuidance: () => readOnlyError(),
         submitManagedUserGuidance: () => readOnlyError(),
         completeManagedUserGuidanceInterruption: () => readOnlyError(),

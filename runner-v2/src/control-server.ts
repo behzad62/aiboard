@@ -15,6 +15,7 @@ import type {
 import type { BuildControlPlane } from "./build-runtime-registry.js";
 import {
   acceptanceContractAuditProjection,
+  MAX_REPAIR_CYCLE_EXTENSION,
   type ProjectHandoffChoice,
   type SchedulerProjection,
 } from "./scheduler-store.js";
@@ -111,6 +112,11 @@ interface RunBuildBody {
 
 interface ArchitectHandoffBody {
   runtimeId: string;
+  idempotencyKey: string;
+}
+
+interface RepairCyclesBody {
+  additionalRepairPlans: number;
   idempotencyKey: string;
 }
 
@@ -627,6 +633,30 @@ export class ControlServer {
           await this.requireBuilds().selectVerifierRuntime(
             runId,
             body.runtimeId,
+            body.idempotencyKey,
+          ),
+        );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "repair-cycles" &&
+        request.method === "POST"
+      ) {
+        const body = await readJson<RepairCyclesBody>(request);
+        if (
+          !Number.isSafeInteger(body.additionalRepairPlans) ||
+          body.additionalRepairPlans < 1 ||
+          body.additionalRepairPlans > MAX_REPAIR_CYCLE_EXTENSION ||
+          !isNonEmptyString(body.idempotencyKey)
+        ) invalidBody();
+        sendJson(
+          response,
+          200,
+          await this.requireBuilds().extendRepairCycles(
+            runId,
+            body.additionalRepairPlans,
             body.idempotencyKey,
           ),
         );

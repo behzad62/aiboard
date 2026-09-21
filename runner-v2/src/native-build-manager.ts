@@ -471,6 +471,19 @@ export class NativeBuildManager implements BuildControlPlane {
     return projection;
   }
 
+  async extendRepairCycles(
+    runId: string,
+    additionalRepairPlans: number,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.extendRepairCycles(additionalRepairPlans, idempotencyKey)
+    );
+    this.wake(runId);
+    return projection;
+  }
+
   async selectProjectHandoff(
     runId: string,
     choice: ProjectHandoffChoice,
