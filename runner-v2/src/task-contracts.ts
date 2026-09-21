@@ -24,6 +24,25 @@ export type TaskStatus =
 
 export type BuildTaskKind = "implementation" | "verification_repair" | "final_verification";
 
+export type ReplanReason =
+  | "scope_exceeded"
+  | "requirement_conflict"
+  | "architecture_contradiction"
+  | "dependency_missing";
+
+export const REPLAN_REASONS: readonly ReplanReason[] = [
+  "scope_exceeded",
+  "requirement_conflict",
+  "architecture_contradiction",
+  "dependency_missing",
+];
+
+export interface ReplanRequest {
+  reason: ReplanReason;
+  summary: string;
+  proposedChange: string;
+}
+
 export interface VerificationRepairProvenance {
   sourceGenerationId: string;
   finalVerificationTaskId: string;

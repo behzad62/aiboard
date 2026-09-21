@@ -20,6 +20,7 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { readyTaskIds } from "../src/task-graph.js";
 import type { BuildTask } from "../src/task-contracts.js";
 import { commandEvidence } from "./support/evidence-fixtures.js";
+import { emptyProjectionForTest } from "./support/projection-fixtures.js";
 
 test("Finish and Budgeted reject forged plan-only handoff payloads", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-policy-forgery-"));
@@ -1718,9 +1719,8 @@ function reviewProjectionWith(
   task: Partial<BuildTask>,
 ): SchedulerProjection {
   return {
-    runId: "run_gate",
-    status: "running",
-    planRevision: 1,
+    ...emptyProjectionForTest("run_gate"),
+    lastSequence: 8,
     tasks: {
       T1: {
         id: "T1",
@@ -1733,14 +1733,6 @@ function reviewProjectionWith(
         ...task,
       },
     },
-    guidance: {},
-    userGuidance: {},
-    architectQuestions: {},
-    reviews: {},
-    userGuidanceVersion: 0,
-    architectQuestionVersion: 0,
-    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
-    lastSequence: 8,
   };
 }
 

@@ -3,10 +3,13 @@ import { createHash } from "node:crypto";
 
 import {
   isFinalVerificationTask,
+  REPLAN_REASONS,
   type BuildTask,
   type PlanNewTask,
   type PlanReconciliation,
   type PlanTaskUpdate,
+  type ReplanReason,
+  type ReplanRequest,
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import {
@@ -165,6 +168,8 @@ export interface GuidanceProjection {
   challengeEvidenceSequence?: number;
   challengedVersion?: number;
   challengeReason?: string;
+  kind?: "question" | "replan";
+  replan?: ReplanRequest;
 }
 
 export interface CriterionSubmissionProjection {
@@ -583,7 +588,13 @@ export function architectLifecycleEventMatchesReason(
         event.payload.guidanceId === reason.guidanceId &&
         event.payload.expectedVersion === reason.version;
     case "guidance_required":
-      return event.actor.role === "architect" && event.type === "guidance.answered" && event.payload.requestId === reason.requestId;
+      return event.actor.role === "architect" && (
+        (event.type === "guidance.answered" && event.payload.requestId === reason.requestId) ||
+        (event.type === "plan.reconciled" &&
+          Array.isArray(event.payload.taskUpdates) &&
+          event.payload.taskUpdates.some((update) =>
+            isRecord(update) && update.taskId === reason.taskId))
+      );
     case "review_required":
       return event.actor.role === "architect" && event.type === "review.decided" && event.payload.taskId === reason.taskId;
     case "integration_approval_required":
@@ -2261,6 +2272,24 @@ export function reduceSchedulerEvent(
       }
       if (next.guidance[requestId]) throw new Error(`Duplicate guidance ${requestId}.`);
       const blocking = event.payload.blocking === true;
+      const kind = event.payload.kind === undefined ? "question" : event.payload.kind;
+      if (kind !== "question" && kind !== "replan") {
+        throw new Error(`Guidance kind ${String(kind)} is invalid.`);
+      }
+      let replan: ReplanRequest | undefined;
+      if (kind === "replan") {
+        if (!blocking) throw new Error("A replan guidance must be blocking.");
+        if (!isRecord(event.payload.replan)) throw new Error("A replan guidance requires a replan record.");
+        const reason = requiredString(event.payload.replan, "reason");
+        if (!REPLAN_REASONS.includes(reason as ReplanReason)) {
+          throw new Error(`A replan reason ${reason} is invalid.`);
+        }
+        replan = {
+          reason: reason as ReplanReason,
+          summary: requiredString(event.payload.replan, "summary"),
+          proposedChange: requiredString(event.payload.replan, "proposedChange"),
+        };
+      }
       next.guidance[requestId] = {
         requestId,
         taskId,
@@ -2269,6 +2298,8 @@ export function reduceSchedulerEvent(
         evidenceSequence: requiredNumber(event.payload, "evidenceSequence"),
         version: 1,
         status: "open",
+        kind,
+        ...(replan ? { replan } : {}),
       };
       if (blocking) {
         next.tasks[taskId] = applyTaskTransition(task, "waiting_guidance", {
@@ -4360,6 +4391,7 @@ function applyPlanReconciliation(
       task.status !== "planned" &&
       task.status !== "failed" &&
       task.status !== "rejected" &&
+      task.status !== "waiting_guidance" &&
       !steeringCheckpoint
     ) {
       throw new Error(
@@ -4441,6 +4473,22 @@ function applyPlanReconciliation(
         : {}),
     };
     const criteriaChanged = update.acceptanceCriteria !== undefined;
+    if (!steeringCheckpoint && task.status === "waiting_guidance") {
+      candidateTasks[update.taskId] = {
+        ...applyTaskTransition(task, "planned", {
+          ...patch,
+          assignedWorkerId: undefined,
+          changeSetId: undefined,
+          criterionEvidenceLinks: undefined,
+          guidanceRequestId: undefined,
+          failureReason: undefined,
+        }),
+        ...(criteriaChanged
+          ? { acceptanceCriteriaVersion: (task.acceptanceCriteriaVersion ?? 0) + 1 }
+          : {}),
+      };
+      continue;
+    }
     const grantsFreshAttempt =
       task.status === "failed" ||
       task.status === "rejected" ||
@@ -4535,6 +4583,20 @@ function applyPlanReconciliation(
           answer: `Superseded by acknowledged user guidance ${options.supersedingGuidanceId}.`,
         };
       }
+    }
+  }
+  const touchedTaskIds = new Set(reconciliation.taskUpdates.map((update) => update.taskId));
+  for (const guidance of Object.values(projection.guidance)) {
+    if (
+      guidance.kind === "replan" &&
+      guidance.status === "open" &&
+      touchedTaskIds.has(guidance.taskId)
+    ) {
+      projection.guidance[guidance.requestId] = {
+        ...guidance,
+        status: "answered",
+        answer: `plan_reconciled:${reconciliation.revision}`,
+      };
     }
   }
   projection.planRevision = reconciliation.revision;

@@ -758,6 +758,14 @@ export function runnerUserFacingObservability(
       detail: independentVerifier.selection.reason,
     });
   }
+  for (const guidance of projection ? Object.values(projection.guidance) : []) {
+    if (guidance.kind !== "replan" || guidance.status !== "open" || !guidance.replan) continue;
+    problems.push({
+      key: `replan:${guidance.requestId}`,
+      title: "Worker requested a replan",
+      detail: guidance.replan.summary,
+    });
+  }
   if (
     currentVerifierReview?.state === "current" &&
     currentVerifierReview.verdict &&

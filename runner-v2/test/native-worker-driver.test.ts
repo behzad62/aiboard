@@ -10,7 +10,7 @@ import { ProviderTransportError } from "../src/account-runner-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
-import { recoverableWorkerSuspension, workerContinuationMessages, shouldFailoverWorkerFailure, shouldAutoContinueWorker, workerModelAttribution } from "../src/native-worker-driver.js";
+import { recoverableWorkerSuspension, workerContinuationMessages, shouldFailoverWorkerFailure, shouldAutoContinueWorker, workerModelAttribution, guidanceOutcomeFromProjection } from "../src/native-worker-driver.js";
 import { NativeWorkerDriver } from "./support/git-fixture.js";
 import { rankSkillsForTask } from "../src/skill-routing.js";
 import type { SkillMetadata } from "../src/skill-catalog.js";
@@ -31,6 +31,7 @@ import {
   workerSessionId,
 } from "../src/worker-identity.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
+import { emptyProjectionForTest } from "./support/projection-fixtures.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -138,7 +139,27 @@ test("worker lifecycle no-ops preserve the attempt and receive a fresh resume re
   assert.match(String(resumed[1].content), /same durable task attempt/i);
   assert.match(String(resumed[1].content), /submit_task/);
   assert.match(String(resumed[1].content), /ask_architect/);
+  assert.match(String(resumed[1].content), /request_replan/);
   assert.doesNotMatch(String(resumed[1].content), /request_guidance/);
+});
+
+test("guidanceOutcomeFromProjection maps an open replan request to a blocking guidance outcome", () => {
+  const outcome = guidanceOutcomeFromProjection({
+    ...emptyProjectionForTest("run_replan"),
+    guidance: {
+      "replan-1": {
+        requestId: "replan-1", taskId: "T1", blocking: true, question: "Replan requested.",
+        evidenceSequence: 3, version: 1, status: "open", kind: "replan",
+        replan: { reason: "scope_exceeded", summary: "s", proposedChange: "p" },
+      },
+    },
+  }, "replan-1");
+  assert.deepEqual(outcome, {
+    type: "guidance", requestId: "replan-1", blocking: true, question: "Replan requested.", evidenceSequence: 3,
+  });
+  assert.deepEqual(guidanceOutcomeFromProjection(emptyProjectionForTest("run_replan"), "missing"), {
+    type: "failed", reason: "missing_guidance:missing",
+  });
 });
 
 test("native worker fails over with the same session, context, tools, and evidence", async (t) => {

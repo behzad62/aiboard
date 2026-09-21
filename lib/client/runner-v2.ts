@@ -223,6 +223,8 @@ export interface NativeGuidanceProjection {
   challengeEvidenceSequence?: number;
   challengedVersion?: number;
   challengeReason?: string;
+  kind?: "question" | "replan";
+  replan?: { reason: string; summary: string; proposedChange: string };
 }
 
 export interface NativeReviewProjection {

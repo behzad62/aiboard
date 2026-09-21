@@ -37,7 +37,7 @@ import {
   type ProviderHealthRegistry,
 } from "./provider-health.js";
 import type { RuntimeRouter, AgentRuntimeCandidate } from "./runtime-router.js";
-import type { SchedulerStore } from "./scheduler-store.js";
+import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog, SkillDocument, SkillMetadata } from "./skill-catalog.js";
@@ -311,20 +311,16 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         };
       }
       if (result.loop.status === "waiting_for_architect") {
-        const projection = rebuildSchedulerProjection(
-          this.options.schedulerStore.readRun(assignment.runId)
+        return guidanceOutcomeFromProjection(
+          rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+          result.loop.requestId,
         );
-        const guidance = projection.guidance[result.loop.requestId];
-        if (!guidance) {
-          return { type: "failed", reason: `missing_guidance:${result.loop.requestId}` };
-        }
-        return {
-          type: "guidance",
-          requestId: guidance.requestId,
-          blocking: guidance.blocking,
-          question: guidance.question,
-          evidenceSequence: guidance.evidenceSequence,
-        };
+      }
+      if (result.loop.status === "replan_requested") {
+        return guidanceOutcomeFromProjection(
+          rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+          result.loop.requestId,
+        );
       }
       if (
         result.loop.status === "suspended" &&
@@ -567,6 +563,21 @@ export function recoverableWorkerSuspension(
   return undefined;
 }
 
+export function guidanceOutcomeFromProjection(
+  projection: SchedulerProjection,
+  requestId: string,
+): WorkerOutcome {
+  const guidance = projection.guidance[requestId];
+  if (!guidance) return { type: "failed", reason: `missing_guidance:${requestId}` };
+  return {
+    type: "guidance",
+    requestId: guidance.requestId,
+    blocking: guidance.blocking,
+    question: guidance.question,
+    evidenceSequence: guidance.evidenceSequence,
+  };
+}
+
 export function shouldAutoContinueWorker(
   reason: AgentSuspensionReason,
   continuations: number,
@@ -591,7 +602,7 @@ export function workerContinuationMessages(
       content: [
         "Resume the same durable task attempt with its existing workspace, tool results, and evidence.",
         "Do not repeat completed work. Inspect current state only as needed.",
-        "Finish with submit_task when the task is ready; use ask_architect when an Architect decision is genuinely required.",
+        "Finish with submit_task when the task is ready; use ask_architect when an Architect decision is genuinely required; use request_replan when the task cannot be completed within its objective.",
         "Do not submit while your own fresh evidence still shows a known acceptance failure.",
       ].join("\n"),
     },

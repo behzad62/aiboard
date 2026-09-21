@@ -614,6 +614,30 @@ assert.ok(
   ),
 );
 
+const replanView = runnerUserFacingObservability(observability, {
+  ...projectionWithoutHandoff,
+  guidance: {
+    "replan-1": {
+      requestId: "replan-1",
+      taskId: "T1",
+      blocking: true,
+      question: "Replan requested.",
+      evidenceSequence: 1,
+      version: 1,
+      status: "open",
+      kind: "replan",
+      replan: {
+        reason: "scope_exceeded",
+        summary: "The cache key factory lives outside this task.",
+        proposedChange: "Split the task.",
+      },
+    },
+  },
+} as typeof projectionWithoutHandoff);
+assert.ok(
+  replanView.problems.some((problem) => problem.title === "Worker requested a replan"),
+);
+
 const pendingRiskMarkup = renderToStaticMarkup(
   createElement(IndependentVerifierManifest, {
     verifier: {

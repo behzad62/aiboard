@@ -10,6 +10,7 @@ import {
 } from "./scheduler-store.js";
 import type { ChangeSet } from "./change-set.js";
 import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
+import { REPLAN_REASONS, type ReplanReason } from "./task-contracts.js";
 
 export interface WorkerLifecycleToolsOptions {
   store: SchedulerStore;
@@ -31,6 +32,14 @@ interface ChallengeGuidanceInput {
   reason: string;
 }
 
+interface RequestReplanInput {
+  requestId: string;
+  reason: ReplanReason;
+  summary: string;
+  proposedChange: string;
+  evidenceSequence: number;
+}
+
 export function createWorkerLifecycleTools(
   options: WorkerLifecycleToolsOptions
 ): NativeTool<unknown>[] {
@@ -38,6 +47,7 @@ export function createWorkerLifecycleTools(
   return [
     askArchitectTool(options.store, options.taskId, clock),
     challengeGuidanceTool(options.store, options.taskId, clock),
+    requestReplanTool(options.store, options.taskId, clock),
   ];
 }
 
@@ -256,6 +266,75 @@ function askArchitectTool(
       };
     },
   };
+}
+
+function requestReplanTool(
+  store: SchedulerStore,
+  taskId: string,
+  clock: () => string
+): NativeTool<RequestReplanInput> {
+  return {
+    definition: {
+      name: "request_replan",
+      description:
+        "End this attempt because the task cannot be completed within its objective: the scope is exceeded, a requirement conflicts with the repository, an architectural contradiction was found, or a dependency is missing. The Architect reconciles the plan or refuses with evidence; the task stays owned by this workspace.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          requestId: { type: "string", minLength: 1 },
+          reason: { type: "string", enum: [...REPLAN_REASONS] },
+          summary: { type: "string", minLength: 1, maxLength: 4_000 },
+          proposedChange: { type: "string", minLength: 1, maxLength: 4_000 },
+          evidenceSequence: { type: "integer", minimum: 0 },
+        },
+        required: ["requestId", "reason", "summary", "proposedChange", "evidenceSequence"],
+        additionalProperties: false,
+      },
+      readOnly: false,
+      effect: "none",
+      lifecycle: true,
+    },
+    validate: validateReplan,
+    execute: async (input, context) => {
+      const denied = workerOnly(context);
+      if (denied) return denied;
+      const requestId = allocateGuidanceRequestId(store, context.runId, input.requestId);
+      const result = append(store, {
+        runId: context.runId,
+        type: "guidance.requested",
+        occurredAt: clock(),
+        actor: { role: "worker", id: context.actor.id },
+        idempotencyKey: `guidance:${requestId}`,
+        payload: {
+          requestId,
+          taskId,
+          question: `Replan requested (${input.reason}): ${input.summary}\nProposed change: ${input.proposedChange}`,
+          blocking: true,
+          evidenceSequence: input.evidenceSequence,
+          kind: "replan",
+          replan: {
+            reason: input.reason,
+            summary: input.summary,
+            proposedChange: input.proposedChange,
+          },
+        },
+      });
+      if (result.isError) return result;
+      return { ...result, lifecycle: { type: "request_replan", requestId } };
+    },
+  };
+}
+
+function validateReplan(input: unknown): ValidationResult<RequestReplanInput> {
+  if (!isRecord(input)) return invalid("Replan arguments must be an object.");
+  if (
+    !nonEmpty(input.requestId) ||
+    !REPLAN_REASONS.includes(input.reason as ReplanReason) ||
+    !nonEmpty(input.summary) ||
+    !nonEmpty(input.proposedChange) ||
+    !nonNegativeInteger(input.evidenceSequence)
+  ) return invalid("requestId, reason, summary, proposedChange, and evidenceSequence are required.");
+  return { ok: true, value: input as unknown as RequestReplanInput };
 }
 
 function allocateGuidanceRequestId(
