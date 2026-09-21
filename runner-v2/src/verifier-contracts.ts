@@ -210,7 +210,7 @@ export function sameVerifierReview(
   return canonicalJson(left) === canonicalJson(right);
 }
 
-function parseRuntimeBinding(value: unknown): VerifierRuntimeBinding {
+export function parseRuntimeBinding(value: unknown): VerifierRuntimeBinding {
   const runtime = requiredRecord(value, "Verifier runtime binding");
   const binding = {
     runtimeId: requiredString(runtime, "runtimeId"),
@@ -226,7 +226,7 @@ function parseRuntimeBinding(value: unknown): VerifierRuntimeBinding {
   return binding;
 }
 
-function parseExcludedModels(value: unknown): VerifierExcludedModel[] {
+export function parseExcludedModels(value: unknown): VerifierExcludedModel[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error("Verifier request requires excluded model identities.");
   }

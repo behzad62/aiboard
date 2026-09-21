@@ -6,6 +6,10 @@ import {
   cloneRunnerCapabilityContract,
   type RunnerCapabilityContract,
 } from "./runner-capability-contract.js";
+import {
+  PLAN_CRITIQUE_MODES,
+  type PlanCritiqueMode,
+} from "./plan-critique-contracts.js";
 
 export type NativeBuildRunPolicy = "finish" | "budgeted" | "plan_only";
 
@@ -33,6 +37,8 @@ export interface NativeBuildSpec {
   runPolicy: NativeBuildRunPolicy;
   /** Digest-only manifests by default; "full" also stores rendered pack text. */
   contextRecording?: "manifest" | "full";
+  /** Plan-critique policy; omitted means the runtime default of risk_based. */
+  planCritique?: PlanCritiqueMode;
   budgetLimits: BudgetLimits;
   createdAt: string;
   idempotencyKey: string;
@@ -117,6 +123,12 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     spec.contextRecording !== "full"
   ) {
     throw new Error("Build spec contextRecording must be manifest or full.");
+  }
+  if (
+    spec.planCritique !== undefined &&
+    !(PLAN_CRITIQUE_MODES as readonly string[]).includes(spec.planCritique)
+  ) {
+    throw new Error("Build spec planCritique must be risk_based, always, or off.");
   }
   assertBudgetLimits(spec.budgetLimits);
   if (spec.capabilityContract !== undefined) {
@@ -211,6 +223,7 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
       : {}),
     ...(spec.repairPlanLimit !== undefined ? { repairPlanLimit: spec.repairPlanLimit } : {}),
     ...(spec.contextRecording !== undefined ? { contextRecording: spec.contextRecording } : {}),
+    ...(spec.planCritique !== undefined ? { planCritique: spec.planCritique } : {}),
     ...(spec.benchmark
       ? {
           benchmark: {

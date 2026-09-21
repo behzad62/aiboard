@@ -77,6 +77,7 @@ interface PlanTaskInput {
 interface PlanTasksInput {
   revision: number;
   tasks: PlanTaskInput[];
+  riskDeclaration?: { risk: "low" | "high"; rationale: string };
 }
 
 interface ReviseTaskInput {
@@ -1108,6 +1109,10 @@ function planTasksTool(
       properties: {
         revision: { type: "integer", minimum: 1 },
         tasks: { type: "array", items: taskSchema() },
+        riskDeclaration: objectSchema({
+          risk: { enum: ["low", "high"] },
+          rationale: { type: "string", minLength: 1 },
+        }, ["risk", "rationale"]),
       },
       required: ["revision", "tasks"],
       additionalProperties: false,
@@ -1143,7 +1148,11 @@ function planTasksTool(
           occurredAt: clock(),
           actor: { role: "architect", id: context.actor.id },
           idempotencyKey: `plan:${input.revision}`,
-          payload: { revision: input.revision, tasks },
+          payload: {
+            revision: input.revision,
+            tasks,
+            ...(input.riskDeclaration ? { riskDeclaration: input.riskDeclaration } : {}),
+          },
         },
         {
           type: "architect_action",
@@ -1525,7 +1534,19 @@ function validatePlan(input: unknown): ValidationResult<PlanTasksInput> {
         acceptanceCriteria,
       });
     }
-    return { revision: value.revision, tasks };
+    let riskDeclaration: PlanTasksInput["riskDeclaration"];
+    if (value.riskDeclaration !== undefined) {
+      if (!isRecord(value.riskDeclaration)) return null;
+      const risk = value.riskDeclaration.risk;
+      if (risk !== "low" && risk !== "high") return null;
+      if (!nonEmpty(value.riskDeclaration.rationale)) return null;
+      riskDeclaration = { risk, rationale: value.riskDeclaration.rationale };
+    }
+    return {
+      revision: value.revision,
+      tasks,
+      ...(riskDeclaration ? { riskDeclaration } : {}),
+    };
   }, "revision and valid tasks are required");
 }
 

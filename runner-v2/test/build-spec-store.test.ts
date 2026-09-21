@@ -210,6 +210,26 @@ test("contextRecording accepts manifest and full, clones both, and rejects other
   assert.equal(cloneBuildSpec({ ...validSpec, runPolicy: "finish", budgetLimits: {} }).contextRecording, undefined);
 });
 
+test("planCritique accepts risk_based, always, and off, clones each, and rejects other values", () => {
+  const base = { ...validSpec, runPolicy: "finish" as const, budgetLimits: {} };
+  assert.doesNotThrow(() => validateBuildSpec(base));
+  for (const mode of ["risk_based", "always", "off"] as const) {
+    assert.doesNotThrow(() => validateBuildSpec({ ...base, planCritique: mode }));
+    const cloned = cloneBuildSpec({ ...base, planCritique: mode });
+    assert.equal(cloned.planCritique, mode);
+    cloned.planCritique = mode === "off" ? "always" : "off";
+    assert.equal(cloneBuildSpec({ ...base, planCritique: mode }).planCritique, mode);
+  }
+  assert.equal(cloneBuildSpec(base).planCritique, undefined);
+  assert.throws(
+    () => validateBuildSpec({
+      ...base,
+      planCritique: "sometimes" as NativeBuildSpec["planCritique"],
+    }),
+    /planCritique/,
+  );
+});
+
 test("native Build specs recover exactly and idempotently", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-"));
   const database = join(root, "build-specs.sqlite");
