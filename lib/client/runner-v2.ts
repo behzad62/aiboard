@@ -200,6 +200,7 @@ export interface NativeCriterionReviewVerdict {
   rationale: string;
   evidenceIds: string[];
   artifactHashes?: string[];
+  acceptedFailures?: Array<{ evidenceId: string; rationale: string }>;
 }
 
 export interface NativeCriterionSubmissionProjection {
@@ -974,6 +975,13 @@ export function projectNativeAcceptanceContract(
           ...(verdict.artifactHashes
             ? { artifactHashes: [...verdict.artifactHashes] }
             : {}),
+          ...(verdict.acceptedFailures
+            ? {
+                acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                  ...failure,
+                })),
+              }
+            : {}),
         })),
         ...(review ? { reviewStatus: review.status } : {}),
         submissionHistory: (projection.submissionHistory?.[task.id] ?? []).map(
@@ -1041,6 +1049,13 @@ function cloneNativeReviewProjection(
             evidenceIds: [...verdict.evidenceIds],
             ...(verdict.artifactHashes
               ? { artifactHashes: [...verdict.artifactHashes] }
+              : {}),
+            ...(verdict.acceptedFailures
+              ? {
+                  acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                    ...failure,
+                  })),
+                }
               : {}),
           })),
         }

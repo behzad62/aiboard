@@ -8,14 +8,18 @@ import { DatabaseSync } from "node:sqlite";
 import {
   acceptanceContractAuditProjection,
   rebuildSchedulerProjection,
+  validateSchedulerEvidenceEvent,
   type NewSchedulerEvent,
   type SchedulerEvent,
+  type SchedulerProjection,
 } from "../src/scheduler-store.js";
 import type { CriterionEvidenceLink } from "../src/acceptance-contracts.js";
+import type { EvidenceRecord, EvidenceStore } from "../src/evidence-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { readyTaskIds } from "../src/task-graph.js";
 import type { BuildTask } from "../src/task-contracts.js";
+import { commandEvidence } from "./support/evidence-fixtures.js";
 
 test("Finish and Budgeted reject forged plan-only handoff payloads", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-policy-forgery-"));
@@ -1709,3 +1713,98 @@ function rawAcceptanceEvents(
     },
   ];
 }
+
+function reviewProjectionWith(
+  task: Partial<BuildTask>,
+): SchedulerProjection {
+  return {
+    runId: "run_gate",
+    status: "running",
+    planRevision: 1,
+    tasks: {
+      T1: {
+        id: "T1",
+        status: "architect_review",
+        attempt: 1,
+        assignedWorkerId: "worker:T1:1",
+        requiredCapabilities: ["code"],
+        dependencies: [],
+        objective: "Gate",
+        ...task,
+      },
+    },
+    guidance: {},
+    userGuidance: {},
+    architectQuestions: {},
+    reviews: {},
+    userGuidanceVersion: 0,
+    architectQuestionVersion: 0,
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 8,
+  };
+}
+
+function inMemoryEvidenceStore(records: EvidenceRecord[]): EvidenceStore {
+  return {
+    record() {
+      throw new Error("in-memory evidence store is read-only");
+    },
+    list() {
+      return [...records];
+    },
+    getByIds({ ids, taskId }) {
+      return records.filter((record) =>
+        ids.includes(record.id) && (taskId === undefined || record.taskId === taskId)
+      );
+    },
+    close() {},
+  };
+}
+
+test("review.decided rejects a satisfied verdict that cites a failing command without an accepted failure", () => {
+  const evidenceStore = inMemoryEvidenceStore([commandEvidence("red", { exitCode: 1 })]);
+  const projection = reviewProjectionWith({
+    acceptanceCriteria: [{ id: "AC-1", text: "Tests pass." }],
+    criterionEvidenceLinks: [{
+      criterionId: "AC-1", evidenceId: "red", artifactHashes: ["a".repeat(64)], taskId: "T1", attempt: 1,
+    }],
+  });
+  const decided = (criterionVerdicts: unknown): SchedulerEvent => ({
+    eventId: "e1", runId: "run_gate", sequence: 9, type: "review.decided",
+    occurredAt: "2026-09-02T00:00:02.000Z", actor: { role: "architect", id: "architect_1" },
+    idempotencyKey: "review:T1",
+    payload: {
+      taskId: "T1", decision: "approved", summary: "ok",
+      evidenceArtifactHashes: ["a".repeat(64), "b".repeat(64)], criterionVerdicts,
+    },
+  });
+  assert.throws(
+    () => validateSchedulerEvidenceEvent(projection, decided([
+      { criterionId: "AC-1", verdict: "satisfied", rationale: "looks fine", evidenceIds: ["red"] },
+    ]), evidenceStore),
+    /cites failing command evidence red/,
+  );
+  assert.doesNotThrow(() => validateSchedulerEvidenceEvent(projection, decided([{
+    criterionId: "AC-1", verdict: "satisfied", rationale: "RED before fix", evidenceIds: ["red"],
+    acceptedFailures: [{ evidenceId: "red", rationale: "Intentional pre-fix failure." }],
+  }]), evidenceStore));
+});
+
+test("verifier.verdict_submitted rejects a satisfied verdict that cites failing command evidence", () => {
+  const evidenceStore = inMemoryEvidenceStore([commandEvidence("red", { exitCode: 2 })]);
+  const projection = reviewProjectionWith({});
+  assert.throws(
+    () => validateSchedulerEvidenceEvent(projection, {
+      eventId: "e2", runId: "run_gate", sequence: 10, type: "verifier.verdict_submitted",
+      occurredAt: "2026-09-02T00:00:03.000Z", actor: { role: "verifier", id: "google:verifier" },
+      idempotencyKey: "verifier:verdict:r1",
+      payload: {
+        reviewId: "r1", targetRevision: "a".repeat(40), sessionId: "verifier:s1",
+        criterionVerdicts: [{
+          taskId: "T1", criterionId: "AC-1", verdict: "satisfied", rationale: "ok", evidenceIds: ["red"],
+        }],
+      },
+    }, evidenceStore),
+    /Verifier verdict cites failing command evidence red/,
+  );
+});

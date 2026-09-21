@@ -21,9 +21,11 @@ import type {
   PlanTaskUpdate,
 } from "./task-contracts.js";
 import {
+  assertSatisfiedVerdictsCiteGreenEvidence,
   validateAcceptanceCriteria,
   validateCriterionReviewVerdicts,
   type AcceptanceCriterion,
+  type AcceptedEvidenceFailure,
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -1325,6 +1327,18 @@ function reviewTaskTool(
             `Task review has invalid criterion verdicts: ${validation.issues.join(" ")}`
           );
         }
+        try {
+          assertSatisfiedVerdictsCiteGreenEvidence(
+            input.criterionVerdicts,
+            evidenceRecords,
+            "Task review",
+          );
+        } catch (error) {
+          return errorOutput(
+            "failing_evidence_cited",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         if (input.decision === "approved" && validation.unsatisfiedCriterionIds.length > 0) {
           return errorOutput(
             "unsatisfied_criterion",
@@ -1980,6 +1994,13 @@ function criterionReviewVerdictSchema(): Record<string, unknown> {
       minItems: 1,
       items: { type: "string", pattern: "^[a-f0-9]{64}$" },
     },
+    acceptedFailures: {
+      type: "array",
+      items: objectSchema({
+        evidenceId: { type: "string", minLength: 1 },
+        rationale: { type: "string", minLength: 1 },
+      }, ["evidenceId", "rationale"]),
+    },
   }, ["criterionId", "verdict", "rationale", "evidenceIds"]);
 }
 
@@ -1999,12 +2020,17 @@ function parseCriterionReviewVerdicts(value: unknown): CriterionReviewVerdict[] 
       candidate.artifactHashes !== undefined &&
       (!artifactHashes || artifactHashes.length === 0 || artifactHashes.some((hash) => !/^[a-f0-9]{64}$/.test(hash)))
     ) return null;
+    const acceptedFailures = candidate.acceptedFailures === undefined
+      ? undefined
+      : parseAcceptedFailures(candidate.acceptedFailures);
+    if (candidate.acceptedFailures !== undefined && acceptedFailures === null) return null;
     verdicts.push({
       criterionId: candidate.criterionId,
       verdict: candidate.verdict,
       rationale: candidate.rationale,
       evidenceIds,
       ...(artifactHashes ? { artifactHashes } : {}),
+      ...(acceptedFailures ? { acceptedFailures } : {}),
     });
   }
   return verdicts;
@@ -2046,6 +2072,24 @@ function positiveInteger(value: unknown): value is number {
 }
 function stringList(value: unknown): string[] | null {
   return Array.isArray(value) && value.every(nonEmpty) ? [...value] : null;
+}
+
+function parseAcceptedFailures(value: unknown): AcceptedEvidenceFailure[] | null {
+  if (!Array.isArray(value)) return null;
+  const failures: AcceptedEvidenceFailure[] = [];
+  const evidenceIds = new Set<string>();
+  for (const candidate of value) {
+    if (!isRecord(candidate) || !nonEmpty(candidate.evidenceId) || !nonEmpty(candidate.rationale)) {
+      return null;
+    }
+    if (evidenceIds.has(candidate.evidenceId)) return null;
+    evidenceIds.add(candidate.evidenceId);
+    failures.push({
+      evidenceId: candidate.evidenceId,
+      rationale: candidate.rationale,
+    });
+  }
+  return failures;
 }
 
 function shortHash(value: string): string {

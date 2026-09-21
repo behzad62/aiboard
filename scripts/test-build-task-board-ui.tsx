@@ -26,6 +26,10 @@ const markup = renderToStaticMarkup(
             rationale: "The recorded evidence supports the requested behavior.",
             evidenceIds: ["evidence_behavior"],
             artifactHashes: ["a".repeat(64)],
+            acceptedFailures: [{
+              evidenceId: "evidence_behavior",
+              rationale: "RED phase of the TDD cycle before the fix.",
+            }],
           },
         }],
       },
@@ -51,6 +55,7 @@ assert.match(markup, /The feature works for the requested input\./);
 assert.match(markup, /Evidence submitted/);
 assert.match(markup, /Architect verdict: Satisfied/);
 assert.match(markup, /The recorded evidence supports the requested behavior\./);
+assert.match(markup, /Accepted failure evidence_behavior: RED phase of the TDD cycle before the fix\./);
 assert.match(markup, /Evidence is mechanical; Architect verdict is semantic\./);
 
 const evidenceOnlyMarkup = renderToStaticMarkup(

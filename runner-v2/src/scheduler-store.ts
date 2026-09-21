@@ -17,12 +17,14 @@ import {
 } from "./final-verification-contracts.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import {
+  assertSatisfiedVerdictsCiteGreenEvidence,
   validateCriterionEvidenceLinks,
   validateCriterionReviewVerdicts,
   validateAcceptanceCriteria,
   type AcceptanceCriterion,
   type CriterionEvidenceLink,
   type CriterionReviewVerdict,
+  type GreenEvidenceVerdict,
 } from "./acceptance-contracts.js";
 import {
   evidenceFactArtifactHashes,
@@ -1073,6 +1075,11 @@ export function validateSchedulerEvidenceEvent(
     if (records.length !== uniqueEvidenceIds.length) {
       throw new Error("Verifier verdict cites missing or foreign evidence.");
     }
+    assertSatisfiedVerdictsCiteGreenEvidence(
+      event.payload.criterionVerdicts as GreenEvidenceVerdict[],
+      records,
+      "Verifier verdict",
+    );
     return;
   }
   if (event.type === "verifier.repairs_planned") {
@@ -1194,6 +1201,7 @@ export function validateSchedulerEvidenceEvent(
     records,
     "Review decision",
   );
+  assertSatisfiedVerdictsCiteGreenEvidence(verdicts, records, "Review decision");
 }
 
 function validateFinalVerificationCheckEvidence(
@@ -1425,6 +1433,13 @@ export function acceptanceContractAuditProjection(
             evidenceIds: [...verdict.evidenceIds],
             ...(verdict.artifactHashes
               ? { artifactHashes: [...verdict.artifactHashes] }
+              : {}),
+            ...(verdict.acceptedFailures
+              ? {
+                  acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                    ...failure,
+                  })),
+                }
               : {}),
           })),
           ...(review ? { reviewStatus: review.status } : {}),
@@ -2433,6 +2448,13 @@ export function reduceSchedulerEvent(
           evidenceIds: [...verdict.evidenceIds],
           ...(verdict.artifactHashes
             ? { artifactHashes: [...verdict.artifactHashes] }
+            : {}),
+          ...(verdict.acceptedFailures
+            ? {
+                acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                  ...failure,
+                })),
+              }
             : {}),
         }));
       }
@@ -4905,6 +4927,13 @@ function cloneCriterionReviewVerdicts(
     evidenceIds: [...verdict.evidenceIds],
     ...(verdict.artifactHashes
       ? { artifactHashes: [...verdict.artifactHashes] }
+      : {}),
+    ...(verdict.acceptedFailures
+      ? {
+          acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+            ...failure,
+          })),
+        }
       : {}),
   }));
 }

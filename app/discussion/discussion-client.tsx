@@ -1122,6 +1122,13 @@ function DiscussionPageInner() {
                         ...(verdict.artifactHashes
                           ? { artifactHashes: [...verdict.artifactHashes] }
                           : {}),
+                        ...(verdict.acceptedFailures
+                          ? {
+                              acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                                ...failure,
+                              })),
+                            }
+                          : {}),
                       },
                     }
                   : {}),

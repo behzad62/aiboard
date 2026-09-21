@@ -1,3 +1,4 @@
+import type { AcceptedEvidenceFailure } from "./acceptance-contracts.js";
 import type { BuildTask } from "./task-contracts.js";
 import { isFinalVerificationTask } from "./task-contracts.js";
 
@@ -24,6 +25,7 @@ export interface VerifierCriterionVerdict extends VerifierCriterionReference {
   verdict: "satisfied" | "unsatisfied";
   rationale: string;
   evidenceIds: string[];
+  acceptedFailures?: AcceptedEvidenceFailure[];
 }
 
 export interface VerifierVerdictProjection {
@@ -287,12 +289,14 @@ function parseCriterionVerdict(
       `Verifier criterion verdict ${index} requires unique durable evidence IDs.`,
     );
   }
+  const acceptedFailures = parseAcceptedFailures(record.acceptedFailures, index);
   return {
     taskId: requiredString(record, "taskId"),
     criterionId: requiredString(record, "criterionId"),
     verdict,
     rationale: requiredString(record, "rationale").trim(),
     evidenceIds: [...evidenceIds],
+    ...(acceptedFailures ? { acceptedFailures } : {}),
   };
 }
 
@@ -320,7 +324,43 @@ export function assertExactVerifierCriteria(
 function cloneCriterionVerdict(
   verdict: VerifierCriterionVerdict,
 ): VerifierCriterionVerdict {
-  return { ...verdict, evidenceIds: [...verdict.evidenceIds] };
+  return {
+    ...verdict,
+    evidenceIds: [...verdict.evidenceIds],
+    ...(verdict.acceptedFailures
+      ? {
+          acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+            ...failure,
+          })),
+        }
+      : {}),
+  };
+}
+
+function parseAcceptedFailures(
+  value: unknown,
+  index: number,
+): AcceptedEvidenceFailure[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`Verifier criterion verdict ${index} acceptedFailures is invalid.`);
+  }
+  const failures: AcceptedEvidenceFailure[] = [];
+  const evidenceIds = new Set<string>();
+  for (const candidate of value) {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      throw new Error(`Verifier criterion verdict ${index} acceptedFailures is invalid.`);
+    }
+    const record = candidate as Record<string, unknown>;
+    const evidenceId = typeof record.evidenceId === "string" ? record.evidenceId.trim() : "";
+    const rationale = typeof record.rationale === "string" ? record.rationale.trim() : "";
+    if (!evidenceId || !rationale || evidenceIds.has(evidenceId)) {
+      throw new Error(`Verifier criterion verdict ${index} acceptedFailures is invalid.`);
+    }
+    evidenceIds.add(evidenceId);
+    failures.push({ evidenceId, rationale });
+  }
+  return failures;
 }
 
 function compareCriterionReferences(

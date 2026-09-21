@@ -54,6 +54,18 @@ export function createSubmitVerifierVerdictTool(
                   uniqueItems: true,
                   items: { type: "string", minLength: 1 },
                 },
+                acceptedFailures: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      evidenceId: { type: "string", minLength: 1 },
+                      rationale: { type: "string", minLength: 1 },
+                    },
+                    required: ["evidenceId", "rationale"],
+                    additionalProperties: false,
+                  },
+                },
               },
               required: [
                 "taskId",
