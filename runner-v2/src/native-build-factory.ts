@@ -151,6 +151,7 @@ import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
 import { rebuildProjectMemories } from "./project-memory.js";
 import { SqliteSchedulerStore } from "./sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
+import { SqliteContextManifestStore } from "./sqlite-context-manifest-store.js";
 import type { ToolLedgerEvent } from "./tool-ledger.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.js";
@@ -574,7 +575,11 @@ export class NativeBuildFactory {
     await this.options.runtimeConstructionHooks?.afterAcquire?.("session_store");
     initializationStage = "tool_ledger";
     const ledger = new SqliteToolLedger(join(runRoot, "tool-ledger.sqlite"));
-    constructionResources.add("tool_ledger", () => ledger.close(), true);
+    const contextManifests = new SqliteContextManifestStore(join(runRoot, "context-manifests.sqlite"));
+    constructionResources.add("tool_ledger", () => {
+      contextManifests.close();
+      ledger.close();
+    }, true);
     await this.options.runtimeConstructionHooks?.afterAcquire?.("tool_ledger");
     initializationStage = "budget_ledger";
     const budgetLedger = new SqliteBudgetLedger(join(runRoot, "budget.sqlite"), {
@@ -845,6 +850,8 @@ export class NativeBuildFactory {
       managedProcesses,
       execution: commandExecution,
       executionGrants,
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -889,6 +896,8 @@ export class NativeBuildFactory {
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       browserBackend: this.browserBackend,
       ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
     });
     const nativeVerifier = new NativeVerifierRuntime({
       git: gitContext,
@@ -910,6 +919,8 @@ export class NativeBuildFactory {
       modelCostEstimators,
       modelCostBases,
       verdictAuthority: new SchedulerVerifierVerdictAuthority(schedulerStore),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
     });
     const independentVerifier: IndependentVerifierDriver = {
       candidateRuntimeIds: [...spec.verifierRuntimeIds],
@@ -1235,8 +1246,10 @@ export class NativeBuildFactory {
           ),
           independentVerifier:
             projectIndependentVerifierObservability(schedulerProjection),
+          contextManifestCount: contextManifests.listRun(spec.runId).length,
         };
       },
+      contextManifests: () => contextManifests.listRun(spec.runId),
       transcript: async (afterSequence = 0) =>
         await sessions.transcript(spec.runId, afterSequence),
       files: async () => {
@@ -1370,6 +1383,7 @@ export class NativeBuildFactory {
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
     let evidenceStore: SqliteEvidenceStore | undefined;
     let ledger: SqliteToolLedger | undefined;
+    let contextManifestStore: SqliteContextManifestStore | undefined;
     let sessions: SqliteAgentSessionStore | undefined;
     let budgetLedger: SqliteBudgetLedger | undefined;
     let schedulerStore: SqliteSchedulerStore | undefined;
@@ -1387,6 +1401,7 @@ export class NativeBuildFactory {
         schedulerStore,
         budgetLedger,
         sessions,
+        contextManifestStore,
         ledger,
         evidenceStore,
       ];
@@ -1414,6 +1429,7 @@ export class NativeBuildFactory {
     try {
       const evidencePath = join(runRoot, "evidence.sqlite");
       const ledgerPath = join(runRoot, "tools.sqlite");
+      const contextManifestPath = join(runRoot, "context-manifests.sqlite");
       const sessionsPath = join(runRoot, "sessions.sqlite");
       const budgetPath = join(runRoot, "budget.sqlite");
       const schedulerPath = join(runRoot, "scheduler.sqlite");
@@ -1431,6 +1447,12 @@ export class NativeBuildFactory {
       }
       if (hasHistoricalStore(ledgerPath)) {
         ledger = new SqliteToolLedger(await snapshotStorePath(ledgerPath), { readOnly: true });
+      }
+      if (hasHistoricalStore(contextManifestPath)) {
+        contextManifestStore = new SqliteContextManifestStore(
+          await snapshotStorePath(contextManifestPath),
+          { readOnly: true },
+        );
       }
       if (hasHistoricalStore(sessionsPath)) {
         sessions = new SqliteAgentSessionStore(
@@ -1712,8 +1734,10 @@ export class NativeBuildFactory {
             ),
             independentVerifier:
               projectIndependentVerifierObservability(schedulerProjection),
+            contextManifestCount: contextManifestStore?.listRun(spec.runId).length ?? 0,
           };
         },
+        contextManifests: () => contextManifestStore?.listRun(spec.runId) ?? [],
         transcript: async (afterSequence = 0) => {
           const provenance = await transcriptProvenance();
           const page = provenance === "unavailable"

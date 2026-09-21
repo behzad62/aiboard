@@ -161,6 +161,7 @@ assert.deepEqual(acceptance.tasks, [{
 const observability = {
   runId: "run_1",
   toolCallCount: 1,
+  contextManifestCount: 2,
   budget: {
     scopeId: "run_1",
     reservations: {},
@@ -295,6 +296,7 @@ assert.deepEqual(summary, {
   runningProcesses: 0,
   providers: 1,
   events: 1,
+  contextManifests: 2,
 });
 
 const view = runnerUserFacingObservability(observability, projection);

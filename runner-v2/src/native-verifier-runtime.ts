@@ -23,6 +23,7 @@ import type {
 import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
 import { BudgetedToolRuntime } from "./budgeted-tool-runtime.js";
 import type { ContextLimits } from "./context-assembler.js";
+import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import {
   assertAcceptanceCriteria,
   type AcceptanceCriterion,
@@ -176,6 +177,8 @@ export interface NativeVerifierRuntimeOptions {
   modelCostBases?: ReadonlyMap<string, ModelCostBasisSnapshot>;
   providerRetryRuntime?: RunnerProviderRetryRuntime;
   verdictAuthority?: VerifierVerdictAuthority;
+  contextManifests?: ContextManifestStore;
+  recordContextPackText?: boolean;
   maxTurns?: number;
   clock?: () => string;
 }
@@ -285,6 +288,20 @@ export class NativeVerifierRuntime {
       context.digest,
       this.options.verdictAuthority ? "verdict" : "inspection",
     );
+    await recordContextPack({
+      store: this.options.contextManifests,
+      artifacts: this.options.artifacts,
+      recordPackText: this.options.recordContextPackText,
+      runId: request.runId,
+      sessionId,
+      actor: { role: "verifier", id: candidate.runtimeId },
+      role: "verifier",
+      purpose: this.options.verdictAuthority ? "verifier:verdict" : "verifier:inspection",
+      repositoryRevision: request.targetRevision,
+      limits: this.options.contextLimits ?? { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 },
+      pack: context,
+      recordedAt: this.clock(),
+    });
     const excludedModels = this.options.verdictAuthority
       ? verifierExcludedModels(
           this.candidateById,

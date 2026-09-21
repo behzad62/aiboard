@@ -19,6 +19,7 @@ import {
 } from "../src/runtime-router.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
+import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import type {
   VerifierReviewProjection,
@@ -448,6 +449,84 @@ test("restart after a durable model response executes its pending verdict withou
   }
 });
 
+test("every verifier inspection records one context manifest bound to the exact revision", async () => {
+  const fixture = createFixture("manifest", [{
+    blocks: [{ type: "text", text: "Inspection complete." }],
+    stopReason: "end_turn",
+  }]);
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_manifest"));
+    assert.equal(result.status, "inspected");
+    const manifests = fixture.contextManifests.listRun("run_manifest");
+    assert.equal(manifests.length, 1);
+    const manifest = manifests[0]!;
+    assert.equal(manifest.role, "verifier");
+    assert.equal(manifest.purpose, "verifier:inspection");
+    assert.equal(manifest.sessionId, result.sessionId);
+    assert.equal(manifest.repositoryRevision, TARGET_REVISION);
+    assert.equal(manifest.sections.some((section) => section.id === "build-criteria"), true);
+    assert.equal(manifest.packArtifactHash, undefined);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("every verifier verdict records one context manifest with verdict purpose", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("manifest-verdict", [{
+    blocks: [{
+      type: "tool_call",
+      callId: "verdict-1",
+      name: "submit_verifier_verdict",
+      arguments: {
+        criterionVerdicts: [{
+          taskId: "task_ui",
+          criterionId: "criterion_ui",
+          verdict: "satisfied",
+          rationale: "The exact revision satisfies the UI criterion.",
+          evidenceIds: ["evidence_ui"],
+        }],
+      },
+    }],
+    stopReason: "tool_calls",
+  }], TARGET_REVISION, authority);
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_manifest_verdict"));
+    assert.equal(result.status, "verdict_submitted");
+    const manifests = fixture.contextManifests.listRun("run_manifest_verdict");
+    assert.equal(manifests.length, 1);
+    assert.equal(manifests[0]?.role, "verifier");
+    assert.equal(manifests[0]?.purpose, "verifier:verdict");
+    assert.equal(manifests[0]?.sessionId, result.sessionId);
+    assert.equal(manifests[0]?.repositoryRevision, TARGET_REVISION);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("full context recording stores pack text as a content-addressed artifact", async () => {
+  const fixture = createFixture("manifest-full", [{
+    blocks: [{ type: "text", text: "Inspection complete." }],
+    stopReason: "end_turn",
+  }], TARGET_REVISION, undefined, false, false, true);
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_manifest_full"));
+    assert.equal(result.status, "inspected");
+    const manifests = fixture.contextManifests.listRun("run_manifest_full");
+    assert.equal(manifests.length, 1);
+    const hash = manifests[0]?.packArtifactHash;
+    assert.match(hash ?? "", /^[a-f0-9]{64}$/);
+    const bytes = await fixture.artifacts.get(hash!);
+    const sent = fixture.model.requests[0]!.messages
+      .filter((message) => message.role === "user")
+      .map((message) => typeof message.content === "string" ? message.content : "")
+      .join("");
+    assert.equal(bytes.toString("utf8"), sent);
+  } finally {
+    fixture.close();
+  }
+});
+
 function createFixture(
   name: string,
   turns: ModelTurn[],
@@ -455,6 +534,7 @@ function createFixture(
   verdictAuthority?: VerifierVerdictAuthority,
   interruptAfterAssistantCheckpoint = false,
   withBudget = false,
+  recordContextPackText = false,
 ) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-native-verifier-${name}-`));
   const workspacePath = join(root, "workspace");
@@ -464,6 +544,7 @@ function createFixture(
     ? new InterruptingSessionStore(join(root, "sessions.sqlite"), artifacts)
     : new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
   const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const contextManifests = new SqliteContextManifestStore(join(root, "context-manifests.sqlite"));
   const budgetLedger = withBudget
     ? new SqliteBudgetLedger(join(root, "budget.sqlite"), {
         limitsFor: () => ({ maxModelCalls: 10, maxToolCalls: 10 }),
@@ -496,6 +577,8 @@ function createFixture(
     sessions,
     model,
     budgetLedger,
+    contextManifests,
+    artifacts,
     workspaceRequests,
     runtime: new NativeVerifierRuntime({
       router,
@@ -509,12 +592,15 @@ function createFixture(
       artifacts,
       evidenceStore,
       workspaceManager,
+      contextManifests,
+      recordContextPackText,
       ...(budgetLedger ? { budgetLedger } : {}),
       ...(verdictAuthority ? { verdictAuthority } : {}),
       clock: () => "2026-08-27T00:00:00.000Z",
     }),
     close: () => {
       budgetLedger?.close();
+      contextManifests.close();
       sessions.close();
       evidenceStore.close();
       rmSync(root, { recursive: true, force: true });

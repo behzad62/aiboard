@@ -306,6 +306,8 @@ export interface BuildObservabilitySnapshot {
   executionSafety?: BuildExecutionSafetyObservability;
   finalVerification?: FinalVerificationObservability;
   independentVerifier?: IndependentVerifierObservability;
+  /** Count of recorded context manifests for this run. */
+  contextManifestCount: number;
   /** Terminal-reader provenance so absent legacy stores are never shown as live empty state. */
   historical?: {
     terminalState: "completed" | "failed" | "stopped";

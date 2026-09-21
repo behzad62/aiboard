@@ -24,6 +24,7 @@ import { SkillCatalog } from "../src/skill-catalog.js";
 import type { SkillMetadata } from "../src/skill-catalog.js";
 import { rankSkillsForTask } from "../src/skill-routing.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
+import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -1076,6 +1077,126 @@ test("resumed Architect action receives a fresh mechanical reminder", async () =
     assert.ok(reminder, "resume must add a fresh current-action reminder");
     assert.equal(runtime.projection().planRevision, 1);
   } finally {
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("every Architect action records one context manifest for the reason, including taskId when present", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-architect-manifest-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  const contextManifests = new SqliteContextManifestStore(join(state, "context-manifests.sqlite"));
+  const objective = "Build the requested application.";
+  try {
+    scheduler.append({
+      runId: "run_manifest",
+      type: "run.initialized",
+      occurredAt: "2026-08-27T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "init",
+      payload: { objective },
+    });
+    scheduler.append({
+      runId: "run_manifest",
+      type: "plan.created",
+      occurredAt: "2026-08-27T00:00:01.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "plan",
+      payload: { revision: 1, tasks: [{
+        id: "task-a",
+        objective: "Implement A",
+        dependencies: [],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "A is implemented." }],
+        acceptanceCriteriaVersion: 1,
+        status: "planned",
+        attempt: 0,
+      }] },
+    });
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "test:architect",
+      providerId: "test",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const architect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([
+        { blocks: [], stopReason: "cancelled" },
+        { blocks: [], stopReason: "cancelled" },
+      ])]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-manifest",
+      projectRoot: project,
+      objective,
+      contextManifests,
+      clock: () => "2026-08-27T00:00:00.000Z",
+    });
+    const projection = rebuildSchedulerProjection(scheduler.readRun("run_manifest"));
+    await architect.run({
+      runId: "run_manifest",
+      reason: { type: "plan_required" },
+      projection,
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run_manifest",
+        sessionId: "architect:run_manifest",
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const planned = contextManifests.listRun("run_manifest");
+    assert.equal(planned.length, 1);
+    assert.equal(planned[0]?.role, "architect");
+    assert.equal(planned[0]?.purpose, "architect:plan_required");
+    assert.equal(planned[0]?.sessionId, "architect:run_manifest");
+    assert.equal(planned[0]?.taskId, undefined);
+    assert.equal(planned[0]?.packArtifactHash, undefined);
+
+    await architect.run({
+      runId: "run_manifest",
+      reason: {
+        type: "task_failure_resolution_required",
+        taskId: "task-a",
+        attempt: 1,
+        failureReason: "tests failed",
+      },
+      projection: rebuildSchedulerProjection(scheduler.readRun("run_manifest")),
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run_manifest",
+        sessionId: "architect:run_manifest",
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const listed = contextManifests.listRun("run_manifest");
+    assert.equal(listed.length, 2);
+    const failed = listed.find((manifest) => manifest.purpose === "architect:task_failure_resolution_required");
+    assert.equal(failed?.role, "architect");
+    assert.equal(failed?.taskId, "task-a");
+    assert.equal(failed?.sessionId, "architect:run_manifest");
+  } finally {
+    contextManifests.close();
     sessions.close();
     scheduler.close();
     evidence.close();

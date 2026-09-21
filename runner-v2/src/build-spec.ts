@@ -31,6 +31,8 @@ export interface NativeBuildSpec {
   maxConcurrency: number;
   permissionProfile: PermissionProfile;
   runPolicy: NativeBuildRunPolicy;
+  /** Digest-only manifests by default; "full" also stores rendered pack text. */
+  contextRecording?: "manifest" | "full";
   budgetLimits: BudgetLimits;
   createdAt: string;
   idempotencyKey: string;
@@ -108,6 +110,13 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
   }
   if (!(["finish", "budgeted", "plan_only"] as unknown[]).includes(spec.runPolicy)) {
     throw new Error("Build spec run policy is invalid.");
+  }
+  if (
+    spec.contextRecording !== undefined &&
+    spec.contextRecording !== "manifest" &&
+    spec.contextRecording !== "full"
+  ) {
+    throw new Error("Build spec contextRecording must be manifest or full.");
   }
   assertBudgetLimits(spec.budgetLimits);
   if (spec.capabilityContract !== undefined) {
@@ -201,6 +210,7 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
       ? { capabilityContract: cloneRunnerCapabilityContract(spec.capabilityContract) }
       : {}),
     ...(spec.repairPlanLimit !== undefined ? { repairPlanLimit: spec.repairPlanLimit } : {}),
+    ...(spec.contextRecording !== undefined ? { contextRecording: spec.contextRecording } : {}),
     ...(spec.benchmark
       ? {
           benchmark: {

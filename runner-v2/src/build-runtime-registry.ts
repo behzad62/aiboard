@@ -16,6 +16,7 @@ export interface BuildControlPlane {
   projection(runId: string): SchedulerProjection;
   usage(runId: string): NativeBuildUsageProjection;
   observability(runId: string): Promise<BuildObservabilitySnapshot>;
+  contextManifests?(runId: string): import("./context-manifest-store.js").ContextManifest[];
   transcript(runId: string, afterSequence?: number): Promise<BuildTranscriptPage>;
   files(runId: string): Promise<IntegrationFileSnapshot>;
   events(runId: string, afterSequence?: number): SchedulerEvent[];
@@ -111,6 +112,7 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
       providers: [],
       events: [],
       git: { integrationBranch: "", integrationRevision: "", commits: [] },
+      contextManifestCount: 0,
     };
   }
 

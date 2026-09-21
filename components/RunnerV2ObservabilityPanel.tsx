@@ -51,6 +51,7 @@ export function runnerObservabilitySummary(snapshot: NativeBuildObservability) {
     runningProcesses: snapshot.processes.filter((process) => process.status === "running").length,
     providers: snapshot.providers.length,
     events: snapshot.events.length,
+    contextManifests: snapshot.contextManifestCount ?? 0,
   };
 }
 
@@ -1324,6 +1325,9 @@ export function RunnerV2ObservabilityPanel({
         <Stat label="Agents" value={String(summary.agents)} />
         <Stat label="Evidence" value={String(summary.evidence)} />
         <Stat label="Active processes" value={String(summary.runningProcesses)} />
+      </div>
+      <div className="border-t px-4 py-2 text-xs text-muted-foreground">
+        Context manifests: {summary.contextManifests}
       </div>
 
       <div className="border-t px-4 py-3">

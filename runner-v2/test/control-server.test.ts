@@ -756,6 +756,7 @@ test("terminal historical Build reads expose durable provenance through every GE
         events: [],
         git: { integrationBranch: "", integrationRevision: "", commits: [] },
         historical,
+        contextManifestCount: 0,
       };
     },
     transcript: async (requestedRunId: string, afterSequence = 0) => {
@@ -948,6 +949,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
       providers: [],
       events: [],
       git: { integrationBranch: "", integrationRevision: "", commits: [] },
+      contextManifestCount: 0,
       finalVerification: {
         canonicalRevision: "revision_final",
         history: [],
@@ -958,6 +960,26 @@ test("native Build projections and pump controls are runner-owned API routes", a
         },
       },
     }),
+    contextManifests: (requestedRunId: string) => {
+      if (requestedRunId !== "run_1") throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return [{
+        manifestId: "manifest-worker-1",
+        runId: "run_1",
+        sessionId: "worker:run_1:task_a:1",
+        actor: { role: "worker" as const, id: "worker_task_a_1" },
+        role: "worker" as const,
+        purpose: "worker:task",
+        taskId: "task_a",
+        attempt: 1,
+        limits: { maxBytes: 1024, maxEstimatedTokens: 256 },
+        packDigest: "d".repeat(64),
+        byteLength: 12,
+        estimatedTokens: 3,
+        sections: [],
+        omissions: [],
+        recordedAt: "2026-07-12T00:00:00.000Z",
+      }];
+    },
     step: async () => {
       steps += 1;
       return { status: "progressed", action: "workers_advanced" };
@@ -1124,6 +1146,8 @@ test("native Build projections and pump controls are runner-owned API routes", a
     assert.equal((audit.usage as { effective: { modelCalls: number } }).effective.modelCalls, 9);
     assert.equal((audit.usage as { models: unknown[] }).models.length, 1);
     assert.equal((audit.observability as { toolCallCount: number }).toolCallCount, 1);
+    assert.equal((audit.contextManifests as Array<{ manifestId: string }>).length, 1);
+    assert.equal((audit.contextManifests as Array<{ manifestId: string }>)[0]?.manifestId, "manifest-worker-1");
     assert.equal((audit.observability as { finalVerification: { current: { targetRevision: string } } }).finalVerification.current.targetRevision, "revision_final");
     assert.deepEqual(audit.acceptanceContract, {
       status: "current",
@@ -1686,6 +1710,7 @@ test("repair-cycle extension is a user POST that rejects a zero additional budge
       },
       agents: [], tools: [], evidence: [], memories: [], skills: [], processes: [],
       providers: [], events: [], git: { integrationBranch: "", integrationRevision: "", commits: [] },
+      contextManifestCount: 0,
     }),
     step: async () => ({ status: "idle" as const }),
     runUntilBlocked: async () => ({ status: "idle" as const }),

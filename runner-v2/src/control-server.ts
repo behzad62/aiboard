@@ -542,6 +542,7 @@ export class ControlServer {
           acceptanceContract: acceptanceContractAuditProjection(build),
           usage,
           observability,
+          contextManifests: builds.contextManifests?.(runId) ?? [],
           runEvents: this.supervisor.events(runId),
           buildEvents: builds.events(runId),
         });

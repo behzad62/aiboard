@@ -926,6 +926,47 @@ export interface NativeBuildObservability {
   executionSafety?: NativeBuildExecutionSafetyObservability;
   finalVerification?: NativeFinalVerificationObservability;
   independentVerifier?: NativeIndependentVerifierObservability;
+  contextManifestCount?: number;
+}
+
+export interface NativeContextManifestSection {
+  id: string;
+  kind: string;
+  required: boolean;
+  priority: number;
+  byteLength: number;
+  digest: string;
+  sourceDigest?: string;
+  artifactHash?: string;
+}
+
+export interface NativeContextManifestOmission {
+  id: string;
+  kind: string;
+  reason: "byte_budget" | "token_budget";
+  byteLength: number;
+  digest: string;
+  artifactHash?: string;
+}
+
+export interface NativeContextManifest {
+  manifestId: string;
+  runId: string;
+  sessionId: string;
+  actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string };
+  role: "architect" | "worker" | "subagent" | "verifier";
+  purpose: string;
+  taskId?: string;
+  attempt?: number;
+  repositoryRevision?: string;
+  limits: { maxBytes: number; maxEstimatedTokens: number };
+  packDigest: string;
+  byteLength: number;
+  estimatedTokens: number;
+  sections: NativeContextManifestSection[];
+  omissions: NativeContextManifestOmission[];
+  packArtifactHash?: string;
+  recordedAt: string;
 }
 
 export interface NativeBuildAuditExport {
@@ -935,6 +976,7 @@ export interface NativeBuildAuditExport {
   acceptanceContract: NativeAcceptanceContractProjection;
   usage: NativeBuildUsageProjection;
   observability: NativeBuildObservability;
+  contextManifests: NativeContextManifest[];
   runEvents: Array<Record<string, unknown>>;
   buildEvents: NativeBuildEvent[];
 }

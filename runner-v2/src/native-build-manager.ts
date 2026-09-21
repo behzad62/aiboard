@@ -31,6 +31,8 @@ export interface NativeBuildRuntimeHandle {
   historical?: true;
   usage(): NativeBuildUsageProjection;
   observability(): Promise<BuildObservabilitySnapshot>;
+  /** Recorded context packs shown to models; empty when the handle has no store. */
+  contextManifests?(): import("./context-manifest-store.js").ContextManifest[];
   transcript(afterSequence?: number): Promise<BuildTranscriptPage>;
   files(): Promise<IntegrationFileSnapshot>;
   compact(): void | Promise<void>;
@@ -287,6 +289,10 @@ export class NativeBuildManager implements BuildControlPlane {
 
   async observability(runId: string): Promise<BuildObservabilitySnapshot> {
     return await this.require(runId).observability();
+  }
+
+  contextManifests(runId: string): import("./context-manifest-store.js").ContextManifest[] {
+    return this.require(runId).contextManifests?.() ?? [];
   }
 
   async transcript(runId: string, afterSequence = 0): Promise<BuildTranscriptPage> {

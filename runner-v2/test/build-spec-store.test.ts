@@ -176,6 +176,40 @@ test("native Build specs validate and clone benchmark command policy", () => {
   assert.deepEqual(benchmarkSpec.verifierRuntimeIds, ["anthropic:claude-sonnet-4.5"]);
 });
 
+test("contextRecording accepts manifest and full, clones both, and rejects other values", () => {
+  assert.doesNotThrow(() => validateBuildSpec(validSpec));
+  assert.doesNotThrow(() =>
+    validateBuildSpec({ ...validSpec, contextRecording: "manifest", runPolicy: "finish", budgetLimits: {} })
+  );
+  assert.doesNotThrow(() =>
+    validateBuildSpec({ ...validSpec, contextRecording: "full", runPolicy: "finish", budgetLimits: {} })
+  );
+  assert.throws(
+    () => validateBuildSpec({
+      ...validSpec,
+      contextRecording: "digest" as NativeBuildSpec["contextRecording"],
+      runPolicy: "finish",
+      budgetLimits: {},
+    }),
+    /contextRecording/,
+  );
+  const clonedManifest = cloneBuildSpec({
+    ...validSpec,
+    runPolicy: "finish",
+    budgetLimits: {},
+    contextRecording: "manifest",
+  });
+  const clonedFull = cloneBuildSpec({
+    ...validSpec,
+    runPolicy: "finish",
+    budgetLimits: {},
+    contextRecording: "full",
+  });
+  assert.equal(clonedManifest.contextRecording, "manifest");
+  assert.equal(clonedFull.contextRecording, "full");
+  assert.equal(cloneBuildSpec({ ...validSpec, runPolicy: "finish", budgetLimits: {} }).contextRecording, undefined);
+});
+
 test("native Build specs recover exactly and idempotently", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-"));
   const database = join(root, "build-specs.sqlite");

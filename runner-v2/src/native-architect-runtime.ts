@@ -37,6 +37,7 @@ import type {
   ArchitectRuntimeDriver,
 } from "./build-runtime.js";
 import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import type { CapabilityRegistry } from "./capability-registry.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import { createEvidenceTools } from "./evidence-tools.js";
@@ -116,9 +117,15 @@ export interface NativeArchitectRuntimeOptions {
   capabilityRegistry?: CapabilityRegistry;
   language?: LanguageIntelligenceProvider;
   providerRetryRuntime?: RunnerProviderRetryRuntime;
+  contextManifests?: ContextManifestStore;
+  recordContextPackText?: boolean;
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
+  private static readonly DEFAULT_CONTEXT_LIMITS: ContextLimits = {
+    maxBytes: 512 * 1024,
+    maxEstimatedTokens: 128 * 1024,
+  };
   private readonly clock: () => string;
   private readonly candidateById: Map<string, AgentRuntimeCandidate>;
 
@@ -127,6 +134,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     this.candidateById = new Map(
       options.candidates.map((candidate) => [candidate.runtimeId, candidate])
     );
+  }
+
+  private get contextLimits(): ContextLimits {
+    return this.options.contextLimits ?? NativeArchitectRuntime.DEFAULT_CONTEXT_LIMITS;
   }
 
   async run(request: ArchitectActionRequest): Promise<void> {
@@ -161,6 +172,21 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     }
     const context = await this.context(request, projection);
     const sessionId = `architect:${request.runId}`;
+    await recordContextPack({
+      store: this.options.contextManifests,
+      artifacts: this.options.artifacts,
+      recordPackText: this.options.recordContextPackText,
+      runId: request.runId,
+      sessionId,
+      actor: { role: "architect", id: candidate.runtimeId },
+      role: "architect",
+      purpose: `architect:${request.reason.type}`,
+      ...("taskId" in request.reason ? { taskId: request.reason.taskId } : {}),
+      repositoryRevision: projection.integrationRevision,
+      limits: this.contextLimits,
+      pack: context,
+      recordedAt: this.clock(),
+    });
     let messages: AgentMessage[] = [
       {
         id: "architect-system",
@@ -528,10 +554,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         summary: `${record.taskId}: ${evidenceFactSummary(record.fact)}`,
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
-    const limits = this.options.contextLimits ?? {
-        maxBytes: 512 * 1024,
-        maxEstimatedTokens: 128 * 1024,
-      };
+    const limits = this.contextLimits;
     const input = {
       limits,
       objective: this.options.objective,

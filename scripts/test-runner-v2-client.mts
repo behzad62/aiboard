@@ -244,6 +244,7 @@ const fetchImpl: typeof fetch = async (input, init = {}) => {
       },
       usage: { effective: { modelCalls: 9 } },
       observability: { runId: "run_1", toolCallCount: 1 },
+      contextManifests: [],
       acceptanceContract: {
         status: "current",
         planRevision: 1,

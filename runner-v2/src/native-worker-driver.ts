@@ -22,6 +22,7 @@ import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
 import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import type { CapabilityRegistry } from "./capability-registry.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -93,6 +94,8 @@ export interface NativeWorkerDriverOptions {
   language?: LanguageIntelligenceProvider;
   execution?: OneShotCommandExecutor;
   executionGrants?: ExecutionGrantAuthority;
+  contextManifests?: ContextManifestStore;
+  recordContextPackText?: boolean;
 }
 
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
@@ -154,6 +157,23 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         workspace.path,
         sessionId,
       );
+      const repositoryRevision = /^HEAD ([0-9a-f]{40,64})/.exec(context.repositorySnapshot)?.[1];
+      await recordContextPack({
+        store: this.options.contextManifests,
+        artifacts: this.options.artifacts,
+        recordPackText: this.options.recordContextPackText,
+        runId: assignment.runId,
+        sessionId,
+        actor: { role: "worker", id: assignment.workerId },
+        role: "worker",
+        purpose: "worker:task",
+        taskId: assignment.task.id,
+        attempt: assignment.attempt,
+        ...(repositoryRevision ? { repositoryRevision } : {}),
+        limits: this.contextLimits,
+        pack: context.pack,
+        recordedAt: this.clock(),
+      });
       const sessionEventCount = this.options.sessions.events(sessionId).length;
       const toolEventCountBefore = this.options.ledger
         .listRun(assignment.runId)
@@ -263,9 +283,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         signal: assignment.signal,
         continuationMessages: workerContinuationMessages(
           {
-            id: `context:${context.digest}`,
+            id: `context:${context.pack.digest}`,
             role: "user",
-            content: context.text,
+            content: context.pack.text,
           },
           sessionEventCount > 0,
           assignment.task.id,
@@ -506,22 +526,27 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       evidence,
       recentHistory: [],
     };
-    if (!this.options.capabilityRegistry) return buildWorkerContext(input);
-    return (await assembleContextWithExtensions({
-      registry: this.options.capabilityRegistry,
-      assembler: new ContextAssembler(this.contextLimits),
-      baseSections: workerContextSections(input),
-      request: {
-        runId: assignment.runId,
-        sessionId,
-        actor: { role: "worker", id: assignment.workerId },
-        objective: assignment.task.objective,
-        workspacePath,
-        taskId: assignment.task.id,
-        signal: assignment.signal ?? new AbortController().signal,
-      },
-      artifacts: this.options.artifacts,
-    })).pack;
+    if (!this.options.capabilityRegistry) {
+      return { pack: buildWorkerContext(input), repositorySnapshot };
+    }
+    return {
+      pack: (await assembleContextWithExtensions({
+        registry: this.options.capabilityRegistry,
+        assembler: new ContextAssembler(this.contextLimits),
+        baseSections: workerContextSections(input),
+        request: {
+          runId: assignment.runId,
+          sessionId,
+          actor: { role: "worker", id: assignment.workerId },
+          objective: assignment.task.objective,
+          workspacePath,
+          taskId: assignment.task.id,
+          signal: assignment.signal ?? new AbortController().signal,
+        },
+        artifacts: this.options.artifacts,
+      })).pack,
+      repositorySnapshot,
+    };
   }
 }
 
