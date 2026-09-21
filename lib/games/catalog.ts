@@ -5,7 +5,7 @@ export interface GameDescriptor {
   title: string;
   summary: string;
   status: "ready" | "coming-soon";
-  accent: "amber" | "red-yellow" | "blue-orange" | "red-blue";
+  accent: "amber" | "red-yellow" | "blue-orange" | "red-blue" | "olive";
   modes: GameCatalogMode[];
 }
 
@@ -48,6 +48,14 @@ const GAME_CATALOG: GameDescriptor[] = [
     summary: "Cooperate with hidden hands, limited clues, and objective team scoring.",
     status: "ready",
     accent: "red-yellow",
+    modes: ["pvp", "pvai", "aivai"],
+  },
+  {
+    id: "quoridor",
+    title: "Quoridor",
+    summary: "Race your pawn to the far side, or fence the other path longer.",
+    status: "ready",
+    accent: "olive",
     modes: ["pvp", "pvai", "aivai"],
   },
 ];

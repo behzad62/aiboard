@@ -10,4 +10,6 @@ export * from "./battleship/types";
 export * from "./battleship/engine";
 export * from "./codenames/types";
 export * from "./codenames/engine";
+export * from "./quoridor/types";
+export * from "./quoridor/engine";
 export * from "./stats";

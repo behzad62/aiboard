@@ -504,6 +504,79 @@ try {
     );
   }
 
+  // --- prompt_cache_key: stable across turns of one discussion -------------
+  // The whole point is that a growing transcript must NOT change the key,
+  // otherwise every turn misses the server-side prompt cache and re-bills the
+  // full prefix. Mirrors buildOpenAIPromptCacheKey in lib/providers/openai-compat.ts.
+  const TRANSCRIPT_MARKER = "\n\n--- Discussion so far ---\n\n";
+
+  async function captureChat(payload: Record<string, unknown>) {
+    const chatResponse = await fetch(`${baseUrl}/providers/chatgpt/chat`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+    await chatResponse.json();
+    return capturedRequests.at(-1);
+  }
+
+  const stablePrefix = "User question:\n\nWhich chess opening is strongest?";
+  const turnOne = await captureChat({
+    model: "gpt-5.5",
+    messages: [{ role: "user", content: `${stablePrefix}${TRANSCRIPT_MARKER}A: I like the Ruy Lopez.` }],
+  });
+  const turnTwo = await captureChat({
+    model: "gpt-5.5",
+    messages: [
+      {
+        role: "user",
+        content: `${stablePrefix}${TRANSCRIPT_MARKER}A: I like the Ruy Lopez.\nB: The Italian is more flexible.\nA: Agreed on flexibility.`,
+      },
+    ],
+  });
+  const otherModel = await captureChat({
+    model: "gpt-5.6-sol",
+    messages: [{ role: "user", content: `${stablePrefix}${TRANSCRIPT_MARKER}A: I like the Ruy Lopez.` }],
+  });
+  const otherTopic = await captureChat({
+    model: "gpt-5.5",
+    messages: [{ role: "user", content: `User question:\n\nBest chess endgame book?${TRANSCRIPT_MARKER}A: I like the Ruy Lopez.` }],
+  });
+
+  const turnOneKey = turnOne?.body.prompt_cache_key;
+  check(
+    "runner sends a namespaced prompt_cache_key",
+    typeof turnOneKey === "string" && String(turnOneKey).startsWith("aidb:chatgpt:gpt-5.5:"),
+    turnOneKey
+  );
+  check(
+    "prompt_cache_key is stable as the transcript grows",
+    typeof turnOneKey === "string" && turnOneKey === turnTwo?.body.prompt_cache_key,
+    { turnOneKey, turnTwoKey: turnTwo?.body.prompt_cache_key }
+  );
+  check(
+    "prompt_cache_key differs per model",
+    turnOneKey !== otherModel?.body.prompt_cache_key,
+    { turnOneKey, otherModelKey: otherModel?.body.prompt_cache_key }
+  );
+  check(
+    "prompt_cache_key differs per topic",
+    turnOneKey !== otherTopic?.body.prompt_cache_key,
+    { turnOneKey, otherTopicKey: otherTopic?.body.prompt_cache_key }
+  );
+
+  // The runner ships standalone and cannot import the orchestrator constant, so
+  // the duplicate is guarded here instead.
+  const runnerSource = fs.readFileSync(path.join(process.cwd(), "lib", "account-provider-runner.mjs"), "utf8");
+  const promptsSource = fs.readFileSync(path.join(process.cwd(), "lib", "orchestrator", "prompts.ts"), "utf8");
+  const runnerMarker = /const DISCUSSION_TRANSCRIPT_MARKER = ("(?:[^"\\]|\\.)*")/.exec(runnerSource)?.[1];
+  const promptsMarker = /export const DISCUSSION_TRANSCRIPT_MARKER = ("(?:[^"\\]|\\.)*")/.exec(promptsSource)?.[1];
+  check(
+    "runner transcript marker matches lib/orchestrator/prompts.ts",
+    !!runnerMarker && runnerMarker === promptsMarker,
+    { runnerMarker, promptsMarker }
+  );
+
   const retryResponse = await fetch(`${baseUrl}/providers/chatgpt/chat`, {
     method: "POST",
     headers,

@@ -1,0 +1,173 @@
+"use client";
+
+import { Bot, Clock, Trophy, User } from "lucide-react";
+import { GameAIPresence } from "@/components/games/GameAIPresence";
+import { buildGameAIThinkingInteraction } from "@/lib/games/core/ai-interactions";
+import type { GameAIInteraction } from "@/lib/games/core/types";
+import { cn } from "@/lib/utils";
+import type { QuoridorPlayer } from "@/lib/games/quoridor/types";
+
+interface QuoridorPlayerPanelProps {
+  player: QuoridorPlayer;
+  label: string;
+  kind: "human" | "ai";
+  modelLabel?: string;
+  reasoningLabel?: string;
+  elapsedMs: number;
+  wallsLeft: number;
+  active: boolean;
+  winner?: boolean;
+  aiInteraction?: GameAIInteraction | null;
+  aiThinking?: boolean;
+}
+
+const PLAYER_STYLES: Record<
+  QuoridorPlayer,
+  { disc: string; panel: string; text: string }
+> = {
+  south: {
+    disc: "border-orange-800 bg-gradient-to-br from-orange-200 via-orange-400 to-orange-800",
+    panel:
+      "border-orange-200 bg-orange-50/85 dark:border-orange-900/70 dark:bg-orange-950/25",
+    text: "text-orange-800 dark:text-orange-300",
+  },
+  north: {
+    disc: "border-sky-950 bg-gradient-to-br from-sky-200 via-sky-600 to-slate-900",
+    panel:
+      "border-sky-200 bg-sky-50/85 dark:border-sky-900/70 dark:bg-sky-950/25",
+    text: "text-sky-700 dark:text-sky-300",
+  },
+};
+
+function formatElapsedTime(timeMs: number): string {
+  const totalSeconds = Math.floor(Math.max(0, timeMs) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+export function QuoridorPlayerPanel({
+  player,
+  label,
+  kind,
+  modelLabel,
+  reasoningLabel,
+  elapsedMs,
+  wallsLeft,
+  active,
+  winner = false,
+  aiInteraction = null,
+  aiThinking = false,
+}: QuoridorPlayerPanelProps) {
+  const styles = PLAYER_STYLES[player];
+  const KindIcon = kind === "ai" ? Bot : User;
+  const visibleInteraction =
+    kind === "ai"
+      ? aiThinking
+        ? buildGameAIThinkingInteraction(player)
+        : aiInteraction
+      : null;
+
+  return (
+    <section
+      className={cn(
+        "rounded-xl border p-4 shadow-sm transition duration-200",
+        styles.panel,
+        active &&
+          "ring-2 ring-amber-400 ring-offset-2 ring-offset-white dark:ring-offset-slate-950",
+        winner && "shadow-[0_12px_28px_rgba(245,158,11,0.22)]"
+      )}
+      data-testid={`quoridor-player-${player}`}
+      aria-current={active ? "true" : undefined}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span
+            className={cn("h-8 w-8 shrink-0 rounded-full border-2", styles.disc)}
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-semibold text-slate-950 dark:text-white">
+              {label}
+            </h3>
+            <div className="mt-1 flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
+              <KindIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>{kind === "ai" ? "AI" : "Human"}</span>
+            </div>
+          </div>
+        </div>
+
+        {winner ? (
+          <span
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+            aria-label={`${label} won`}
+          >
+            <Trophy className="h-3.5 w-3.5" aria-hidden="true" />
+            Winner
+          </span>
+        ) : active ? (
+          <span
+            className={cn("rounded-full px-2 py-1 text-xs font-semibold", styles.text)}
+          >
+            Turn
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="rounded-lg border border-current/10 bg-white/60 px-3 py-2 dark:bg-slate-950/40">
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+            Time
+          </span>
+          <div
+            className="mt-1 font-mono text-lg font-bold tabular-nums text-slate-950 dark:text-white"
+            data-testid={`quoridor-clock-${player}`}
+          >
+            {formatElapsedTime(elapsedMs)}
+          </div>
+        </div>
+        <div className="rounded-lg border border-current/10 bg-white/60 px-3 py-2 dark:bg-slate-950/40">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+            Walls
+          </span>
+          <div
+            className="mt-1 font-mono text-lg font-bold tabular-nums text-slate-950 dark:text-white"
+            data-testid={`quoridor-walls-${player}`}
+          >
+            {wallsLeft}
+          </div>
+        </div>
+      </div>
+
+      {kind === "ai" && (
+        <div className="mt-3 space-y-1 border-t border-current/10 pt-3 text-xs text-slate-600 dark:text-slate-400">
+          {modelLabel && (
+            <p className="truncate">
+              <span className="font-medium text-slate-700 dark:text-slate-300">
+                Model:
+              </span>{" "}
+              {modelLabel}
+            </p>
+          )}
+          {reasoningLabel && (
+            <p>
+              <span className="font-medium text-slate-700 dark:text-slate-300">
+                Reasoning:
+              </span>{" "}
+              {reasoningLabel}
+            </p>
+          )}
+        </div>
+      )}
+
+      <GameAIPresence
+        interaction={visibleInteraction}
+        variant="card"
+        className="mt-3"
+      />
+    </section>
+  );
+}
+
+export default QuoridorPlayerPanel;
