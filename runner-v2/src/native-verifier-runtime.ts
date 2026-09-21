@@ -581,12 +581,12 @@ export function verifierModelAttribution(
   };
 }
 
-function createInspectionTools(input: {
+export function createInspectionTools(input: {
   git?: RunGitExecutionContext;
   executionGrants?: ExecutionGrantAuthority;
   workspacePath: string;
   artifacts: ArtifactStore;
-  evidenceStore: EvidenceStore;
+  evidenceStore?: EvidenceStore;
   runId: string;
   clock: () => string;
   ledger?: ToolInvocationLedger;
@@ -608,13 +608,15 @@ function createInspectionTools(input: {
     }),
     ...createGitTools(input.git),
     ...createArtifactTools(input.artifacts),
-    ...createEvidenceTools({
-      git: input.git,
-      store: input.evidenceStore,
-      artifacts: input.artifacts,
-      taskId: "verifier",
-      clock: input.clock,
-    }).filter((tool) => tool.definition.name === "inspect_evidence"),
+    ...(input.evidenceStore
+      ? createEvidenceTools({
+          git: input.git,
+          store: input.evidenceStore,
+          artifacts: input.artifacts,
+          taskId: "verifier",
+          clock: input.clock,
+        }).filter((tool) => tool.definition.name === "inspect_evidence")
+      : []),
   ].filter(
     (tool) =>
       tool.definition.readOnly &&
@@ -722,7 +724,7 @@ function verifierReviewId(
   return `verifier-review:${digest}`;
 }
 
-function verifierExcludedModels(
+export function verifierExcludedModels(
   candidates: ReadonlyMap<string, AgentRuntimeCandidate>,
   architectRuntimeId: string,
   authorRuntimeIds: readonly string[],

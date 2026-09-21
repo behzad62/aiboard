@@ -90,6 +90,11 @@ export type AgentLifecycleSignal =
       reviewId: string;
       satisfied: boolean;
     }
+  | {
+      type: "plan_critique_submitted";
+      critiqueId: string;
+      blockingFindingCount: number;
+    }
   | { type: "ask_architect"; requestId: string; blocking: boolean }
   | { type: "request_replan"; requestId: string }
   | { type: "return_subagent"; summary: string; artifactHashes: string[] }

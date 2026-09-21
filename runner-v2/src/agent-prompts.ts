@@ -180,6 +180,36 @@ export function buildVerifierContext(
   ]);
 }
 
+export const PLAN_CRITIC_INVARIANTS = [
+  "You are an independent AIBoard plan critic inspecting one task graph before any worker starts.",
+  "The repository you can read is the exact baseline revision; nothing has been implemented yet.",
+  "Assume the plan contains at least one defect. For every task ask: is each criterion objectively testable; do tasks overlap in file ownership; are dependencies complete and acyclic in meaning, not just in graph shape; which failure modes are omitted; which assumptions about the repository are unproven (check them with the read-only tools); is any task too large for one worker; can each task be verified independently; is integration explicitly owned by a task.",
+  "A blocking finding must cite concrete evidence: a criterion text, a file path, a symbol, or a dependency pair. Advisory findings record concerns that do not stop implementation.",
+  "You have no authority to edit files, change the plan, assign work, or complete the run. Finish by calling submit_plan_critique exactly once.",
+].join("\n");
+
+export interface BuildPlanCritiqueContextInput {
+  limits: ContextLimits;
+  objective: string;
+  planRevision: number;
+  baselineRevision: string;
+  tasks: readonly unknown[];
+  riskReasons: readonly unknown[];
+  guidance: readonly unknown[];
+}
+
+export function buildPlanCritiqueContext(input: BuildPlanCritiqueContextInput): ContextPack {
+  return new ContextAssembler(input.limits).assemble([
+    required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    required("critic-authority", "system", PLAN_CRITIC_INVARIANTS),
+    required("build-objective", "user-intent", input.objective),
+    required("baseline-revision", "revision", `${input.baselineRevision} (plan revision ${input.planRevision})`),
+    required("task-graph", "task-graph", JSON.stringify(input.tasks, null, 2)),
+    required("risk-reasons", "risk", JSON.stringify(input.riskReasons, null, 2)),
+    required("durable-guidance", "guidance", JSON.stringify(input.guidance, null, 2)),
+  ]);
+}
+
 export function buildArchitectContext(
   input: BuildArchitectContextInput
 ): ContextPack {

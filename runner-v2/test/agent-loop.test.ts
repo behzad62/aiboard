@@ -87,6 +87,70 @@ test("model budget exhaustion is a typed budget suspension, not a provider failu
   assert.equal(sleeps, 0);
 });
 
+test("a plan_critique_submitted lifecycle tool ends the loop with the typed critique result", async () => {
+  const registry = new ToolRegistry();
+  registry.register(submitPlanCritiqueTool({
+    critiqueId: "critique-1",
+    blockingFindingCount: 1,
+  }));
+  const model = new ScriptedModel([
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "critique_1",
+        name: "submit_plan_critique",
+        arguments: { findings: [{ findingId: "F-1" }] },
+      }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: {
+      ...context(),
+      actor: { role: "verifier", id: "critic_1" },
+    },
+    initialMessages,
+  });
+  assert.equal(result.status, "plan_critique_submitted");
+  assert.equal(result.critiqueId, "critique-1");
+  assert.equal(result.blockingFindingCount, 1);
+  assert.equal(result.turns, 1);
+});
+
+test("a plan_critique_submitted lifecycle with no blocking findings still ends the loop", async () => {
+  const registry = new ToolRegistry();
+  registry.register(submitPlanCritiqueTool({
+    critiqueId: "critique-advisory",
+    blockingFindingCount: 0,
+  }));
+  const model = new ScriptedModel([
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "critique_advisory",
+        name: "submit_plan_critique",
+        arguments: { findings: [] },
+      }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: {
+      ...context(),
+      actor: { role: "verifier", id: "critic_1" },
+    },
+    initialMessages,
+  });
+  assert.equal(result.status, "plan_critique_submitted");
+  assert.equal(result.critiqueId, "critique-advisory");
+  assert.equal(result.blockingFindingCount, 0);
+  assert.equal(result.turns, 1);
+});
+
 test("native tool results feed the next turn and only submit_task submits work", async () => {
   const registry = new ToolRegistry();
   registry.register(textTool("read_file", "file contents"));
@@ -1161,6 +1225,35 @@ function textTool(
       onExecute();
       return { content: [{ type: "text", text: output }], isError: false };
     },
+  };
+}
+
+function submitPlanCritiqueTool(signal: {
+  critiqueId: string;
+  blockingFindingCount: number;
+}): NativeTool<Record<string, unknown>> {
+  return {
+    definition: {
+      name: "submit_plan_critique",
+      description: "Submit the typed plan critique",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+      lifecycle: true,
+    },
+    validate: (input) =>
+      typeof input === "object" && input !== null && !Array.isArray(input)
+        ? { ok: true, value: input as Record<string, unknown> }
+        : { ok: false, issues: ["findings are required"] },
+    execute: async () => ({
+      content: [{ type: "json", value: signal }],
+      isError: false,
+      lifecycle: {
+        type: "plan_critique_submitted",
+        critiqueId: signal.critiqueId,
+        blockingFindingCount: signal.blockingFindingCount,
+      },
+    }),
   };
 }
 
