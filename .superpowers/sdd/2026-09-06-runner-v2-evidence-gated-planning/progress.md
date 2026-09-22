@@ -2,9 +2,11 @@
 
 ## Current revision — 2026-09-22 owner amendment, revision 2
 
-PLAN BLOCKED — one condition: **the scoped independent re-review of the correction pass after
-`amendment-review-r2.md`** has not been performed. Owner: controller. Unblock: dispatch one fresh-context re-review scoped to
-the corrections below and the new OA-3, OA-10..OA-17 content.
+**PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED**
+
+The third independent review (`amendment-review-r3.md`, at `702e06cd`) returned PLAN COVERAGE
+VERIFIED with no finding. Readiness does not authorize execution: T1 still requires the
+accepted agent-capability program (OA-8) and an owner instruction to start.
 
 D3 is **resolved**: the owner confirmed Node 24.x on 2026-09-22 (OA-9). It no longer blocks.
 
@@ -25,7 +27,7 @@ Campaign order: **P6.5 → agent-capability program → P6.6 → P7** (OA-8).
 | Revision 2 | B1: BP1 entry, Relationship, D1 and the header carry the OA-8 order; T1 inspects the post-agent-capability tree. B2: ownership sentence and campaign gate say EP01–EP51 and T1–T9. B3: section 3, T1 and T4 name and exempt `architect_document`. I1: T3 defines the planning-state predicate; EP41 positive moved to T9; EP32 scoped to planning state. I2: four identifiers named, cross-vocabulary rejection. I3: BP2 exit has both paths; T4 base is accepted T9; T5 base stays T3; T9 card; registry and queue below. M1–M4 applied. New EP42–EP51. |
 | Scoped re-review of revision 2 | INSUFFICIENT (`amendment-review-r2.md`): B1–B3, I1, I2, M1–M4 FIXED; **I3 NOT FIXED** (two start rules for T5, repair cycle 2 of 3); new IMPORTANT N1 (`clarify` outside planning state), N2 (answer reviewer fresh session), N3 (`unsupported_language` read as empty selection), N4 (temp files not inventoried); MINOR N5 |
 | Correction pass | one start rule (T5 at accepted T3, T9 at T3, T4 at T9; BP2 complete = T3 and T9); planning state = no ready plan and triage not `answer`; EP37 covers T3/T9 with sentinel; failed ladder rung steps down; temp-path creation record; N5 details |
-| **Scoped re-review of the correction pass** | **OUTSTANDING — blocks PLAN READY** |
+| Scoped re-review of the correction pass | **PLAN COVERAGE VERIFIED** (`amendment-review-r3.md`): B-R2 and N1–N5 FIXED; no finding |
 
 ### Assignment registry (single controller authority; supersedes the 2026-09-08 table below)
 
@@ -33,7 +35,7 @@ Campaign order: **P6.5 → agent-capability program → P6.6 → P7** (OA-8).
 |---|---|---|---|---|
 | A | T1, T2, T3, then T9, then T4, then T6, T7, T8 | PLANNED; no worker/session/branch/worktree claim | Accepted agent-capability program for T1; later accepted packet snapshots; T4 on accepted T9 | None before prerequisites and execution authority; T1 first afterward |
 | B | T5 | PLANNED; no claim | Accepted T3, isolated from lane A's T9/T4 worktrees | Starts at T3 acceptance, beside T9; does not wait for T9 |
-| Controller | Assignment, integration, acceptance | Planning only | Actual approved snapshots | Dispatch the scoped re-review |
+| Controller | Assignment, integration, acceptance | Planning only | Actual approved snapshots | None until the agent-capability program is accepted and execution is authorized |
 
 ### Execution queue (not started; supersedes the queue further below)
 
