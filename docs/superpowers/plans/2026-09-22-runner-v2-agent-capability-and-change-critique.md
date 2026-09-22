@@ -1,8 +1,7 @@
-# Runner V2 — Agent capability model and change critique (execution plan)
+# Runner V2 — Agent capability model (execution plan)
 
-**Revision 3.** Repairs the four BLOCKING conditions the r2 re-review found still open, the
-one new BLOCKING D7 finding, and the four regressions revision 2 introduced
-(`evidence/plan-review-r2.md`); revision 1's history is in `evidence/plan-review-r1.md`.
+**Revision 6.** The filename is kept for reference stability; change critique and coverage
+review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this plan.
 **Execution has not started.** Verdict in §11.
 
 ---
@@ -11,41 +10,40 @@ one new BLOCKING D7 finding, and the four regressions revision 2 introduced
 
 | | |
 |---|---|
-| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md` |
-| SOURCE status | APPROVED by owner; D7 added 2026-09-22 after review |
+| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 2 |
+| Moved scope | D4, D5, D7 → `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md` |
 | Base revision | `6c166f97` on `main` |
-| Prior phase | P6.5 review-gap closure, PR #98; lint cleanup PR #99 |
 | PLAN_DIR | this file + `.superpowers/sdd/2026-09-22-runner-v2-agent-capability/` |
 | PROJECT_RULES | `CLAUDE.md`, `AGENTS.md`, the Runner V2 Task 12 mandate |
-| MAX_WORKERS | 4 permitted; **this plan derives 2, opening to 3** — see §5 |
-| REPAIR_BUDGET | 3 evidence-backed cycles per tracked blocking issue |
+| MAX_WORKERS | 4 permitted; **this plan derives 2** — see §5 |
+| REPAIR_BUDGET | 3 evidence-backed cycles per tracked blocking issue; ESC-1 carries one owner-granted extra cycle |
+| Planning history | four independent reviews of revisions 1–5: `evidence/plan-review-r1.md` … `-r4.md` |
 
-### 0.1 Host capabilities — discovered, not assumed
+### 0.1 Host capabilities — observed
 
-| Capability | Actual support |
+| Capability | Support |
 |---|---|
 | Independent implementation workers | **Yes.** Cursor CLI, `grok-4.7-high`. |
-| Independent reviewer, fresh context | **Yes.** Separate invocation; demonstrated by the r1 review. |
+| Independent fresh-context reviewer | **Yes.** Separate invocation; demonstrated four times on this plan. |
 | Git worktrees | **Yes.** |
-| Atomic task claims | **No.** The single controller serializes assignment. Procedural, not mechanical. |
-| Harness-enforced state gates | **No.** §7 gates are procedural unless they land as kernel invariants. |
-| Native launch chips | **No.** §10 provides copy-ready cards. |
+| Atomic task claims | **No.** The single controller serializes assignment. Procedural. |
+| Harness-enforced state gates | **No.** §7 gates are procedural unless landed as kernel invariants. |
+| Native launch chips | **No.** §10 gives copy-ready cards. |
 
-### 0.2 Carried-forward execution amendments
+### 0.2 Carried-forward execution rules
 
-1. **Affected-graph validation per packet.** Full `npm run test:runner-v2` runs exactly twice
-   per program: entry baseline and the D1g exit gate.
-2. **Node 24 only**, invoked as `C:\Program Files\nodejs\node.exe`.
-3. **`--test-concurrency=1`** for any affected graph containing host or process fixtures.
-4. **`public/*.zip`** are publication artifacts: packets leave them dirty, the controller
-   reverts, and they are refreshed in a deliberate publication commit.
+1. Affected-graph validation per packet; the full `npm run test:runner-v2` runs exactly twice —
+   the §0.3 baseline and the D1g exit gate.
+2. Node 24, invoked as `C:\Program Files\nodejs\node.exe`.
+3. `--test-concurrency=1` for any affected graph containing host or process fixtures.
+4. `public/*.zip` are publication artifacts; packets leave them dirty, the controller reverts,
+   and they are refreshed in a deliberate publication commit.
 
-### 0.3 Inherited baseline, reusable under §6.4
+### 0.3 Baseline, reusable under §6.4
 
 At `6c166f97`: `npm run test:runner-v2` **3096 tests, 3091 pass, 0 fail, 5 skipped** plus 18
 chained scripts PASS; both typechecks exit 0; `npm run build` exit 0, 20/20 routes;
-`npx eslint .` exit 0 with 0 errors and 13 pre-existing warnings. The 5 skips are host gates
-(2 Darwin, 2 POSIX, 1 win32).
+`npx eslint .` 0 errors, 13 pre-existing warnings. The 5 skips are host gates.
 
 ---
 
@@ -53,38 +51,27 @@ chained scripts PASS; both typechecks exit 0; `npm run build` exit 0, 20/20 rout
 
 | ID | Requirement | Source | Phase | Packets | Evidence required | Status |
 |---|---|---|---|---|---|---|
-| AC-1 | Failed manifest write retries with bounded backoff | D1 | B | B1 | stub failing N-1 times then succeeding records once, emits no note | PLANNED |
-| AC-2 | Exhausted failure writes a durable note to the **scheduler store** | D1 | B | B2 | permanently failing stub → exactly one durable note carrying the reason | PLANNED |
-| AC-3 | Exhausted failure pauses with a typed Architect decision **on all four agent paths**; never silently continues, never dies without the note | D1 | B | B2 | one test per path — architect, worker, verifier, critic; note present; **plus** a fail-closed test where the scheduler append itself throws. The **worker** path is mandatory and separate: `task-scheduler.ts:227-234` turns every `driver.run` rejection into a failed task, so a dispatcher-only catch never sees it | PLANNED |
-| AC-4 | Exactly one of `retry` / `proceed_without_manifest` (rationale required) / `abort`, durable and attributed | D1 | B | B2 | one test per resolution; rationale-less waiver rejected **at the durable append boundary**; `retry` budget exhaustion re-pauses rather than looping | PLANNED |
-| AC-5 | Each role's tool surface is an explicit allow-list, asserted, failing closed, **across every broker that role uses** | D2 | A | A1 | exact sorted list per role per broker; adding and removing an entry both redden | PLANNED |
-| AC-6 | The Architect can run commands, subject to the run permission profile | D2 | A | A3 | Architect list contains the command tool; approval required under non-`full` | PLANNED |
-| AC-7 | Architect project writes are refused outside the **I2-recorded allow-list** | D2 | A | A4 | success only for an I2-recorded path; refusal for a path outside the allow-list **and outside `runner-v2/src`** — a denylist of one prefix must not satisfy this | PLANNED |
-| AC-8 | Verifier and critic command execution is confined to their own workspace | D2 | A | A3 | fixture project byte-identical after a reader run while the reader's copy may change; confinement proved against a fixture double, since `containedDirectory` already exists | PLANNED |
-| AC-9a | **Verifier and critic** cannot commit, integrate, complete, alter the plan or review tasks | D2 | A | A1 | exact-list assertion on their brokers excludes every such tool | PLANNED |
-| AC-9b | **The Architect retains** `review_task`, `request_integration` and `complete_run`; the allow-list must not delete them | D2 | A | A1 | assertion targets **both** the inspection broker and `createArchitectTools`; removing any of the three reddens | PLANNED |
-| AC-10 | Reader MCP admission accepts only tools the mapper marks `readOnly`, as a **checked class**, not static list entries | D3 | A | A2 | stub server: `readOnlyHint` alone is refused; `readOnlyHint && !destructiveHint` is admitted; verifier and critic remain at zero MCP | PLANNED |
-| AC-11 | A change critique stage runs at integration before the verifier, reusing finding, gate and resolution contracts | D4 | C | C2, C4 | ordering asserted; blocking findings hold integration; **`resolve_plan_critique` extended for `stage: "change"`**; zero-blocking auto-resolve preserved | PLANNED |
-| AC-12 | Change-critic selection excludes the Architect **and** every accepted change author | D4 | C | C2 | emptying either exclusion reddens a **distinct** named test | PLANNED |
-| AC-13 | Stage 2 forms findings before being shown its own stage-1 findings, and durably marks which remain open | D4 | C | C3 | turn-1 messages contain no stage-1 finding id or claim text; turn-2 does; a durable "remains open" mark exists | PLANNED |
-| AC-14 | Change risk is deterministic; **a named producer computes the signals from a change** | D5 | C | C1 | repeated calls deep-equal; explicit kernel set and affected-test rule are named constants, not prose | INVESTIGATE (I1, I3) |
-| AC-15 | Graded low / medium / high, with a durable recorded skip at low | D5 | C | C4 | one runtime test per tier | PLANNED |
-| AC-16 | At high risk the critic runs **the affected tests** and the result is durable evidence cited by a finding | D5 | C | C4 | the recorded command must be the affected-test command from AC-14's rule — an arbitrary command must **not** satisfy it | PLANNED |
-| AC-17 | Architect plan/spec writes land as an attributed Architect-authored ChangeSet **carrying no acceptance criteria** | D6 | A | A5 | ChangeSet stored with architect actor, present in audit, asserted to have no acceptance criteria | PLANNED |
-| AC-18 | Pre-change runs keep current semantics and remain replayable | compat | A→D | **A0** records, D1g compares | fixture captured **before the first source packet**, replayed at D1g to an identical projection | PLANNED |
-| AC-19 | Coverage obligations derive from the **original objective and durable user guidance**, never the Architect's criteria or plan, **in a session whose event list is empty at derivation** | D7 | E | E1, E2 | asserted on the deriving turn's **actual messages, tool results and loaded session** — not a section-id list — that the objective and guidance are present and no criteria, plan or diff text is. A section-id helper is not the acceptance | PLANNED |
-| AC-20 | Obligations are durably recorded **before** the plan or diff is provided; the kernel refuses a coverage verdict with none recorded | D7 | E | E1, E2 | kernel gate reddens when deleted; ordering asserted | PLANNED |
-| AC-21 | Verdict is per obligation — `covered` / `weakened` / `missing` — resolved through the **extended `resolve_plan_critique` path**, and blocking `missing`/`weakened` holds the build | D7 | E | E2, E3 | one test per verdict value; blocking holds integration; **a criterion that existed but was never exercised is expressible as `weakened` and must not collapse into `covered`** | PLANNED |
-| AC-22 | The four new categories are accepted and malformed ones rejected, alongside the existing eight; **`scope_creep` and `unverified_claim` stay reportable even though they are not obligation-verdict values** | D7 | E | E1 | each new category round-trips; an unknown category is rejected; the existing eight still validate; a `scope_creep` finding carrying no obligation verdict is accepted | PLANNED |
-| AC-23 | A cited evidence record not supporting its citing claim is reportable as `unverified_claim` | D7 | E | E2 | a seeded mismatch produces the finding; a matching citation does not | PLANNED |
+| AC-1 | Failed manifest write retries with bounded backoff | D1 | B | B1 | a stub failing N-1 times then succeeding records exactly once and throws nothing; a permanently failing stub throws `ContextManifestRecordingError` after exactly the bound | PLANNED |
+| AC-2 | Exhausted failure writes a durable note to the scheduler store | D1 | B | B2 | exactly one `context_manifest.recording_failed` event carrying purpose, task id, attempt, revision, attempts and reason | PLANNED |
+| AC-3 | Exhausted failure pauses the run with a typed Architect decision on **all four agent paths** | D1 | B | B2 | one named test per path — architect, worker, verifier, critic. The worker test asserts the task is **neither `failed` nor redispatched** while paused. Plus a fail-closed test where the scheduler append itself throws | PLANNED |
+| AC-4 | Exactly one of `retry` / `proceed_without_manifest` (rationale required) / `abort`, durable, attributed and restart-safe | D1 | B | B2 | one test per resolution; rationale-less waiver rejected at the durable append boundary; `retry` budget exhaustion re-pauses; **three restart tests** — paused-before-decision stays paused with no dispatch, post-waiver restart re-derives suspension before the first dispatch, post-abort run is terminally failed | PLANNED |
+| AC-5 | Each role's tool surface is an asserted allow-list across every broker it uses | D2 | A | A1 | exact sorted list per role per broker; adding and removing an entry both redden; `PlanOnlyInspectionRuntime` included | PLANNED |
+| AC-6 | The Architect runs commands in a disposable copy, subject to the permission profile | D2 | A | A3 | the command tool is in the Architect list; approval required under non-`full`; the project fixture is byte-identical after an Architect command | PLANNED |
+| AC-7 | Architect document writes are refused outside the I2 allow-list | D2, D6 | A | A4 | success only for an I2-recorded path; refusal for a path outside the allow-list **and outside `runner-v2/src`**; enforced at the durable append boundary, not only in the tool | PLANNED |
+| AC-8 | Verifier execution is confined to its own workspace; the critic has no command tool | D2 | A | A3 | fixture project byte-identical after a verifier run while its workspace may differ; confinement proved against a fixture double because `containedDirectory` already exists; the critic's exact list contains no command tool | PLANNED |
+| AC-9a | Verifier and critic cannot commit, integrate, complete, alter the plan or review tasks | D2 | A | A1 | exact-list assertion on their brokers | PLANNED |
+| AC-9b | The Architect retains `review_task`, `request_integration`, `complete_run` | D2 | A | A1, A1b | assertion on **both** the inspection broker and `createArchitectTools`; removing any of the three reddens | PLANNED |
+| AC-10 | The Architect admits only mapper-`readOnly` MCP tools, as an asserted class | D3 | A | A2 | stub server: `readOnlyHint` alone refused; `readOnlyHint && !destructiveHint` admitted; verifier and critic remain MCP-free | PLANNED |
+| AC-17 | An Architect document write lands as a kernel-applied `architect_document` task with Architect attribution in git, absent from accepted change sessions | D6 | A | A5 | the integration branch contains the file in a commit carrying the Architect trailer; `acceptedChangeSessions` does not list it; zero model calls to apply it | PLANNED |
+| AC-18 | Pre-change runs keep current semantics and replay | compat | A→D | A0 records, D1g compares | fixture captured before the first source packet, replayed at D1g to an identical projection | PLANNED |
 
 ### 1.1 Reverse traceability
 
 | Packet | Requirements |
 |---|---|
-| I1, I2, I3 | investigation for AC-14/15, AC-7, AC-14 |
+| I2 | AC-7 (investigation) |
 | A0 | AC-18 (capture) |
-| A1 | AC-5, AC-9a, AC-9b (the brokers Lane A owns) |
+| A1 | AC-5, AC-9a, AC-9b (brokers Lane A owns) |
 | A1b | AC-9b (the `createArchitectTools` half) |
 | A2 | AC-10 |
 | A3 | AC-6, AC-8 |
@@ -92,872 +79,346 @@ chained scripts PASS; both typechecks exit 0; `npm run build` exit 0, 20/20 rout
 | A5 | AC-17 |
 | B1 | AC-1 |
 | B2 | AC-2, AC-3, AC-4 |
-| C1 | AC-14 |
-| C2 | AC-11 (contracts), AC-12 |
-| C3 | AC-13 |
-| C4 | AC-11 (wiring), AC-15, AC-16 |
-| C5 | AC-11 (surface) |
-| E1 | AC-19, AC-20, AC-22 |
-| E2 | AC-19, AC-20, AC-21, AC-23 |
-| E3 | AC-21 (gate) |
 | D1g | AC-18 (compare), program gate |
 
-Every packet supports an obligation. Every applicable obligation has an owning packet.
+Every packet supports an obligation; every obligation has an owning packet. AC-11..AC-16 and
+AC-19..AC-23 are owned by P6.6 (EP33–EP38), not dropped.
 
 ---
 
 ## 2. Phases
 
-**Phase I — investigation.** I1, I2, I3. Exit: each question answered against its decision
-criterion. Unlocks A4 (I2) and C1 (I1, I3).
+**Phase I — investigation.** I2. Writes an evidence file only and may run beside A0.
 
-**Phase A — capability model.** A0, A1, **A1b**, A2, A3, A4, A5. Requirements AC-5..AC-10,
-AC-17, AC-18 (capture). Entry: base `6c166f97`; **A0 runs first, before any source packet**
-(the three investigations write evidence files only and may run beside it); I2 accepted
-before A4.
+**Phase A — capability model.** A0, A1, A1b, A2, A3, A4, A5. AC-5..AC-10, AC-17, AC-18
+(capture). **No packet writes a source file before A0 integrates.**
 
-**Phase B — manifest recording resolution.** B1, B2. Requirements AC-1..AC-4.
-**Entry: after A0.** Phase B is **not** independent of Phase A for scheduling purposes —
-see §5.2 for the surfaces it shares.
+**Phase B — manifest recording resolution.** B1, B2. AC-1..AC-4. Entry: A0 integrated.
 
-**Phase C — change critique.** C1..C5. Requirements AC-11..AC-16.
-
-**One entry rule. C1 needs A0, I1 and I3 — nothing else. Lane C opens on that rule, not on
-B2.** Every later C packet carries its own `Depends on`, and those gate *those* packets — C2
-waits for B2 and A5, C3 for A1 and A3, C4 for the release. Nothing gates C1 beyond A0, I1, I3.
-
-Locations that must read exactly that, to be checked mechanically after every revision because
-r2, r3 and r4 each found a straggler: this paragraph, C1's `Depends on`, the §4 edge list,
-§5.1's roster note, the Lane C card **heading and body**, and STATE's lane row and C1 row.
-
-C1 depends on **A0** because it writes source (`change-risk.ts`) — r3 finding N-9. The
-"no source before A0" rule has no exceptions; only the three investigations, which write
-evidence files alone, may run beside A0.
-
-**Phase E — coverage review.** E1, E2, E3. Requirements AC-19..AC-23. Entry: C2 integrated
-(shares the critique contracts).
-
-**Phase D — program gate.** D1g. Requirements AC-18 (compare) and program closure.
+**Phase D — program gate.** D1g.
 
 ---
 
 ## 3. Packet contracts
 
-### 3.0 Shared packet rules
+### 3.0 Shared rules
 
-**Writable surfaces** are listed per packet and **each packet's list includes the test files
-it must add or edit**. Everything else is forbidden, including `public/*.zip` and any file
-another lane holds (§5.2). `runner-v2/test/filesystem-mutation-routing.test.ts` is
-**controller-owned**: a packet that introduces a new `node:fs` importer reports it and stops.
+**Writable surfaces** are listed per packet and include that packet's tests. Everything else is
+forbidden, including `public/*.zip` and any file another lane holds (§5.2).
+`filesystem-mutation-routing.test.ts` is controller-owned: a packet adding a `node:fs` importer
+reports it and stops.
 
-**Definition of Done** (every packet): every mandatory criterion has evidence; prove-red
-performed per new guard and restored byte-exact with a hash; affected graph green with a
-recorded scope rationale; both typechecks exit 0; ESLint introduces no new error or warning;
-independent review has no unresolved mandatory finding; the worker did **not** commit, stage
-or stash.
+**Definition of Done:** every mandatory criterion evidenced; prove-red per new guard, restored
+byte-exact with a hash; affected graph green with a scope rationale; both typechecks exit 0;
+ESLint adds no error or warning; independent review has no unresolved mandatory finding; the
+worker did not commit, stage or stash.
 
-**Injection discipline** — each of these cost a real defect in P6.5 or was caught by the r1
-review:
-- Prove the injection changed the file (bytes or SHA-256) **before** reading the result.
-- Probe a type-level injection with `npx tsc --noEmit`, never a `tsx` run.
-- Assert **exact sorted allow-lists**; prove both directions.
-- **Check whether the behaviour you are "adding" already exists.** If an equivalent guard is
-  already present elsewhere, your prove-red will not redden and your packet proves nothing.
-- An assertion that passed before the feature existed proves nothing until it can fail.
-- Before reporting done, grep the tests and confirm every new export is constructed or called.
+**Injection discipline** — each item cost a real defect during P6.5 or this plan's reviews:
+prove the injection changed the file before reading the result; probe type-level injections
+with `tsc --noEmit`, never `tsx`; assert exact sorted allow-lists in both directions; **check
+whether the behaviour you are adding already exists**, or your prove-red cannot redden; an
+assertion that passed before the feature existed proves nothing until it can fail; grep that
+every new export is constructed or called by a test.
 
 ---
 
-### I1 — Change-risk thresholds (investigation)
+### I2 — Architect document allow-list (investigation)
 
-Deliverable `evidence/I1.md`: measured signal values for each of the 14 P6.5 packet commits
-and the tier each candidate threshold set assigns.
+Deliverable `evidence/I2.md`: the path set, whether it is per-project configuration or a fixed
+default, and each candidate checked against `tsconfig` includes, `next.config` and the test
+globs. **Decision criterion:** no path in the set can affect built output or test outcome.
+Writable: `evidence/I2.md`. Unlocks A4.
 
-**Decision criterion (strengthened after r1 finding I-7).** Thresholds are accepted only if,
-replayed over the P6.5 commits: **(a)** no commit containing a review-found defect lands in
-`low`; **(b)** at least one trivially safe commit lands in `low`; **and (c) at least one
-commit whose defect was only provable by execution lands in `high`.** Without (c) the
-execution tier can be empty while the criterion passes.
-
-Writable: `evidence/I1.md`. Unlocks C1.
-
-### I2 — Architect write allow-list (investigation)
-
-Deliverable `evidence/I2.md`: the proposed path set, the configuration surface, and each
-candidate checked against `tsconfig` includes, `next.config` and the test globs.
-**Decision criterion:** the set excludes every path that can affect built output or test
-outcome. Writable: `evidence/I2.md`. Unlocks A4.
-
-### I3 — Author model tier (investigation)
-
-Deliverable `evidence/I3.md`: what `acceptedChangeAuthorRuntimeIds` already yields and the
-recommended source of tier. **Decision criterion:** available inside the runner without a
-network call, and deterministic. Writable: `evidence/I3.md`. Unlocks C1.
-
----
-
-### A0 — Capture the compatibility fixture (must run first)
+### A0 — Capture the compatibility fixture (first)
 
 | | |
 |---|---|
-| Phase A · Requirements | AC-18 (capture) |
-| Outcome | A pre-change scheduler projection fixture exists in the tree, so D1g has a "before" to compare against. |
-| Writable | `runner-v2/test/support/pre-capability-run.fixture.json` (new), `runner-v2/test/replay-compatibility.test.ts` (new) |
-| Depends on | nothing. **No source packet may start until A0 is integrated.** |
+| Requirements | AC-18 (capture) |
+| Writable | `runner-v2/test/support/pre-capability-run.fixture.json`, `runner-v2/test/replay-compatibility.test.ts` |
+| Depends on | nothing |
 
-**Why first.** After A, B, C and E land, "before" cannot be recorded from the integrated tree.
-Raised by r1 finding I-8.
+Drive a representative run at `6c166f97` — plan, one worker task, a verifier verdict, a context
+manifest — and store its projection and event list. The replay test asserts deep equality.
+Prove-red: mutate one stored field → red. D1g re-runs the same test. After the work lands,
+"before" no longer exists, which is why this is first.
 
-**Steps.** Drive a representative run at `6c166f97` — plan, one worker task, a verifier
-verdict, a context manifest — and serialise the resulting projection and event list. Add a
-test that replays the fixture and asserts the projection deep-equals the stored one.
-
-**Acceptance.** The replay test passes at `6c166f97`. It is the same test D1g re-runs.
-
-**Prove-red.** Mutate one field of the stored projection → the replay test reddens.
-
----
-
-### A1 — Per-role tool allow-lists, asserted across every broker
+### A1 — Per-role allow-lists, asserted across the brokers Lane A owns
 
 | | |
 |---|---|
-| Phase A · Requirements | AC-5, AC-9a, AC-9b |
-| Writable | `native-architect-runtime.ts`, `native-verifier-runtime.ts`, `native-plan-critic-runtime.ts`, `worker-runtime.ts`, new `role-capabilities.ts`, new `runner-v2/test/role-capabilities.test.ts`, and the existing tests asserting those brokers |
-| Forbidden | `tool-broker.ts`, every tool implementation, all B / C / E surfaces |
-| Depends on | **A0 integrated** |
+| Requirements | AC-5, AC-9a, AC-9b (inspection half) |
+| Writable | `native-architect-runtime.ts`, `native-verifier-runtime.ts`, `native-plan-critic-runtime.ts`, `worker-runtime.ts`, new `role-capabilities.ts`, their tests |
+| Depends on | A0 |
 
-**Two brokers, not one.** r1 finding B-2. Each role's surface is composed from more than one
-registration site:
-
-| Role | Inspection / extras broker | Lifecycle tools |
-|---|---|---|
-| Architect | `native-architect-runtime.ts` | `createArchitectTools` registered at `build-runtime.ts:1416` |
-| Verifier | `createInspectionTools` | its verdict tool |
-| Critic | `createInspectionTools` | its critique tool |
-| Worker | `worker-runtime.ts` | its lifecycle tools |
-
-`assertRoleToolSurface` must be applied to **the role's full composed surface**, not one
-broker. AC-9b exists because `request_integration` (`architect-tools.ts:1482`) and
-`complete_run` (`architect-tools.ts:1528`) are legitimate Architect authority that D2 keeps —
-an assertion on the inspection broker alone would pass while proving nothing.
-
-**`build-runtime.ts` is held by Lane B until B2 integrates.** A1 therefore lands the
-allow-list and the assert for the brokers it owns, and the Architect lifecycle assertion is
-added by **A1b**, a controller-scheduled follow-on that runs after B2 releases that file. A1
-is not accepted until A1b is accepted; they share one evidence file.
-
-**Third filter.** `PlanOnlyInspectionRuntime` (`native-architect-runtime.ts:707-714`) uses a
-**different** predicate — `readOnly && effect !== "workspace"`. r1 finding I-5. A1 must route
-it through the same allow-list or its surface will drift.
-
-**Steps.** Derive today's effective list per role **by construction**, not by reading code.
-Replace each filter with admission against the named list. Add `assertRoleToolSurface`,
-modelled on `assertReadOnlyInspectionDefinition`, throwing on an admitted tool absent from the
-list and on a list entry never admitted. **No capability is added in this packet.**
-
-**Prove-red.** Per role and per broker: add a forbidden entry → red; remove a required entry →
-red; admit without listing → the assert throws. For AC-9b: remove `complete_run` from the
-Architect list → red.
-
-**Validation scope.** Every test importing any of the four runtimes or `createArchitectTools`.
+Derive today's effective list per role **by construction**. Replace every filter — including
+`PlanOnlyInspectionRuntime` (`native-architect-runtime.ts:707-714`), whose predicate is
+`readOnly && effect !== "workspace"` — with admission against a named list. Add
+`assertRoleToolSurface`, modelled on `assertReadOnlyInspectionDefinition`. **No capability is
+added here.** Prove-red per role and broker: add a forbidden entry, remove a required entry,
+admit without listing — each reddens. **A1 is not accepted until A1b is**; one evidence file.
 
 ### A1b — Architect lifecycle allow-list on `createArchitectTools`
 
 | | |
 |---|---|
-| Phase A (lane B) · Requirements | AC-9b (the `createArchitectTools` half) |
-| Outcome | The Architect's lifecycle tool surface is asserted by the same allow-list, so AC-9b is proved on the broker where those tools actually live. |
-| Writable | `build-runtime.ts` (the `createArchitectTools` registration at `:1416`) and the affected tests **only** |
-| Forbidden | everything Lane A holds; the tool implementations |
-| Depends on | **A1**, **B2 integrated**, and **must integrate before C4 takes `build-runtime.ts`** |
+| Requirements | AC-9b (lifecycle half) |
+| Writable | `build-runtime.ts` (the `createArchitectTools` registration, `:1416`) and its tests **only** |
+| Depends on | A1, B2 |
 
-**Why it is a separate packet.** r2 finding B-2 and regression 1. Revision 2 referred to A1b in
-prose but never gave it a contract, a traceability row, a phase listing or a graph node, so a
-controller could not assign it — and §5.2 did not order it ahead of C4, so A1b and C4 could
-both edit `build-runtime.ts`.
+Apply `assertRoleToolSurface` — defined by A1 — to the Architect's composed surface including
+`request_integration`, `complete_run` and `review_task`. Removing any of the three reddens a
+named test. A1b does not write `role-capabilities.ts`.
 
-**Steps.** Apply `assertRoleToolSurface` — already defined by A1 in `role-capabilities.ts` —
-to the Architect's composed surface including `request_integration`
-(`architect-tools.ts:1482`), `complete_run` (`:1528`) and `review_task` (`:1338`).
-
-**A1b does not write `role-capabilities.ts`.** r3 finding N-5: A1b depends on A1 and B2, not on
-A2/A3/A4, so Lane B could reach A1b while Lane A still held that file. A1 lands every
-allow-list entry A1b needs; A1b only applies the assert at the second registration site.
-
-**Acceptance.** Removing any of those three from the Architect allow-list reddens a named test.
-Adding a verifier-only tool reddens a different one.
-
-**A1 and A1b are one acceptance unit.** A1 is not accepted until A1b is; they share one
-evidence file.
-
----
-
-### A2 — MCP admission for the Architect
+### A2 — MCP class for the Architect
 
 | | |
 |---|---|
-| Phase A · Requirements | AC-10 |
-| Writable | `native-architect-runtime.ts`, `role-capabilities.ts`, `runner-v2/test/role-capabilities.test.ts`, `runner-v2/test/mcp-tools.test.ts` |
-| Forbidden | `mcp-tools.ts`, the verifier and critic runtimes, worker MCP admission |
-| Depends on | **A1** |
+| Requirements | AC-10 |
+| Writable | `native-architect-runtime.ts`, `role-capabilities.ts`, `mcp-tools.test.ts`, `role-capabilities.test.ts` |
+| Forbidden | `mcp-tools.ts`, verifier and critic runtimes |
+| Depends on | A1 |
 
-**A checked class, not list entries.** r1 finding B-3. MCP tool names come from the server and
-cannot be static allow-list entries. A2 adds a *class* rule to the admission path: a
-dynamically named tool is admitted iff `tool.definition.readOnly === true` as set by
-`createMcpTools` — which requires `readOnlyHint === true` **and** `destructiveHint === false`
-(`mcp-tools.ts:156-159`) — and `assertRoleToolSurface` treats class-admitted names as valid.
+Admit a dynamically named tool iff `createMcpTools` set `readOnly === true`
+(`readOnlyHint === true && destructiveHint === false`, `mcp-tools.ts:156-159`), with a class
+assert that accepts `effect: "external"` only for that class. Stub server with three shapes:
+only `readOnlyHint && !destructiveHint` is admitted. Prove-red: drop the `destructiveHint` half.
 
-**Scope is the Architect only.** The verifier and critic receive zero MCP tools today, and
-`assertReadOnlyInspectionDefinition` rejects `effect !== "external"`… precisely, it rejects
-`effect !== "none"`, so it could never admit one. This packet does **not** change that, and
-the SOURCE records it as deliberate.
-
-**Acceptance.** A stub server exposing (a) `readOnlyHint: true, destructiveHint: false`,
-(b) `readOnlyHint: true` with `destructiveHint` absent, and (c) neither: only (a) is admitted
-for the Architect. Verifier and critic lists remain MCP-free.
-
-**Prove-red.** Drop the `destructiveHint` half of the predicate → (b) is admitted → red.
-
----
-
-### A3 — Reader command execution, workspace-confined
+### A3 — Reader command execution
 
 | | |
 |---|---|
-| Phase A · Requirements | AC-6, AC-8 |
-| Writable | the four runtimes, `role-capabilities.ts`, **`agent-prompts.ts`**, the affected tests |
+| Requirements | AC-6, AC-8 |
+| Writable | the four runtimes, `role-capabilities.ts`, **`agent-prompts.ts`**, **`native-build-factory.ts`** (wiring the Architect's disposable workspace), their tests |
 | Forbidden | `evidence-tools.ts`, `tool-broker.ts` |
-| Depends on | **A1** |
+| Depends on | A2 |
 
-**The prompt must change with the capability.** r1 finding I-4.
-`VERIFIER_AUTHORITY_INVARIANTS` still says "Use only the provided read-only inspection tools."
-A3 owns `agent-prompts.ts` so the authority sentence is corrected in the same packet that
-grants execution. **The authorship prohibitions stay exactly as they are** — only the
-read-only-tools sentence changes.
+| Role | Execution root |
+|---|---|
+| Verifier | its verification workspace (`workspace.path`) |
+| Architect | a disposable copy, using the provider pattern the critic already uses (`native-plan-critic-runtime.ts:154-156`) |
+| Critic | **no command tool** |
 
-**Workspace per role, stated explicitly.** r1 finding I-2.
+Correct the read-only-tools sentence in `VERIFIER_AUTHORITY_INVARIANTS` in the same packet;
+keep every authorship prohibition word-for-word. Prove-red uses a **fixture double** with
+containment stubbed, because `containedDirectory` already rejects an escaping `cwd`.
+Security-sensitive: review confirms no reader reaches the project tree and approval semantics
+under all three permission profiles are unchanged.
 
-| Role | Execution root | May it write project code? |
-|---|---|---|
-| Verifier | its verification workspace (`workspace.path`) | no |
-| Critic | its disposable workspace (`native-plan-critic-runtime.ts:154-156`) | no |
-| Architect | `projectRoot` (`native-architect-runtime.ts:248`) | **decision below** |
-
-**Architect execution decision.** An Architect command running in `projectRoot` could write
-project code, which would defeat D2's filesystem boundary by another route. This packet
-confines Architect execution to a **disposable copy** as well, matching the readers. If the
-owner later wants Architect commands against the live project, that is a separate decision.
-
-**Confinement already exists.** `containedDirectory` (`evidence-tools.ts:243-255`) already
-rejects an escaping `cwd`, and A3 may not edit that file. A prove-red that removes a *second*
-check will not redden. A3's prove-red therefore uses a **fixture double** of the execution
-context with the containment stubbed out, and asserts the runtime-level confinement refuses
-independently.
-
-**Acceptance.** AC-6 as stated. AC-8: after a full verifier or critic run against a fixture
-project, the fixture project tree is byte-identical while the reader's copy may differ.
-
----
-
-### A4 — Architect path-scoped writes
+### A4 — `write_plan_document`
 
 | | |
 |---|---|
-| Phase A · Requirements | AC-7 |
-| Writable | `native-architect-runtime.ts`, `role-capabilities.ts`, `filesystem-tools.ts`, `runner-v2/test/filesystem-tools.test.ts` |
-| Depends on | **A1**, **I2 accepted** |
+| Requirements | AC-7 |
+| Writable | `architect-tools.ts`, `scheduler-store.ts` (`architect_document.requested` and its path validation), `role-capabilities.ts`, `build-runtime.ts` (tool registration), `build-spec.ts` **only if I2 chose per-project configuration**, their tests |
+| Depends on | I2, A3, A1b |
 
-**Acceptance (strengthened after r1 finding I-3).** A write to a path **I2 recorded** succeeds.
-A write to a path outside the allow-list **and outside `runner-v2/src`** — for example under
-`lib/` or `app/` — is refused. Testing only a `runner-v2/src` refusal would be satisfied by a
-one-prefix denylist, which is not the requirement.
+The Architect receives **no** filesystem mutation tool. It calls
+`write_plan_document(path, content, summary)`; the path is validated against the I2 allow-list
+in the tool **and** at the durable append boundary. Acceptance per AC-7. Prove-red: replace the
+allow-list with a `runner-v2/src` denylist → the `lib/` refusal test reddens.
 
-**Prove-red.** Replace the allow-list with a `runner-v2/src` denylist → the `lib/` refusal test
-reddens.
-
-**Cleanup note.** A new `node:fs` importer must be **reported** to the controller for the
-reviewed-owner list; the packet does not edit that test.
-
-### A5 — Architect ChangeSet attribution
+### A5 — Kernel-applied `architect_document` task
 
 | | |
 |---|---|
-| Phase A (lane B) · Requirements | AC-17 |
-| Writable | `change-set.ts`, **`native-build-factory.ts`** (the `acceptedChangeSessions` filter at `:2725-2743`), `native-architect-runtime.ts`, `build-runtime.ts`, `scheduler-store.ts`, the affected tests |
-| Depends on | **A4**, **B2 integrated**, and **before C2 and C4 take their §5.2 turns** |
+| Requirements | AC-17 |
+| Writable | `task-contracts.ts` (`BuildTaskKind`), `task-graph.ts`, `acceptance-contracts.ts`, `scheduler-store.ts`, `task-scheduler.ts`, `build-runtime.ts`, `workspace-manager.ts` (Architect commit trailer), their tests |
+| Depends on | A4 |
 
-**Why the surface is larger than revision 2 said.** r2 finding B-4. The audit list is
-`acceptedChangeSessions`, which keeps a session only when `actor.role === "worker"` and the id
-is an integrated task's `changeSetId`. `ChangeSet` has **no actor field** at all. So AC-17
-needs three things revision 2 left to the worker: an actor on the ChangeSet, a relaxation of
-that worker-only filter, and a stated commit mechanism. All three are named here, and
-`native-build-factory.ts` — where the filter lives — is in the writable list.
+**Named mechanism.** `architect_document.requested` creates a task of kind
+`architect_document`. The scheduler routes that kind to a **runner-applied** path, not a worker
+driver: `WorkspaceManager.createTaskWorkspace(taskId)`, write the file, `commitTask` with an
+Architect trailer, `createChangeSet` with the content hash as its evidence hash, then
+`IntegrationManager.integrate` (`integration-manager.ts:474`).
 
-**Commit mechanism, named rather than deferred.** r3 finding N-3 rejected "define how" as a
-step. The concrete mechanism:
+**Must also hold:** the task carries no acceptance criteria and is exempt from the
+acceptance-contract upgrade requirement; it counts toward completion readiness only as a
+terminal `integrated` task; it makes **zero** model calls; and it does not appear in
+`acceptedChangeSessions`, because it has no worker session — consistent with ESC-2 and with no
+change to that filter.
 
-| Requirement | What satisfies it |
-|---|---|
-| a workspace | `WorkspaceManager.createTaskWorkspace` with a reserved architect id; every commit API in the tree needs a task workspace, including `commitTask` (`workspace-manager.ts:129`) |
-| `taskId` in `createChangeSet` | that reserved architect id, e.g. `architect:plan`, **not** a planned task |
-| `taskCommit` | `WorkspaceManager.commitTask(<architect id>, summary)` |
-| at least one evidence hash | the written file's own content hash |
-| an actor on the ChangeSet | a new `actor` field on `ChangeSet`, since it has none today |
-| appearing in the audit | `acceptedChangeSessions` (`native-build-factory.ts:2725-2743`) must relax **both** the `actor.role === "worker"` check **and** the integrated-task-id lookup, because a reserved architect id is not an integrated task |
+**Budget.** AC-17 was changed by owner decision ESC-2. This is a new mechanism under a changed
+requirement, reviewed once; if review finds it unsound it escalates again rather than
+consuming a fresh budget.
 
-Relaxing only the role check leaves the change invisible in the audit — the lookup is the
-second gate, and r3 named it specifically.
-
-**Why a separate packet.** r1 finding B-4. `createChangeSet` (`change-set.ts:63-100`) requires
-a `taskId`, a `taskCommit` and at least one evidence hash, and throws on empty evidence.
-An Architect write has none of those. AC-17 is **not reachable** from A4's surface, and the
-packet that satisfies it must own the ChangeSet constructor.
-
-**Steps.** Define how an Architect write obtains a commit without a worker task, extend the
-constructor for an architect-authored ChangeSet with no acceptance criteria, and route it into
-the audit export.
-
-**Acceptance.** The stored ChangeSet has an architect actor, appears in the audit export, and
-is **asserted to carry no acceptance criteria**.
-
----
-
-### B1 — Bounded retry inside `recordContextPack`
+### B1 — Retry, typed error and recording suspension
 
 | | |
 |---|---|
-| Phase B · Requirements | AC-1 |
-| Writable | `context-manifest-store.ts`, `runner-v2/test/context-manifest-store.test.ts` |
-| Forbidden | **every runtime call site**, `scheduler-store.ts`, `build-runtime.ts` |
-| Depends on | **A0 integrated** |
+| Requirements | AC-1 |
+| Writable | `context-manifest-store.ts`, `context-manifest-store.test.ts` |
+| Forbidden | **every `recordContextPack` call site** |
+| Depends on | A0 |
 
-**Restructured after r1 finding B-1.** The original contract said "the three recording call
-sites". There are **five, in four files**, three of which Lane A owns and one
-(`native-worker-driver.ts`) that was on no roster. Editing them from Lane B would have been a
-parallel-write collision.
-
-**The fix is structural: no call site changes.** `recordContextPack` retries internally and,
-on exhaustion, throws a typed `ContextManifestRecordingError` carrying purpose, task id,
-attempt, revision, attempts made and the underlying reason. The five call sites already
-`await` without catching, so the error propagates unchanged. B2 converts it into a note and a
-pause at the dispatcher, which is a file Lane B already owns.
-
-**Acceptance.** A stub failing N-1 times then succeeding records exactly once and throws
-nothing. A permanently failing stub throws the typed error after exactly the bounded number of
-attempts.
-
-**Prove-red.** Remove the retry → the transient stub throws → red. Make the bound unbounded →
-a never-succeeding stub does not terminate within the test timeout → red.
+`recordContextPack` retries internally and on exhaustion throws `ContextManifestRecordingError`.
+B1 also owns the **recording-suspension API** — `suspendContextRecording(runId, reason)` and
+`isContextRecordingSuspended(runId)` — which `recordContextPack` consults first, returning
+`undefined` while suspended. Round 4 found this registry described in B2 but contracted to no
+packet; it is B1's now. Prove-red: remove the retry; make the bound unbounded; ignore the
+suspension check — each reddens.
 
 ### B2 — Note, pause and Architect resolution
 
 | | |
 |---|---|
-| Phase B · Requirements | AC-2, AC-3, AC-4 |
-| Writable | `build-runtime.ts`, **`task-scheduler.ts`**, `architect-tools.ts`, `user-steering-contracts.ts`, `scheduler-store.ts`, `lib/client/runner-v2.ts`, `components/RunnerV2ObservabilityPanel.tsx`, the affected tests and the two UI scripts |
-| Depends on | **B1** |
+| Requirements | AC-2, AC-3, AC-4 |
+| Writable | `build-runtime.ts`, `task-scheduler.ts`, `architect-tools.ts`, `user-steering-contracts.ts`, `scheduler-store.ts`, `native-build-manager.ts` (the abort path), `lib/client/runner-v2.ts`, `components/RunnerV2ObservabilityPanel.tsx`, their tests and the two UI scripts |
+| Depends on | B1 |
 
-**The worker path does not reach the dispatcher.** r2 finding B-1. `task-scheduler.ts:227-234`
-catches **every** `driver.run` rejection and calls `recordOutcome(..., { type: "failed" })`,
-which transitions the task to `failed` (`:290-292`). `build-runtime.ts:837-838` only ticks and
-awaits idle, and that promise already resolved inside the scheduler's catch. A dispatcher-only
-catch therefore sees the architect, both verifier and the critic paths — and **never the
-worker**. The run would continue with a burnt task attempt and no note, while every test
-written against the other three paths passed.
+**Worker path.** In the scheduler's catch, on `ContextManifestRecordingError` only: append the
+note, then record the **existing `paused` outcome** (`task-scheduler.ts:278-288`). The task
+stays `running` but the run is paused, and `tick` does not dispatch while paused
+(`task-scheduler.ts:119`). Every other rejection keeps today's `failed` behaviour. **Do not
+re-raise** — round 3 showed it leaves the task for the next tick to redispatch.
 
-**Do not re-raise.** r3 finding N-1: re-raising reaches `awaitIdle` and runs `finally`, but it
-skips `recordOutcome`, so the task stays `running` and the next `tick` dispatches it straight
-back into the same error. An uncaught rejection becomes `autonomous_pump_error`
-(`native-build-manager.ts:729-736`) and the note is never written.
+**Architect, verifier, critic paths.** These propagate to the dispatcher; its catch appends the
+note and pauses the run through the existing pause mechanism.
 
-**Use the pause outcome that already exists.** `task-scheduler.ts:278-288` handles
-`outcome.type === "paused"` by appending `run.paused` and **returning without transitioning
-the task to `failed`**. B2's catch therefore, on `ContextManifestRecordingError` only:
-appends the `context_manifest.recording_failed` note, then calls `recordOutcome` with the
-existing `paused` outcome. `awaitIdle` resolves, `build-runtime.ts:840` sees the pause, and
-the task is neither failed nor redispatched. Every other rejection keeps today's
-`type: "failed"` behaviour exactly.
+**Resolutions.**
+- `retry`: resume. The worker task is redispatched and recording re-attempted — correct, not a
+  defect. A finite retry budget; exhaustion re-pauses with the existing note.
+- `proceed_without_manifest`: append the durable waiver, call `suspendContextRecording`. On
+  **every runtime construction**, re-derive suspension from the durable waiver **before the
+  first dispatch**, so a crash between the waiver and the next dispatch cannot redispatch into
+  the same failure.
+- `abort`: `RunSupervisor.fail(runId, key, "context_recording_aborted")`
+  (`run-supervisor.ts:117`). The run is terminal and nothing redispatches.
 
-**`proceed_without_manifest` must be able to resume.** A waiver is useless if the resumed
-worker throws again at the same call. B1 therefore gives `context-manifest-store.ts` a
-run-scoped **recording-suspended registry**: `recordContextPack` checks it and returns
-`undefined` early. B2's dispatcher sets it when a waiver is recorded, and re-sets it on
-restart by reading the durable waiver from the projection. This works for all five call sites
-and **changes none of them**.
-
-AC-3 requires a separate named test per agent path; the worker test is the one that proves
-this, and it must assert the task is **not** `failed` and **not** redispatched.
-
-**Steps.** Catch `ContextManifestRecordingError` at the dispatcher. Append
-`context_manifest.recording_failed` to the scheduler store, then pause with the typed reason.
-Add `resolve_context_recording_failure` with the three resolutions, the reducer cases and the
-surface, mirroring the four existing pause-and-decide flows.
-
-**Bounded `retry`.** r1 finding I-1. The Architect's `retry` consumes a finite budget;
-exhausting it re-pauses with the existing note rather than looping.
-
-**Fail-closed when the note itself cannot be written.** r1 finding I-1. If the scheduler
-append throws, the run must not continue the model call. Tested explicitly.
-
-**Acceptance.** AC-2, AC-3 (including the scheduler-append-throws case), AC-4 (one test per
-resolution; rationale-less waiver rejected at the durable append boundary; retry-budget
-exhaustion re-pauses).
-
-**On release — B2 releases nothing on its own.** r3 finding N-4: revision 3's release sentence
-here and in the Lane B card handed `build-runtime.ts` and `scheduler-store.ts` to Lane C at
-B2, which is exactly the A1b/A5 race §5.2 forbids. The release is the **controller's single
-announcement**, made only after B2, A1b **and** A5 have integrated, per §5.2. B2 unblocks A1b
-and A5. It unblocks nothing in Lane C.
-
----
-
-### C1 — Deterministic change-risk assessment and its producer
-
-| | |
-|---|---|
-| Phase C · Requirements | AC-14 |
-| Writable | new `change-risk.ts`, new `change-risk.test.ts` |
-| Depends on | **A0 integrated**, **I1 accepted**, **I3 accepted** |
-
-**A producer, not only a pure function.** r1 finding I-7. This packet delivers both
-`assessChangeRisk(input)` **and** `collectChangeRiskSignals(projection, changeSet)` which
-computes the six signals from a real change. It also defines, as named exported constants:
-the **kernel surface set** and the **affected-test rule**. Prose definitions are not
-acceptable — AC-16 depends on the affected-test rule being mechanically derivable.
-
-**Acceptance.** Identical input deep-equals across calls; evidence ordering stable; the module
-contains no `Date`, `Math.random`, `process.env` or model call.
-
-**Prove-red.** Each signal removed alone → a distinct named test reddens. Add a `Date.now()`
-term → the determinism test reddens.
-
-### C2 — Change critique contracts, events and selection
-
-| | |
-|---|---|
-| Phase C · Requirements | AC-11 (contracts), AC-12 |
-| Writable | `plan-critique-contracts.ts`, `scheduler-store.ts`, `plan-critique-authority.ts`, `architect-tools.ts` (extend `resolve_plan_critique` for `stage: "change"`), the affected tests |
-| Depends on | **C1**, **B2 integrated**, **A5 integrated** (A5 writes `scheduler-store.ts` after B2 — r3 finding N-3) |
-
-**Resolution behaviour is reused, not just the finding type.** r1 finding I-6. Extend
-`resolve_plan_critique` to accept `stage: "change"`, preserve the zero-blocking auto-resolve
-path (`build-runtime.ts:1684-1692`), and add the durable field C3 needs to mark a stage-1
-finding as still open.
-
-**Acceptance.** AC-12: emptying the Architect exclusion reddens one named test; emptying the
-author exclusion reddens a **different** one. Plan-stage behaviour byte-identical — prove by
-running the whole existing plan-critique suite unchanged.
-
-### C3 — Change critic runtime, blind-first
-
-| | |
-|---|---|
-| Phase C · Requirements | AC-13 |
-| Writable | `native-plan-critic-runtime.ts`, `agent-prompts.ts`, the affected tests |
-| Depends on | **C2**, **A1 integrated**, **A3 integrated** (r1 finding B-5: A3 also writes this runtime and `agent-prompts.ts`) |
-
-**Acceptance.** Turn-1 messages contain no stage-1 finding id or claim text; turn-2 messages
-contain them; the exact stage-2 tool list is asserted; a durable "remains open" mark is
-produced on turn 2.
-
-**Review focus.** This is the anchoring guarantee. Confirm the findings cannot reach turn 1
-through **any** channel — context pack, prompt, tool result or session replay — using the same
-tool-surface reasoning that found the P6.5.6 `git.show` leak.
-
-### C4 — Dispatcher stage and graded response
-
-| | |
-|---|---|
-| Phase C · Requirements | AC-11 (wiring), AC-15, AC-16 |
-| Writable | `build-runtime.ts`, `native-build-factory.ts`, the affected tests |
-| Depends on | **C3**, **A3 integrated**, and the controller's release announcement after **B2 + A1b + A5** (r3 findings N-3, N-4, N-7) |
-
-**AC-16 must not be vacuous.** r1 finding I-7. The high-tier test asserts that the recorded
-command **is the affected-test command derived by C1's rule**. An arbitrary command such as
-`echo ok` must not satisfy it, and the prove-red replaces the command with an arbitrary one to
-show the assertion reddens.
-
-**Acceptance.** Ordering: critic before verifier. Blocking findings hold integration. One
-runtime test per tier; low records a durable skip and advances.
-
-### C5 — Client, UI and audit surface
-
-| | |
-|---|---|
-| Phase C · Requirements | AC-11 (surface) |
-| Writable | `lib/client/runner-v2.ts`, `components/RunnerV2ObservabilityPanel.tsx`, the two scripts |
-| Depends on | **C4** |
-
-Every stage-2 state renders, including the absent case; differing severity mixes render
-differently. Re-verify — do not assume — that `lib/client/native-build-activity.ts` still maps
-no event types.
-
----
-
-### E1 — Coverage contracts and blind derivation
-
-| | |
-|---|---|
-| Phase E · Requirements | AC-19, AC-20, AC-22 |
-| Writable | `plan-critique-contracts.ts`, `scheduler-store.ts`, `agent-prompts.ts`, the affected tests |
-| Depends on | **C2 integrated**, **C3 integrated** |
-
-**Why C3 and not only C2.** r2 regression 2. §5.2 sequences `agent-prompts.ts` as A3 → C3 →
-E1/E2. With a C2-only dependency, E1 and C3 could both hold that file after C2 integrated.
-
-**Steps.** Add the four categories. Add a `coverage_obligations_recorded` event and the kernel
-gate that refuses a coverage verdict with none recorded — modelled directly on RG-6's
-expectations gate. Add the derivation context builder, which carries the **objective and
-durable user guidance only**.
-
-**Acceptance.** AC-19 is **not** accepted here. r3 finding N-8: E1's section-id assertion is a
-**helper**, and a worker graded on it could satisfy this paragraph while the deriving session
-already held the plan. AC-19 is accepted on E2's message, tool-result and loaded-session
-assertions. E1 delivers the helper and is graded on AC-20 and AC-22 only.
-AC-20: the gate reddens when deleted. AC-22: each new category round-trips; an unknown one is
-rejected; the existing eight still validate.
-
-### E2 — Coverage review stages
-
-| | |
-|---|---|
-| Phase E · Requirements | AC-19, AC-20, AC-21, AC-23 |
-| Writable | `native-plan-critic-runtime.ts`, `agent-prompts.ts`, the affected tests |
-| Depends on | **E1**, **C3 integrated** |
-
-**A fresh session is part of the requirement, not an implementation detail.** r2 finding D7-1.
-The live critic session is created before the critique and already carries the plan
-(`native-plan-critic-runtime.ts:175-194`), so a derivation turn inside it is not blind however
-the context pack is composed. E2 must open a **new session whose event list is empty at
-derivation**.
-
-**The acceptance asserts the turn, not a section list.** A section-id check is a helper, not
-the proof. E2 asserts on the deriving turn's **actual messages, tool results and loaded
-session state** that the objective and durable user guidance are present and that no criteria,
-plan or diff text is — covering the four channels named in the SOURCE and the two the r2
-review added: **session replay and an earlier-turn checkpoint**.
-
-**Prove-red.** Derive inside the existing critic session → the empty-event-list assertion
-reddens. Replay a checkpoint carrying the plan into the deriving turn → the message assertion
-reddens. A section-id-only check must be shown **not** to redden in either case, which is why
-it is not the acceptance.
-
-Stage 1 derives from the objective before the plan is provided; stage 2 before the diff.
-Verdicts are per obligation. AC-23: a seeded evidence/claim mismatch produces
-`unverified_claim`; a matching citation does not.
-
-**OQ-4 — one predicate, and it does not contradict D5.** r3 finding N-6 rejected revision 3's
-wording: defect-hunting already starts at `medium`, so "one tier lower" was the same floor,
-and stage 1 runs before a change exists so change risk is not even a stage-1 input.
-
-The recorded default: **stage-1 coverage review is never skipped.** It runs on every run that
-produces a plan, including a low-plan-risk run where the plan critique itself is skipped.
-Stage-2 coverage follows D5's tiers with `low` raised to `medium` — that is the "harder to
-skip" the SOURCE recommends, expressed as a real difference rather than a slogan.
-
-Acceptance: a low-plan-risk run still records coverage obligations. The owner may override
-before Phase E starts.
-
-### E3 — Coverage gate and surface
-
-| | |
-|---|---|
-| Phase E · Requirements | AC-21 (gate) |
-| Writable | `build-runtime.ts`, `lib/client/runner-v2.ts`, the panel, the two scripts, the affected tests |
-| Depends on | **E2**, **C4 integrated** |
-
-A blocking `missing` or `weakened` verdict holds the build until resolved through the extended
-resolution path.
+Tests per AC-2..AC-4, including the three restart tests.
 
 ---
 
 ### D1g — Compatibility and program gate
 
-Depends on **A2, A4, A5, A1b, C5, E3** — the six edges in §4, not a prose phase list.
-Independent source-to-delivery reconciliation per §9, then
-AC-18's replay of the **A0 fixture**, then the full suite, then the publication commit.
+Depends on **A5** — the only leaf; every packet has a path to it. Independent source-to-delivery
+reconciliation, then AC-18 replay of the A0 fixture, then the full suite, then the publication
+commit.
 
 ---
 
 ## 4. Dependency graph
 
-Edges below are the authoritative graph. The packet "Depends on" fields match it exactly.
+**Authoritative edge list.** Every `Depends on` field and every STATE row is a copy of this.
 
 ```
-A0 ──► A1 ──► A2
-  │     ├──► A3 ───────────────────┐
-  │     └──► A4 ──► A5             │
-  │            ▲     ▲             │
-I2 ────────────┘     │             │
-                     │             │
-A0 ──► B1 ──► B2 ────┼──► A1b ─────┼──────┐
-                     │      │      │      │ (A1b before C4)
-                     ├──────┴──────┼──────┼──► C2 ──► C3 ──► C4 ──► C5
-                     │             │      │     ▲       ▲      ▲
-I1 ─┬──► C1 ─────────┴─────────────┴──────┴─────┘       │      │
-I3 ─┘                               A1 ─────────────────┘      │
-                                    A3 ────────────────────────┘
-
-                          C2 ──► E1 ──► E2 ──► E3
-                          C3 ──────┘      ▲      ▲
-                                   C3 ────┘  C4 ─┘
-
-all ──► D1g
+A0 → A1        A0 → B1
+A1 → A2 → A3
+A1 → A1b       B1 → B2 → A1b
+I2 → A4        A3 → A4        A1b → A4
+A4 → A5
+A5 → D1g
 ```
 
-**The authoritative edge list.** Every packet's `Depends on` field and every STATE row is a
-copy of this and contains nothing else. r3 finding N-7 found three edges living in a contract
-or in STATE but not here.
-
-```
-A0 → A1        A0 → B1        A0 → C1
-I2 → A4        I1 → C1        I3 → C1
-A1 → A2        A1 → A3        A1 → A4        A1 → A1b        A1 → C3
-A3 → C3        A4 → A5
-B1 → B2        B2 → A1b       B2 → A5        B2 → C2
-A1b → C4       A5 → C2        A5 → C4        A3 → C4
-C1 → C2 → C3 → C4 → C5
-C2 → E1        C3 → E1        C3 → E2        C4 → E3
-E1 → E2 → E3
-A2 → D1g   A4 → D1g   A5 → D1g   A1b → D1g   C5 → D1g   E3 → D1g
-```
-
-D1g's `Depends on` is **those six edges**, not a prose phase list — r4 finding N-7 showed a
-controller trusting "matches exactly" could start D1g with A2 unaccepted, because A2 had no
-outgoing edge. The ASCII drawing above is an illustration; **this list is the graph**, and
-where they differ the list wins.
-
-**A0 gates every packet that writes source.** r2 regression 4: revision 2's caption said
-"A0 → everything", which the drawing did not show and which is not true of I1, I2 and I3 —
-those write only an evidence file and may run beside A0. The rule is: **no packet writes a
-source file before A0 integrates.**
-
-Acyclic. **Longest path is 10** — r4 finding N-10; `A5 → C2` lengthens it past the nine
-revision 4 claimed: `A0 → A1 → A4 → A5 → C2 → C3 → E1 → E2 → E3 → D1g`.
+Acyclic. **Longest path 7**, two of them:
+`A0 → A1 → A2 → A3 → A4 → A5 → D1g` and `A0 → B1 → B2 → A1b → A4 → A5 → D1g`.
 
 ---
 
 ## 5. Lanes, ownership and serialized surfaces
 
-### 5.1 Lane roster
+### 5.1 Lanes
 
-| Lane | Packets | Owner of |
+| Lane | Packets | Notes |
 |---|---|---|
-| **Lane A** | I2 → A1 → A2 → A3 → A4 | the four agent runtimes, `role-capabilities.ts`, `filesystem-tools.ts`, `agent-prompts.ts` (A3) |
-| **Lane B** | A0 → I1 → I3 → B1 → B2 → A1b → A5 (A1b and A5 both before Lane C may take `build-runtime.ts`) | `context-manifest-store.ts`, `architect-tools.ts`, `user-steering-contracts.ts`, `change-set.ts`, and `scheduler-store.ts` + `build-runtime.ts` + the client surface **until B2** |
-| **Lane C** | C1 → C2 → C3 → C4 → C5 → E1 → E2 → E3 | `change-risk.ts`, the critique surfaces; **inherits `scheduler-store.ts` and `build-runtime.ts` only on the controller's release announcement after B2 + A1b + A5** — r4 finding N-4 |
+| **Lane A** | I2, A1, A2, A3 | runtimes, `role-capabilities.ts`, `agent-prompts.ts`, `native-build-factory.ts` |
+| **Lane B** | A0, B1, B2, A1b, A4, A5 | recording, scheduler, dispatcher, Architect tools, the new task kind |
 
-**I1 and I3 belong to Lane B. Only Lane B.** r1 finding B-5 — revision 1 assigned them twice.
-Lane C does not open until B2 integrates, so Lane B carries the investigations.
+Two lanes, not four: after A3 and B2 both lanes converge on the same files, so a third or fourth
+lane would be false parallelism. **Real parallelism is A1–A3 alongside B1–B2**, which touch no
+common file. They are not behaviourally independent — B2's tests construct runtimes whose tool
+lists A1 changes — so the controller re-runs the affected graph after integrating each.
 
-**A0 is Lane B's first packet and gates every other source packet**, including Lane A's.
+### 5.2 Serialized surfaces
 
-### 5.2 Serialized surfaces — one owner at a time
-
-| Surface | Owner sequence, in order | Why |
-|---|---|---|
-| `build-runtime.ts` | B (B2) → B (**A1b**) → B (A5) → C (C4) → C (E3) | dispatcher, the Architect lifecycle assertion, and the Architect ChangeSet. **A1b and A5 both precede C4** — r2 finding B-2 and regression 3 |
-| `scheduler-store.ts` | B (B2) → B (A5) → C (C2) → C (E1) | event union and reducer |
-| `native-build-factory.ts` | B (A5) → C (C4) | the `acceptedChangeSessions` audit filter lives here — r2 finding B-4 |
-| **`task-scheduler.ts`** | B (B2) only | its catch must re-raise the typed recording error — r2 finding B-1 |
-| `native-plan-critic-runtime.ts` | A (A1, A3) → C (C3) → C (E2) | tool admission before stage logic |
-| `agent-prompts.ts` | A (A3) → C (C3) → C (E1, E2) | the authority sentence changes with the capability; **E1 depends on C3** so this file has one owner at a time — r2 regression 2 |
-| `native-architect-runtime.ts` | A (A1, A2, A3, A4) → B (A5) | A5 needs it after A4 |
-| `architect-tools.ts` | B (B2) → C (C2) | resolution tools |
-| `lib/client/runner-v2.ts`, the panel | B (B2) → C (C5) → C (E3) | one client mirror |
-| `plan-critique-contracts.ts` | C (C2) → C (E1) | one contract owner |
-| `filesystem-mutation-routing.test.ts` | **controller only** | shared reviewed-owner audit list |
-| the five `recordContextPack` call sites | **nobody edits them** | B1 throws a typed error instead — r1 finding B-1 |
-
-**Lane B holds `build-runtime.ts` longer than revision 2 implied.** It is released to Lane C
-only after B2, A1b **and** A5 have integrated. The controller announces that release; until
-then C4 is blocked, and the Lane C card says so.
-
-Different files do not prove independence. Lane A changes what tools every role receives;
-Lane C constructs agents. **Lane C rebases onto integrated Lane A work before C3.**
+| Surface | Owner sequence |
+|---|---|
+| `build-runtime.ts` | B2 → A1b → A4 → A5 |
+| `scheduler-store.ts` | B2 → A4 → A5 |
+| `task-scheduler.ts` | B2 → A5 |
+| `architect-tools.ts` | B2 → A4 |
+| `role-capabilities.ts` | A1 → A2 → A3 → A4 |
+| `native-architect-runtime.ts` | A1 → A2 → A3 |
+| `native-verifier-runtime.ts`, `native-plan-critic-runtime.ts` | A1 → A3 |
+| `agent-prompts.ts`, `native-build-factory.ts` | A3 only |
+| `native-build-manager.ts`, `lib/client/runner-v2.ts`, the panel | B2 only |
+| `context-manifest-store.ts` | B1 only |
+| `filesystem-mutation-routing.test.ts` | controller only |
+| the five `recordContextPack` call sites | **nobody** |
 
 ### 5.3 Controller
 
-One controller owns assignment (no atomic claim primitive — §0.1), integration order, the
-reviewed-owner audit list, the ledger, the A1/A1b pairing and acceptance state. Workers own
-only their lane surfaces and their evidence file, and never commit.
+Owns assignment (no atomic claim primitive), integration order, the reviewed-owner audit list,
+the A1/A1b pairing, and acceptance. Workers own only their surfaces and evidence file, and never
+commit.
 
 ---
 
-## 6. Validation and evidence policy
+## 6. Validation and evidence
 
-**6.1 Scope.** Impact-based: the packet's own tests, every test importing a changed shared
-kernel surface, plus consumers found by inspecting callers. Rationale recorded per packet.
-
-**6.2 Full suite.** Exactly twice — the §0.3 baseline and D1g. Accepted trade-off: an escape
-surfaces at the exit gate and is located by bisecting per-packet commits. This happened once
-in P6.5 and the gate caught it.
-
-**6.3 Evidence records.** Requirement and condition; tested revision plus uncommitted-diff
-identity; command, environment, inputs; outcome with exit status and counts; log paths; review
-disposition. Zero selected tests, unexplained skips and prose-only claims do not prove
-acceptance.
-
-**6.4 Reuse.** The §0.3 baseline applies while the relevant code, dependencies, configuration
-and environment are unaffected, and the record must say why. A documentation-only commit does
-not invalidate behavioural evidence.
-
-**6.5 Fault injection.** Disposable fixtures only. Remove the injection, retain the regression
-test, restore byte-exact and prove it by hash.
+**6.1 Scope** — impact-based: the packet's tests, every test importing a changed kernel surface,
+and consumers found by inspecting callers. **6.2 Full suite** — exactly twice. **6.3 Records** —
+requirement and condition; revision and diff identity; command, environment, inputs; outcome
+with exit and counts; logs; review disposition. **6.4 Reuse** — the §0.3 baseline applies while
+code, dependencies, configuration and environment are unaffected, with the reason recorded.
+**6.5 Fault injection** — disposable fixtures only; restore byte-exact and prove by hash.
 
 ---
 
 ## 7. Review and acceptance
 
-**Planning review.** One independent coverage review by a fresh-context reviewer reading the
-SOURCE. Revision 1 was reviewed (`evidence/plan-review-r1.md`, PLAN COVERAGE INSUFFICIENT,
-5 BLOCKING + 9 IMPORTANT). **Revision 2 requires a re-review of the corrections and affected
-coverage** before PLAN READY.
-
-**Packet review.** One independent review per packet; a worker never self-accepts. Covers
-source obligations, the actual diff and surrounding behaviour, evidence reliability, missing
-behaviour and regressions, scope compliance.
-
-**Acceptance.** Every mandatory criterion evidenced; no unresolved mandatory finding;
-integration and affected-boundary checks passed; state records reflect it.
-
-**Gate enforcement is procedural** (§0.1). States: PLANNED, READY, RUNNING, IN_REVIEW,
-READY_TO_INTEGRATE, BLOCKED, ACCEPTED.
-
----
+One independent review per packet; workers never self-accept. A packet is accepted when every
+mandatory criterion is evidenced, no mandatory finding is unresolved, integration and
+affected-boundary checks pass, and STATE reflects it. Gates are procedural (§0.1). States:
+PLANNED, READY, RUNNING, IN_REVIEW, READY_TO_INTEGRATE, BLOCKED, ACCEPTED.
 
 ## 8. Repair policy
 
-REPAIR_BUDGET 3 evidence-backed cycles per tracked blocking issue, counted across sessions and
-agents. A cycle is a substantive correction plus validation. Related symptoms of one root
-cause share a record; renaming does not reset the budget. Escalate only for a genuine
-authority decision, an unsafe action, an unresolved requirement conflict, an owner-dependent
-blocker, a proposed weakening of a control, or an exhausted budget.
-
----
+Three evidence-backed cycles per blocking issue, counted across sessions and agents; related
+symptoms share a record; renaming does not reset the count. Escalate only for an authority
+decision, unsafe action, requirement conflict, owner-dependent blocker, weakened control or
+exhausted budget. **ESC-1 holds one owner-granted cycle; if B-1 is still unsound after this
+revision's review, it escalates again.**
 
 ## 9. Program closure
 
-1. Independent source-to-delivery reconciliation against the SOURCE, before the expensive
-   suite. Reuse accepted packet reviews.
-2. Repair omissions with targeted validation.
-3. AC-18: replay the A0 fixture and assert an identical projection.
-4. Full `npm run test:runner-v2`, both typechecks, ESLint, `npm run build`.
-5. Publication commit refreshing `public/*.zip`.
-6. Ledger reconciled; every row evidenced or explicitly dispositioned.
-
-"Complete" means the agreed obligations are verified. SOURCE §3 records what this program
-cannot catch.
+Independent reconciliation against the SOURCE; targeted repair; AC-18 replay; full suite, both
+typechecks, ESLint, `npm run build`; publication commit; ledger reconciled.
 
 ---
 
 ## 10. Launch cards
 
-### Controller
-> Read `.superpowers/sdd/2026-09-22-runner-v2-agent-capability/STATE.md`, then §5 and §7. You
-> own assignment, integration order, the reviewed-owner audit list, the A1/A1b pairing, and
-> acceptance. There is no atomic claim primitive: serialize every assignment and record worker,
-> lane, base and ownership. **A0 gates every source packet — integrate it first.** Enforce §5.2
->
-> **Lane B holds `build-runtime.ts` and `scheduler-store.ts` through B2, A1b and A5.** Make one
-> release announcement, only when all three have integrated. Until then C2 and C4 are both
-> blocked — **B2 alone unblocks neither**, because A5 still writes `scheduler-store.ts`
-> (r3 finding N-3). A1 is not accepted until A1b is; they are one unit sharing one evidence
-> file. Reserve the full suite for D1g.
+**Controller.** Read STATE, then §5 and §7. A0 gates every source packet — integrate it first.
+Serialize assignments and record them. Hold the A1/A1b pairing. After integrating anything from
+one lane, re-run the other lane's affected graph. Reserve the full suite for D1g.
 
-### Lane A
-> You own I2 → A1 → A2 → A3 → A4. Read STATE.md, then §3.0 and your contracts. Writable: the
-> four agent runtimes, `role-capabilities.ts`, `filesystem-tools.ts`, and `agent-prompts.ts`
-> from A3. Forbidden: `scheduler-store.ts`, `build-runtime.ts`, `architect-tools.ts` — Lane B
-> holds those. A1 asserts **both** the inspection broker and `createArchitectTools`; the second
-> half is A1b and the controller schedules it after B2. A3 changes the security posture and
-> must correct the verifier authority sentence in the same packet. Do not commit, stage or
-> stash.
+**Lane A.** You own I2, A1, A2, A3. I2 may start now; A1 waits for A0. Writable per contract;
+`build-runtime.ts`, `scheduler-store.ts`, `task-scheduler.ts` and `architect-tools.ts` are Lane
+B's. A3 changes the security posture and must correct the verifier authority sentence in the
+same packet. Do not commit, stage or stash.
 
-### Lane B
-> You own A0 → I1 → I3 → B1 → B2 → A1b → A5. **A0 first: it captures the compatibility fixture
-> and every other source packet is blocked until it integrates.** B1 must not touch any
-> `recordContextPack` call site — it retries internally and throws a typed error; B2 catches it
-> at the dispatcher. You hold `scheduler-store.ts`, `build-runtime.ts` and the client surface
-> until B2, **and you still hold them through A1b and A5**. You release nothing yourself: the
-> controller makes one release announcement after all three have integrated. Do not commit,
-> stage or stash.
-
-### Lane C (opens when A0 is integrated and I1, I3 are accepted)
->
-> You own C1 → C5 then E1 → E3. **C1 needs only I1 and I3 accepted; every later packet carries
-> its own Depends on and those are authoritative.** C4 waits for `build-runtime.ts`, which Lane
-> B holds through B2, A1b and A5 — wait for the controller's release announcement, not for B2.
-> E1 waits for C3, because C3 holds `agent-prompts.ts`. Rebase onto integrated Lane A work
-> before C3 — your agents are constructed with Lane A's allow-lists, and A3 also writes
-> `native-plan-critic-runtime.ts` and `agent-prompts.ts`. C3 and E2 carry the blindness
-> guarantees: prove the withheld material cannot reach the first turn through **any** channel,
-> including the tool surface. AC-16 must assert the affected-test command specifically — an
-> arbitrary command must not satisfy it. Do not commit, stage or stash.
+**Lane B.** You own A0, B1, B2, A1b, A4, A5, in that order. **A0 first.** B1 must not touch any
+`recordContextPack` call site. B2 must not re-raise from the scheduler. A4 waits for I2 and A3
+from Lane A. Do not commit, stage or stash.
 
 ---
 
 ## 11. Verdict
 
-**PLAN BLOCKED — two blocking conditions have exhausted REPAIR_BUDGET and are escalated to
-the owner under §8. Five further findings are repaired in revision 5 and await re-review.**
+**PLAN BLOCKED — revision 6 not yet independently re-reviewed.**
 
-### Escalated — owner decision required
+Revision 6 is a scope reduction plus two owner decisions, not a routine repair:
 
-Four independent review rounds are recorded in `evidence/plan-review-r1..r4.md`. Two
-conditions have now consumed all three permitted repair cycles each, and §8 requires
-escalation rather than a fourth attempt.
-
-**ESC-1 — B-1 / N-1: a manifest recording failure on the worker path.**
-Three cycles: (r2) restructure so no call site is edited and let the error propagate — the
-scheduler swallows it; (r3) re-raise from the scheduler catch — the task stays `running` and
-the next tick redispatches it into the same error; (r4) record the existing `paused` outcome —
-verified by the reviewer to hold the task while the run is paused, but `run.resumed`
-redispatches the same attempt, the waiver registry is not in any packet's contract, `abort` is
-unspecified against a `running` task, and §5.2 still carries the stale "re-raise" rationale.
-
-What the controller assesses as remaining: the redispatch-on-resume behaviour is **correct**
-for `retry`, is what the suspended-recording registry exists to solve for
-`proceed_without_manifest`, and is moot for `abort`. Three of the four defects are contract
-assignment and stale text. The genuinely open question is whether a recovered scheduler after
-a crash redispatches a task whose recording will fail again.
-
-**Owner decision:** grant a fourth cycle to finish the assignment gaps, or descope AC-1..AC-4
-to the three non-worker paths and record the worker path as a known gap, or drop D1 and leave
-recording fail-closed as it is today.
-
-**ESC-2 — B-4 / N-3: an Architect-authored ChangeSet cannot reach the audit.**
-Three cycles: (r2) A5 created; (r3) surface widened to `native-build-factory.ts`; (r4)
-workspace, reserved id, `commitTask`, evidence hash, actor field and both gates named. The
-reviewer's trace shows why naming them is not enough: `acceptedChangeSessions` iterates
-**sessions**, and `session.changeSet` is written only by `submit`
-(`sqlite-agent-session-store.ts:198-216`), whose only caller is `worker-runtime.ts:407`. The
-architect runtime holds `sessions` and creates an `architect:${runId}` session but never
-submits. Relaxing both gates operates on an empty candidate list. Separately `commitTask` on a
-workspace with no changes throws `NoTaskChangesError`, and the plan never says the
-allow-listed write happens in that workspace.
-
-**Owner decision:** let the Architect runtime call `submit` (a new capability, with its own
-review), or give the audit a second source for non-session changes, or descope AC-17 so
-Architect writes are attributed in the ChangeSet but not surfaced in the audit export, or drop
-D6.
-
-### Repaired in revision 5, pending re-review
-
-| r4 finding | Repair |
+| Change | Reason |
 |---|---|
-| N-2 | Every location now states one rule — C1 needs A0, I1, I3; Lane C opens on that, not B2. The locations are enumerated in §2 so the next revision can check them mechanically |
-| N-4 | §5.1's roster note no longer releases at B2; the release is the controller's single announcement after B2 + A1b + A5 |
-| N-6 | STATE PD-11 replaced with E2's predicate: stage-1 coverage is never skipped. The contradictory "one tier lower than medium" wording is gone |
-| N-7 | D1g's `Depends on` is the six edges in §4, not a prose phase list; `A2 → D1g` and `A1b → D1g` added; the drawing is declared an illustration and the list authoritative |
-| N-10 | Longest path is 10, with the path shown |
+| D4, D5, D7 and phases C and E removed | owner amendment moving them to P6.6, which already owns coverage review (T3) and deliverable review (T6) and forbids a second competing authority |
+| ESC-1 → one more cycle | B-1's remaining defects were contract assignment (the suspension registry now belongs to B1), stale text (the re-raise rationale is gone), an unspecified `abort` (now `RunSupervisor.fail`) and crash recovery (suspension re-derived before the first dispatch; three restart tests) |
+| ESC-2 → git attribution, not the audit list | the commit path is now a kernel-applied `architect_document` task, which supplies the workspace, task id, commit and evidence every existing API requires, and is absent from `acceptedChangeSessions` without changing it |
+| Architect gets no filesystem mutation tool | document writes go through `write_plan_document` and the kernel, which removes the isolation problem of writing into `projectRoot` |
+| Plan critic stays execution-free | P6.6 forbids execution during planning; the change-review stage that needed it moved to P6.6 |
 
-Confirmed repaired and closed across rounds: B-3 (r2); B-2, D7-1, regressions 1 and 2 (r3);
-N-5, N-8, N-9 (r4); and the nine r1 IMPORTANT findings.
-
-- **Responsible owner:** controller for the five repairs; **the owner** for ESC-1 and ESC-2.
-- **Unblock action:** decide ESC-1 and ESC-2, then re-review revision 5's five repairs plus
-  whatever those decisions change.
+- **Responsible owner:** controller.
+- **Unblock action:** one independent review of revision 6 against revision 2 of the SOURCE,
+  covering the whole revised plan because the scope change touches every section.
 
 **Execution has not started. Planning readiness does not authorize execution.**

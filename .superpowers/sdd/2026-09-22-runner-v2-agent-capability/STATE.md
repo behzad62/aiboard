@@ -1,108 +1,77 @@
-# STATE — Runner V2 agent capability model and change critique
+# STATE — Runner V2 agent capability model
 
-**Controller-owned. Single writer. This is the entry point for any resume.**
+**Controller-owned. Single writer. Entry point for any resume.**
 
 | | |
 |---|---|
-| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md` |
-| PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md` |
+| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 2 |
+| PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`, revision 6 |
+| Moved scope | D4, D5, D7 → P6.6 owner amendment `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md` |
 | Base revision | `6c166f97` on `main` |
 | Planning branch | `docs/agent-capability-and-change-critique` |
-| Program state | **PLANNING — revision 5. PLAN BLOCKED: 2 conditions escalated to the owner, 5 repairs await re-review.** |
+| Program state | **PLANNING — revision 6. PLAN BLOCKED on independent review of revision 6.** |
 | Execution | **NOT STARTED.** No implementation worker has been launched. |
 | Last updated | 2026-09-22 |
 
 ---
 
-## 1. Planning progress
+## 1. Planning history
 
-| Step | State |
+| Step | Outcome |
 |---|---|
-| SOURCE written and owner-approved | DONE |
-| Requirement ledger (AC-1..AC-23, AC-9 split into 9a/9b), both directions traced | DONE |
-| Phase specifications (I, A, B, C, **E**, D) | DONE |
-| Packet contracts (I1-I3, **A0**, A1, **A1b**, A2-A4, **A5**, B1-B2, C1-C5, **E1-E3**, D1g) | DONE |
-| Dependency graph, acyclic, **longest path 10**, one authoritative edge list that D1g copies | DONE |
-| Lane roster, ownership map, serialized surfaces | DONE |
-| Validation / evidence / review / repair / closure policies | DONE |
-| Launch cards (controller + 3 lanes) | DONE |
-| Independent planning coverage review, revision 1 | DONE — **PLAN COVERAGE INSUFFICIENT**, 5 BLOCKING + 9 IMPORTANT, `evidence/plan-review-r1.md` |
-| Revision 2: 14 findings addressed, D7 added (AC-19..AC-23) | DONE |
-| Re-review of revision 2 | DONE — **PLAN COVERAGE INSUFFICIENT**: 4 of 5 NOT FIXED, 1 new BLOCKING, 4 regressions, `evidence/plan-review-r2.md` |
-| Revision 3 | DONE |
-| Re-review of revision 3 | DONE — **INSUFFICIENT**: B-2, D7-1, regressions 1-2 REPAIRED; B-1 became a NEW DEFECT; B-4, B-5, regressions 3-4 NOT FIXED; 6 further findings. `evidence/plan-review-r3.md` |
-| Revision 4 | DONE |
-| Re-review of revision 4 | DONE — **INSUFFICIENT**. N-5, N-8, N-9 REPAIRED; N-1 and N-3 NOT FIXED with budget exhausted; N-2, N-4, N-6, N-7, N-10 NOT FIXED. `evidence/plan-review-r4.md` |
-| Revision 5: N-2, N-4, N-6, N-7, N-10 repaired | DONE |
-| **ESC-1 and ESC-2: owner decision** | **OUTSTANDING — blocks PLAN READY** |
-| **Re-review of revision 5** | **OUTSTANDING — blocks PLAN READY** |
+| Revision 1 | reviewed — INSUFFICIENT, 5 BLOCKING + 9 IMPORTANT (`evidence/plan-review-r1.md`) |
+| Revision 2 | reviewed — INSUFFICIENT, 4 of 5 repairs NOT FIXED, 1 new BLOCKING, 4 regressions (`-r2.md`) |
+| Revision 3 | reviewed — INSUFFICIENT, B-1 became a NEW DEFECT (`-r3.md`) |
+| Revision 4 | reviewed — INSUFFICIENT; B-1 and B-4 exhausted their budget (`-r4.md`) |
+| Revision 5 | five repairs; ESC-1 and ESC-2 escalated to the owner |
+| Owner decisions 2026-09-22 | ESC-1 → A (one more cycle); ESC-2 → A (git attribution, not the audit list); **split: D4, D5, D7 moved to P6.6** |
+| Revision 6 | scope reduced to D1, D2, D3, D6; both ESC decisions applied |
+| **Independent review of revision 6** | **OUTSTANDING — blocks PLAN READY** |
 
 ---
 
 ## 2. Next eligible action
 
-**Two actions, the first is the owner's:**
+**One action:** an independent review of revision 6 against revision 2 of the SOURCE. The
+whole plan is in scope because the scope change touches every section. ESC-1 is on its
+owner-granted extra cycle: if B-1 is still unsound, it escalates to the owner again.
 
-> **1. Owner decides ESC-1 and ESC-2** (plan §11). Both have consumed all three permitted
-> repair cycles, so §8 forbids a fourth attempt without that decision. ESC-1 is the worker-path
-> manifest recording failure; ESC-2 is whether an Architect ChangeSet can reach the audit at
-> all, given `acceptedChangeSessions` reads sessions that only `worker-runtime.ts` ever
-> submits. Each has three or four named options in §11.
->
-> **2. Then re-review revision 5** — the five repairs N-2, N-4, N-6, N-7, N-10, plus whatever
-> the ESC decisions change. Do not re-audit what rounds 1-4 cleared: B-3, B-2, D7-1,
-> regressions 1-2, N-5, N-8, N-9, and the nine r1 IMPORTANT findings.
-
-Nothing else is eligible. Planning readiness does not authorize execution, and no lane may
-start before the verdict is PLAN READY.
+Nothing else is eligible. Planning readiness does not authorize execution.
 
 ---
 
 ## 3. Assignment registry
 
-| Lane | Worker / session | Base | Worktree | Ownership state |
+| Lane | Worker / session | Base | Worktree | Ownership |
 |---|---|---|---|---|
 | Lane A | — | — | — | unassigned |
 | Lane B | — | — | — | unassigned |
-| Lane C | — | — | — | blocked: opens when **A0 is integrated and I1, I3 accepted** — not at B2 |
 
-There is **no atomic claim primitive** on this host. The controller serializes every
-assignment and records it here before a worker starts. Checking a worktree or a PR is not a
-lock. Before reassigning a stale claim, verify the previous writer has stopped.
+No atomic claim primitive exists on this host. The controller serializes every assignment and
+records it here before a worker starts. Before reassigning a stale claim, verify the previous
+writer has stopped.
 
 ---
 
 ## 4. Packet status
 
-All packets `PLANNED`. None assigned, none started.
+All `PLANNED`. Each `Depends on` copies the plan's §4 edge list.
 
-| Packet | Lane | State | Depends on |
-|---|---|---|---|
-| A0 | B | PLANNED | — · **gates every other source packet** |
-| I1 | B | PLANNED | — |
-| I2 | A | PLANNED | — |
-| I3 | B | PLANNED | — |
-| A1 | A | PLANNED | A0 integrated |
-| A1b | B | PLANNED | A1, B2 integrated · before C4 · writes `build-runtime.ts` **only** |
-| A2 | A | PLANNED | A1 |
-| A3 | A | PLANNED | A1 |
-| A4 | A | PLANNED | A1, I2 accepted |
-| A5 | B | PLANNED | A4, B2 integrated · **must integrate before C2 and C4** |
-| B1 | B | PLANNED | A0 integrated |
-| B2 | B | PLANNED | B1 |
-| C1 | C | PLANNED | **A0 integrated**, I1, I3 accepted — **this alone is the Phase C entry rule** |
-| C2 | C | PLANNED | C1, B2 integrated, **A5 integrated** |
-| C3 | C | PLANNED | C2, A1 integrated, **A3 integrated** |
-| C4 | C | PLANNED | C3, A3 integrated, and the controller release after **B2 + A1b + A5** |
-| C5 | C | PLANNED | C4 |
-| E1 | C | PLANNED | C2, **C3** integrated · graded on AC-20 and AC-22 only; AC-19 is E2's |
-| E2 | C | PLANNED | E1, C3 integrated |
-| E3 | C | PLANNED | E2, C4 integrated |
-| D1g | — | PLANNED | A, B, C, E accepted |
+| Packet | Lane | Depends on |
+|---|---|---|
+| I2 | A | — (evidence only; may run beside A0) |
+| A0 | B | — (gates every source packet) |
+| A1 | A | A0 |
+| A2 | A | A1 |
+| A3 | A | A2 |
+| B1 | B | A0 |
+| B2 | B | B1 |
+| A1b | B | A1, B2 |
+| A4 | B | I2, A3, A1b |
+| A5 | B | A4 |
+| D1g | controller | A5 |
 
-**A1 and A1b are one acceptance unit.** A1 asserts the brokers Lane A owns; A1b adds the
-Architect lifecycle assertion on `build-runtime.ts` once Lane B releases it. A1 is not
-accepted until A1b is.
+A1 and A1b are one acceptance unit sharing one evidence file.
 
 ---
 
@@ -114,54 +83,43 @@ Empty.
 
 ## 6. Blockers
 
-| ID | Blocks | Condition | Owner | Unblock action |
+| ID | Blocks | Condition | Owner | Unblock |
 |---|---|---|---|---|
-| BL-1 | — | **CLOSED.** r1 review performed; verdict PLAN COVERAGE INSUFFICIENT | controller | superseded by BL-2 |
-| BL-2 | — | **CLOSED.** r2 re-review performed; 4 of 5 NOT FIXED plus 1 new BLOCKING and 4 regressions | controller | superseded by BL-3 |
-| BL-3 | — | **CLOSED.** r3 re-review performed; B-1 became a new defect, 4 findings still open, 6 new | controller | superseded by BL-4 |
-| BL-4 | — | **CLOSED.** r4 re-review performed | controller | superseded by ESC-1, ESC-2, BL-5 |
-| **ESC-1** | PLAN READY | **B-1/N-1 exhausted REPAIR_BUDGET** — worker-path manifest recording failure, 3 cycles spent | **owner** | choose: fourth cycle / descope AC-1..AC-4 to the three non-worker paths / drop D1 |
-| **ESC-2** | PLAN READY | **B-4/N-3 exhausted REPAIR_BUDGET** — an Architect ChangeSet has no path into the audit, 3 cycles spent | **owner** | choose: let the Architect runtime `submit` / a second audit source / descope AC-17 to attribution without audit / drop D6 |
-| BL-5 | PLAN READY | Revision 5's five repairs not independently re-reviewed | controller | re-review after the ESC decisions |
-
-Open questions OQ-1, OQ-2 and OQ-3 are **not** blockers — they are scheduled investigation
-packets I1, I2 and I3 with decision criteria in the plan.
+| BL-1 … BL-4 | — | CLOSED — planning reviews r1–r4 performed | controller | superseded |
+| ESC-1 | — | **DECIDED:** option A, one owner-granted extra repair cycle for B-1 | owner | applied in revision 6 |
+| ESC-2 | — | **DECIDED:** option A, Architect ChangeSet attributed in git, absent from the audit's accepted-change list | owner | applied in revision 6 |
+| BL-5 | — | CLOSED — superseded by the scope change | controller | — |
+| **BL-6** | PLAN READY | revision 6 not independently reviewed | controller | dispatch one review |
 
 ---
 
 ## 7. Resume procedure
 
-1. Read this file, then the plan's §1 ledger and §5 ownership map, then the contract for the
-   packet you are resuming. Load context through this index — do not reread every log.
-2. Inspect actual reality: `git branch -a`, `git status`, the worktree list, the merged state
-   of `main`, and any open PR. Do not trust a recorded state you have not checked.
-3. Reconcile recorded state against actual code and evidence. Correct discrepancies here
-   before doing anything else. A checkpoint does **not** prove an interrupted command
-   succeeded; re-verify the last recorded action's outcome.
-4. Confirm exclusive ownership for the lane per §5.2 of the plan, and that the previous writer
-   has stopped.
-5. Continue the next eligible unfinished action. A new session does not justify repeating
-   completed work.
+1. Read this file, then the plan's §1 ledger and §5 ownership, then the packet contract.
+2. Inspect reality: branches, `git status`, worktrees, the state of `main`, open PRs.
+3. Reconcile recorded state with actual code and evidence before anything else. A checkpoint
+   does not prove an interrupted command succeeded.
+4. Confirm exclusive ownership per the plan's §5.2 and that the previous writer has stopped.
+5. Continue the next eligible action. Do not repeat accepted work.
 
 ---
 
-## 8. Decisions recorded during planning
+## 8. Decisions
 
 | ID | Decision | Rationale |
 |---|---|---|
-| PD-1 | 2 lanes, opening to 3 — not the permitted 4 | The dependency graph does not support four. `scheduler-store.ts` and `build-runtime.ts` are contended between Phases B and C, and Phase C depends on Phase A. Inventing a fourth lane would create false parallelism and a real conflict. |
-| PD-2 | Thresholds for change risk are measured, not chosen | The P6.5 ledger records which packets carried review-found defects, so ground truth exists. I1 replays the proposed thresholds against those commits with a stated pass criterion. |
-| PD-3 | Full suite runs exactly twice | Carried from the P6.5 owner amendment, with the accepted trade-off recorded in plan §6.2. The P6.5 exit gate caught exactly one escape, which validates the trade rather than refuting it. |
-| PD-4 | Stage 2 is blind-first | Handing an agent its own prior conclusions recreates the anchoring bias RG-6 removed. Without this, stage 2 degrades to a checklist covering only the smaller P6.5 defect class. |
-| PD-5 | Extend the critic rather than add a reviewer role | The finding contracts, blocking gate, resolution flow, selection rule and UI already exist and are already review-shaped. A separate role would duplicate all of it. |
-| PD-6 | B1 retries internally and throws a typed error; no call site is edited | r1 finding B-1. There are five `recordContextPack` call sites in four files, three owned by Lane A and one on no roster. Editing them from Lane B was a parallel-write collision. Throwing a typed error that the dispatcher catches removes the collision entirely. |
-| PD-7 | AC-9 split into 9a and 9b, asserted across two brokers | r1 finding B-2. Revision 1 said the Architect list must contain no integrate or complete tool, contradicting D2, and the assertion targeted a broker where those tools are not registered — so it would have passed while proving nothing. |
-| PD-8 | A0 captures the compatibility fixture before any source packet | r1 finding I-8. After the work lands, "before" cannot be recorded from the integrated tree. |
-| PD-12 | B-1 is fixed with the existing `paused` outcome, not a re-raise | r3 finding N-1. Re-raising skipped `recordOutcome`, leaving the task `running` for the next `tick` to redispatch into the same error. `task-scheduler.ts:278-288` already returns on a `paused` outcome without failing the task. This is B-1's third and final repair cycle; a further failure escalates under §8. |
-| PD-13 | A waiver resumes through a run-scoped recording-suspended registry | The alternative was editing one or more of the five `recordContextPack` call sites, which is the collision that started B-1. A registry inside the module that owns `recordContextPack` serves all five paths and changes none of them. |
-| PD-10 | `task-scheduler.ts` joins B2's surface | r2 finding B-1. Its catch converts every `driver.run` rejection into a failed task, so the worker's typed recording error never reaches the dispatcher. A dispatcher-only catch would have left AC-3 false for one role in four while every written test passed. |
-| PD-11 | OQ-4: **stage-1 coverage review is never skipped** | r4 finding N-6. The earlier wording was self-contradictory: defect-hunting already starts at medium, so "one tier lower" was the same floor, and stage 1 runs before a change exists so change risk is not a stage-1 input. The recorded predicate is E2's: stage-1 coverage runs on every run that produces a plan, including a low-plan-risk run whose plan critique is skipped. D5's low skip still applies to stage-2 defect-hunting. Owner-overridable before Phase E. |
-| PD-9 | D7 adopts the review pattern used on this plan | Owner-identified. A coverage reviewer reads the original request, derives obligations before seeing the artifact, returns a verdict per obligation, and verifies cited claims rather than trusting them. Nothing in Runner V2 reads the user's objective and asks whether all of it arrived. |
+| PD-1 | Two lanes, not four | After A3 and B2 both lanes converge on the same files; a third or fourth lane would be false parallelism. |
+| PD-3 | Full suite runs exactly twice | P6.5 owner amendment. The P6.5 exit gate caught exactly one escape, which validates the trade. |
+| PD-6 | No `recordContextPack` call site is edited | five call sites in four files, one on no roster; B1 throws a typed error instead. |
+| PD-7 | AC-9 split into 9a and 9b across two brokers | revision 1 contradicted D2 and asserted on a broker where the lifecycle tools are not registered. |
+| PD-8 | A0 captures the compatibility fixture first | after the work lands, "before" cannot be recorded. |
+| PD-12 | B-1 uses the existing `paused` outcome, never a re-raise | round 3: a re-raise skips `recordOutcome`, so the next tick redispatches the task into the same error. |
+| PD-14 | The suspension registry belongs to B1 and is re-derived before the first dispatch | round 4: it was described in B2 but contracted to no packet, and a restart could redispatch before a waiver took effect. |
+| PD-15 | `abort` uses `RunSupervisor.fail` | round 4: `abort` was unspecified against a `running` task. |
+| PD-16 | Architect document writes are a kernel-applied `architect_document` task | round 4: every commit API needs a task workspace, `createChangeSet` needs a task id, commit and evidence, and nothing on the Architect path built them. A real task supplies all three at zero model cost and stays out of `acceptedChangeSessions`, matching ESC-2. |
+| PD-17 | The Architect gets no filesystem mutation tool | writing into `projectRoot` bypasses isolation and the P6 handoff. |
+| PD-18 | The plan critic stays execution-free | P6.6 forbids execution during planning; the change-review stage needing it moved to P6.6. |
+| PD-19 | D4, D5, D7 moved to P6.6 | owner decision. P6.6 already owns coverage review (T3) and deliverable review (T6), and forbids a second competing authority. |
 
 ---
 
@@ -169,10 +127,7 @@ packets I1, I2 and I3 with decision criteria in the plan.
 
 | File | Contents |
 |---|---|
-| `evidence/TEMPLATE.md` | the evidence record shape every packet fills |
-| `evidence/plan-review-r1.md` | review of revision 1 — INSUFFICIENT, 5 BLOCKING + 9 IMPORTANT |
-| `evidence/plan-review-r2.md` | re-review of revision 2 — INSUFFICIENT, 4 of 5 NOT FIXED, 1 new BLOCKING, 4 regressions |
-| `evidence/plan-review-r3.md` | re-review of revision 3 — INSUFFICIENT, B-1 became a NEW DEFECT, 5 blocking conditions |
-| `evidence/plan-review-r4.md` | re-review of revision 4 — INSUFFICIENT; N-1 and N-3 exhausted their repair budget and are escalated |
+| `evidence/TEMPLATE.md` | evidence record shape |
+| `evidence/plan-review-r1.md` … `-r4.md` | the four planning reviews of revisions 1–4 |
 
-One file per packet is created when that packet starts. No packet evidence exists yet.
+No packet evidence exists yet.

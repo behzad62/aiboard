@@ -1,117 +1,75 @@
-# Runner V2 — Agent capability model and change critique (design)
+# Runner V2 — Agent capability model (design)
 
-**Status:** APPROVED SOURCE. Owner-approved in session 2026-09-22. This document is the
-SOURCE for the execution plan at
+**Status:** APPROVED SOURCE, **revision 2** (2026-09-22). Owner-approved. SOURCE for
 `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`.
 
-**Base revision:** `6c166f97` on `main` (P6.5 merged as PR #98, pre-existing lint cleared
-as PR #99).
+**Base revision:** `6c166f97` on `main` (P6.5 merged as PR #98; lint cleared as PR #99).
 
-**Supersedes nothing.** Extends the P6.5 review-gap closure
-(`docs/superpowers/plans/2026-09-02-runner-v2-p6-5-review-gap-closure.md`) and resolves the
-open owner decision OD-3 recorded in
-`.superpowers/sdd/2026-08-26-runner-v2-robust-build-improvements/progress.md`.
+**Scope change in revision 2 — owner-authorized, 2026-09-22.** Revision 1 held seven
+decisions, D1–D7. Four independent planning reviews found that D4 (change critique), D5
+(risk-gated review depth) and D7 (coverage review against the original request) duplicate
+what P6.6 already plans: P6.6 mandates an independent source-coverage review for every plan
+(T3) and one combined independent deliverable review per change with justified specialist
+review (T6), and it explicitly forbids a second competing critic or coverage authority. The
+owner decided to **move D4, D5 and D7 into P6.6 as an owner amendment**
+(`docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md`) and to keep here only
+what P6.6 does not cover: **D1, D2, D3 and D6.** Their text is retained below as moved
+pointers so traceability is not lost. Nothing is silently dropped; the obligations change
+owner, not existence.
+
+Two owner decisions from the same session are applied here:
+
+- **ESC-1 → option A.** One further repair cycle is granted for the worker-path recording
+  failure (plan finding B-1/N-1), which had exhausted its three-cycle budget.
+- **ESC-2 → option A.** An Architect-authored plan/spec change is attributed to the Architect
+  **in git**. It is **not** surfaced in the audit export's accepted-change list.
 
 ---
 
 ## 1. Why this exists
 
-P6.5 closed six review gaps and shipped ten packets. During that phase an independent
-controller reviewed every packet and found **fifteen real defects, every one of them after
-the implementing worker had reported a fully green test suite**.
+P6.5 shipped ten packets. Independent review found **fifteen real defects, each after the
+implementing worker had reported a fully green suite.** Roughly twelve had no acceptance
+criterion able to catch them, and roughly six were only *provable* by running something —
+breaking a guard and observing that zero tests failed.
 
-That fact is the entire justification for this document. The defects were not caught by the
-existing review machinery, and they were not caught because of how that machinery is shaped,
-not because anyone was careless.
+Two structural facts at `6c166f97` explain the second half of that, and are what this design
+fixes:
 
-### 1.1 What the fifteen defects looked like
+1. **Readers cannot execute.** The verifier's inspection broker admits only
+   `readOnly && effect === "none"` tools and asserts it (`native-verifier-runtime.ts:884-890`,
+   `assertReadOnlyInspectionDefinition`). `run_evidence_command` (`evidence-tools.ts:45`,
+   `readOnly: false` at line 65) is excluded, so the verifier reads only evidence produced by
+   the thing it judges. The Architect is filtered the same way for filesystem and git tools
+   (`native-architect-runtime.ts:257-274`) and has no process tools at all.
+   `VERIFIER_AUTHORITY_INVARIANTS` forbids *authorship and lifecycle control* — "edit files,
+   create commits, integrate changes, alter the plan, review worker tasks, or complete the
+   run" — not execution. The blanket read-only filter is broader than the stated intent.
+2. **One role's boundary is not self-enforcing.** The Architect filters extension
+   capabilities to `readOnly === true && effect === "none"` but registers **every MCP tool
+   unfiltered** (`native-architect-runtime.ts:304-308`), and under `permissionProfile: "full"`
+   the broker requires no approval for `effect: "external"` (`tool-broker.ts:272-280`).
 
-| Class | Count | Example |
-|---|---|---|
-| No acceptance criterion existed to catch it | ~12 | six untested manifest identity components; a class never constructed by any test; a compound guard whose clause had zero coverage |
-| A criterion existed but nothing exercised it | ~3 | "a revised task that was `waiting_guidance` transitions to `planned`" — documented, and it threw on every call |
-
-**Every P6.5 packet met its stated acceptance criteria.** That is precisely why four
-workers honestly reported green. The defects lived in the space *between* the criteria.
-
-### 1.2 Why the current roles could not catch them
-
-Runner V2 has three review layers as of `6c166f97`. All three are criterion-shaped:
-
-| Layer | When | Model | Question it asks |
-|---|---|---|---|
-| Plan critic (`native-plan-critic-runtime.ts`) | before work | ≠ Architect, enforced | "is this plan sound?" |
-| Architect `review_task` (`architect-tools.ts:1338`) | per task | same as planner | "does this meet AC-1..n?" |
-| Independent verifier (`native-verifier-runtime.ts`) | at integration | ≠ Architect and ≠ change authors, enforced | "is each criterion satisfied?" |
-
-`submit_verifier_verdict` (`verifier-tools.ts:35`) has exactly one output channel,
-`criterionVerdicts: [{ taskId, criterionId, verdict, ... }]`, and
-`assertExactVerifierCriteria` requires every criterion exactly once with no extras. The
-verifier therefore **structurally cannot report a finding that is not attached to an
-acceptance criterion**. It has nowhere to put that sentence.
-
-### 1.3 Why the readers could not prove what they suspected
-
-All three reader roles are filtered to read-only tools. `native-verifier-runtime.ts:884-890`:
-
-```ts
-.filter((tool) =>
-  tool.definition.readOnly &&
-  tool.definition.effect === "none" &&
-  tool.definition.lifecycle !== true && ...)
-...
-assertReadOnlyInspectionDefinition(tool.definition);
-```
-
-`run_evidence_command` (`evidence-tools.ts:45`, whose `readOnly: false` is at line 65) is not
-read-only because running a command can write to its working directory, so the blanket filter
-excludes it. The verifier receives `inspect_evidence` only.
-
-Note for the plan: that tool **already** confines execution — `containedDirectory`
-(`evidence-tools.ts:243-255`) rejects a `cwd` outside `context.workspacePath`. Any packet
-claiming to add confinement must account for the check that exists, or its prove-red will not
-redden.
-
-The consequence: **a reader can only read evidence produced by the thing it is judging.**
-Of the fifteen P6.5 defects, roughly six were only *provable* by running something — breaking
-a guard and observing that zero tests failed. A reader without execution can suspect those
-and cannot establish them.
-
-Note what `VERIFIER_AUTHORITY_INVARIANTS` (`agent-prompts.ts`) actually forbids:
-
-> "You have no authority to **edit files, create commits, integrate changes, alter the plan,
-> review worker tasks, or complete the run**."
-
-That list is about **authorship and lifecycle control**. Running a command to check a claim
-is none of those. The read-only tool filter is broader than the stated intent and excludes
-execution as collateral, not by decision.
-
-### 1.4 The owner's position
-
-Recorded verbatim, 2026-09-22:
+The owner's position, recorded verbatim:
 
 > "if we are giving AI agents to handle the tasks they should have the necessary tools to do
 > it, unless we let other parts of our architect handle such a things and we do it for a good
 > reason"
 
-and
-
 > "maybe we dont want the architect and verifier to directly write code or modify project
 > files but that does not mean it should not be able to write/modify specs/plans and other
 > parts or run tools"
 
-The distinction the owner draws, and which this design adopts: **"must not author project
-code" is a legitimate boundary. "Cannot act at all" is not.**
+**"Must not author project code" is a legitimate boundary. "Cannot act at all" is not.**
 
 ---
 
-## 2. Approved decisions
+## 2. Decisions
 
-### D1 — Context manifest recording failure is resolved by the Architect (closes OD-3)
+### D1 — A failed context-manifest write is resolved by the Architect (closes OD-3)
 
 **Problem.** `recordContextPack` (`context-manifest-store.ts`) awaits `artifacts.put` and
-`store.record` with no `try`/`catch`. It is awaited on the model-call path from **five call
-sites in four files**, verified by inspection at `6c166f97`:
+`store.record` with no `try`/`catch`, from **five call sites in four files**:
 
 | File | Line |
 |---|---|
@@ -120,354 +78,171 @@ sites in four files**, verified by inspection at `6c166f97`:
 | `native-verifier-runtime.ts` | 378, 651 |
 | `native-worker-driver.ts` | 161 |
 
-A side-ledger write failure — a locked SQLite file, a full disk, an antivirus handle —
-therefore fails the Build step. `SqliteToolLedger` behaves the
-same way, so this is consistent with Runner V2, not an oversight. It was surfaced by the
-implementing worker rather than silently patched.
+A side-ledger write failure — a locked SQLite file, a full disk, an antivirus handle — fails
+the Build step. The context manifest is audit-only; nothing reads it to decide anything. An
+observability feature that can kill a build is a real cost, and P6.5 hit Windows `EPERM` on
+SQLite handles twice.
 
-The tension: the tool ledger is load-bearing (it fences and de-duplicates tool calls, so
-proceeding after a failed write is genuinely unsafe). The context manifest is **audit-only** —
-nothing reads it to make a decision. An observability feature that can kill a build is a
-real cost, and this phase hit Windows `EPERM` on SQLite handles twice.
-
-**Decision.** Neither "always die" nor "always continue". The Architect assesses and decides.
+**Decision.**
 
 ```
 recordContextPack fails
-  → retry with bounded backoff            (catches the common transient lock)
+  → bounded retry with backoff             (the common transient lock)
   → still failing
-  → write a durable note to the SCHEDULER STORE
-    (deliberately a different database from the one that failed,
-     so the note itself can land)
-  → PAUSE and present a typed decision to the Architect
+  → durable note in the SCHEDULER STORE    (a different database from the one that failed)
+  → the run PAUSES; the Architect must decide
 ```
-
-The Architect must answer with exactly one of:
 
 | Resolution | Meaning | Effect |
 |---|---|---|
-| `retry` | "the cause is addressed or transient" | re-attempt recording, bounded |
-| `proceed_without_manifest` | "not fixable, not fatal" — **requires a rationale** | run continues; the audit gap is attributed, never silent |
-| `abort` | "unrecoverable" | run stops with the reason recorded |
+| `retry` | cause addressed or transient | resume; recording re-attempted within a finite budget; exhausting it re-pauses with the existing note |
+| `proceed_without_manifest` | not fixable, not fatal — **rationale required** | recording is suspended for the run; the gap is attributed, never silent |
+| `abort` | unrecoverable | the run fails through the existing `RunSupervisor.fail` path (`run-supervisor.ts:117`) with the reason recorded |
 
-**Rationale for the middle option.** The objection to "just continue" was silent audit gaps.
-A waiver is not silent: it is a decision with an author and a written reason in the durable
-record. This is the same device RG-2 already uses for `acceptedFailures`.
+**Mechanism constraints, established by four review rounds and binding on the plan.**
 
-**Rationale for the shape.** This mirrors four existing P6.5 pause-and-decide flows —
-repair-cycle limit, verifier unavailable, worker replan, plan critique resolution. Nothing
-new to learn and the UI vocabulary already exists.
+1. **No call site is edited.** `recordContextPack` retries internally and throws a typed
+   `ContextManifestRecordingError` on exhaustion.
+2. **The worker path does not reach the dispatcher.** `task-scheduler.ts:227-234` turns every
+   `driver.run` rejection into a failed task. Re-raising from there is also wrong: it skips
+   `recordOutcome`, leaving the task `running` for the next tick to redispatch into the same
+   error, and an uncaught rejection becomes `autonomous_pump_error`
+   (`native-build-manager.ts:729-736`). The scheduler must instead record the **existing
+   `paused` outcome** (`task-scheduler.ts:278-288`), which appends `run.paused` and returns
+   without failing the task.
+3. **A waiver must survive restart.** Recording suspension is a runtime switch owned by
+   `context-manifest-store.ts` and **re-derived from the durable waiver event before the first
+   dispatch** whenever a runtime is constructed. It serves all five call sites and edits none.
 
-**Explicitly rejected:** making recording silently non-gating (reintroduces the silent gap);
-leaving it purely fail-closed (a locked file kills a long build for an audit write).
+**Explicitly rejected:** silently non-gating recording (reintroduces the silent audit gap);
+purely fail-closed recording (a locked file kills a long build for an audit write).
 
 ### D2 — Capability model: doers author, readers observe and execute
 
-**Decision.** Replace the blanket read-only filter with an explicit per-role capability
-allow-list. Every boundary must be **asserted**, not merely filtered, so it cannot drift.
+**Decision.** Replace the blanket read-only filter with an explicit per-role allow-list,
+asserted at registration across **every broker the role uses**, failing closed.
 
-| Role | Read project | Run commands | Write project code | Write plans/specs | Lifecycle authority |
+| Role | Read project | Run commands | Author project code | Write plans/specs | Lifecycle authority |
 |---|---|---|---|---|---|
 | Worker | yes | yes | yes | yes | none |
-| Architect | yes | **yes (new)** | no | **yes, path-scoped (new)** | plan, review, integrate, complete |
-| Independent verifier | yes | **yes, in its own workspace (new)** | no | no | typed verdict only |
-| Plan / change critic | yes | **yes, in its own workspace (new)** | no | no | typed findings only |
+| Architect | yes | **yes (new), in a disposable copy** | no | **yes (new), via D6 only** | plan, review, integrate, complete |
+| Independent verifier | yes | **yes (new), in its own workspace** | no | no | typed verdict only |
+| Plan critic | yes | **no** | no | no | typed findings only |
 
-Unchanged for every reader role: **no commits, no integration, no completing the run.** The
-verifier and critic additionally retain: no plan mutation, no task review.
+**Why the plan critic stays execution-free.** It runs during planning. P6.6 forbids
+implementation tests and application execution during planning mode, and the change-review
+stage that would need execution moved to P6.6 with D4.
 
-**Why readers may now execute.** Independent review that cannot run an experiment is
-skeptical reading. The evidence from §1.3 is direct: roughly six of the fifteen P6.5 defects
-were only provable by execution. `run_evidence_command` already records exit code, output and
-revision as durable, attributable evidence, so a reader running a command is not off-book —
-it produces evidence exactly like a worker does.
+**Why readers may execute.** Independent review without an experiment is skeptical reading.
+Roughly six P6.5 defects were only provable by execution. `run_evidence_command` already
+records exit code, output and revision as durable, attributable evidence.
 
-**Why this does not compromise independence.** The verifier and critic execute inside **their
-own disposable workspace copy**, never the user's project. The verifier already receives a
-workspace; RG-6 added a second baseline one. Nothing the user cares about is mutated.
+**Why independence survives.** Reader execution runs in a disposable copy or the reader's own
+workspace, never the user's project. `containedDirectory` (`evidence-tools.ts:243-255`)
+already rejects an escaping `cwd`; any new confinement must account for it.
 
-**Why the Architect still may not author code.** The Architect is also the reviewer
-(`review_task`). An Architect that writes code reviews its own code. That is the same defect
-RG-6 was built to remove one layer up, and it is not reopened here.
+**Why the Architect still may not author code.** It is also the reviewer (`review_task`). An
+Architect that writes code reviews its own code — the defect RG-6 removed one layer down.
 
-**Why path-scoped writes are cheap.** `filesystem-tools.ts` already enforces `hiddenPaths`
-(read policy) and `protectedPaths` (write policy). Architect plan/spec writes are an
-allow-list variant of machinery that exists.
+**Unchanged for every reader:** no commits, no integration, no completing the run. The
+verifier and critic additionally cannot alter the plan or review tasks. The Architect
+**retains** `review_task`, `request_integration` and `complete_run`
+(`architect-tools.ts:1338`, `:1482`, `:1528`) — D2 must not delete legitimate authority.
 
-**Explicitly rejected:** giving the Architect full worker powers (destroys reviewer
-independence); keeping readers execution-free (the status quo that produced §1.3).
+**Planning-mode note for P6.6.** Architect command execution granted here applies outside a
+new-policy planning state. P6.6 T3 owns keeping new-policy planning read-only.
 
-### D3 — MCP tools are filtered for reader roles
+### D3 — MCP admission for the Architect is filtered
 
-**Problem.** The Architect is the only role whose boundary is not self-enforcing. It filters
-filesystem and git tools by `readOnly`, and extension capabilities by
-`readOnly === true && effect === "none"`, but registers **all MCP tools unfiltered**
-(`native-architect-runtime.ts:304-308`). MCP tools carry `effect: "external"` and take
-`readOnly` from the server's own `readOnlyHint`.
+**Decision.** The Architect admits only MCP tools that `createMcpTools` maps to
+`readOnly === true`, as a **checked class** — server-supplied names cannot be static allow-list
+entries. The mapper's predicate is `readOnlyHint === true && destructiveHint === false`
+(`mcp-tools.ts:156-159`), and it always sets `effect: "external"`, so
+`assertReadOnlyInspectionDefinition` can never admit one; the class needs its own assert.
+Verifier and critic stay at zero MCP tools, as today. MCP is not banned: read-only documentation
+lookup is genuinely useful for planning.
 
-Approval (`tool-broker.ts:272-280`) is `permissionProfile !== "full" && (... effect === "external" ...)`.
+**Explicitly rejected:** banning MCP for readers; forcing approval even under `full`.
 
-| Profile | Architect MCP call |
-|---|---|
-| `guarded` / `project` | user approves each one |
-| `full` | **no approval and no filter** |
+### D4 — MOVED to P6.6
 
-So under `full`, a configured MCP server can hand the Architect write and execute power,
-twenty lines below the code that deliberately stripped exactly those. This is an
-inconsistency rather than a silent backdoor — the operator chose `full` — but the Architect
-should not be the one role whose boundary can drift.
+Change critique. See the P6.6 owner amendment, requirements EP36–EP38.
 
-**Decision.** Reader roles admit only MCP tools that `createMcpTools` maps to
-`readOnly === true`, and the admission is covered by the same style of assert the verifier
-already has. MCP is not banned: read-only documentation lookup (Context7 and similar) is
-genuinely useful for planning.
+### D5 — MOVED to P6.6
 
-**The predicate is the mapper's, not the raw hint.** `mcp-tools.ts:156-159` sets
-`readOnly` only when `readOnlyHint === true` **and** `destructiveHint === false`, and always
-sets `effect: "external"`. Two consequences the plan must honour:
+Risk-gated review depth. See the P6.6 owner amendment, requirement EP38.
 
-1. A server declaring `readOnlyHint: true` without `destructiveHint: false` is **not**
-   admitted. The narrower mapper predicate governs.
-2. `assertReadOnlyInspectionDefinition` rejects `effect !== "none"`, so that existing assert
-   can never admit an MCP tool. Admitting MCP for a reader needs a **separate checked class**
-   — dynamic server-supplied names cannot be static allow-list entries — with its own assert
-   that accepts `effect: "external"` only for tools the mapper marked `readOnly`.
+### D6 — Architect plan/spec writes are attributed in git (ESC-2 → option A)
 
-**Current verifier and critic behaviour is zero MCP tools, and this decision does not change
-that.** Only the Architect's MCP admission is filtered. Extending MCP to the verifier or
-critic is out of scope here and would need its own decision.
+**Decision.** The Architect writes plans and specs through a single lifecycle tool,
+`write_plan_document(path, content, summary)`, admitted only for paths on the investigated
+allow-list. It does **not** receive filesystem mutation tools.
 
-**Explicitly rejected:** banning MCP for readers (loses legitimate capability); forcing
-approval even under `full` (changes what the operator's own `full` setting means).
+**Mechanism.** The write becomes a kernel-applied task of a new kind, `architect_document`.
+The runner — not a model — creates the task workspace, writes the file, commits it with an
+Architect trailer through `WorkspaceManager.commitTask`, builds the ChangeSet through
+`createChangeSet` with the file's content hash as its evidence, and integrates it through
+`IntegrationManager.integrate` (`integration-manager.ts:474`). Applying it costs **no model
+tokens**.
 
-### D4 — The plan critic becomes a two-stage critic
+**Why a kernel-applied task.** Four review rounds established that every commit API in the
+tree needs a task workspace, `createChangeSet` (`change-set.ts:63-100`) needs a task id, a task
+commit and at least one evidence hash, and nothing on the Architect path constructs any of
+them. A real task supplies all three and reuses isolation, commit, integration and handoff
+unchanged. Writing into `projectRoot` instead would bypass isolation and the P6 handoff.
 
-**Decision.** Extend the existing critic rather than adding a parallel reviewer role. It
-gains a second stage that reviews the **change** instead of the **plan**.
+**Consistent with ESC-2.** `acceptedChangeSessions` (`native-build-factory.ts:2725-2743`) keeps
+only worker sessions with a submitted ChangeSet. A kernel-applied task has no worker session,
+so it does not appear there — exactly the owner's choice, with no change to that filter. Git
+shows who wrote the plan.
 
-```
-plan → [critic stage 1: plan] → workers → integrate
-     → [critic stage 2: change]   ← new
-     → [verifier: criteria] → final verification → complete
-```
+**Explicitly rejected:** Architect filesystem mutation tools (no isolation, no attribution
+path); plans kept only in runner-private state (splits the plan away from git).
 
-**What is reused unchanged.** `PlanCritiqueFinding` (severity / category / taskIds / claim /
-evidence), the blocking gate, the Architect `resolve_plan_critique` resolution flow, advisory
-auto-resolution, the independence selection rule, and the observability surface. The finding
-vocabulary is already a review-finding vocabulary.
+### D7 — MOVED to P6.6
 
-**What must differ.**
-
-1. **Selection excludes change authors.** A plan critic must not be the Architect. A change
-   critic must also not be any worker who authored an accepted change.
-   `RuntimeRouter.selectVerifier` already accepts `acceptedChangeAuthorRuntimeIds`
-   (`runtime-router.ts:189`); the plan stage passes `[]`, the change stage passes the real
-   authors. A consequence to accept: **stage 2 may select a different model than stage 1**,
-   which is correct.
-2. **Stage 2 is blind-first.** Its own stage-1 findings are **not** provided in its first
-   turn. It forms and files findings against the diff, and only then is shown the stage-1
-   findings to mark which remain open. Handing an agent its own prior conclusions up front
-   recreates precisely the anchoring bias RG-6 exists to remove, and would turn stage 2 into
-   a checklist that catches only the ~3 defect class from §1.1.
-3. **Stage 2 runs before the verifier.** The verifier answers the contract; the critic hunts
-   what the contract missed. If the critic blocks, the verifier's budget has not been spent
-   on a change that is about to change.
-
-**Why not a separate reviewer role.** It would duplicate the finding contracts, the
-resolution flow, the selection rule, the UI and the tests, and would give the operator two
-roles to configure for one job.
-
-### D5 — Change critique is risk-gated with graded depth
-
-**Decision.** Stage 2 is **not** run on every build, and is **not** a binary skip-or-review.
-
-Owner rationale, recorded: the purpose is to catch edge cases and poor work from fast cheap
-worker models, and neither tokens nor wall-clock should be spent on changes that do not
-warrant it.
-
-**Change risk is assessed deterministically**, in the same style as `assessPlanRisk`: no
-clock, no randomness, no environment lookup, no model call, so the same change always yields
-the same risk.
-
-| Signal | Rationale |
-|---|---|
-| Author model tier | a fast cheap worker earns more scrutiny than a frontier one; authorship is already durable via `acceptedChangeAuthorRuntimeIds` |
-| Shared kernel surface touched | a change to the scheduler store is not a change to a README |
-| Source changed with no test changed | the loudest single smell observed during P6.5 |
-| Task required more than one attempt | it already struggled once |
-| An `acceptedFailures` waiver was used | someone explicitly accepted a red command |
-| Size — files and lines touched | blunt but real |
-
-**Graded response.**
-
-| Risk | Stage 2 behaviour | Cost |
-|---|---|---|
-| low | durable skip, recorded with reason | ~0 |
-| medium | read the diff, file findings | one model pass |
-| high | read the diff **and run the affected tests itself** | one pass plus compute |
-
-The top tier is where D2's execution capability pays for itself: reading a test file shows it
-exists; running it with the guard removed shows whether it does anything.
-
-**Explicitly rejected:** running stage 2 on every build (wastes budget on trivial changes);
-binary skip-or-full (wastes the middle tier).
-
-### D6 — Architect-authored plan and spec writes are attributed
-
-**Decision.** Architect writes under the allow-listed plan/spec paths land as an
-**Architect-authored ChangeSet** — attributed, in the audit, carrying no acceptance criteria.
-
-**Why.** Today every repository change belongs to a task, a worker and a ChangeSet. An
-unattributed Architect write would be the only change in the system with no owner.
-
-**Known constraint the plan must solve, not assume away.** `createChangeSet`
-(`change-set.ts:63-100`) is the only constructor and it requires a `taskId`, a `taskCommit`
-and at least one evidence hash, throwing when evidence is empty. An Architect write has no
-worker task and no task commit. Nothing on the Architect path or in the filesystem tools
-constructs a ChangeSet today. Satisfying this decision therefore requires a change to the
-ChangeSet construction and integration path — it is **not** reachable from the filesystem
-tool layer alone, and the owning packet's writable surface must say so.
-
-**Explicitly rejected:** keeping plans in runner-private state and exporting on demand (splits
-the plan away from git, where the owner reads it).
-
-### D7 — Independent coverage review against the original request
-
-**Problem.** Every review layer in Runner V2 inherits the Architect's criteria.
-
-```
-user objective
-   ↓  the Architect writes criteria          ← the only translation step, unchecked
-plan critic  → checks the criteria are well-FORMED
-verifier     → checks the criteria are SATISFIED
-RG-6 pass 1  → derives expectations FROM the criteria
-```
-
-The plan critic's own instruction (`agent-prompts.ts:230`) asks eight questions and every one
-is about the plan's internal quality: is each criterion testable, do tasks overlap, are
-dependencies complete, which failure modes are omitted, which assumptions are unproven, is a
-task too large, can each be verified independently, is integration owned. The categories match
-— `ambiguous_criterion`, `untestable_criterion`, `missing_dependency`, `overlapping_scope`,
-`missing_failure_mode`, `unproven_assumption`, `oversized_task`, `missing_integration_task`.
-
-**None of them can express "the objective requires X and no task delivers X."** The objective
-is passed in as `required("build-objective", "user-intent", input.objective)`, but only as
-background. If the Architect's criteria miss something the user asked for, every layer below
-inherits the miss and the build completes green having not done what was asked.
-
-**Decision.** Add a coverage dimension that reads the **user's original objective** and
-derives independently, before it is allowed to see what was produced. This is the pattern
-used to review this very document, which the owner identified as the model to adopt.
-
-The pattern, in the order it must run:
-
-| Step | Rule |
-|---|---|
-| 1 | **Fresh session.** No history of the work being reviewed. |
-| 2 | Read the **original objective and durable user guidance** — not the Architect's criteria, not the plan. |
-| 3 | **Derive and durably record** the obligations that request implies, **before** the plan or diff is provided. |
-| 4 | Only then receive the plan (stage 1) or the diff and criteria (stage 2). |
-| 5 | Return a verdict **per derived obligation**: `covered` / `weakened` / `missing`. |
-| 6 | **Verify cited claims against the repository** rather than trusting them. |
-
-Step 3 reuses machinery that already exists: RG-6's `record_verification_expectations` is
-exactly "record what should be true before you are allowed to see what is", and its kernel
-gate already refuses a verdict when no expectations were recorded. D7 points that same device
-at coverage-against-the-request instead of satisfaction-of-criteria.
-
-Step 6 is not decoration. The review of this document checked its code citations against the
-repository and found three that were off by a line or two; more importantly, that habit is
-what distinguishes a reviewer from a reader who agrees.
-
-**New finding categories**, additive to the existing eight:
-
-| Category | Means |
-|---|---|
-| `missing_coverage` | the objective requires it and nothing delivers it |
-| `weakened_obligation` | a task covers it, but for less than was asked |
-| `scope_creep` | a task serves no part of the objective |
-| `unverified_claim` | a cited evidence record does not say what the citing task claims |
-
-**Why this is worth its cost.** A missed obligation is worse than a missed bug: the bug is
-found later, the missed obligation is delivered as success. Of the fifteen P6.5 defects, the
-smaller class — a criterion that existed but was never exercised — is exactly what step 5's
-`weakened` verdict catches, and no existing layer catches it at all.
-
-**Explicitly rejected:** giving the coverage check the Architect's criteria as its input
-(that is the inherited-gap problem restated); making it advisory only (a missed obligation
-that cannot block is a missed obligation that ships).
-
-**Owner decision still open — OQ-4.** Whether stage-1 coverage review is risk-gated like D5
-defect-hunting, or mandatory on every run. The recommendation recorded here is that it should
-be **harder to skip than defect-hunting**, because a missed obligation is delivered as
-success, but the cost is a full reasoning pass before the plan may be read.
+Coverage review against the original request. See the P6.6 owner amendment, EP33–EP35.
 
 ---
 
-## 3. Honest limits of this design
+## 3. Honest limits
 
-Recorded so the plan does not oversell what it buys.
-
-1. **Review has a ceiling.** Sorting the fifteen P6.5 defects by what would have been needed:
-   roughly seven were findable by careful reading, roughly six were only provable by running,
-   and a further class — timing, load, real-world behaviour — is findable by **neither**. As
-   the owner put it: "sometimes things only show in real live and smoke tests anyway." That
-   class belongs to P7 real-world qualification and is explicitly out of scope here.
-2. **The Architect cannot repair runner-private state, and this design does not grant that.**
-   Under D1 the Architect's "solve it" is realistically *retry after a transient cause
-   passes*, or *waive with a reason*, or *stop*. The SQLite ledgers and workspaces under
-   `stateDirectory` are written only by the runner itself, and opening them to an agent would
-   undermine the fencing, ownership and replay guarantees that depend on them.
-3. **Stage 2 costs a full model pass over the diff** whenever risk is medium or high, plus
-   compute at high. D5 exists to bound that, but the cost is real and should be measured
-   before it is assumed acceptable at scale.
-4. **A blocking critic finding can halt a build.** That is intended — a critic that cannot
-   block is a suggestion box, and the ~12 defect class from §1.1 would ship regardless — but
-   it means a reader model gains the power to stop delivery, gated by Architect resolution.
+1. **Review has a ceiling.** Timing, load and real-world behaviour are findable neither by
+   reading nor by a clean-room test run. That is P7.
+2. **The Architect cannot repair runner-private state, and D1 does not grant it.** "Solve it"
+   is realistically *retry after a transient cause passes*, *waive with a reason*, or *stop*.
+3. **`architect_document` is a new task kind**, not a small edit. The owner was told ESC-2
+   option A was a small change; the review rounds showed a commit path is unavoidable, and the
+   kernel-applied task is the cheapest one that preserves isolation. It costs no tokens to
+   apply, but it is real scheduler work.
 
 ---
 
-## 4. Requirements this design creates
-
-Stable IDs. The execution plan owns decomposition, ownership and acceptance routes.
+## 4. Requirements
 
 | ID | Requirement | From |
 |---|---|---|
-| **AC-1** | A failed context-manifest write retries with bounded backoff before it is treated as failed. | D1 |
-| **AC-2** | An exhausted recording failure writes a durable note to the scheduler store, not to the ledger that failed. | D1 |
-| **AC-3** | An exhausted recording failure pauses the run and presents a typed decision to the Architect; the run never silently continues and never dies without the note. | D1 |
-| **AC-4** | The Architect resolves it with exactly one of `retry`, `proceed_without_manifest` (rationale required), `abort`; each is durable and attributed. | D1 |
-| **AC-5** | Each agent role's tool surface is an explicit allow-list, asserted at registration, failing closed on an unlisted tool. | D2 |
-| **AC-6** | The Architect can run commands, subject to the run's permission profile. | D2 |
-| **AC-7** | The Architect can write only under configured plan/spec paths; any other project write is refused. | D2 |
-| **AC-8** | The verifier and critic can run commands **inside their own workspace only**; the user's project is never mutated by a reader. | D2 |
-| **AC-9** | No reader role can commit, integrate, or complete the run; the verifier and critic additionally cannot alter the plan or review tasks. | D2 |
-| **AC-10** | Reader roles admit only MCP tools declaring `readOnlyHint: true`, asserted. | D3 |
-| **AC-11** | A change critique stage exists, runs at integration before the verifier, and reuses the existing finding, gate and resolution contracts. | D4 |
-| **AC-12** | Change-critic selection excludes the Architect **and** every accepted change author. | D4 |
-| **AC-13** | Stage 2 forms its findings before being shown its own stage-1 findings. | D4 |
-| **AC-14** | Change risk is deterministic: identical change, identical risk; no clock, randomness, environment or model call. | D5 |
-| **AC-15** | Change critique is graded low / medium / high, with a durable recorded skip at low. | D5 |
-| **AC-16** | At high risk the critic runs the affected tests itself and its results are recorded as durable evidence. | D5 |
-| **AC-17** | Architect plan/spec writes land as an attributed Architect-authored ChangeSet. | D6 |
-| **AC-18** | Runs created before this change keep current semantics and remain replayable. | compatibility |
-| **AC-19** | A coverage review derives its obligations from the **original objective and durable user guidance**, never from the Architect's criteria or plan. | D7 |
-| **AC-20** | Those obligations are durably recorded **before** the plan (stage 1) or the diff (stage 2) is provided; the kernel refuses a coverage verdict with no recorded obligations. | D7 |
-| **AC-21** | The coverage verdict is per derived obligation, one of `covered` / `weakened` / `missing`, and a `missing` or `weakened` verdict at blocking severity holds the build. | D7 |
-| **AC-22** | The four new finding categories are accepted by the contracts and rejected when malformed, alongside the existing eight. | D7 |
-| **AC-23** | A cited evidence record that does not support the citing claim is reportable as `unverified_claim`. | D7 |
+| AC-1 | A failed manifest write retries with bounded backoff before it is treated as failed. | D1 |
+| AC-2 | An exhausted failure writes a durable note to the scheduler store, not the failed ledger. | D1 |
+| AC-3 | An exhausted failure pauses the run with a typed Architect decision on **all four agent paths**; it never silently continues and never dies without the note. | D1 |
+| AC-4 | The Architect resolves it with exactly one of `retry`, `proceed_without_manifest` (rationale required), `abort`; each durable, attributed and restart-safe. | D1 |
+| AC-5 | Each role's tool surface is an explicit allow-list, asserted across every broker, failing closed. | D2 |
+| AC-6 | The Architect can run commands in a disposable copy, subject to the run permission profile. | D2 |
+| AC-7 | Architect document writes are refused outside the investigated plan/spec allow-list. | D2, D6 |
+| AC-8 | Verifier command execution is confined to its own workspace; the plan critic has none; the user's project is never mutated by a reader. | D2 |
+| AC-9a | Verifier and critic cannot commit, integrate, complete, alter the plan or review tasks. | D2 |
+| AC-9b | The Architect retains `review_task`, `request_integration` and `complete_run`. | D2 |
+| AC-10 | The Architect admits only MCP tools the mapper marks `readOnly`, as an asserted class. | D3 |
+| AC-17 | An Architect document write lands as a kernel-applied `architect_document` task, committed with Architect attribution in git, and is **not** listed among accepted change sessions. | D6 |
+| AC-18 | Runs created before this change keep current semantics and remain replayable. | compat |
+
+AC-11..AC-16 and AC-19..AC-23 moved to P6.6 as EP33–EP38.
 
 ---
 
-## 5. Open questions for the owner
+## 5. Open questions
 
-None blocking. Recorded for the plan's investigation packets:
+- **OQ-2** — which paths form the Architect's document allow-list. Investigated by plan packet
+  I2 against `tsconfig` includes, `next.config` and the test globs.
 
-- **OQ-1** — the concrete thresholds for low / medium / high change risk. Needs measurement
-  against real P6.5-era changes rather than a guessed constant.
-- **OQ-2** — which paths form the Architect's write allow-list. `docs/superpowers/plans/`
-  and `docs/superpowers/specs/` are the obvious candidates in this repository.
-- **OQ-3** — whether "author model tier" is a declared per-runtime attribute or derived from
-  the model catalogue. No such attribute exists today.
-- **OQ-4** — whether stage-1 coverage review (D7) is risk-gated like defect-hunting, or
-  mandatory on every run. Recommendation recorded in D7: harder to skip than defect-hunting.
+OQ-1, OQ-3 and OQ-4 moved to P6.6 with the decisions that raised them.
