@@ -2,8 +2,8 @@
 
 ## Current revision — 2026-09-22 owner amendment, revision 2
 
-PLAN BLOCKED — one condition: **the scoped independent re-review of amendment revision 2** has
-not been performed. Owner: controller. Unblock: dispatch one fresh-context re-review scoped to
+PLAN BLOCKED — one condition: **the scoped independent re-review of the correction pass after
+`amendment-review-r2.md`** has not been performed. Owner: controller. Unblock: dispatch one fresh-context re-review scoped to
 the corrections below and the new OA-3, OA-10..OA-17 content.
 
 D3 is **resolved**: the owner confirmed Node 24.x on 2026-09-22 (OA-9). It no longer blocks.
@@ -23,20 +23,22 @@ Campaign order: **P6.5 → agent-capability program → P6.6 → P7** (OA-8).
 | Revision 1 (OA-1..OA-9, EP33–EP41, T9) | reviewed — PLAN COVERAGE INSUFFICIENT (`amendment-review-r1.md`): B1 (OA-8 order absent at entry sites), B2 (EP01–EP32 ownership and campaign gate), B3 (`architect_document` unknown to T1/T4); I1 (planning-state predicate), I2 (category identifiers), I3 (T9 placement); M1–M4; five narrowings of moved text |
 | Owner decisions | narrowings: 1 accept, 2 restore generalized, 3 accept, 4 restore at high risk only, 5 restore the blocking hold (OA-10); reviewer rule loosened to distinct-model-preferred, fresh-context fallback, everywhere (OA-3); Node 24.x confirmed (OA-9); six robustness suggestions added, language-neutral (OA-11..OA-17) |
 | Revision 2 | B1: BP1 entry, Relationship, D1 and the header carry the OA-8 order; T1 inspects the post-agent-capability tree. B2: ownership sentence and campaign gate say EP01–EP51 and T1–T9. B3: section 3, T1 and T4 name and exempt `architect_document`. I1: T3 defines the planning-state predicate; EP41 positive moved to T9; EP32 scoped to planning state. I2: four identifiers named, cross-vocabulary rejection. I3: BP2 exit has both paths; T4 base is accepted T9; T5 base stays T3; T9 card; registry and queue below. M1–M4 applied. New EP42–EP51. |
-| **Scoped re-review of revision 2** | **OUTSTANDING — blocks PLAN READY** |
+| Scoped re-review of revision 2 | INSUFFICIENT (`amendment-review-r2.md`): B1–B3, I1, I2, M1–M4 FIXED; **I3 NOT FIXED** (two start rules for T5, repair cycle 2 of 3); new IMPORTANT N1 (`clarify` outside planning state), N2 (answer reviewer fresh session), N3 (`unsupported_language` read as empty selection), N4 (temp files not inventoried); MINOR N5 |
+| Correction pass | one start rule (T5 at accepted T3, T9 at T3, T4 at T9; BP2 complete = T3 and T9); planning state = no ready plan and triage not `answer`; EP37 covers T3/T9 with sentinel; failed ladder rung steps down; temp-path creation record; N5 details |
+| **Scoped re-review of the correction pass** | **OUTSTANDING — blocks PLAN READY** |
 
 ### Assignment registry (single controller authority; supersedes the 2026-09-08 table below)
 
 | Lane | Packets | State / claim | Required next base | Next eligible action |
 |---|---|---|---|---|
 | A | T1, T2, T3, then T9, then T4, then T6, T7, T8 | PLANNED; no worker/session/branch/worktree claim | Accepted agent-capability program for T1; later accepted packet snapshots; T4 on accepted T9 | None before prerequisites and execution authority; T1 first afterward |
-| B | T5 | PLANNED; no claim | Accepted T3, isolated from lane A's T9/T4 worktrees | None before T3, ownership and capacity gates |
+| B | T5 | PLANNED; no claim | Accepted T3, isolated from lane A's T9/T4 worktrees | Starts at T3 acceptance, beside T9; does not wait for T9 |
 | Controller | Assignment, integration, acceptance | Planning only | Actual approved snapshots | Dispatch the scoped re-review |
 
 ### Execution queue (not started; supersedes the queue further below)
 
-T1 → T2 → T3 → T9 → (T4 || T5; separate owned worktrees; T4 on T9, T5 on T3) → integrate T4
-then T5 → T6 → T7 → T8.
+T1 → T2 → T3 → { lane A: T9 → T4 } ‖ { lane B: T5 } (separate owned worktrees; T5 starts at T3
+acceptance) → integrate T4 then T5 → T6 → T7 → T8.
 
 These state files were copied onto `main`'s planning branch
 `docs/agent-capability-and-change-critique` on 2026-09-22 from the

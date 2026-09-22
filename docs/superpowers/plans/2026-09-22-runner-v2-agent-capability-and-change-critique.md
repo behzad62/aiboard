@@ -364,7 +364,7 @@ remove the recovery call → the supervisor stays `paused`.
 | | |
 |---|---|
 | Requirements | AC-24 |
-| Writable | `runtime-router.ts`, `native-verifier-runtime.ts`, `native-plan-critic-runtime.ts`, `verifier-verdict-authority.ts`, `plan-critique-authority.ts`, `scheduler-store.ts` (the two events' `independence` field), `lib/client/runner-v2.ts`, `components/RunnerV2ObservabilityPanel.tsx`, their tests and the UI scripts |
+| Writable | `runtime-router.ts`, `native-verifier-runtime.ts`, `native-plan-critic-runtime.ts`, `verifier-verdict-authority.ts`, `plan-critique-authority.ts`, **`verifier-contracts.ts`** (`parseVerifierReviewRequest`), `scheduler-store.ts` (the two events' `independence` field and the two identity rejections), `lib/client/runner-v2.ts`, `components/RunnerV2ObservabilityPanel.tsx`, their tests and the UI scripts |
 | Forbidden | `build-spec.ts` (verifier runtime configuration is unchanged); `build-runtime.ts` (the zero-candidate pause at `:1266` and `:1724` is unchanged) |
 | Depends on | A3, A5 |
 
@@ -380,6 +380,15 @@ remove the recovery call → the supervisor stays `paused`.
 3. **Record.** `verifier.review_requested` (`verifier-verdict-authority.ts:73`) and
    `plan_critique.requested` (`plan-critique-authority.ts:54`) carry `independence`. The reducer
    accepts only the two values; a missing field replays as `distinct_model`.
+3a. **Lift the identity rejections only for `fresh_context`** (sixth review, R1-1). Today the
+   request append throws when the selected model is in `excludedModels`:
+   `parseVerifierReviewRequest` (`verifier-contracts.ts:110-116`, called from
+   `scheduler-store.ts:3567`) and `applyPlanCritiqueRequested` (`scheduler-store.ts:4622-4624`).
+   Both must accept the selected runtime when, and only when, `independence` is
+   `fresh_context`; with `distinct_model` or a missing field they keep rejecting exactly as today.
+   `excludedModels` (`verifierExcludedModels`, `native-verifier-runtime.ts:1001-1026`; critic
+   `:195-199`) keeps recording the Architect and every change author, so the audit shows the
+   overlap. The Architect-runtime-id check at `scheduler-store.ts:3582-3591` is unchanged.
 4. **Show.** The observability panel labels a fresh-context review "same model, fresh context".
 
 **Acceptance.**
@@ -387,13 +396,16 @@ remove the recovery call → the supervisor stays `paused`.
   available → `fresh_context`; only a provider-error-excluded runtime → `unavailable`.
 - Fresh context: a sentinel string written into the Architect session and a worker session is
   absent from the fallback reviewer's first provider request, for both roles.
-- Record: round-trip, rejection of an unknown value, legacy replay.
+- Record: round-trip, rejection of an unknown value, legacy replay. A same-model request with
+  `fresh_context` appends for both roles; the same request with `distinct_model` or no field is
+  still rejected by both reducers.
 - UI: the label renders.
 - `alwaysRequireIndependentVerifier` keeps its meaning (a verifier is required at high risk); it
   does not require a distinct model.
 
 Prove-red: restore the old `unavailable` return → the single-model test reddens; reuse the
-Architect's session → the sentinel test reddens.
+Architect's session → the sentinel test reddens; drop the `fresh_context` condition from either
+reducer → the `distinct_model` rejection test reddens.
 
 ---
 
@@ -456,7 +468,7 @@ lists A1 changes — so the controller re-runs the affected graph after integrat
 | `task-scheduler.ts` | B2 → A5 |
 | `native-build-manager.ts`, `cli.ts` | B2 only |
 | `lib/client/runner-v2.ts`, the panel | B2 → R1 |
-| `runtime-router.ts`, `verifier-verdict-authority.ts`, `plan-critique-authority.ts` | R1 only |
+| `runtime-router.ts`, `verifier-verdict-authority.ts`, `plan-critique-authority.ts`, `verifier-contracts.ts` | R1 only |
 | `context-manifest-store.ts` | B1 only |
 | `filesystem-mutation-routing.test.ts` | controller only |
 | the five `recordContextPack` call sites | **nobody** |

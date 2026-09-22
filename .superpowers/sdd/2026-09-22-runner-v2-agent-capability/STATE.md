@@ -29,7 +29,9 @@
 | Review of revision 6 | INSUFFICIENT (`evidence/plan-review-r5.md`): pause, retry, waiver, D2, D3, graph and moved scope all clean; **B-1 `abort` NOT FIXED** (supervisor unreachable) and **A5 UNSOUND** (integration driver needs a worker session) |
 | Owner decisions 2026-09-22 (2) | **ESC-3 → A, both:** one final cycle each for B-1 `abort` and A5. **D8:** reviewer independence — distinct model preferred, fresh context fallback, same rule everywhere |
 | Revision 7 | SOURCE revision 3 (D1 constraint 4, D6 reachable wiring, D8/AC-24); plan: B2 abort via scheduler `failed` + `cli.ts` hook; A5 via its own `documentApplier` port in `native-build-factory.ts`; new packet R1 |
-| **Independent re-review of revision 7** | **OUTSTANDING — blocks PLAN READY** |
+| Re-review of revision 7 | INSUFFICIENT (`evidence/plan-review-r6.md`): **B-1 `abort` REPAIRED**; graph, lanes and §5.2 clean; **A5 NOT FIXED** (new defect: `commitTask(taskId)` looks up workspace id `taskId`, not the `<taskId>:document` workspace the applier created — ESC-3's final cycle is spent); **R1-1** (`parseVerifierReviewRequest` in `verifier-contracts.ts` rejects the same-model fallback; cycle 1 of 3) |
+| R1-1 repair | `verifier-contracts.ts` added to R1; both identity rejections accept the selected runtime only for `fresh_context` |
+| **ESC-4** | **A5 — owner decision needed** (budget exhausted) |
 
 ---
 
@@ -96,7 +98,9 @@ Empty.
 | BL-5 | — | CLOSED — superseded by the scope change | controller | — |
 | BL-6 | — | CLOSED — review of revision 6 performed (`plan-review-r5.md`) | controller | — |
 | ESC-3 | — | **DECIDED:** option A for both — one final cycle each for B-1 `abort` and A5 | owner | applied in revision 7 |
-| **BL-7** | PLAN READY | revision 7 not independently re-reviewed | controller | dispatch one scoped re-review |
+| BL-7 | — | CLOSED — revision 7 re-reviewed (`plan-review-r6.md`) | controller | — |
+| **ESC-4** | A5, A5's dependents R1 and D1g, PLAN READY | A5's commit step addresses the wrong workspace; the reviewer's own fix is to commit the `TaskWorkspace` object via `commitWorkspace` (`workspace-manager.ts:136`); ESC-3's last cycle is spent | owner | decide: one more cycle, or another option |
+| **BL-8** | PLAN READY | R1-1 repair not re-reviewed | controller | re-review with the ESC-4 outcome |
 
 ---
 
