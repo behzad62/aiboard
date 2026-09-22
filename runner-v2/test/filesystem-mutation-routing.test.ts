@@ -19,7 +19,7 @@ const privateOwners = new Set([
   "oci-execution-isolation-provider.ts", "owned-fence-lock.mjs", "permission-store.ts", "plugin-loader.ts",
   "portable-process-channel.ts", "portable-process-child.mjs", "portable-process-protocol.mjs", "portable-process-supervisor.mjs",
   "runner-capability-contract.ts", "runner-internal-execution-context.ts", "runner-internal-process-kernel.ts",
-  "sqlite-agent-session-store.ts", "sqlite-budget-ledger.ts", "sqlite-build-spec-store.ts", "sqlite-event-store.ts",
+  "sqlite-agent-session-store.ts", "sqlite-budget-ledger.ts", "sqlite-build-spec-store.ts", "sqlite-context-manifest-store.ts", "sqlite-event-store.ts",
   "sqlite-evidence-store.ts", "sqlite-project-memory.ts", "sqlite-scheduler-store.ts", "sqlite-tool-ledger.ts",
   "streaming-session-store.ts", "verification-workspace.ts", "windows-job-process-host.ts", "windows-process-semantic-probes.ts", "workspace-manager.ts",
 ]);
