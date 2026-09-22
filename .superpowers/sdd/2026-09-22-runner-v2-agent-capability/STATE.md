@@ -8,7 +8,7 @@
 | PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md` |
 | Base revision | `6c166f97` on `main` |
 | Planning branch | `docs/agent-capability-and-change-critique` |
-| Program state | **PLANNING — revision 4. PLAN BLOCKED on re-review of corrections.** |
+| Program state | **PLANNING — revision 5. PLAN BLOCKED: 2 conditions escalated to the owner, 5 repairs await re-review.** |
 | Execution | **NOT STARTED.** No implementation worker has been launched. |
 | Last updated | 2026-09-22 |
 
@@ -22,7 +22,7 @@
 | Requirement ledger (AC-1..AC-23, AC-9 split into 9a/9b), both directions traced | DONE |
 | Phase specifications (I, A, B, C, **E**, D) | DONE |
 | Packet contracts (I1-I3, **A0**, A1, **A1b**, A2-A4, **A5**, B1-B2, C1-C5, **E1-E3**, D1g) | DONE |
-| Dependency graph, acyclic, **longest path 9**, one authoritative edge list | DONE |
+| Dependency graph, acyclic, **longest path 10**, one authoritative edge list that D1g copies | DONE |
 | Lane roster, ownership map, serialized surfaces | DONE |
 | Validation / evidence / review / repair / closure policies | DONE |
 | Launch cards (controller + 3 lanes) | DONE |
@@ -31,22 +31,27 @@
 | Re-review of revision 2 | DONE — **PLAN COVERAGE INSUFFICIENT**: 4 of 5 NOT FIXED, 1 new BLOCKING, 4 regressions, `evidence/plan-review-r2.md` |
 | Revision 3 | DONE |
 | Re-review of revision 3 | DONE — **INSUFFICIENT**: B-2, D7-1, regressions 1-2 REPAIRED; B-1 became a NEW DEFECT; B-4, B-5, regressions 3-4 NOT FIXED; 6 further findings. `evidence/plan-review-r3.md` |
-| Revision 4: N-1..N-10 repaired | DONE |
-| **Re-review of revision 4 corrections** | **OUTSTANDING — blocks PLAN READY** |
+| Revision 4 | DONE |
+| Re-review of revision 4 | DONE — **INSUFFICIENT**. N-5, N-8, N-9 REPAIRED; N-1 and N-3 NOT FIXED with budget exhausted; N-2, N-4, N-6, N-7, N-10 NOT FIXED. `evidence/plan-review-r4.md` |
+| Revision 5: N-2, N-4, N-6, N-7, N-10 repaired | DONE |
+| **ESC-1 and ESC-2: owner decision** | **OUTSTANDING — blocks PLAN READY** |
+| **Re-review of revision 5** | **OUTSTANDING — blocks PLAN READY** |
 
 ---
 
 ## 2. Next eligible action
 
-**One action only:** dispatch the re-review of revision 4.
+**Two actions, the first is the owner's:**
 
-> Scope is N-1..N-10 and any regression revision 4 introduced. Do not re-audit what rounds 1-3
-> cleared: B-3, B-2, D7-1, regressions 1-2, and the nine r1 IMPORTANT findings. Verify against
-> the repository, not the plan's prose. Prior reviews: `evidence/plan-review-r1.md`, `-r2.md`,
-> `-r3.md`.
+> **1. Owner decides ESC-1 and ESC-2** (plan §11). Both have consumed all three permitted
+> repair cycles, so §8 forbids a fourth attempt without that decision. ESC-1 is the worker-path
+> manifest recording failure; ESC-2 is whether an Architect ChangeSet can reach the audit at
+> all, given `acceptedChangeSessions` reads sessions that only `worker-runtime.ts` ever
+> submits. Each has three or four named options in §11.
 >
-> **N-1 is on its last repair cycle.** If the pause-outcome mechanism is still not sound, it is
-> escalated to the owner under plan §8 as an exhausted REPAIR_BUDGET, not revised again.
+> **2. Then re-review revision 5** — the five repairs N-2, N-4, N-6, N-7, N-10, plus whatever
+> the ESC decisions change. Do not re-audit what rounds 1-4 cleared: B-3, B-2, D7-1,
+> regressions 1-2, N-5, N-8, N-9, and the nine r1 IMPORTANT findings.
 
 Nothing else is eligible. Planning readiness does not authorize execution, and no lane may
 start before the verdict is PLAN READY.
@@ -59,7 +64,7 @@ start before the verdict is PLAN READY.
 |---|---|---|---|---|
 | Lane A | — | — | — | unassigned |
 | Lane B | — | — | — | unassigned |
-| Lane C | — | — | — | blocked: opens after B2 integrates and I1, I3 accepted |
+| Lane C | — | — | — | blocked: opens when **A0 is integrated and I1, I3 accepted** — not at B2 |
 
 There is **no atomic claim primitive** on this host. The controller serializes every
 assignment and records it here before a worker starts. Checking a worktree or a PR is not a
@@ -114,7 +119,10 @@ Empty.
 | BL-1 | — | **CLOSED.** r1 review performed; verdict PLAN COVERAGE INSUFFICIENT | controller | superseded by BL-2 |
 | BL-2 | — | **CLOSED.** r2 re-review performed; 4 of 5 NOT FIXED plus 1 new BLOCKING and 4 regressions | controller | superseded by BL-3 |
 | BL-3 | — | **CLOSED.** r3 re-review performed; B-1 became a new defect, 4 findings still open, 6 new | controller | superseded by BL-4 |
-| BL-4 | PLAN READY | Revision 4 corrections not independently re-reviewed | controller | dispatch a re-review scoped to N-1..N-10 |
+| BL-4 | — | **CLOSED.** r4 re-review performed | controller | superseded by ESC-1, ESC-2, BL-5 |
+| **ESC-1** | PLAN READY | **B-1/N-1 exhausted REPAIR_BUDGET** — worker-path manifest recording failure, 3 cycles spent | **owner** | choose: fourth cycle / descope AC-1..AC-4 to the three non-worker paths / drop D1 |
+| **ESC-2** | PLAN READY | **B-4/N-3 exhausted REPAIR_BUDGET** — an Architect ChangeSet has no path into the audit, 3 cycles spent | **owner** | choose: let the Architect runtime `submit` / a second audit source / descope AC-17 to attribution without audit / drop D6 |
+| BL-5 | PLAN READY | Revision 5's five repairs not independently re-reviewed | controller | re-review after the ESC decisions |
 
 Open questions OQ-1, OQ-2 and OQ-3 are **not** blockers — they are scheduled investigation
 packets I1, I2 and I3 with decision criteria in the plan.
@@ -152,7 +160,7 @@ packets I1, I2 and I3 with decision criteria in the plan.
 | PD-12 | B-1 is fixed with the existing `paused` outcome, not a re-raise | r3 finding N-1. Re-raising skipped `recordOutcome`, leaving the task `running` for the next `tick` to redispatch into the same error. `task-scheduler.ts:278-288` already returns on a `paused` outcome without failing the task. This is B-1's third and final repair cycle; a further failure escalates under §8. |
 | PD-13 | A waiver resumes through a run-scoped recording-suspended registry | The alternative was editing one or more of the five `recordContextPack` call sites, which is the collision that started B-1. A registry inside the module that owns `recordContextPack` serves all five paths and changes none of them. |
 | PD-10 | `task-scheduler.ts` joins B2's surface | r2 finding B-1. Its catch converts every `driver.run` rejection into a failed task, so the worker's typed recording error never reaches the dispatcher. A dispatcher-only catch would have left AC-3 false for one role in four while every written test passed. |
-| PD-11 | OQ-4 answered with a working default, not left open | r2 D7 obligation 12: silence is not a decision. Stage-1 coverage runs whenever the plan critique runs, plus at medium change risk — one tier lower than defect-hunting. The owner may override before Phase E. |
+| PD-11 | OQ-4: **stage-1 coverage review is never skipped** | r4 finding N-6. The earlier wording was self-contradictory: defect-hunting already starts at medium, so "one tier lower" was the same floor, and stage 1 runs before a change exists so change risk is not a stage-1 input. The recorded predicate is E2's: stage-1 coverage runs on every run that produces a plan, including a low-plan-risk run whose plan critique is skipped. D5's low skip still applies to stage-2 defect-hunting. Owner-overridable before Phase E. |
 | PD-9 | D7 adopts the review pattern used on this plan | Owner-identified. A coverage reviewer reads the original request, derives obligations before seeing the artifact, returns a verdict per obligation, and verifies cited claims rather than trusting them. Nothing in Runner V2 reads the user's objective and asks whether all of it arrived. |
 
 ---
@@ -165,5 +173,6 @@ packets I1, I2 and I3 with decision criteria in the plan.
 | `evidence/plan-review-r1.md` | review of revision 1 — INSUFFICIENT, 5 BLOCKING + 9 IMPORTANT |
 | `evidence/plan-review-r2.md` | re-review of revision 2 — INSUFFICIENT, 4 of 5 NOT FIXED, 1 new BLOCKING, 4 regressions |
 | `evidence/plan-review-r3.md` | re-review of revision 3 — INSUFFICIENT, B-1 became a NEW DEFECT, 5 blocking conditions |
+| `evidence/plan-review-r4.md` | re-review of revision 4 — INSUFFICIENT; N-1 and N-3 exhausted their repair budget and are escalated |
 
 One file per packet is created when that packet starts. No packet evidence exists yet.

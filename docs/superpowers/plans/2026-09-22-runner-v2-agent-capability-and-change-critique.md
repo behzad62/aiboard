@@ -122,10 +122,13 @@ see §5.2 for the surfaces it shares.
 
 **Phase C — change critique.** C1..C5. Requirements AC-11..AC-16.
 
-**One entry rule. C1 needs A0, I1 and I3 — nothing else.** Every later C packet carries its
-own `Depends on` and those are authoritative. §5.1, both Lane C card lines and STATE state
-this same rule and no other; r3 finding N-2 found the header and §5.1 still opening the lane
-at B2.
+**One entry rule. C1 needs A0, I1 and I3 — nothing else. Lane C opens on that rule, not on
+B2.** Every later C packet carries its own `Depends on`, and those gate *those* packets — C2
+waits for B2 and A5, C3 for A1 and A3, C4 for the release. Nothing gates C1 beyond A0, I1, I3.
+
+Locations that must read exactly that, to be checked mechanically after every revision because
+r2, r3 and r4 each found a straggler: this paragraph, C1's `Depends on`, the §4 edge list,
+§5.1's roster note, the Lane C card **heading and body**, and STATE's lane row and C1 row.
 
 C1 depends on **A0** because it writes source (`change-risk.ts`) — r3 finding N-9. The
 "no source before A0" rule has no exceptions; only the three investigations, which write
@@ -671,7 +674,8 @@ resolution path.
 
 ### D1g — Compatibility and program gate
 
-Depends on A, B, C, E accepted. Independent source-to-delivery reconciliation per §9, then
+Depends on **A2, A4, A5, A1b, C5, E3** — the six edges in §4, not a prose phase list.
+Independent source-to-delivery reconciliation per §9, then
 AC-18's replay of the **A0 fixture**, then the full suite, then the publication commit.
 
 ---
@@ -716,16 +720,21 @@ A1b → C4       A5 → C2        A5 → C4        A3 → C4
 C1 → C2 → C3 → C4 → C5
 C2 → E1        C3 → E1        C3 → E2        C4 → E3
 E1 → E2 → E3
-A4 → D1g   A5 → D1g   C5 → D1g   E3 → D1g
+A2 → D1g   A4 → D1g   A5 → D1g   A1b → D1g   C5 → D1g   E3 → D1g
 ```
+
+D1g's `Depends on` is **those six edges**, not a prose phase list — r4 finding N-7 showed a
+controller trusting "matches exactly" could start D1g with A2 unaccepted, because A2 had no
+outgoing edge. The ASCII drawing above is an illustration; **this list is the graph**, and
+where they differ the list wins.
 
 **A0 gates every packet that writes source.** r2 regression 4: revision 2's caption said
 "A0 → everything", which the drawing did not show and which is not true of I1, I2 and I3 —
 those write only an evidence file and may run beside A0. The rule is: **no packet writes a
 source file before A0 integrates.**
 
-Acyclic. **Longest path is 9**, not the 8 revision 3 claimed (r3 finding N-10, which the
-E-chain edges lengthened): `A0 → B1 → B2 → C2 → C3 → E1 → E2 → E3 → D1g`.
+Acyclic. **Longest path is 10** — r4 finding N-10; `A5 → C2` lengthens it past the nine
+revision 4 claimed: `A0 → A1 → A4 → A5 → C2 → C3 → E1 → E2 → E3 → D1g`.
 
 ---
 
@@ -737,7 +746,7 @@ E-chain edges lengthened): `A0 → B1 → B2 → C2 → C3 → E1 → E2 → E3 
 |---|---|---|
 | **Lane A** | I2 → A1 → A2 → A3 → A4 | the four agent runtimes, `role-capabilities.ts`, `filesystem-tools.ts`, `agent-prompts.ts` (A3) |
 | **Lane B** | A0 → I1 → I3 → B1 → B2 → A1b → A5 (A1b and A5 both before Lane C may take `build-runtime.ts`) | `context-manifest-store.ts`, `architect-tools.ts`, `user-steering-contracts.ts`, `change-set.ts`, and `scheduler-store.ts` + `build-runtime.ts` + the client surface **until B2** |
-| **Lane C** | C1 → C2 → C3 → C4 → C5 → E1 → E2 → E3 | `change-risk.ts`, the critique surfaces; **inherits `scheduler-store.ts` + `build-runtime.ts` after B2** |
+| **Lane C** | C1 → C2 → C3 → C4 → C5 → E1 → E2 → E3 | `change-risk.ts`, the critique surfaces; **inherits `scheduler-store.ts` and `build-runtime.ts` only on the controller's release announcement after B2 + A1b + A5** — r4 finding N-4 |
 
 **I1 and I3 belong to Lane B. Only Lane B.** r1 finding B-5 — revision 1 assigned them twice.
 Lane C does not open until B2 integrates, so Lane B carries the investigations.
@@ -875,7 +884,7 @@ cannot catch.
 > controller makes one release announcement after all three have integrated. Do not commit,
 > stage or stash.
 
-### Lane C (opens after B2 integrates and I1, I3 are accepted)
+### Lane C (opens when A0 is integrated and I1, I3 are accepted)
 >
 > You own C1 → C5 then E1 → E3. **C1 needs only I1 and I3 accepted; every later packet carries
 > its own Depends on and those are authoritative.** C4 waits for `build-runtime.ts`, which Lane
@@ -891,52 +900,64 @@ cannot catch.
 
 ## 11. Verdict
 
-**PLAN BLOCKED — revision 4 corrections not yet independently re-reviewed.**
+**PLAN BLOCKED — two blocking conditions have exhausted REPAIR_BUDGET and are escalated to
+the owner under §8. Five further findings are repaired in revision 5 and await re-review.**
 
-Revision 3 was re-reviewed (`evidence/plan-review-r3.md`) and returned **PLAN COVERAGE
-INSUFFICIENT** again. **B-2, D7-1 and regressions 1 and 2 were confirmed REPAIRED.** B-1
-became a **NEW DEFECT**, B-4, B-5 and regressions 3 and 4 were still **NOT FIXED**, and six
-further findings were raised.
+### Escalated — owner decision required
 
-Revision 4 repairs those. The B-1 repair is the third and final cycle permitted by
-REPAIR_BUDGET; unlike the first two it is not another variation of the same idea but a
-mechanism the reviewer identified and the controller verified in the source
-(`task-scheduler.ts:278-288` already returns on a `paused` outcome without failing the task).
+Four independent review rounds are recorded in `evidence/plan-review-r1..r4.md`. Two
+conditions have now consumed all three permitted repair cycles each, and §8 requires
+escalation rather than a fourth attempt.
 
-| r3 finding | Repair in revision 4 |
+**ESC-1 — B-1 / N-1: a manifest recording failure on the worker path.**
+Three cycles: (r2) restructure so no call site is edited and let the error propagate — the
+scheduler swallows it; (r3) re-raise from the scheduler catch — the task stays `running` and
+the next tick redispatches it into the same error; (r4) record the existing `paused` outcome —
+verified by the reviewer to hold the task while the run is paused, but `run.resumed`
+redispatches the same attempt, the waiver registry is not in any packet's contract, `abort` is
+unspecified against a `running` task, and §5.2 still carries the stale "re-raise" rationale.
+
+What the controller assesses as remaining: the redispatch-on-resume behaviour is **correct**
+for `retry`, is what the suspended-recording registry exists to solve for
+`proceed_without_manifest`, and is moot for `abort`. Three of the four defects are contract
+assignment and stale text. The genuinely open question is whether a recovered scheduler after
+a crash redispatches a task whose recording will fail again.
+
+**Owner decision:** grant a fourth cycle to finish the assignment gaps, or descope AC-1..AC-4
+to the three non-worker paths and record the worker path as a known gap, or drop D1 and leave
+recording fail-closed as it is today.
+
+**ESC-2 — B-4 / N-3: an Architect-authored ChangeSet cannot reach the audit.**
+Three cycles: (r2) A5 created; (r3) surface widened to `native-build-factory.ts`; (r4)
+workspace, reserved id, `commitTask`, evidence hash, actor field and both gates named. The
+reviewer's trace shows why naming them is not enough: `acceptedChangeSessions` iterates
+**sessions**, and `session.changeSet` is written only by `submit`
+(`sqlite-agent-session-store.ts:198-216`), whose only caller is `worker-runtime.ts:407`. The
+architect runtime holds `sessions` and creates an `architect:${runId}` session but never
+submits. Relaxing both gates operates on an empty candidate list. Separately `commitTask` on a
+workspace with no changes throws `NoTaskChangesError`, and the plan never says the
+allow-listed write happens in that workspace.
+
+**Owner decision:** let the Architect runtime call `submit` (a new capability, with its own
+review), or give the audit a second source for non-session changes, or descope AC-17 so
+Architect writes are attributed in the ChangeSet but not surfaced in the audit export, or drop
+D6.
+
+### Repaired in revision 5, pending re-review
+
+| r4 finding | Repair |
 |---|---|
-| N-1 — re-raising leaves the task `running`, so `tick` redispatches it into the same error | No re-raise. The catch records the **existing `paused` outcome** plus the note, so the task is neither failed nor redispatched. A run-scoped recording-suspended registry in `context-manifest-store.ts` lets a waiver resume without changing any of the five call sites |
-| N-2 — Phase C still had two rules | One rule: C1 needs A0, I1, I3. §5.1, both Lane C lines and STATE now say only that |
-| N-3 — A5 still had no executable commit path | The workspace, the reserved architect id, `commitTask`, the evidence hash, the new `actor` field and **both** audit gates are named explicitly |
-| N-4 — B2's own text released the files it must hold | Deleted from B2 and the Lane B card. One controller announcement after B2 + A1b + A5 |
-| N-5 — A1b raced Lane A on `role-capabilities.ts` | A1b's writable list is `build-runtime.ts` and its tests only |
-| N-6 — the OQ-4 default contradicted D5 | Stage-1 coverage is never skipped; stage 2 raises D5's `low` to `medium` |
-| N-7 — three edges lived in a contract or STATE but not the list | One authoritative edge list; every `Depends on` and STATE row is a copy of it |
-| N-8 — E1 still accepted AC-19 on the helper | E1 is graded on AC-20 and AC-22 only; AC-19 is accepted on E2 |
-| N-9 — C1 writes source with no path to A0 | `A0 → C1` added |
-| N-10 — longest path was 9, not 8 | Corrected, with the path shown |
+| N-2 | Every location now states one rule — C1 needs A0, I1, I3; Lane C opens on that, not B2. The locations are enumerated in §2 so the next revision can check them mechanically |
+| N-4 | §5.1's roster note no longer releases at B2; the release is the controller's single announcement after B2 + A1b + A5 |
+| N-6 | STATE PD-11 replaced with E2's predicate: stage-1 coverage is never skipped. The contradictory "one tier lower than medium" wording is gone |
+| N-7 | D1g's `Depends on` is the six edges in §4, not a prose phase list; `A2 → D1g` and `A1b → D1g` added; the drawing is declared an illustration and the list authoritative |
+| N-10 | Longest path is 10, with the path shown |
 
-Earlier repairs that held and are unchanged: **B-3** (r2), **B-2 and D7-1** (r3), regressions
-1 and 2, and all nine r1 IMPORTANT findings.
+Confirmed repaired and closed across rounds: B-3 (r2); B-2, D7-1, regressions 1 and 2 (r3);
+N-5, N-8, N-9 (r4); and the nine r1 IMPORTANT findings.
 
-| r2 condition | Repair in revision 3 |
-|---|---|
-| B-1 — the worker's typed error is swallowed by `task-scheduler.ts:227-234` | B2 now owns `task-scheduler.ts` and its catch re-raises; AC-3 requires a named test **per agent path**, worker included |
-| B-2 — A1b had no contract and raced C4 | A1b is a real packet with a contract, a traceability row, a phase listing and a graph node, ordered before C4 on `build-runtime.ts` |
-| B-4 — A5 could not reach the audit filter or state a commit mechanism | A5 owns `native-build-factory.ts`, and the actor field, the worker-only filter relaxation and the commit mechanism are all named |
-| B-5 — three different Phase C start rules | One rule: C1 needs I1 and I3; later packets carry their own `Depends on`, and those are authoritative everywhere |
-| D7-1 — AC-19 could pass while the turn had already seen the plan | A fresh session with an empty event list is required, and the acceptance asserts the turn's real messages, tool results and loaded session, covering replay and checkpoint |
-| regressions 1–4 | A1b orphan (above); `C3 → E1` so `agent-prompts.ts` has one owner; A5 ordered ahead of C2/C4; the "A0 → everything" caption corrected to "no packet writes source before A0" |
-
-Three of revision 2's repairs held and are unchanged: **B-3** (MCP as a checked class with the
-mapper's real predicate) and all nine IMPORTANT findings, which the r2 review confirmed were
-answered by contract changes rather than prose.
-
-- **Responsible owner:** controller.
-- **Unblock action:** re-review revision 4, scoped to these corrections and the coverage they
-  affect, then re-issue this verdict.
-- **Repair budget:** B-1 has now consumed all three permitted cycles. If revision 4's B-1
-  repair is still not sound, it is escalated to the owner as an exhausted budget under §8,
-  not revised a fourth time.
+- **Responsible owner:** controller for the five repairs; **the owner** for ESC-1 and ESC-2.
+- **Unblock action:** decide ESC-1 and ESC-2, then re-review revision 5's five repairs plus
+  whatever those decisions change.
 
 **Execution has not started. Planning readiness does not authorize execution.**
