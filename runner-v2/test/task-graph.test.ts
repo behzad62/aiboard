@@ -82,6 +82,33 @@ test("task transitions are explicit and illegal jumps do not mutate", () => {
   );
 });
 
+test("waiting_guidance to planned clears the abandoned attempt's evidence and assignment", () => {
+  const waiting: BuildTask = {
+    ...task("task_retry"),
+    status: "waiting_guidance",
+    assignedWorkerId: "worker:task_retry:1",
+    changeSetId: "stale-change",
+    failureReason: "blocked on architect",
+    guidanceRequestId: "replan-1",
+    criterionEvidenceLinks: [{
+      criterionId: "done",
+      evidenceId: "stale-evidence",
+      artifactHashes: ["stale-hash"],
+    }],
+  };
+  const planned = applyTaskTransition(waiting, "planned", {
+    guidanceRequestId: undefined,
+  });
+  assert.equal(planned.status, "planned");
+  assert.equal(planned.assignedWorkerId, undefined);
+  assert.equal(planned.changeSetId, undefined);
+  assert.equal(planned.criterionEvidenceLinks, undefined);
+  assert.equal(planned.failureReason, undefined);
+  assert.equal(planned.guidanceRequestId, undefined);
+  assert.equal(waiting.status, "waiting_guidance");
+  assert.equal(waiting.criterionEvidenceLinks?.[0].evidenceId, "stale-evidence");
+});
+
 function task(
   id: string,
   dependencies: string[] = [],

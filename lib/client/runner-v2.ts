@@ -200,6 +200,7 @@ export interface NativeCriterionReviewVerdict {
   rationale: string;
   evidenceIds: string[];
   artifactHashes?: string[];
+  acceptedFailures?: Array<{ evidenceId: string; rationale: string }>;
 }
 
 export interface NativeCriterionSubmissionProjection {
@@ -222,6 +223,8 @@ export interface NativeGuidanceProjection {
   challengeEvidenceSequence?: number;
   challengedVersion?: number;
   challengeReason?: string;
+  kind?: "question" | "replan";
+  replan?: { reason: string; summary: string; proposedChange: string };
 }
 
 export interface NativeReviewProjection {
@@ -322,7 +325,13 @@ export type NativeArchitectActionReason =
       }>;
     }
   | { type: "task_failure_resolution_required"; taskId: string; attempt: number; failureReason: string }
-  | { type: "integration_resolution_required"; taskId: string };
+  | { type: "integration_resolution_required"; taskId: string }
+  | {
+      type: "plan_critique_resolution_required";
+      critiqueId: string;
+      planRevision: number;
+      blockingFindingIds: string[];
+    };
 
 export interface NativeArchitectQuestionProjection {
   questionId: string;
@@ -427,6 +436,17 @@ export interface NativeVerifierReviewProjection {
   invalidatedByGuidanceId?: string;
   supersededByReviewId?: string;
   repairTaskIds?: string[];
+  twoPass?: boolean;
+  baselineRevision?: string;
+  expectations?: Array<{
+    taskId: string;
+    criterionId: string;
+    expectedBehaviors: string[];
+    edgeCases: string[];
+    regressionSurfaces: string[];
+    requiredTests: string[];
+  }>;
+  expectationsSessionId?: string;
   verdict?: {
     reviewId: string;
     targetRevision: string;
@@ -438,6 +458,8 @@ export interface NativeVerifierReviewProjection {
       verdict: "satisfied" | "unsatisfied";
       rationale: string;
       evidenceIds: string[];
+      location?: { path: string; lines?: string };
+      reproduction?: string[];
     }>;
     submittedAt: string;
   };
@@ -448,6 +470,7 @@ export interface NativeIndependentVerifierObservability {
     mode: "risk_based";
     candidateRuntimeIds: string[];
     alwaysRequireIndependentVerifier: boolean;
+    twoPass: boolean;
   };
   risk: {
     current?: NativeBuildRiskObservation;
@@ -463,6 +486,75 @@ export interface NativeIndependentVerifierObservability {
   review: {
     current?: NativeVerifierReviewProjection;
     history: NativeVerifierReviewProjection[];
+  };
+}
+
+export interface NativePlanCritiqueFinding {
+  findingId: string;
+  severity: "blocking" | "advisory";
+  category:
+    | "ambiguous_criterion"
+    | "untestable_criterion"
+    | "missing_dependency"
+    | "overlapping_scope"
+    | "missing_failure_mode"
+    | "unproven_assumption"
+    | "oversized_task"
+    | "missing_integration_task";
+  taskIds: string[];
+  criterionIds?: Array<{ taskId: string; criterionId: string }>;
+  claim: string;
+  evidence: string[];
+}
+
+export interface NativePlanCritiqueProjection {
+  critiqueId: string;
+  planRevision: number;
+  runtime: NativeVerifierRuntimeBinding;
+  excludedModels: Array<{
+    source: "architect" | "accepted_change_author";
+    runtimeId: string;
+    modelIdentity: string;
+  }>;
+  status: "requested" | "submitted" | "resolved";
+  requestedAt: string;
+  submittedAt?: string;
+  resolvedAt?: string;
+  findings?: NativePlanCritiqueFinding[];
+  blockingFindingIds?: string[];
+  resolution?: {
+    planRevisionAfter: number;
+    resolvedBy: "architect" | "runner";
+    resolutions: Array<{
+      findingId: string;
+      resolution: "plan_reconciled" | "rejected";
+      rationale: string;
+    }>;
+  };
+  supersededByCritiqueId?: string;
+}
+
+export interface NativePlanCritiqueState {
+  policy?: { mode: "risk_based" | "always" | "off" };
+  risk?: {
+    planRevision: number;
+    architectDeclaration: "low" | "high";
+    stricterQualification: boolean;
+    assessment: {
+      risk: "low" | "high";
+      reasons: Array<{
+        code: "architect_declared_high" | "stricter_qualification" | "task_count" | "dependency_fan_in";
+        evidence: string[];
+      }>;
+    };
+    assessedAt: string;
+  };
+  current?: NativePlanCritiqueProjection;
+  history: NativePlanCritiqueProjection[];
+  skipped?: {
+    planRevision: number;
+    reason: "policy_off" | "low_plan_risk" | "critic_failed" | "plan_only";
+    skippedAt: string;
   };
 }
 
@@ -517,10 +609,27 @@ export interface NativeBuildProjection {
     history: NativeBuildRiskAssessmentProjection[];
   };
   verifierSelection?: NativeIndependentVerifierObservability["selection"];
+  repairCycles?: {
+    limit: number;
+    used: number;
+    extensions: number;
+    pause?: {
+      source: "final_verification" | "verifier";
+      targetRevision: string;
+      used: number;
+      limit: number;
+    };
+  };
   verifier?: {
     current?: NativeVerifierReviewProjection;
     history: NativeVerifierReviewProjection[];
   };
+  planRiskDeclaration?: {
+    risk: "low" | "high";
+    rationale?: string;
+    source: "architect" | "legacy_default";
+  };
+  planCritique?: NativePlanCritiqueState;
   projectHandoffHistory?: Array<{
     status: "withdrawn";
     summary: string;
@@ -912,6 +1021,47 @@ export interface NativeBuildObservability {
   executionSafety?: NativeBuildExecutionSafetyObservability;
   finalVerification?: NativeFinalVerificationObservability;
   independentVerifier?: NativeIndependentVerifierObservability;
+  contextManifestCount?: number;
+}
+
+export interface NativeContextManifestSection {
+  id: string;
+  kind: string;
+  required: boolean;
+  priority: number;
+  byteLength: number;
+  digest: string;
+  sourceDigest?: string;
+  artifactHash?: string;
+}
+
+export interface NativeContextManifestOmission {
+  id: string;
+  kind: string;
+  reason: "byte_budget" | "token_budget";
+  byteLength: number;
+  digest: string;
+  artifactHash?: string;
+}
+
+export interface NativeContextManifest {
+  manifestId: string;
+  runId: string;
+  sessionId: string;
+  actor: { role: "architect" | "worker" | "subagent" | "verifier"; id: string };
+  role: "architect" | "worker" | "subagent" | "verifier";
+  purpose: string;
+  taskId?: string;
+  attempt?: number;
+  repositoryRevision?: string;
+  limits: { maxBytes: number; maxEstimatedTokens: number };
+  packDigest: string;
+  byteLength: number;
+  estimatedTokens: number;
+  sections: NativeContextManifestSection[];
+  omissions: NativeContextManifestOmission[];
+  packArtifactHash?: string;
+  recordedAt: string;
 }
 
 export interface NativeBuildAuditExport {
@@ -921,6 +1071,7 @@ export interface NativeBuildAuditExport {
   acceptanceContract: NativeAcceptanceContractProjection;
   usage: NativeBuildUsageProjection;
   observability: NativeBuildObservability;
+  contextManifests: NativeContextManifest[];
   runEvents: Array<Record<string, unknown>>;
   buildEvents: NativeBuildEvent[];
 }
@@ -973,6 +1124,13 @@ export function projectNativeAcceptanceContract(
           evidenceIds: [...verdict.evidenceIds],
           ...(verdict.artifactHashes
             ? { artifactHashes: [...verdict.artifactHashes] }
+            : {}),
+          ...(verdict.acceptedFailures
+            ? {
+                acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                  ...failure,
+                })),
+              }
             : {}),
         })),
         ...(review ? { reviewStatus: review.status } : {}),
@@ -1041,6 +1199,13 @@ function cloneNativeReviewProjection(
             evidenceIds: [...verdict.evidenceIds],
             ...(verdict.artifactHashes
               ? { artifactHashes: [...verdict.artifactHashes] }
+              : {}),
+            ...(verdict.acceptedFailures
+              ? {
+                  acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                    ...failure,
+                  })),
+                }
               : {}),
           })),
         }
@@ -1518,6 +1683,25 @@ export async function selectNativeVerifierRuntime(
     {
       method: "POST",
       body: JSON.stringify({ runtimeId, idempotencyKey }),
+      signal,
+    },
+    fetchImpl,
+  );
+}
+
+export async function extendNativeRepairCycles(
+  connection: NativeRunnerConnection,
+  runId: string,
+  input: { additionalRepairPlans: number; idempotencyKey: string },
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<NativeBuildProjection> {
+  return await request(
+    connection,
+    `/v2/runs/${encodeURIComponent(runId)}/build/repair-cycles`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
       signal,
     },
     fetchImpl,

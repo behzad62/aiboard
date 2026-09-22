@@ -34,6 +34,7 @@ export interface BuildTaskCriterionView {
     rationale: string;
     evidenceIds: string[];
     artifactHashes?: string[];
+    acceptedFailures?: Array<{ evidenceId: string; rationale: string }>;
   };
 }
 
@@ -195,6 +196,14 @@ export function BuildTaskBoard({
                                 {criterion.verdict.rationale}
                               </p>
                             )}
+                            {criterion.verdict?.acceptedFailures?.map((failure) => (
+                              <p
+                                key={failure.evidenceId}
+                                className="leading-relaxed text-muted-foreground"
+                              >
+                                Accepted failure {failure.evidenceId}: {failure.rationale}
+                              </p>
+                            ))}
                           </li>
                         ))}
                       </ul>

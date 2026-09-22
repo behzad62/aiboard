@@ -46,6 +46,19 @@ export type AgentLoopResult =
       messages: AgentMessage[];
     }
   | {
+      status: "verifier_expectations_recorded";
+      reviewId: string;
+      turns: number;
+      messages: AgentMessage[];
+    }
+  | {
+      status: "plan_critique_submitted";
+      critiqueId: string;
+      blockingFindingCount: number;
+      turns: number;
+      messages: AgentMessage[];
+    }
+  | {
       status: "subagent_returned";
       summary: string;
       artifactHashes: string[];
@@ -80,6 +93,7 @@ export type AgentLoopResult =
         | "verification_repairs_planned"
         | "user_guidance_acknowledged"
         | "user_question_requested"
+        | "plan_critique_resolved"
         | "run_completed";
       referenceId?: string;
       turns: number;
@@ -961,6 +975,21 @@ function lifecycleResult(
         status: "verifier_verdict_submitted",
         reviewId: signal.reviewId,
         satisfied: signal.satisfied,
+        turns,
+        messages,
+      };
+    case "verifier_expectations_recorded":
+      return {
+        status: "verifier_expectations_recorded",
+        reviewId: signal.reviewId,
+        turns,
+        messages,
+      };
+    case "plan_critique_submitted":
+      return {
+        status: "plan_critique_submitted",
+        critiqueId: signal.critiqueId,
+        blockingFindingCount: signal.blockingFindingCount,
         turns,
         messages,
       };

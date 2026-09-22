@@ -108,6 +108,7 @@ export interface IndependentVerifierObservability {
     mode: "risk_based";
     candidateRuntimeIds: string[];
     alwaysRequireIndependentVerifier: boolean;
+    twoPass: boolean;
   };
   risk: {
     current?: IndependentVerifierRiskObservation;
@@ -306,6 +307,8 @@ export interface BuildObservabilitySnapshot {
   executionSafety?: BuildExecutionSafetyObservability;
   finalVerification?: FinalVerificationObservability;
   independentVerifier?: IndependentVerifierObservability;
+  /** Count of recorded context manifests for this run. */
+  contextManifestCount: number;
   /** Terminal-reader provenance so absent legacy stores are never shown as live empty state. */
   historical?: {
     terminalState: "completed" | "failed" | "stopped";
@@ -333,6 +336,7 @@ export function projectIndependentVerifierObservability(
             ],
             alwaysRequireIndependentVerifier:
               projection.verifierPolicy.alwaysRequireIndependentVerifier,
+            twoPass: projection.verifierPolicy.twoPass === true,
           },
         }
       : {}),

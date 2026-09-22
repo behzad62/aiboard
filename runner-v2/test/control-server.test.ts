@@ -756,6 +756,7 @@ test("terminal historical Build reads expose durable provenance through every GE
         events: [],
         git: { integrationBranch: "", integrationRevision: "", commits: [] },
         historical,
+        contextManifestCount: 0,
       };
     },
     transcript: async (requestedRunId: string, afterSequence = 0) => {
@@ -948,6 +949,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
       providers: [],
       events: [],
       git: { integrationBranch: "", integrationRevision: "", commits: [] },
+      contextManifestCount: 0,
       finalVerification: {
         canonicalRevision: "revision_final",
         history: [],
@@ -958,6 +960,26 @@ test("native Build projections and pump controls are runner-owned API routes", a
         },
       },
     }),
+    contextManifests: (requestedRunId: string) => {
+      if (requestedRunId !== "run_1") throw new Error(`Unknown build runtime ${requestedRunId}.`);
+      return [{
+        manifestId: "manifest-worker-1",
+        runId: "run_1",
+        sessionId: "worker:run_1:task_a:1",
+        actor: { role: "worker" as const, id: "worker_task_a_1" },
+        role: "worker" as const,
+        purpose: "worker:task",
+        taskId: "task_a",
+        attempt: 1,
+        limits: { maxBytes: 1024, maxEstimatedTokens: 256 },
+        packDigest: "d".repeat(64),
+        byteLength: 12,
+        estimatedTokens: 3,
+        sections: [],
+        omissions: [],
+        recordedAt: "2026-07-12T00:00:00.000Z",
+      }];
+    },
     step: async () => {
       steps += 1;
       return { status: "progressed", action: "workers_advanced" };
@@ -985,6 +1007,7 @@ test("native Build projections and pump controls are runner-owned API routes", a
       verifierRuntimeChoice = runtimeId;
       return projection;
     },
+    extendRepairCycles: async () => projection,
     selectProjectHandoff: async (_runId: string, choice: "keep_integration_branch" | "apply_to_project") => {
       projectHandoffChoice = choice;
       return {
@@ -1123,6 +1146,8 @@ test("native Build projections and pump controls are runner-owned API routes", a
     assert.equal((audit.usage as { effective: { modelCalls: number } }).effective.modelCalls, 9);
     assert.equal((audit.usage as { models: unknown[] }).models.length, 1);
     assert.equal((audit.observability as { toolCallCount: number }).toolCallCount, 1);
+    assert.equal((audit.contextManifests as Array<{ manifestId: string }>).length, 1);
+    assert.equal((audit.contextManifests as Array<{ manifestId: string }>)[0]?.manifestId, "manifest-worker-1");
     assert.equal((audit.observability as { finalVerification: { current: { targetRevision: string } } }).finalVerification.current.targetRevision, "revision_final");
     assert.deepEqual(audit.acceptanceContract, {
       status: "current",
@@ -1631,6 +1656,118 @@ test("control API rejects request bodies larger than one MiB", async () => {
       })
     );
     assert.equal(response.status, 413);
+  } finally {
+    await server.close();
+    supervisor.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("repair-cycle extension is a user POST that rejects a zero additional budget", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "aiboard-control-repair-cycles-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(directory, "events.sqlite")));
+  const projection = {
+    runId: "run_1",
+    status: "running" as const,
+    planRevision: 1,
+    tasks: {},
+    guidance: {},
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 2,
+    repairCycles: { limit: 4, used: 1, extensions: 1 },
+  };
+  let received: { additionalRepairPlans: number; idempotencyKey: string } | undefined;
+  const builds = {
+    projection: () => projection,
+    events: () => [],
+    transcript: async () => ({ turns: [], cursor: 0 }),
+    files: async () => ({
+      source: "integration" as const,
+      revision: "",
+      appliedToProject: false,
+      omittedFileCount: 0,
+      files: [],
+    }),
+    usage: () => ({
+      scopeId: "run_1",
+      reservations: {},
+      activeSegments: {},
+      effective: {
+        modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+        estimatedCostMicros: 0, activeMs: 0, artifactBytes: 0,
+      },
+      lastSequence: 2,
+    }),
+    observability: async () => ({
+      runId: "run_1", toolCallCount: 0, budget: {
+        scopeId: "run_1", reservations: {}, activeSegments: {},
+        effective: {
+          modelCalls: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0,
+          estimatedCostMicros: 0, activeMs: 0, artifactBytes: 0,
+        },
+        lastSequence: 2,
+      },
+      agents: [], tools: [], evidence: [], memories: [], skills: [], processes: [],
+      providers: [], events: [], git: { integrationBranch: "", integrationRevision: "", commits: [] },
+      contextManifestCount: 0,
+    }),
+    step: async () => ({ status: "idle" as const }),
+    runUntilBlocked: async () => ({ status: "idle" as const }),
+    activate: () => undefined,
+    pause: () => projection,
+    resume: () => projection,
+    continue: () => projection,
+    selectArchitectHandoff: () => projection,
+    selectVerifierRuntime: async () => projection,
+    extendRepairCycles: async (
+      _runId: string,
+      additionalRepairPlans: number,
+      idempotencyKey: string,
+    ) => {
+      received = { additionalRepairPlans, idempotencyKey };
+      return projection;
+    },
+    selectProjectHandoff: async () => projection,
+    submitUserGuidance: async () => projection,
+    answerArchitectQuestion: async () => projection,
+  } as unknown as BuildControlPlane;
+  const server = new ControlServer({
+    supervisor,
+    token,
+    checkGit: async () => gitReady,
+    bootstrapRun,
+    builds,
+  });
+  try {
+    const { url } = await server.start(0);
+    const rejected = await fetch(
+      `${url}/v2/runs/run_1/build/repair-cycles`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({ additionalRepairPlans: 0, idempotencyKey: "extend:0" }),
+      }),
+    );
+    assert.equal(rejected.status, 400);
+    const tooLarge = await fetch(
+      `${url}/v2/runs/run_1/build/repair-cycles`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({ additionalRepairPlans: 11, idempotencyKey: "extend:11" }),
+      }),
+    );
+    assert.equal(tooLarge.status, 400);
+    const accepted = await fetch(
+      `${url}/v2/runs/run_1/build/repair-cycles`,
+      authorized({
+        method: "POST",
+        body: JSON.stringify({ additionalRepairPlans: 2, idempotencyKey: "extend:2" }),
+      }),
+    );
+    assert.equal(accepted.status, 200);
+    const body = await json(accepted);
+    assert.deepEqual(body.repairCycles, { limit: 4, used: 1, extensions: 1 });
+    assert.deepEqual(received, { additionalRepairPlans: 2, idempotencyKey: "extend:2" });
   } finally {
     await server.close();
     supervisor.close();

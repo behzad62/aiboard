@@ -14,8 +14,10 @@ import type {
 } from "./scheduler-store.js";
 import {
   architectLifecycleEventMatchesReason,
+  DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
   rebuildSchedulerProjection,
+  repairCyclesExhausted,
 } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -42,6 +44,14 @@ import {
   assessBuildRisk,
   type BuildRiskAssessmentInput,
 } from "./risk-policy.js";
+import {
+  assessPlanRisk,
+  planCritiqueRequired,
+  type PlanCritiqueMode,
+  type PlanCritiqueSkipReason,
+  type PlanRiskLevel,
+  type PlanRiskReason,
+} from "./plan-critique-contracts.js";
 export type { ArchitectActionReason } from "./user-steering-contracts.js";
 
 export interface ArchitectActionRequest {
@@ -141,11 +151,32 @@ export interface IndependentVerifierDriver {
   candidateRuntimeIds: readonly string[];
   /** Optional only for legacy/test drivers; production always supplies it. */
   alwaysRequireIndependentVerifier?: boolean;
+  /** New runs default to two-pass; absent keeps a caller on single-pass. */
+  twoPass?: boolean;
   assessRisk(input: {
     runId: string;
     projection: SchedulerProjection;
   }): Promise<BuildRiskAssessmentInput>;
   verify(input: IndependentVerifierRequest): Promise<IndependentVerifierResult>;
+}
+
+export type PlanCriticResult =
+  | { status: "submitted"; critiqueId: string }
+  | { status: "unavailable"; reason: "no_independent_healthy_capability_match" | "runtime_unavailable" }
+  | { status: "suspended"; reason: string; runtimeId?: string; error?: string };
+
+export interface PlanCriticDriver {
+  candidateRuntimeIds: readonly string[];
+  mode: PlanCritiqueMode;
+  stricterQualification: boolean;
+  architectDeclaration(projection: SchedulerProjection): PlanRiskLevel;
+  critique(input: {
+    runId: string;
+    projection: SchedulerProjection;
+    riskReasons: readonly PlanRiskReason[];
+    preferredRuntimeId?: string;
+    signal?: AbortSignal;
+  }): Promise<PlanCriticResult>;
 }
 
 export interface BuildRuntimeOptions {
@@ -170,6 +201,8 @@ export interface BuildRuntimeOptions {
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
   independentVerifier?: IndependentVerifierDriver;
+  planCritic?: PlanCriticDriver;
+  repairPlanLimit?: number;
 }
 
 export interface BuildStepResult {
@@ -198,6 +231,8 @@ export class BuildRuntime {
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
   private readonly discardFinalVerificationProfile?: BuildRuntimeOptions["discardFinalVerificationProfile"];
   private readonly independentVerifier?: IndependentVerifierDriver;
+  private readonly planCritic?: PlanCriticDriver;
+  private readonly repairPlanLimit: number;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
 
@@ -221,6 +256,8 @@ export class BuildRuntime {
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
     this.discardFinalVerificationProfile = options.discardFinalVerificationProfile;
     this.independentVerifier = options.independentVerifier;
+    this.planCritic = options.planCritic;
+    this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
     if (
       this.independentVerifier &&
       (
@@ -234,9 +271,38 @@ export class BuildRuntime {
         "Independent verifier requires unique non-empty candidate runtime IDs.",
       );
     }
+    if (this.planCritic) {
+      if (
+        this.planCritic.candidateRuntimeIds.length === 0 ||
+        new Set(this.planCritic.candidateRuntimeIds).size !==
+          this.planCritic.candidateRuntimeIds.length ||
+        this.planCritic.candidateRuntimeIds.some((runtimeId) => !runtimeId.trim())
+      ) {
+        throw new Error(
+          "Plan critic requires unique non-empty candidate runtime IDs.",
+        );
+      }
+      if (
+        this.independentVerifier &&
+        (
+          this.planCritic.candidateRuntimeIds.length !==
+            this.independentVerifier.candidateRuntimeIds.length ||
+          this.planCritic.candidateRuntimeIds.some(
+            (runtimeId, index) =>
+              runtimeId !== this.independentVerifier!.candidateRuntimeIds[index],
+          )
+        )
+      ) {
+        throw new Error(
+          "Plan critic candidate runtime IDs must equal the verifier policy candidates.",
+        );
+      }
+    }
     this.initializeRun();
     this.configureRunPolicy();
     this.configureVerifierPolicy();
+    this.configureRepairPolicy();
+    this.configurePlanCritiquePolicy();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
       store: options.store,
@@ -314,6 +380,9 @@ export class BuildRuntime {
         "This Build is awaiting the user's independent verifier selection."
       );
     }
+    if (projection.repairCycles?.pause) {
+      throw new Error("This Build is awaiting the user's repair-cycle decision.");
+    }
     const occurredAt = this.clock();
     if (
       renewBudgetWindow &&
@@ -359,6 +428,18 @@ export class BuildRuntime {
       actor: { role: "user", id: "local-user" },
       idempotencyKey,
       payload: { runtimeId },
+    });
+    return this.projection();
+  }
+
+  extendRepairCycles(additionalRepairPlans: number, idempotencyKey: string): SchedulerProjection {
+    this.store.append({
+      runId: this.runId,
+      type: "repair.cycle_limit_extended",
+      occurredAt: this.clock(),
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey,
+      payload: { additionalRepairPlans },
     });
     return this.projection();
   }
@@ -576,6 +657,9 @@ export class BuildRuntime {
       await this.runArchitect({ type: "plan_required" }, projection);
       return this.afterArchitect("plan_required");
     }
+
+    const critique = await this.advancePlanCritique(projection);
+    if (critique) return critique;
 
     const openGuidance = Object.values(projection.guidance)
       .filter((guidance) => guidance.status === "open")
@@ -802,6 +886,12 @@ export class BuildRuntime {
         if (!decision) {
           throw new Error("Final verification repair review lacks a structured decision.");
         }
+        const pausedForRepair = this.pauseIfRepairCyclesExhausted(
+          this.projection(),
+          "final_verification",
+          generation.targetRevision,
+        );
+        if (pausedForRepair) return pausedForRepair;
         await this.runArchitect({
           type: "final_verification_repair_plan_required",
           finalVerificationTaskId: generation.taskId,
@@ -886,6 +976,12 @@ export class BuildRuntime {
         return await this.advanceFinalVerificationCleanup(generation);
       }
       if (generation.repairTaskIds?.length) return undefined;
+      const pausedForRepair = this.pauseIfRepairCyclesExhausted(
+        this.projection(),
+        "final_verification",
+        generation.targetRevision,
+      );
+      if (pausedForRepair) return pausedForRepair;
       await this.runArchitect({
         type: "final_verification_repair_plan_required",
         finalVerificationTaskId: generation.taskId,
@@ -1087,6 +1183,12 @@ export class BuildRuntime {
       currentReview.verdict?.satisfied === false
     ) {
       if (currentReview.repairTaskIds?.length) return undefined;
+      const pausedForRepair = this.pauseIfRepairCyclesExhausted(
+        projection,
+        "verifier",
+        currentReview.targetRevision,
+      );
+      if (pausedForRepair) return pausedForRepair;
       const unsatisfiedCriteria = currentReview.verdict.criterionVerdicts
         .filter((criterion) => criterion.verdict === "unsatisfied")
         .map((criterion) => ({
@@ -1327,6 +1429,8 @@ export class BuildRuntime {
         reason.type === "final_verification_repair_plan_required",
       verifierRepairPlanAvailable:
         reason.type === "verifier_repair_plan_required",
+      planCritiqueResolutionAvailable:
+        projection.planCritique?.current?.status === "submitted",
       architectAction: {
         reason,
         sequence: projection.lastSequence,
@@ -1508,8 +1612,143 @@ export class BuildRuntime {
       idempotencyKey: "verifier-policy-configured",
       payload: {
         ...expected,
+        twoPass: this.independentVerifier.twoPass === true,
       },
     });
+  }
+
+  private configureRepairPolicy(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.some((event) => event.type === "repair.policy_configured")) return;
+    if (events.some((event) => event.type === "plan.created")) return; // in-flight pre-P6.5 runs stay uncapped
+    this.store.append({
+      runId: this.runId,
+      type: "repair.policy_configured",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "repair-policy",
+      payload: { repairPlanLimit: this.repairPlanLimit },
+    });
+  }
+
+  private configurePlanCritiquePolicy(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.some((event) => event.type === "plan_critique.policy_configured")) return;
+    if (events.some((event) => event.type === "plan.created")) return;
+    this.store.append({
+      runId: this.runId,
+      type: "plan_critique.policy_configured",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "plan-critique-policy",
+      payload: { mode: this.planCritic?.mode ?? "off" },
+    });
+  }
+
+  private async advancePlanCritique(projection: SchedulerProjection): Promise<BuildStepResult | undefined> {
+    const driver = this.planCritic;
+    const state = projection.planCritique;
+    if (!driver || !state?.policy || state.policy.mode === "off" || state.skipped) return undefined;
+    if (state.current?.status === "resolved") return undefined;
+    const skip = (reason: PlanCritiqueSkipReason): BuildStepResult => {
+      this.store.append({
+        runId: this.runId, type: "plan_critique.skipped", occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `plan-critique:skip:${projection.planRevision}:${reason}`,
+        payload: { planRevision: projection.planRevision, reason },
+      });
+      return { status: "progressed", action: "plan_critique_skipped" };
+    };
+    if (this.runPolicy === "plan_only") return skip("plan_only");
+    if (!state.risk) {
+      const input = {
+        architectDeclaration: driver.architectDeclaration(projection),
+        stricterQualification: driver.stricterQualification,
+        tasks: Object.values(projection.tasks),
+      };
+      this.store.append({
+        runId: this.runId, type: "plan_critique.risk_assessed", occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `plan-critique:risk:${projection.planRevision}`,
+        payload: {
+          planRevision: projection.planRevision,
+          architectDeclaration: input.architectDeclaration,
+          stricterQualification: input.stricterQualification,
+          assessment: assessPlanRisk(input),
+        },
+      });
+      return { status: "progressed", action: "plan_risk_assessed" };
+    }
+    if (!planCritiqueRequired(state.policy.mode, state.risk.assessment)) return skip("low_plan_risk");
+    const current = state.current;
+    if (current?.status === "submitted") {
+      if ((current.blockingFindingIds ?? []).length === 0) {
+        this.store.append({
+          runId: this.runId, type: "plan_critique.resolved", occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `plan-critique:resolve:${current.critiqueId}`,
+          payload: { critiqueId: current.critiqueId, planRevision: current.planRevision, resolutions: [] },
+        });
+        return { status: "progressed", action: "plan_critique_resolved_by_runner" };
+      }
+      await this.runArchitect({
+        type: "plan_critique_resolution_required",
+        critiqueId: current.critiqueId,
+        planRevision: current.planRevision,
+        blockingFindingIds: [...current.blockingFindingIds!],
+      }, projection);
+      if (this.projection().planCritique?.current?.status !== "resolved") {
+        throw new Error("Architect returned from plan_critique_resolution_required without a typed action.");
+      }
+      return this.afterArchitect("plan_critique_resolution_required");
+    }
+    const result = await driver.critique({
+      runId: this.runId,
+      projection,
+      riskReasons: state.risk.assessment.reasons,
+      ...(projection.verifierSelection?.status === "selected" && projection.verifierSelection.selectedRuntimeId
+        ? { preferredRuntimeId: projection.verifierSelection.selectedRuntimeId }
+        : {}),
+      signal: this.activeLifecycleSignal(),
+    });
+    if (result.status === "submitted") return { status: "progressed", action: "plan_critique_submitted" };
+    if (result.status === "suspended" && result.reason === "cancelled" && this.projection().status === "paused") {
+      return { status: "paused", action: "plan_critic_interrupted" };
+    }
+    const failures = this.projection().planCritique?.history.length ?? 0;
+    if (result.status === "suspended" && result.reason === "provider_error" && failures < 2) {
+      return { status: "progressed", action: "plan_critic_provider_failed" };
+    }
+    if (!driver.stricterQualification && result.status === "suspended") return skip("critic_failed");
+    this.store.append({
+      runId: this.runId, type: "verifier.selection_required", occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `verifier-selection:plan-critique:${projection.planRevision}:${result.status === "unavailable" ? result.reason : result.reason}`,
+      payload: {
+        reason: "plan_critique_no_independent_runtime",
+        requiredCapabilities: ["code"],
+        candidateRuntimeIds: [...driver.candidateRuntimeIds],
+      },
+    });
+    return { status: "paused", action: "verifier_selection_required" };
+  }
+
+  private pauseIfRepairCyclesExhausted(
+    projection: SchedulerProjection,
+    source: "final_verification" | "verifier",
+    targetRevision: string,
+  ): BuildStepResult | undefined {
+    if (!repairCyclesExhausted(projection)) return undefined;
+    const cycles = projection.repairCycles!;
+    this.store.append({
+      runId: this.runId,
+      type: "repair.cycle_limit_reached",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `repair-cycle-limit:${targetRevision}:${cycles.used}:${cycles.extensions}`,
+      payload: { source, targetRevision, used: cycles.used, limit: cycles.limit },
+    });
+    return { status: "paused", action: "repair_cycle_limit_reached" };
   }
 }
 

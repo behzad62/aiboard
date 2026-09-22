@@ -10,6 +10,10 @@ import type {
   ModelTurn,
 } from "../src/agent-contracts.js";
 import type { AgentLoopCheckpoint } from "../src/agent-loop.js";
+import {
+  buildVerifierExpectationsContext,
+  VERIFIER_ADVERSARIAL_STANCE,
+} from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { NativeVerifierRuntime } from "./support/git-fixture.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
@@ -19,12 +23,14 @@ import {
 } from "../src/runtime-router.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "../src/sqlite-budget-ledger.js";
+import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import type {
   VerifierReviewProjection,
   VerifierVerdictProjection,
 } from "../src/verifier-contracts.js";
 import type {
+  RecordVerifierExpectationsInput,
   RequestVerifierReviewInput,
   SubmitVerifierVerdictInput,
   VerifierVerdictAuthority,
@@ -32,7 +38,31 @@ import type {
 
 const TARGET_REVISION = "a".repeat(40);
 const OTHER_REVISION = "b".repeat(40);
+const BASELINE_REVISION = "e".repeat(40);
 const HASH = "c".repeat(64);
+const PASS_1_TOOLS = [
+  "artifact.read",
+  "fs.list",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "git.status",
+  "inspect_evidence",
+  "record_verification_expectations",
+];
+const PASS_2_TOOLS = [
+  "artifact.read",
+  "fs.list",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "git.diff",
+  "git.log",
+  "git.show",
+  "git.status",
+  "inspect_evidence",
+  "submit_verifier_verdict",
+];
 
 const candidates: AgentRuntimeCandidate[] = [
   {
@@ -448,6 +478,293 @@ test("restart after a durable model response executes its pending verdict withou
   }
 });
 
+test("every verifier inspection records one context manifest bound to the exact revision", async () => {
+  const fixture = createFixture("manifest", [{
+    blocks: [{ type: "text", text: "Inspection complete." }],
+    stopReason: "end_turn",
+  }]);
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_manifest"));
+    assert.equal(result.status, "inspected");
+    const manifests = fixture.contextManifests.listRun("run_manifest");
+    assert.equal(manifests.length, 1);
+    const manifest = manifests[0]!;
+    assert.equal(manifest.role, "verifier");
+    assert.equal(manifest.purpose, "verifier:inspection");
+    assert.equal(manifest.sessionId, result.sessionId);
+    assert.equal(manifest.repositoryRevision, TARGET_REVISION);
+    assert.equal(manifest.sections.some((section) => section.id === "build-criteria"), true);
+    assert.equal(manifest.packArtifactHash, undefined);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("every verifier verdict records one context manifest with verdict purpose", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("manifest-verdict", [{
+    blocks: [{
+      type: "tool_call",
+      callId: "verdict-1",
+      name: "submit_verifier_verdict",
+      arguments: {
+        criterionVerdicts: [{
+          taskId: "task_ui",
+          criterionId: "criterion_ui",
+          verdict: "satisfied",
+          rationale: "The exact revision satisfies the UI criterion.",
+          evidenceIds: ["evidence_ui"],
+        }],
+      },
+    }],
+    stopReason: "tool_calls",
+  }], TARGET_REVISION, authority);
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_manifest_verdict"));
+    assert.equal(result.status, "verdict_submitted");
+    const manifests = fixture.contextManifests.listRun("run_manifest_verdict");
+    assert.equal(manifests.length, 1);
+    assert.equal(manifests[0]?.role, "verifier");
+    assert.equal(manifests[0]?.purpose, "verifier:verdict");
+    assert.equal(manifests[0]?.sessionId, result.sessionId);
+    assert.equal(manifests[0]?.repositoryRevision, TARGET_REVISION);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("full context recording stores pack text as a content-addressed artifact", async () => {
+  const fixture = createFixture("manifest-full", [{
+    blocks: [{ type: "text", text: "Inspection complete." }],
+    stopReason: "end_turn",
+  }], TARGET_REVISION, undefined, false, false, true);
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_manifest_full"));
+    assert.equal(result.status, "inspected");
+    const manifests = fixture.contextManifests.listRun("run_manifest_full");
+    assert.equal(manifests.length, 1);
+    const hash = manifests[0]?.packArtifactHash;
+    assert.match(hash ?? "", /^[a-f0-9]{64}$/);
+    const bytes = await fixture.artifacts.get(hash!);
+    const sent = fixture.model.requests[0]!.messages
+      .filter((message) => message.role === "user")
+      .map((message) => typeof message.content === "string" ? message.content : "")
+      .join("");
+    assert.equal(bytes.toString("utf8"), sent);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("buildVerifierExpectationsContext names the baseline and omits implementation evidence", () => {
+  const pack = buildVerifierExpectationsContext({
+    limits: { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 },
+    objective: "Build the audited application.",
+    baselineRevision: BASELINE_REVISION,
+    targetRevision: TARGET_REVISION,
+    criteria: [],
+    guidance: [],
+    riskReasons: [],
+  });
+  assert.match(pack.text, /baseline-revision/);
+  assert.match(pack.text, new RegExp(BASELINE_REVISION));
+  assert.doesNotMatch(pack.text, /integration-revision/);
+  assert.doesNotMatch(pack.text, new RegExp(TARGET_REVISION));
+  assert.doesNotMatch(pack.text, /accepted-change-history/);
+  assert.doesNotMatch(pack.text, /accepted-reviews/);
+  assert.doesNotMatch(pack.text, /FINAL-VERIFICATION/);
+  assert.doesNotMatch(pack.text, /final build passed/);
+  assert.doesNotMatch(pack.text, /Assume the integrated change contains at least one defect/);
+  assert.match(VERIFIER_ADVERSARIAL_STANCE, /Assume the integrated change contains at least one defect/);
+});
+
+test("two-pass verification records expectations on the baseline before it can see the implementation", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("two-pass", [
+    { blocks: [{ type: "tool_call", callId: "exp-1", name: "record_verification_expectations", arguments: {
+      expectations: [{ taskId: "task_ui", criterionId: "criterion_ui",
+        expectedBehaviors: ["UI matches the request"], edgeCases: ["empty state"],
+        regressionSurfaces: ["src/app.ts"], requiredTests: ["renders empty state"] }] } }],
+      stopReason: "tool_calls" },
+    { blocks: [{ type: "tool_call", callId: "verdict-1", name: "submit_verifier_verdict", arguments: {
+      criterionVerdicts: [{ taskId: "task_ui", criterionId: "criterion_ui", verdict: "satisfied",
+        rationale: "Checked both expected behaviors against the revision.", evidenceIds: ["evidence_ui"] }] } }],
+      stopReason: "tool_calls" },
+  ], TARGET_REVISION, authority, false, false, { twoPass: true });
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_two_pass", { twoPass: true }));
+    assert.equal(result.status, "verdict_submitted");
+    assert.deepEqual(fixture.baselineRequests, [BASELINE_REVISION]);
+    assert.deepEqual(fixture.workspaceRequests, [TARGET_REVISION]);
+    const passOne = JSON.stringify(fixture.model.requests[0]!.messages);
+    for (const forbidden of ["accepted-change-history", "accepted-reviews", HASH, "FINAL-VERIFICATION"]) {
+      assert.doesNotMatch(passOne, new RegExp(escapeRegExp(forbidden)), forbidden);
+    }
+    assert.doesNotMatch(passOne, /final build passed/);
+    assert.match(passOne, /baseline-revision/);
+    assert.doesNotMatch(passOne, /integration-revision/);
+    assert.doesNotMatch(passOne, new RegExp(escapeRegExp(TARGET_REVISION)));
+    assert.deepEqual(sortedToolNames(fixture.model.requests[0]!), PASS_1_TOOLS);
+    assert.equal(fixture.model.requests[0]!.tools.some((tool) => tool.name === "record_verification_expectations"), true);
+    assert.equal(fixture.model.requests[0]!.tools.some((tool) => tool.name === "submit_verifier_verdict"), false);
+    const passTwo = JSON.stringify(fixture.model.requests[1]!.messages);
+    assert.match(passTwo, /recorded-expectations/);
+    assert.match(passTwo, /integration-revision/);
+    assert.match(passTwo, new RegExp(escapeRegExp(TARGET_REVISION)));
+    assert.match(passTwo, /Assume the integrated change contains at least one defect/);
+    assert.match(passTwo, new RegExp(escapeRegExp(HASH)));
+    assert.deepEqual(sortedToolNames(fixture.model.requests[1]!), PASS_2_TOOLS);
+    assert.equal(authority.expectations.length, 1);
+    assert.equal(fixture.baselineCleanupCalls, 1);
+    assert.notEqual(authority.expectations[0]?.sessionId, result.sessionId, "pass 1 uses its own session");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("pass 1 refuses a git.show of the integration revision and still records expectations", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("pass1-blind-show", [
+    { blocks: [{ type: "tool_call", callId: "show-integration", name: "git.show", arguments: {
+      revision: TARGET_REVISION } }], stopReason: "tool_calls" },
+    { blocks: [{ type: "tool_call", callId: "exp-after-show", name: "record_verification_expectations", arguments: {
+      expectations: [{ taskId: "task_ui", criterionId: "criterion_ui",
+        expectedBehaviors: ["UI matches the request"], edgeCases: ["empty state"],
+        regressionSurfaces: ["src/app.ts"], requiredTests: ["renders empty state"] }] } }],
+      stopReason: "tool_calls" },
+    { blocks: [{ type: "tool_call", callId: "verdict-after-show", name: "submit_verifier_verdict", arguments: {
+      criterionVerdicts: [{ taskId: "task_ui", criterionId: "criterion_ui", verdict: "satisfied",
+        rationale: "Checked both expected behaviors against the revision.", evidenceIds: ["evidence_ui"] }] } }],
+      stopReason: "tool_calls" },
+  ], TARGET_REVISION, authority, false, false, { twoPass: true });
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_pass1_blind_show", { twoPass: true }));
+    assert.equal(result.status, "verdict_submitted");
+    assert.deepEqual(sortedToolNames(fixture.model.requests[0]!), PASS_1_TOOLS);
+    const passOnePrompt = JSON.stringify(fixture.model.requests[0]!.messages);
+    assert.doesNotMatch(passOnePrompt, new RegExp(escapeRegExp(TARGET_REVISION)));
+    const refused = JSON.stringify(fixture.model.requests[1]!.messages);
+    assert.match(refused, /Tool git\.show is not registered/);
+    assert.match(refused, /unknown_tool/);
+    assert.equal(
+      fixture.model.requests[1]!.tools.some((tool) => tool.name === "record_verification_expectations"),
+      true,
+    );
+    assert.deepEqual(sortedToolNames(fixture.model.requests[2]!), PASS_2_TOOLS);
+    assert.match(
+      JSON.stringify(fixture.model.requests[2]!.messages),
+      new RegExp(escapeRegExp(TARGET_REVISION)),
+    );
+    assert.equal(authority.expectations.length, 1);
+    assert.equal(authority.expectations[0]?.expectations[0]?.expectedBehaviors[0], "UI matches the request");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("restart after durable expectations resumes at pass 2 without repeating pass 1", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  authority.afterRequest = (review) => ({
+    ...review,
+    expectations: [{
+      taskId: "task_ui",
+      criterionId: "criterion_ui",
+      expectedBehaviors: ["UI matches the request"],
+      edgeCases: ["empty state"],
+      regressionSurfaces: ["src/app.ts"],
+      requiredTests: ["renders empty state"],
+    }],
+    expectationsSessionId: "verifier:already-recorded",
+  });
+  const fixture = createFixture("two-pass-resume", [
+    { blocks: [{ type: "tool_call", callId: "verdict-1", name: "submit_verifier_verdict", arguments: {
+      criterionVerdicts: [{ taskId: "task_ui", criterionId: "criterion_ui", verdict: "satisfied",
+        rationale: "Checked the recorded expectations against the revision.", evidenceIds: ["evidence_ui"] }] } }],
+      stopReason: "tool_calls" },
+  ], TARGET_REVISION, authority, false, false, { twoPass: true });
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_two_pass_resume", { twoPass: true }));
+    assert.equal(result.status, "verdict_submitted");
+    assert.equal(fixture.model.requests.length, 1);
+    assert.deepEqual(fixture.baselineRequests, []);
+    assert.equal(authority.expectations.length, 0);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("restart during pass 1 resumes the expectations session without a blank prompt", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("two-pass-pass1-restart", [
+    { blocks: [{ type: "tool_call", callId: "exp-restart", name: "record_verification_expectations", arguments: {
+      expectations: [{ taskId: "task_ui", criterionId: "criterion_ui",
+        expectedBehaviors: ["UI matches the request"], edgeCases: ["empty state"],
+        regressionSurfaces: ["src/app.ts"], requiredTests: ["renders empty state"] }] } }],
+      stopReason: "tool_calls" },
+    { blocks: [{ type: "tool_call", callId: "verdict-restart", name: "submit_verifier_verdict", arguments: {
+      criterionVerdicts: [{ taskId: "task_ui", criterionId: "criterion_ui", verdict: "satisfied",
+        rationale: "Checked the expectations recorded before the restart.", evidenceIds: ["evidence_ui"] }] } }],
+      stopReason: "tool_calls" },
+  ], TARGET_REVISION, authority, true, false, { twoPass: true });
+  try {
+    const interrupted = await fixture.runtime.inspect(
+      verifierRequest("run_two_pass_pass1", { twoPass: true }),
+    );
+    assert.equal(interrupted.status, "suspended");
+    assert.equal(interrupted.reason, "checkpoint_error");
+    assert.equal(authority.expectations.length, 0);
+    assert.equal(fixture.baselineCleanupCalls, 0);
+    assert.equal(fixture.model.requests.length, 1);
+    assert.equal(
+      fixture.model.requests[0]!.tools.some((tool) => tool.name === "record_verification_expectations"),
+      true,
+    );
+
+    const resumed = await fixture.runtime.inspect(
+      verifierRequest("run_two_pass_pass1", { twoPass: true }),
+    );
+    assert.equal(resumed.status, "verdict_submitted");
+    assert.equal(authority.expectations.length, 1);
+    assert.equal(authority.expectations[0]?.sessionId !== resumed.sessionId, true);
+    assert.equal(fixture.model.requests.length, 2);
+    assert.equal(
+      fixture.model.requests.filter((request) =>
+        request.tools.some((tool) => tool.name === "record_verification_expectations"),
+      ).length,
+      1,
+    );
+    assert.equal(
+      fixture.model.requests[1]!.tools.some((tool) => tool.name === "submit_verifier_verdict"),
+      true,
+    );
+    assert.equal(fixture.baselineCleanupCalls, 1);
+    assert.deepEqual(fixture.baselineRequests, [BASELINE_REVISION, BASELINE_REVISION]);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("a two-pass verdict without expectations is refused by the authority", async () => {
+  const authority = new FakeVerifierVerdictAuthority();
+  const fixture = createFixture("two-pass-missing", [
+    { blocks: [{ type: "tool_call", callId: "verdict-1", name: "submit_verifier_verdict", arguments: {
+      criterionVerdicts: [{ taskId: "task_ui", criterionId: "criterion_ui", verdict: "satisfied",
+        rationale: "Skipped expectations.", evidenceIds: ["evidence_ui"] }] } }],
+      stopReason: "tool_calls" },
+  ], TARGET_REVISION, authority, false, false, { twoPass: true });
+  try {
+    const result = await fixture.runtime.inspect(verifierRequest("run_two_pass_missing", { twoPass: true }));
+    assert.equal(result.status, "suspended");
+    assert.equal(authority.submissions.length, 0);
+    assert.match(
+      JSON.stringify(result),
+      /submit_verifier_verdict is not registered|Two-pass verifier verdict requires recorded expectations/,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
 function createFixture(
   name: string,
   turns: ModelTurn[],
@@ -455,7 +772,11 @@ function createFixture(
   verdictAuthority?: VerifierVerdictAuthority,
   interruptAfterAssistantCheckpoint = false,
   withBudget = false,
+  recordContextPackTextOrOptions: boolean | { twoPass?: boolean; recordContextPackText?: boolean } = false,
 ) {
+  const recordContextPackText = typeof recordContextPackTextOrOptions === "boolean"
+    ? recordContextPackTextOrOptions
+    : recordContextPackTextOrOptions.recordContextPackText === true;
   const root = mkdtempSync(join(tmpdir(), `aiboard-native-verifier-${name}-`));
   const workspacePath = join(root, "workspace");
   mkdirSync(workspacePath);
@@ -464,6 +785,7 @@ function createFixture(
     ? new InterruptingSessionStore(join(root, "sessions.sqlite"), artifacts)
     : new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
   const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  const contextManifests = new SqliteContextManifestStore(join(root, "context-manifests.sqlite"));
   const budgetLedger = withBudget
     ? new SqliteBudgetLedger(join(root, "budget.sqlite"), {
         limitsFor: () => ({ maxModelCalls: 10, maxToolCalls: 10 }),
@@ -471,6 +793,10 @@ function createFixture(
     : undefined;
   const model = new ScriptedModel(turns);
   const workspaceRequests: string[] = [];
+  const baselineRequests: string[] = [];
+  const baselinePath = join(root, "baseline");
+  mkdirSync(baselinePath);
+  let baselineCleanupCalls = 0;
   const workspaceManager = {
     workspaceKind: "independent-verifier" as const,
     create: async (targetRevision: string) => {
@@ -485,6 +811,21 @@ function createFixture(
         canonicalRevision: TARGET_REVISION,
       };
     },
+    createBaseline: async (revision: string) => {
+      baselineRequests.push(revision);
+      return {
+        runId: "fixture",
+        workspaceId: "verifier-baseline",
+        path: baselinePath,
+        metadataPath: join(root, "baseline.metadata.json"),
+        repositoryRoot: workspacePath,
+        targetRevision: revision,
+        canonicalRevision: revision,
+      };
+    },
+    cleanupBaseline: async () => {
+      baselineCleanupCalls += 1;
+    },
   };
   const router = new RuntimeRouter({
     candidates,
@@ -496,7 +837,11 @@ function createFixture(
     sessions,
     model,
     budgetLedger,
+    contextManifests,
+    artifacts,
     workspaceRequests,
+    baselineRequests,
+    get baselineCleanupCalls() { return baselineCleanupCalls; },
     runtime: new NativeVerifierRuntime({
       router,
       candidates,
@@ -509,12 +854,15 @@ function createFixture(
       artifacts,
       evidenceStore,
       workspaceManager,
+      contextManifests,
+      recordContextPackText,
       ...(budgetLedger ? { budgetLedger } : {}),
       ...(verdictAuthority ? { verdictAuthority } : {}),
       clock: () => "2026-08-27T00:00:00.000Z",
     }),
     close: () => {
       budgetLedger?.close();
+      contextManifests.close();
       sessions.close();
       evidenceStore.close();
       rmSync(root, { recursive: true, force: true });
@@ -547,7 +895,23 @@ class InterruptingSessionStore extends SqliteAgentSessionStore {
         typeof message.content === "object" &&
         message.content.toolName === "submit_verifier_verdict",
     );
-    if (this.interrupt && hasPendingVerdict) {
+    const hasPendingExpectations = checkpoint.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        Array.isArray(message.content) &&
+        message.content.some(
+          (block) =>
+            block.type === "tool_call" &&
+            block.name === "record_verification_expectations",
+        ),
+    ) && !checkpoint.messages.some(
+      (message) =>
+        message.role === "tool" &&
+        !Array.isArray(message.content) &&
+        typeof message.content === "object" &&
+        message.content.toolName === "record_verification_expectations",
+    );
+    if (this.interrupt && (hasPendingVerdict || hasPendingExpectations)) {
       this.interrupt = false;
       throw new Error("Injected interruption after durable verifier response.");
     }
@@ -556,6 +920,7 @@ class InterruptingSessionStore extends SqliteAgentSessionStore {
 
 class FakeVerifierVerdictAuthority implements VerifierVerdictAuthority {
   readonly requests: RequestVerifierReviewInput[] = [];
+  readonly expectations: RecordVerifierExpectationsInput[] = [];
   readonly submissions: SubmitVerifierVerdictInput[] = [];
   afterRequest?: (review: VerifierReviewProjection) => VerifierReviewProjection;
   private current?: VerifierReviewProjection;
@@ -572,6 +937,8 @@ class FakeVerifierVerdictAuthority implements VerifierVerdictAuthority {
       status: "requested",
       state: "current",
       requestedAt: input.occurredAt,
+      ...(input.twoPass === true ? { twoPass: true } : {}),
+      ...(input.baselineRevision ? { baselineRevision: input.baselineRevision } : {}),
     };
     this.current = this.afterRequest?.(requested) ?? requested;
     return structuredClone(this.current);
@@ -581,9 +948,47 @@ class FakeVerifierVerdictAuthority implements VerifierVerdictAuthority {
     return this.current ? structuredClone(this.current) : undefined;
   }
 
+  recordExpectations(input: RecordVerifierExpectationsInput): VerifierReviewProjection {
+    this.expectations.push(structuredClone(input));
+    if (!this.current || this.current.status !== "requested") {
+      throw new Error("Verifier expectations require a current requested review.");
+    }
+    if (this.current.twoPass !== true) {
+      throw new Error("Verifier expectations require a two-pass review.");
+    }
+    if (
+      input.reviewId !== this.current.reviewId ||
+      input.targetRevision !== this.current.targetRevision ||
+      input.baselineRevision !== this.current.baselineRevision
+    ) {
+      throw new Error("Verifier expectations are stale or foreign to the current review.");
+    }
+    if (this.current.expectations) {
+      if (this.current.expectationsSessionId !== input.sessionId) {
+        throw new Error("Verifier expectations conflict with the recorded expectations.");
+      }
+      return structuredClone(this.current);
+    }
+    this.current = {
+      ...this.current,
+      expectations: input.expectations.map((expectation) => ({
+        ...expectation,
+        expectedBehaviors: [...expectation.expectedBehaviors],
+        edgeCases: [...expectation.edgeCases],
+        regressionSurfaces: [...expectation.regressionSurfaces],
+        requiredTests: [...expectation.requiredTests],
+      })),
+      expectationsSessionId: input.sessionId,
+    };
+    return structuredClone(this.current);
+  }
+
   submitVerdict(input: SubmitVerifierVerdictInput): VerifierVerdictProjection {
     this.submissions.push(structuredClone(input));
     if (!this.current) throw new Error("No requested verifier review.");
+    if (this.current.twoPass === true && !this.current.expectations) {
+      throw new Error("Two-pass verifier verdict requires recorded expectations.");
+    }
     const verdict: VerifierVerdictProjection = {
       reviewId: input.reviewId,
       targetRevision: input.targetRevision,
@@ -602,7 +1007,10 @@ class FakeVerifierVerdictAuthority implements VerifierVerdictAuthority {
   }
 }
 
-function verifierRequest(runId: string) {
+function verifierRequest(
+  runId: string,
+  overrides: { twoPass?: boolean } = {},
+) {
   return {
     runId,
     objective: "Build the audited application.",
@@ -684,6 +1092,9 @@ function verifierRequest(runId: string) {
       code: "security_auth_crypto_path" as const,
       evidence: ["src/auth/session.ts"],
     }],
+    ...(overrides.twoPass
+      ? { twoPass: true as const, baselineRevision: BASELINE_REVISION }
+      : {}),
   };
 }
 
@@ -702,6 +1113,10 @@ class ScriptedModel implements AgentModel {
     if (!turn) throw new Error("Unexpected verifier model call.");
     return structuredClone(turn);
   }
+}
+
+function sortedToolNames(request: AgentModelRequest): string[] {
+  return request.tools.map((tool) => tool.name).sort();
 }
 
 function escapeRegExp(value: string): string {

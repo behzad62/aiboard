@@ -3289,6 +3289,7 @@ function emptyObservability(runId: string) {
     providers: [],
     events: [],
     git: { integrationBranch: "", integrationRevision: "", commits: [] },
+    contextManifestCount: 0,
   };
 }
 

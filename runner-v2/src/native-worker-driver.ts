@@ -22,6 +22,7 @@ import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
 import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import type { CapabilityRegistry } from "./capability-registry.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -37,7 +38,7 @@ import {
   type ProviderHealthRegistry,
 } from "./provider-health.js";
 import type { RuntimeRouter, AgentRuntimeCandidate } from "./runtime-router.js";
-import type { SchedulerStore } from "./scheduler-store.js";
+import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
 import { rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog, SkillDocument, SkillMetadata } from "./skill-catalog.js";
@@ -93,6 +94,8 @@ export interface NativeWorkerDriverOptions {
   language?: LanguageIntelligenceProvider;
   execution?: OneShotCommandExecutor;
   executionGrants?: ExecutionGrantAuthority;
+  contextManifests?: ContextManifestStore;
+  recordContextPackText?: boolean;
 }
 
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
@@ -154,6 +157,23 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         workspace.path,
         sessionId,
       );
+      const repositoryRevision = /^HEAD ([0-9a-f]{40,64})/.exec(context.repositorySnapshot)?.[1];
+      await recordContextPack({
+        store: this.options.contextManifests,
+        artifacts: this.options.artifacts,
+        recordPackText: this.options.recordContextPackText,
+        runId: assignment.runId,
+        sessionId,
+        actor: { role: "worker", id: assignment.workerId },
+        role: "worker",
+        purpose: "worker:task",
+        taskId: assignment.task.id,
+        attempt: assignment.attempt,
+        ...(repositoryRevision ? { repositoryRevision } : {}),
+        limits: this.contextLimits,
+        pack: context.pack,
+        recordedAt: this.clock(),
+      });
       const sessionEventCount = this.options.sessions.events(sessionId).length;
       const toolEventCountBefore = this.options.ledger
         .listRun(assignment.runId)
@@ -263,9 +283,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         signal: assignment.signal,
         continuationMessages: workerContinuationMessages(
           {
-            id: `context:${context.digest}`,
+            id: `context:${context.pack.digest}`,
             role: "user",
-            content: context.text,
+            content: context.pack.text,
           },
           sessionEventCount > 0,
           assignment.task.id,
@@ -311,20 +331,16 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         };
       }
       if (result.loop.status === "waiting_for_architect") {
-        const projection = rebuildSchedulerProjection(
-          this.options.schedulerStore.readRun(assignment.runId)
+        return guidanceOutcomeFromProjection(
+          rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+          result.loop.requestId,
         );
-        const guidance = projection.guidance[result.loop.requestId];
-        if (!guidance) {
-          return { type: "failed", reason: `missing_guidance:${result.loop.requestId}` };
-        }
-        return {
-          type: "guidance",
-          requestId: guidance.requestId,
-          blocking: guidance.blocking,
-          question: guidance.question,
-          evidenceSequence: guidance.evidenceSequence,
-        };
+      }
+      if (result.loop.status === "replan_requested") {
+        return guidanceOutcomeFromProjection(
+          rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)),
+          result.loop.requestId,
+        );
       }
       if (
         result.loop.status === "suspended" &&
@@ -510,22 +526,27 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       evidence,
       recentHistory: [],
     };
-    if (!this.options.capabilityRegistry) return buildWorkerContext(input);
-    return (await assembleContextWithExtensions({
-      registry: this.options.capabilityRegistry,
-      assembler: new ContextAssembler(this.contextLimits),
-      baseSections: workerContextSections(input),
-      request: {
-        runId: assignment.runId,
-        sessionId,
-        actor: { role: "worker", id: assignment.workerId },
-        objective: assignment.task.objective,
-        workspacePath,
-        taskId: assignment.task.id,
-        signal: assignment.signal ?? new AbortController().signal,
-      },
-      artifacts: this.options.artifacts,
-    })).pack;
+    if (!this.options.capabilityRegistry) {
+      return { pack: buildWorkerContext(input), repositorySnapshot };
+    }
+    return {
+      pack: (await assembleContextWithExtensions({
+        registry: this.options.capabilityRegistry,
+        assembler: new ContextAssembler(this.contextLimits),
+        baseSections: workerContextSections(input),
+        request: {
+          runId: assignment.runId,
+          sessionId,
+          actor: { role: "worker", id: assignment.workerId },
+          objective: assignment.task.objective,
+          workspacePath,
+          taskId: assignment.task.id,
+          signal: assignment.signal ?? new AbortController().signal,
+        },
+        artifacts: this.options.artifacts,
+      })).pack,
+      repositorySnapshot,
+    };
   }
 }
 
@@ -567,6 +588,21 @@ export function recoverableWorkerSuspension(
   return undefined;
 }
 
+export function guidanceOutcomeFromProjection(
+  projection: SchedulerProjection,
+  requestId: string,
+): WorkerOutcome {
+  const guidance = projection.guidance[requestId];
+  if (!guidance) return { type: "failed", reason: `missing_guidance:${requestId}` };
+  return {
+    type: "guidance",
+    requestId: guidance.requestId,
+    blocking: guidance.blocking,
+    question: guidance.question,
+    evidenceSequence: guidance.evidenceSequence,
+  };
+}
+
 export function shouldAutoContinueWorker(
   reason: AgentSuspensionReason,
   continuations: number,
@@ -591,7 +627,7 @@ export function workerContinuationMessages(
       content: [
         "Resume the same durable task attempt with its existing workspace, tool results, and evidence.",
         "Do not repeat completed work. Inspect current state only as needed.",
-        "Finish with submit_task when the task is ready; use ask_architect when an Architect decision is genuinely required.",
+        "Finish with submit_task when the task is ready; use ask_architect when an Architect decision is genuinely required; use request_replan when the task cannot be completed within its objective.",
         "Do not submit while your own fresh evidence still shows a known acceptance failure.",
       ].join("\n"),
     },

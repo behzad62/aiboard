@@ -14,6 +14,7 @@ test("independent verifier observability exposes current policy, risk, selection
     mode: "risk_based",
     candidateRuntimeIds: ["google:verifier"],
     alwaysRequireIndependentVerifier: true,
+    twoPass: false,
   });
   assert.equal(observed.risk.current?.risk, "high");
   assert.equal(observed.risk.current?.architectDeclaration, "high");
@@ -114,6 +115,7 @@ function fixtureProjection(): SchedulerProjection {
       mode: "risk_based",
       candidateRuntimeIds: ["google:verifier"],
       alwaysRequireIndependentVerifier: true,
+      twoPass: false,
     },
     buildRisk: {
       current: {

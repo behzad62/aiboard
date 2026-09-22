@@ -37,6 +37,7 @@ import type {
   ArchitectRuntimeDriver,
 } from "./build-runtime.js";
 import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import type { CapabilityRegistry } from "./capability-registry.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import { createEvidenceTools } from "./evidence-tools.js";
@@ -116,9 +117,15 @@ export interface NativeArchitectRuntimeOptions {
   capabilityRegistry?: CapabilityRegistry;
   language?: LanguageIntelligenceProvider;
   providerRetryRuntime?: RunnerProviderRetryRuntime;
+  contextManifests?: ContextManifestStore;
+  recordContextPackText?: boolean;
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
+  private static readonly DEFAULT_CONTEXT_LIMITS: ContextLimits = {
+    maxBytes: 512 * 1024,
+    maxEstimatedTokens: 128 * 1024,
+  };
   private readonly clock: () => string;
   private readonly candidateById: Map<string, AgentRuntimeCandidate>;
 
@@ -127,6 +134,10 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     this.candidateById = new Map(
       options.candidates.map((candidate) => [candidate.runtimeId, candidate])
     );
+  }
+
+  private get contextLimits(): ContextLimits {
+    return this.options.contextLimits ?? NativeArchitectRuntime.DEFAULT_CONTEXT_LIMITS;
   }
 
   async run(request: ArchitectActionRequest): Promise<void> {
@@ -161,6 +172,21 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     }
     const context = await this.context(request, projection);
     const sessionId = `architect:${request.runId}`;
+    await recordContextPack({
+      store: this.options.contextManifests,
+      artifacts: this.options.artifacts,
+      recordPackText: this.options.recordContextPackText,
+      runId: request.runId,
+      sessionId,
+      actor: { role: "architect", id: candidate.runtimeId },
+      role: "architect",
+      purpose: `architect:${request.reason.type}`,
+      ...("taskId" in request.reason ? { taskId: request.reason.taskId } : {}),
+      repositoryRevision: projection.integrationRevision,
+      limits: this.contextLimits,
+      pack: context,
+      recordedAt: this.clock(),
+    });
     let messages: AgentMessage[] = [
       {
         id: "architect-system",
@@ -174,9 +200,12 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
           "When current evidence proves that a planned task is already satisfied or its assumptions are stale, reconcile the Architect-owned plan: cancel or revise that task and rewire its pending dependents. Do not require a fabricated code change merely because a task exists.",
           "When a legacy in-flight run requires an acceptance-contract upgrade, record criteria for every non-cancelled task with upgrade_acceptance_contract before reviewing or completing work.",
+          "A satisfied criterion verdict may cite a command that did not exit 0 only with an explicit acceptedFailures entry naming that evidence ID and a rationale, for example an intentionally failing pre-fix test. Otherwise mark the criterion unsatisfied.",
+          "A guidance request of kind replan means the worker cannot complete the task within its objective. Either reconcile the plan with reconcile_plan (cancel or revise that task, add replacement tasks) or refuse with answer_guidance citing evidence; never leave a replan request open.",
           "When final verification planning is requested, inspect the canonical repository state and use plan_final_verification with an explicit build, tests, runtime_smoke, and browser plan.",
           "When final verification review is requested, inspect the exact current submission and persisted category evidence, then use review_final_verification with one semantic rationale per category plus an explicit low/high Architect risk declaration and rationale. Require repair when the evidence does not support approval, and declare high risk whenever semantic concerns exceed the kernel-observed paths and effects.",
           "When final verification repairs are requested, use plan_verification_repairs to create narrowly scoped ordinary tasks whose provenance and acceptance criteria cover every failed category exactly once.",
+          "When plan critique resolution is requested, read every blocking finding, inspect the baseline repository where a finding cites files, then call resolve_plan_critique exactly once: reconcile the plan for findings you accept (cancel, revise, or add tasks in one planReconciliation) and reject the rest with evidence-based rationale.",
         ].join("\n"),
       },
     ];
@@ -526,10 +555,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         summary: `${record.taskId}: ${evidenceFactSummary(record.fact)}`,
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
-    const limits = this.options.contextLimits ?? {
-        maxBytes: 512 * 1024,
-        maxEstimatedTokens: 128 * 1024,
-      };
+    const limits = this.contextLimits;
     const input = {
       limits,
       objective: this.options.objective,
@@ -640,7 +666,8 @@ export function architectInspectionWorkspace(
     reason.type === "final_verification_plan_required" ||
     reason.type === "final_verification_review_required" ||
     reason.type === "final_verification_repair_plan_required" ||
-    reason.type === "verifier_repair_plan_required"
+    reason.type === "verifier_repair_plan_required" ||
+    reason.type === "plan_critique_resolution_required"
   ) {
     return canonicalProjectRoot?.trim() || projectRoot;
   }

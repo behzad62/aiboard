@@ -16,6 +16,7 @@ export interface BuildControlPlane {
   projection(runId: string): SchedulerProjection;
   usage(runId: string): NativeBuildUsageProjection;
   observability(runId: string): Promise<BuildObservabilitySnapshot>;
+  contextManifests?(runId: string): import("./context-manifest-store.js").ContextManifest[];
   transcript(runId: string, afterSequence?: number): Promise<BuildTranscriptPage>;
   files(runId: string): Promise<IntegrationFileSnapshot>;
   events(runId: string, afterSequence?: number): SchedulerEvent[];
@@ -35,6 +36,11 @@ export interface BuildControlPlane {
   selectVerifierRuntime(
     runId: string,
     runtimeId: string,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection>;
+  extendRepairCycles(
+    runId: string,
+    additionalRepairPlans: number,
     idempotencyKey: string,
   ): Promise<SchedulerProjection>;
   selectProjectHandoff(
@@ -106,6 +112,7 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
       providers: [],
       events: [],
       git: { integrationBranch: "", integrationRevision: "", commits: [] },
+      contextManifestCount: 0,
     };
   }
 
@@ -187,6 +194,14 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     idempotencyKey: string,
   ): Promise<SchedulerProjection> {
     return this.require(runId).selectVerifierRuntime(runtimeId, idempotencyKey);
+  }
+
+  async extendRepairCycles(
+    runId: string,
+    additionalRepairPlans: number,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection> {
+    return this.require(runId).extendRepairCycles(additionalRepairPlans, idempotencyKey);
   }
 
   async selectProjectHandoff(

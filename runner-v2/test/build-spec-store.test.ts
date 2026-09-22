@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   cloneBuildSpec,
+  recoverLegacyBuildSpec,
   validateBuildSpec,
   type NativeBuildSpec,
 } from "../src/build-spec.js";
@@ -101,6 +102,46 @@ test("native Build specs enforce policy-specific limit shapes", () => {
   );
 });
 
+test("native Build specs persist a non-negative integer repairPlanLimit", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-repair-limit-"));
+  const database = join(root, "build-specs.sqlite");
+  try {
+    const spec = { ...validSpec, repairPlanLimit: 0 };
+    const store = new SqliteBuildSpecStore(database);
+    try {
+      store.save(spec);
+      assert.equal(store.get(spec.runId).repairPlanLimit, 0);
+      assert.equal(cloneBuildSpec(spec).repairPlanLimit, 0);
+    } finally {
+      store.close();
+    }
+    assert.throws(
+      () => validateBuildSpec({ ...validSpec, repairPlanLimit: -1 }),
+      /Build spec repairPlanLimit must be a non-negative integer/,
+    );
+    assert.throws(
+      () => validateBuildSpec({ ...validSpec, repairPlanLimit: 1.5 }),
+      /Build spec repairPlanLimit must be a non-negative integer/,
+    );
+    const recovered = recoverLegacyBuildSpec({
+      version: 1,
+      runId: "run_legacy_repair",
+      projectId: "project_legacy_repair",
+      objective: "Recover a pre-P6.5 build.",
+      architectRuntimeId: "chatgpt:gpt-5.5",
+      workerRuntimeIds: ["chatgpt:gpt-5.4"],
+      maxConcurrency: 1,
+      permissionProfile: "full",
+      budgetLimits: {},
+      createdAt: "2026-07-12T00:00:00.000Z",
+      idempotencyKey: "build-spec:run_legacy_repair",
+    });
+    assert.equal(recovered.repairPlanLimit, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("native Build specs validate and clone benchmark command policy", () => {
   const benchmarkSpec: NativeBuildSpec = {
     ...validSpec,
@@ -133,6 +174,94 @@ test("native Build specs validate and clone benchmark command policy", () => {
   assert.deepEqual(benchmarkSpec.benchmark!.allowedCommands, ["npm test", "node verifier.mjs"]);
   assert.deepEqual(benchmarkSpec.benchmark!.hiddenPaths, ["case-meta.json"]);
   assert.deepEqual(benchmarkSpec.verifierRuntimeIds, ["anthropic:claude-sonnet-4.5"]);
+});
+
+test("contextRecording accepts manifest and full, clones both, and rejects other values", () => {
+  assert.doesNotThrow(() => validateBuildSpec(validSpec));
+  assert.doesNotThrow(() =>
+    validateBuildSpec({ ...validSpec, contextRecording: "manifest", runPolicy: "finish", budgetLimits: {} })
+  );
+  assert.doesNotThrow(() =>
+    validateBuildSpec({ ...validSpec, contextRecording: "full", runPolicy: "finish", budgetLimits: {} })
+  );
+  assert.throws(
+    () => validateBuildSpec({
+      ...validSpec,
+      contextRecording: "digest" as NativeBuildSpec["contextRecording"],
+      runPolicy: "finish",
+      budgetLimits: {},
+    }),
+    /contextRecording/,
+  );
+  const clonedManifest = cloneBuildSpec({
+    ...validSpec,
+    runPolicy: "finish",
+    budgetLimits: {},
+    contextRecording: "manifest",
+  });
+  const clonedFull = cloneBuildSpec({
+    ...validSpec,
+    runPolicy: "finish",
+    budgetLimits: {},
+    contextRecording: "full",
+  });
+  assert.equal(clonedManifest.contextRecording, "manifest");
+  assert.equal(clonedFull.contextRecording, "full");
+  assert.equal(cloneBuildSpec({ ...validSpec, runPolicy: "finish", budgetLimits: {} }).contextRecording, undefined);
+});
+
+test("planCritique accepts risk_based, always, and off, clones each, and rejects other values", () => {
+  const base = { ...validSpec, runPolicy: "finish" as const, budgetLimits: {} };
+  assert.doesNotThrow(() => validateBuildSpec(base));
+  for (const mode of ["risk_based", "always", "off"] as const) {
+    assert.doesNotThrow(() => validateBuildSpec({ ...base, planCritique: mode }));
+    const cloned = cloneBuildSpec({ ...base, planCritique: mode });
+    assert.equal(cloned.planCritique, mode);
+    cloned.planCritique = mode === "off" ? "always" : "off";
+    assert.equal(cloneBuildSpec({ ...base, planCritique: mode }).planCritique, mode);
+  }
+  assert.equal(cloneBuildSpec(base).planCritique, undefined);
+  assert.throws(
+    () => validateBuildSpec({
+      ...base,
+      planCritique: "sometimes" as NativeBuildSpec["planCritique"],
+    }),
+    /planCritique/,
+  );
+});
+
+test("verifierTwoPass is an optional boolean that legacy recovery leaves unset", () => {
+  const base = { ...validSpec, runPolicy: "finish" as const, budgetLimits: {} };
+  assert.equal(cloneBuildSpec(base).verifierTwoPass, undefined);
+  for (const verifierTwoPass of [true, false]) {
+    const spec = { ...base, verifierTwoPass };
+    assert.doesNotThrow(() => validateBuildSpec(spec));
+    const cloned = cloneBuildSpec(spec);
+    assert.equal(cloned.verifierTwoPass, verifierTwoPass);
+    cloned.verifierTwoPass = !verifierTwoPass;
+    assert.equal(cloneBuildSpec(spec).verifierTwoPass, verifierTwoPass);
+  }
+  assert.throws(
+    () => validateBuildSpec({
+      ...base,
+      verifierTwoPass: "yes" as unknown as boolean,
+    }),
+    /verifierTwoPass must be a boolean/,
+  );
+  const recovered = recoverLegacyBuildSpec({
+    version: 1,
+    runId: "run_legacy_two_pass",
+    projectId: "project_legacy_two_pass",
+    objective: "Legacy objective",
+    architectRuntimeId: "openai:architect",
+    workerRuntimeIds: ["openai:worker"],
+    maxConcurrency: 1,
+    permissionProfile: "project",
+    budgetLimits: {},
+    createdAt: "2026-08-27T00:00:00.000Z",
+    idempotencyKey: "build-spec:run_legacy_two_pass",
+  });
+  assert.equal(recovered.verifierTwoPass, undefined);
 });
 
 test("native Build specs recover exactly and idempotently", () => {

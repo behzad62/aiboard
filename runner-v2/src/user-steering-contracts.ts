@@ -82,7 +82,13 @@ export type ArchitectActionReason =
       }>;
     }
   | { type: "task_failure_resolution_required"; taskId: string; attempt: number; failureReason: string }
-  | { type: "integration_resolution_required"; taskId: string };
+  | { type: "integration_resolution_required"; taskId: string }
+  | {
+      type: "plan_critique_resolution_required";
+      critiqueId: string;
+      planRevision: number;
+      blockingFindingIds: string[];
+    };
 
 export type ArchitectQuestionDecisionKind =
   | "authority_decision"
@@ -367,6 +373,26 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
     case "integration_resolution_required":
       exact(["taskId"]);
       return { type, taskId: text("taskId") };
+    case "plan_critique_resolution_required": {
+      exact(["critiqueId", "planRevision", "blockingFindingIds"]);
+      if (
+        !Array.isArray(reason.blockingFindingIds) ||
+        reason.blockingFindingIds.length === 0
+      ) {
+        throw new Error("Plan critique resolution reason requires blocking findings.");
+      }
+      return {
+        type,
+        critiqueId: text("critiqueId"),
+        planRevision: requiredPositiveInteger(reason, "planRevision"),
+        blockingFindingIds: reason.blockingFindingIds.map((item) => {
+          if (typeof item !== "string" || !item.trim()) {
+            throw new Error("blockingFindingIds must contain nonblank strings.");
+          }
+          return item;
+        }),
+      };
+    }
     default:
       throw new Error(`Architect action reason ${type} is invalid.`);
   }

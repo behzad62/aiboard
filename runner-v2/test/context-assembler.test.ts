@@ -190,6 +190,44 @@ test("Architect context protects durable steering questions and their exact resu
   assert.match(pack.text, /Build the immutable original application/);
 });
 
+test("included sections surface sourceDigest and artifactHash provenance", () => {
+  const assembler = new ContextAssembler({ maxBytes: 4_096, maxEstimatedTokens: 1_024 });
+  const pack = assembler.assemble([
+    { id: "kernel-invariants", kind: "system", required: true, priority: 1000, content: "Use native tools." },
+    {
+      id: "instruction:AGENTS.md",
+      kind: "instructions",
+      required: false,
+      priority: 900,
+      content: "Keep it small.",
+      sourceDigest: "d".repeat(64),
+    },
+    {
+      id: "evidence:e1",
+      kind: "evidence",
+      required: false,
+      priority: 500,
+      content: "npm test exited 0",
+      artifactHash: "e".repeat(64),
+    },
+    {
+      id: "skill:testing",
+      kind: "skill",
+      required: false,
+      priority: 800,
+      content: "Inspect before editing.",
+      sourceDigest: "f".repeat(64),
+      artifactHash: "a".repeat(64),
+    },
+  ]);
+  assert.equal(pack.sections[1]?.sourceDigest, "d".repeat(64));
+  assert.equal(pack.sections[1]?.artifactHash, undefined);
+  assert.equal(pack.sections[2]?.artifactHash, "a".repeat(64));
+  assert.equal(pack.sections[2]?.sourceDigest, "f".repeat(64));
+  assert.equal(pack.sections[3]?.artifactHash, "e".repeat(64));
+  assert.equal(pack.sections[3]?.sourceDigest, undefined);
+});
+
 test("same context inputs produce byte-identical packs", () => {
   const assembler = new ContextAssembler({ maxBytes: 1_000, maxEstimatedTokens: 1_000 });
   const sections = [
