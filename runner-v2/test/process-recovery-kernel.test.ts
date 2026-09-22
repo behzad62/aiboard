@@ -11,6 +11,31 @@ import { createSubprocessRuntimeKernel, exceptionalRecoveryCallId, durableBacken
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 
+interface LegacyLaunchBinding {
+  attestationVersion: number;
+  lifecycle?: unknown;
+}
+interface LegacyMutationData {
+  requiredLifecycleScope?: unknown;
+  requiredCapabilities: unknown;
+  binding: LegacyLaunchBinding;
+}
+interface LegacyDurableMutation {
+  readonly kind: string;
+  data: LegacyMutationData;
+}
+interface LegacyDurableRecord {
+  requiredLifecycleScope?: unknown;
+  requiredCapabilities: unknown;
+  readonly mutations: readonly LegacyDurableMutation[];
+  backendBinding: LegacyLaunchBinding;
+}
+function requireLegacyMutation(mutations: readonly LegacyDurableMutation[], kind: string): LegacyDurableMutation {
+  const mutation = mutations.find((entry) => entry.kind === kind);
+  if (mutation === undefined) throw new Error(`Legacy durable fixture is missing the ${kind} mutation.`);
+  return mutation;
+}
+
 async function fixture(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>, options: { readonly legacyScope?: boolean } = {}) {
   const f = await setup(options); let passed = false;
   try { await run(f); passed = true; }
@@ -57,15 +82,15 @@ async function setup(options: { readonly legacyScope?: boolean } = {}) {
     const db = new DatabaseSync(path);
     try {
       const row = db.prepare("SELECT revision, record_json FROM durable_processes WHERE invocation_id = ?").get("invocation") as { revision: number; record_json: string };
-      const legacy = JSON.parse(row.record_json) as Record<string, any>;
+      const legacy = JSON.parse(row.record_json) as LegacyDurableRecord;
       delete legacy.requiredLifecycleScope;
       legacy.requiredCapabilities = ["tree_termination", "verified_emptiness"];
-      const preparedMutation = legacy.mutations.find((mutation: any) => mutation.kind === "prepared");
+      const preparedMutation = requireLegacyMutation(legacy.mutations, "prepared");
       delete preparedMutation.data.requiredLifecycleScope;
       preparedMutation.data.requiredCapabilities = ["tree_termination", "verified_emptiness"];
       legacy.backendBinding.attestationVersion = 1;
       delete legacy.backendBinding.lifecycle;
-      const bindMutation = legacy.mutations.find((mutation: any) => mutation.kind === "bind_launch");
+      const bindMutation = requireLegacyMutation(legacy.mutations, "bind_launch");
       bindMutation.data.binding.attestationVersion = 1;
       delete bindMutation.data.binding.lifecycle;
       const json = JSON.stringify(legacy);

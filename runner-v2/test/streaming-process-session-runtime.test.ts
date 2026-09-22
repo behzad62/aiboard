@@ -1744,13 +1744,15 @@ test("authorized stop cannot adopt a takeover fence between authorization assert
 
 test("authorized stop cannot begin stopping after takeover races a successful lease renewal", async () => {
   let current = new Date(now);
-  let authority: Awaited<ReturnType<typeof makeFixture>>["authority"] | undefined;
-  let kernel: Awaited<ReturnType<typeof makeFixture>>["kernel"] | undefined;
+  type StreamingFixture = Awaited<ReturnType<typeof makeFixture>>;
+  const captured: { authority?: StreamingFixture["authority"]; kernel?: StreamingFixture["kernel"] } = {};
   let armed = false;
   let baselineRevision = Number.MAX_SAFE_INTEGER;
-  let replacement: ReturnType<NonNullable<typeof kernel>["store"]["readBySession"]>;
+  let replacement: ReturnType<StreamingFixture["kernel"]["store"]["readBySession"]>;
   let inTakeover = false;
   const clock = () => {
+    const authority = captured.authority;
+    const kernel = captured.kernel;
     if (armed && !inTakeover && authority && kernel) {
       const owned = kernel.store.readBySession("stream-1");
       if (owned && owned.revision > baselineRevision) {
@@ -1768,7 +1770,7 @@ test("authorized stop cannot begin stopping after takeover races a successful le
     return new Date(current);
   };
   const fixture = await makeFixture(2, "cleaned", undefined, [], 4, undefined, undefined, undefined, { clock });
-  authority = fixture.authority; kernel = fixture.kernel;
+  captured.authority = fixture.authority; captured.kernel = fixture.kernel;
   const facade = await fixture.runtime.open(fixture.request);
   const operation = { sessionId: "stream-1", operation: "stop" as const, requestAccess: [], credentialNames: [], networkApproved: false, externalApproved: false, destructiveApproved: false };
   const authorization = facade.authorizeFirstOperation(operation);
