@@ -92,8 +92,8 @@ export default function HomePage() {
                   <Link href="/games" className={cardLink}>
                     Games
                   </Link>{" "}
-                  — play chess, Connect Four, Battleship, Codenames, or
-                  Fireworks against the models.
+                  — play chess, Connect Four, Battleship, Codenames,
+                  Fireworks, or Quoridor against the models.
                 </li>
               </ul>
             </div>
