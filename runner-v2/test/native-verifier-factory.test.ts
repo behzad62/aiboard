@@ -11,6 +11,7 @@ import {
   buildNativeVerifierInspectionRequest,
   buildPlanCritiqueRequest,
   deriveNativeVerifierRiskInput,
+  runBaselineRevision,
 } from "../src/native-build-factory.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { assessBuildRisk } from "../src/risk-policy.js";
@@ -89,12 +90,16 @@ test("factory derives conservative risk and complete verifier context from durab
     architectRuntimeId: "openai:architect",
     projection,
     sessions,
+    schedulerEvents,
+    twoPass: true,
     risk,
     preferredRuntimeId: "fallback:verifier",
     providerRetryDeadlineMs: 42_000,
   });
 
   assert.equal(request.targetRevision, REVISION);
+  assert.equal(request.twoPass, true);
+  assert.equal(request.baselineRevision, REVISION);
   assert.equal(request.preferredRuntimeId, "fallback:verifier");
   assert.equal(request.providerRetryDeadlineMs, 42_000);
   assert.deepEqual(request.criteria.map((item) => [
@@ -124,6 +129,38 @@ test("factory derives conservative risk and complete verifier context from durab
   assert.equal(request.finalVerification.generationId, "final-generation");
   assert.equal(request.finalVerification.green, true);
   assert.deepEqual(request.riskReasons, risk.assessment.reasons);
+});
+
+test("runBaselineRevision keeps the first advanced previous revision and rejects an unknown baseline", () => {
+  const baseline = "b".repeat(40);
+  const later = "c".repeat(40);
+  const projection = { integrationRevision: REVISION } as SchedulerProjection;
+  const advanced = (previous: string, sequence: number): SchedulerEvent => ({
+    eventId: `event-${sequence}`,
+    runId: "run-factory-verifier",
+    sequence,
+    type: "integration.revision_advanced",
+    occurredAt: "2026-08-27T00:00:00.000Z",
+    actor: { role: "runner", id: "integration-manager" },
+    idempotencyKey: `integration:${sequence}`,
+    payload: {
+      integrationRevision: sequence === 1 ? baseline : later,
+      previousIntegrationRevision: previous,
+    },
+  });
+  assert.equal(
+    runBaselineRevision([advanced(baseline, 1), advanced(later, 2)], projection),
+    baseline,
+  );
+  assert.equal(runBaselineRevision([], projection), REVISION);
+  assert.equal(
+    runBaselineRevision([advanced("   ", 1)], projection),
+    REVISION,
+  );
+  assert.throws(
+    () => runBaselineRevision([], {} as SchedulerProjection),
+    /Run baseline revision is unknown/,
+  );
 });
 
 test("buildPlanCritiqueRequest maps live ordinary tasks and verifier-shaped guidance", () => {

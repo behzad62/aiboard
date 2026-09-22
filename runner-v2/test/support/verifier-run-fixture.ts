@@ -165,16 +165,21 @@ export function createRuntime(
   });
 }
 
-export function appendVerifierRequest(store: SqliteSchedulerStore): void {
+export function appendVerifierRequest(
+  store: SqliteSchedulerStore,
+  overrides: Record<string, unknown> = {},
+): void {
   store.append(event(
     "verifier.review_requested",
     "verifier:request",
-    verifierRequestPayload(),
+    verifierRequestPayload(overrides),
     { role: "runner", id: "native-verifier-runtime" },
   ));
 }
 
-export function verifierRequestPayload(): Record<string, unknown> {
+export function verifierRequestPayload(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     reviewId: REVIEW_ID,
     targetRevision: REVISION,
@@ -199,6 +204,7 @@ export function verifierRequestPayload(): Record<string, unknown> {
       },
     ],
     criteria: CRITERIA,
+    ...overrides,
   };
 }
 

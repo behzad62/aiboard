@@ -436,6 +436,17 @@ export interface NativeVerifierReviewProjection {
   invalidatedByGuidanceId?: string;
   supersededByReviewId?: string;
   repairTaskIds?: string[];
+  twoPass?: boolean;
+  baselineRevision?: string;
+  expectations?: Array<{
+    taskId: string;
+    criterionId: string;
+    expectedBehaviors: string[];
+    edgeCases: string[];
+    regressionSurfaces: string[];
+    requiredTests: string[];
+  }>;
+  expectationsSessionId?: string;
   verdict?: {
     reviewId: string;
     targetRevision: string;
@@ -447,6 +458,8 @@ export interface NativeVerifierReviewProjection {
       verdict: "satisfied" | "unsatisfied";
       rationale: string;
       evidenceIds: string[];
+      location?: { path: string; lines?: string };
+      reproduction?: string[];
     }>;
     submittedAt: string;
   };
@@ -457,6 +470,7 @@ export interface NativeIndependentVerifierObservability {
     mode: "risk_based";
     candidateRuntimeIds: string[];
     alwaysRequireIndependentVerifier: boolean;
+    twoPass: boolean;
   };
   risk: {
     current?: NativeBuildRiskObservation;

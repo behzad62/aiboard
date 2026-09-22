@@ -230,6 +230,40 @@ test("planCritique accepts risk_based, always, and off, clones each, and rejects
   );
 });
 
+test("verifierTwoPass is an optional boolean that legacy recovery leaves unset", () => {
+  const base = { ...validSpec, runPolicy: "finish" as const, budgetLimits: {} };
+  assert.equal(cloneBuildSpec(base).verifierTwoPass, undefined);
+  for (const verifierTwoPass of [true, false]) {
+    const spec = { ...base, verifierTwoPass };
+    assert.doesNotThrow(() => validateBuildSpec(spec));
+    const cloned = cloneBuildSpec(spec);
+    assert.equal(cloned.verifierTwoPass, verifierTwoPass);
+    cloned.verifierTwoPass = !verifierTwoPass;
+    assert.equal(cloneBuildSpec(spec).verifierTwoPass, verifierTwoPass);
+  }
+  assert.throws(
+    () => validateBuildSpec({
+      ...base,
+      verifierTwoPass: "yes" as unknown as boolean,
+    }),
+    /verifierTwoPass must be a boolean/,
+  );
+  const recovered = recoverLegacyBuildSpec({
+    version: 1,
+    runId: "run_legacy_two_pass",
+    projectId: "project_legacy_two_pass",
+    objective: "Legacy objective",
+    architectRuntimeId: "openai:architect",
+    workerRuntimeIds: ["openai:worker"],
+    maxConcurrency: 1,
+    permissionProfile: "project",
+    budgetLimits: {},
+    createdAt: "2026-08-27T00:00:00.000Z",
+    idempotencyKey: "build-spec:run_legacy_two_pass",
+  });
+  assert.equal(recovered.verifierTwoPass, undefined);
+});
+
 test("native Build specs recover exactly and idempotently", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-spec-"));
   const database = join(root, "build-specs.sqlite");

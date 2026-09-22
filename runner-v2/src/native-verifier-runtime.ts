@@ -11,6 +11,7 @@ import type {
 import { runAgentLoop } from "./agent-loop.js";
 import {
   buildVerifierContext,
+  buildVerifierExpectationsContext,
   VERIFIER_AUTHORITY_INVARIANTS,
 } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
@@ -55,7 +56,10 @@ import {
   type VerifierVerdictProjection,
 } from "./verifier-contracts.js";
 import type { VerifierVerdictAuthority } from "./verifier-verdict-authority.js";
-import { createSubmitVerifierVerdictTool } from "./verifier-tools.js";
+import {
+  createRecordVerificationExpectationsTool,
+  createSubmitVerifierVerdictTool,
+} from "./verifier-tools.js";
 
 const REVISION_PATTERN = /^[a-f0-9]{40,64}$/;
 const ARTIFACT_PATTERN = /^[a-f0-9]{64}$/;
@@ -111,6 +115,8 @@ export interface NativeVerifierInspectionRequest {
   readonly changes: readonly VerifierChangeSnapshot[];
   readonly finalVerification: VerifierFinalVerificationSnapshot;
   readonly riskReasons: readonly BuildRiskReason[];
+  readonly baselineRevision?: string;
+  readonly twoPass?: boolean;
   readonly preferredRuntimeId?: string;
   readonly providerRetryDeadlineMs?: number;
   readonly signal?: AbortSignal;
@@ -156,6 +162,8 @@ export type NativeVerifierInspectionResult =
 export interface VerifierWorkspaceProvider {
   readonly workspaceKind: "independent-verifier";
   create(targetRevision: string): Promise<VerificationWorkspace>;
+  createBaseline(baselineRevision: string): Promise<VerificationWorkspace>;
+  cleanupBaseline(): Promise<void>;
 }
 
 export interface NativeVerifierRuntimeOptions {
@@ -267,11 +275,12 @@ export class NativeVerifierRuntime {
         "Verifier workspace target revision does not match the requested integration revision."
       );
     }
-    const context = buildVerifierContext({
-      limits: this.options.contextLimits ?? {
-        maxBytes: 512 * 1024,
-        maxEstimatedTokens: 128 * 1024,
-      },
+    const contextLimits = this.options.contextLimits ?? {
+      maxBytes: 512 * 1024,
+      maxEstimatedTokens: 128 * 1024,
+    };
+    const baseContext = buildVerifierContext({
+      limits: contextLimits,
       objective: request.objective,
       targetRevision: request.targetRevision,
       criteria: request.criteria,
@@ -285,23 +294,9 @@ export class NativeVerifierRuntime {
       request.runId,
       request.targetRevision,
       candidate.runtimeId,
-      context.digest,
+      baseContext.digest,
       this.options.verdictAuthority ? "verdict" : "inspection",
     );
-    await recordContextPack({
-      store: this.options.contextManifests,
-      artifacts: this.options.artifacts,
-      recordPackText: this.options.recordContextPackText,
-      runId: request.runId,
-      sessionId,
-      actor: { role: "verifier", id: candidate.runtimeId },
-      role: "verifier",
-      purpose: this.options.verdictAuthority ? "verifier:verdict" : "verifier:inspection",
-      repositoryRevision: request.targetRevision,
-      limits: this.options.contextLimits ?? { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 },
-      pack: context,
-      recordedAt: this.clock(),
-    });
     const excludedModels = this.options.verdictAuthority
       ? verifierExcludedModels(
           this.candidateById,
@@ -309,7 +304,7 @@ export class NativeVerifierRuntime {
           authorRuntimeIds,
         )
       : [];
-    const durableReview = this.options.verdictAuthority
+    let durableReview = this.options.verdictAuthority
       ? this.options.verdictAuthority.requestReview({
           runId: request.runId,
           reviewId: verifierReviewId(
@@ -333,6 +328,10 @@ export class NativeVerifierRuntime {
             taskId: item.taskId,
             criterionId: item.criterion.id,
           })),
+          ...(request.twoPass === true ? { twoPass: true } : {}),
+          ...(request.baselineRevision
+            ? { baselineRevision: request.baselineRevision }
+            : {}),
           occurredAt: this.clock(),
         })
       : undefined;
@@ -345,6 +344,51 @@ export class NativeVerifierRuntime {
         excludedModels,
       });
     }
+    if (
+      request.twoPass === true &&
+      durableReview &&
+      !durableReview.expectations
+    ) {
+      const passOne = await this.runExpectationsPass({
+        request,
+        candidate,
+        model,
+        review: durableReview,
+      });
+      if (passOne) return passOne;
+      durableReview = this.options.verdictAuthority?.currentReview(request.runId);
+      if (!durableReview?.expectations) {
+        throw new Error("Verifier expectations were not durable after pass 1.");
+      }
+    }
+    const context = buildVerifierContext({
+      limits: contextLimits,
+      objective: request.objective,
+      targetRevision: request.targetRevision,
+      criteria: request.criteria,
+      reviews: request.reviews,
+      guidance: request.guidance,
+      changes: request.changes,
+      finalVerification: request.finalVerification,
+      riskReasons: request.riskReasons,
+      ...(durableReview?.expectations
+        ? { expectations: durableReview.expectations }
+        : {}),
+    });
+    await recordContextPack({
+      store: this.options.contextManifests,
+      artifacts: this.options.artifacts,
+      recordPackText: this.options.recordContextPackText,
+      runId: request.runId,
+      sessionId,
+      actor: { role: "verifier", id: candidate.runtimeId },
+      role: "verifier",
+      purpose: this.options.verdictAuthority ? "verifier:verdict" : "verifier:inspection",
+      repositoryRevision: request.targetRevision,
+      limits: contextLimits,
+      pack: context,
+      recordedAt: this.clock(),
+    });
     const systemMessage: AgentMessage = {
       id: "verifier-system",
       role: "system",
@@ -566,6 +610,222 @@ export class NativeVerifierRuntime {
       messages: result.messages,
     };
   }
+
+  private async runExpectationsPass(input: {
+    request: NativeVerifierInspectionRequest;
+    candidate: AgentRuntimeCandidate;
+    model: AgentModel;
+    review: VerifierReviewProjection;
+  }): Promise<NativeVerifierInspectionResult | undefined> {
+    const { request, candidate, model, review } = input;
+    const baselineRevision = request.baselineRevision;
+    if (!baselineRevision) {
+      throw new Error("Two-pass verifier inspection requires a baseline revision.");
+    }
+    const baseline = await this.options.workspaceManager.createBaseline(baselineRevision);
+    if (baseline.targetRevision !== baselineRevision) {
+      throw new Error(
+        "Verifier baseline workspace revision does not match the requested baseline.",
+      );
+    }
+    const contextLimits = this.options.contextLimits ?? {
+      maxBytes: 512 * 1024,
+      maxEstimatedTokens: 128 * 1024,
+    };
+    const context = buildVerifierExpectationsContext({
+      limits: contextLimits,
+      objective: request.objective,
+      baselineRevision,
+      targetRevision: request.targetRevision,
+      criteria: request.criteria,
+      guidance: request.guidance,
+      riskReasons: request.riskReasons,
+    });
+    const sessionId = verifierSessionId(
+      request.runId,
+      baselineRevision,
+      candidate.runtimeId,
+      context.digest,
+      "expectations",
+    );
+    await recordContextPack({
+      store: this.options.contextManifests,
+      artifacts: this.options.artifacts,
+      recordPackText: this.options.recordContextPackText,
+      runId: request.runId,
+      sessionId,
+      actor: { role: "verifier", id: candidate.runtimeId },
+      role: "verifier",
+      purpose: "verifier:expectations",
+      repositoryRevision: baselineRevision,
+      limits: contextLimits,
+      pack: context,
+      recordedAt: this.clock(),
+    });
+    const systemMessage: AgentMessage = {
+      id: "verifier-expectations-system",
+      role: "system",
+      content: [
+        "You are inspecting the BASELINE revision: the repository as it was before this build's changes.",
+        "No diff, review, or verification result is available yet.",
+        "Derive expectations from the criteria and the existing code and tests, then call record_verification_expectations exactly once.",
+      ].join("\n"),
+    };
+    const contextMessage: AgentMessage = {
+      id: `verifier-context:${context.digest}`,
+      role: "user",
+      content: context.text,
+    };
+    let messages: AgentMessage[] = [systemMessage, contextMessage];
+    const sessionEvents = this.options.sessions.events(sessionId);
+    if (sessionEvents.length === 0) {
+      await this.options.sessions.create({
+        sessionId,
+        runId: request.runId,
+        actor: { role: "verifier", id: candidate.runtimeId },
+        occurredAt: this.clock(),
+      });
+    } else {
+      const recovered = await this.options.sessions.load(sessionId);
+      if (
+        recovered.actor.role !== "verifier" ||
+        recovered.actor.id !== candidate.runtimeId ||
+        recovered.runId !== request.runId
+      ) {
+        throw new Error("Recovered verifier expectations session identity does not match the request.");
+      }
+      if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
+      if (!messages.some((message) => message.id === contextMessage.id)) {
+        messages.push(contextMessage);
+      }
+    }
+    const authority = this.options.verdictAuthority;
+    if (!authority) {
+      throw new Error("Two-pass verification requires a verdict authority.");
+    }
+    const broker = createInspectionTools({
+      git: this.options.git,
+      executionGrants: this.options.executionGrants,
+      workspacePath: baseline.path,
+      artifacts: this.options.artifacts,
+      evidenceStore: this.options.evidenceStore,
+      runId: request.runId,
+      clock: this.clock,
+      excludeToolNames: REVISION_REACHING_GIT_TOOLS,
+      lifecycleTool: createRecordVerificationExpectationsTool({
+        authority,
+        runId: request.runId,
+        reviewId: review.reviewId,
+        targetRevision: review.targetRevision,
+        baselineRevision,
+        runtimeId: candidate.runtimeId,
+        sessionId,
+        criteria: review.criteria,
+        clock: this.clock,
+      }),
+      ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+    });
+    const tools = this.options.budgetLedger
+      ? new BudgetedToolRuntime({
+          runtime: broker,
+          ledger: this.options.budgetLedger,
+          scopeId: request.runId,
+          clock: this.clock,
+        })
+      : broker;
+    const runtimeModel = this.options.budgetLedger
+      ? new BudgetedAgentModel({
+          model,
+          ledger: this.options.budgetLedger,
+          scopeId: request.runId,
+          attribution: verifierModelAttribution(candidate, sessionId),
+          outputTokenReserve: this.options.outputTokenReserve ?? 16_384,
+          estimateCostMicros: this.options.modelCostEstimators?.get(candidate.runtimeId),
+          costBasis: this.options.modelCostBases?.get(candidate.runtimeId),
+          clock: this.clock,
+        })
+      : model;
+    const result = await runAgentLoop({
+      model: runtimeModel,
+      registry: tools,
+      context: {
+        runId: request.runId,
+        sessionId,
+        actor: { role: "verifier", id: candidate.runtimeId },
+        workspacePath: baseline.path,
+        signal: request.signal,
+      },
+      initialMessages: messages,
+      maxTurns: this.options.maxTurns ?? 20,
+      signal: request.signal,
+      providerRetry: {
+        runtimeId: candidate.runtimeId,
+        providerId: candidate.providerId,
+        modelId: candidate.modelId,
+        deadlineMs: request.providerRetryDeadlineMs,
+        classify: classifyProviderFailure,
+        ...(this.options.providerRetryRuntime
+          ? {
+              now: this.options.providerRetryRuntime.now,
+              random: this.options.providerRetryRuntime.random,
+              sleep: this.options.providerRetryRuntime.sleep,
+            }
+          : {}),
+      },
+      onCheckpoint: async (checkpoint) => {
+        await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
+      },
+    });
+    if (result.status === "verifier_expectations_recorded") {
+      const recorded = authority.currentReview(request.runId);
+      if (
+        !recorded?.expectations ||
+        recorded.expectationsSessionId !== sessionId ||
+        recorded.reviewId !== result.reviewId
+      ) {
+        throw new Error("Verifier expectations were not durable after pass 1.");
+      }
+      this.options.sessions.complete(sessionId, this.clock());
+      await this.options.workspaceManager.cleanupBaseline();
+      return undefined;
+    }
+    if (result.status === "suspended") {
+      if (result.reason === "provider_error") {
+        this.options.router.recordFailure(
+          candidate.runtimeId,
+          classifyProviderFailure({
+            ...result.providerError,
+            message: result.error ?? "Verifier provider failed.",
+          }),
+        );
+      }
+      this.options.sessions.suspend(
+        sessionId,
+        result.reason,
+        result.error,
+        this.clock(),
+      );
+      return {
+        status: "suspended",
+        sessionId,
+        runtimeId: candidate.runtimeId,
+        targetRevision: request.targetRevision,
+        reason: result.reason,
+        ...(result.error ? { error: result.error } : {}),
+        messages: result.messages,
+      };
+    }
+    const reason = `unexpected_verifier_lifecycle:${result.status}`;
+    this.options.sessions.suspend(sessionId, reason, undefined, this.clock());
+    return {
+      status: "suspended",
+      sessionId,
+      runtimeId: candidate.runtimeId,
+      targetRevision: request.targetRevision,
+      reason,
+      messages: result.messages,
+    };
+  }
 }
 
 export function verifierModelAttribution(
@@ -581,6 +841,8 @@ export function verifierModelAttribution(
   };
 }
 
+const REVISION_REACHING_GIT_TOOLS = ["git.diff", "git.log", "git.show"] as const;
+
 export function createInspectionTools(input: {
   git?: RunGitExecutionContext;
   executionGrants?: ExecutionGrantAuthority;
@@ -591,6 +853,7 @@ export function createInspectionTools(input: {
   clock: () => string;
   ledger?: ToolInvocationLedger;
   lifecycleTool?: NativeTool<unknown>;
+  excludeToolNames?: readonly string[];
 }): ToolBroker {
   const broker = new ToolBroker({
     git: input.git, executionGrants: input.executionGrants,
@@ -601,6 +864,7 @@ export function createInspectionTools(input: {
     ...(input.ledger ? { ledger: input.ledger } : {}),
   });
   const repository = new RepositoryIntelligence(input.git ? (request) => input.git!.current().run(request) : undefined);
+  const excludedToolNames = new Set<string>(["git.remotes", ...(input.excludeToolNames ?? [])]);
   const tools = [
     ...createFilesystemTools({
       artifacts: input.artifacts,
@@ -622,7 +886,7 @@ export function createInspectionTools(input: {
       tool.definition.readOnly &&
       tool.definition.effect === "none" &&
       tool.definition.lifecycle !== true &&
-      tool.definition.name !== "git.remotes"
+      !excludedToolNames.has(tool.definition.name)
   );
   for (const tool of tools) {
     assertReadOnlyInspectionDefinition(tool.definition);
@@ -650,6 +914,16 @@ function assertInspectionRequest(request: NativeVerifierInspectionRequest): void
   }
   if (!REVISION_PATTERN.test(request.targetRevision)) {
     throw new Error("Verifier integration revision is invalid.");
+  }
+  if (request.twoPass === true) {
+    if (!request.baselineRevision || !REVISION_PATTERN.test(request.baselineRevision)) {
+      throw new Error("Two-pass verifier inspection requires a baseline revision.");
+    }
+  } else if (
+    request.baselineRevision !== undefined &&
+    !REVISION_PATTERN.test(request.baselineRevision)
+  ) {
+    throw new Error("Verifier baseline revision is invalid.");
   }
   if (
     !request.finalVerification.generationId.trim() ||
@@ -698,7 +972,7 @@ function verifierSessionId(
   targetRevision: string,
   runtimeId: string,
   contextDigest: string,
-  mode: "inspection" | "verdict",
+  mode: "inspection" | "verdict" | "expectations",
 ): string {
   const digest = createHash("sha256")
     .update(JSON.stringify([runId, targetRevision, runtimeId, contextDigest, mode]))
@@ -784,6 +1058,8 @@ function assertBoundVerifierReview(input: {
     input.review.runtime.modelIdentity !==
       canonicalModelIdentity(input.candidate.modelId) ||
     input.review.runtime.sessionId !== input.sessionId ||
+    (input.request.twoPass === true) !== (input.review.twoPass === true) ||
+    (input.request.baselineRevision ?? undefined) !== input.review.baselineRevision ||
     JSON.stringify(actualCriteria) !== JSON.stringify(expectedCriteria) ||
     JSON.stringify(input.review.excludedModels) !==
       JSON.stringify(input.excludedModels)

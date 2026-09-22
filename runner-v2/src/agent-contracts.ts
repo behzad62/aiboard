@@ -91,6 +91,10 @@ export type AgentLifecycleSignal =
       satisfied: boolean;
     }
   | {
+      type: "verifier_expectations_recorded";
+      reviewId: string;
+    }
+  | {
       type: "plan_critique_submitted";
       critiqueId: string;
       blockingFindingCount: number;

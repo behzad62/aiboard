@@ -171,6 +171,7 @@ test("production composition settles its owned MCP and run binding while retaini
       "integration_workspace",
       "verification_workspace",
       "independent_verifier_workspace",
+      "independent_verifier_baseline_workspace",
       "memory_store",
       "managed_process_service",
       "subprocess_runtime",
@@ -1003,6 +1004,7 @@ test("NativeBuildFactory reverses every acquired runtime resource after construc
     "integration_workspace",
     "verification_workspace",
     "independent_verifier_workspace",
+    "independent_verifier_baseline_workspace",
     "memory_store",
     "managed_process_service",
   ] as const;

@@ -39,6 +39,8 @@ export interface NativeBuildSpec {
   contextRecording?: "manifest" | "full";
   /** Plan-critique policy; omitted means the runtime default of risk_based. */
   planCritique?: PlanCritiqueMode;
+  /** Two-pass independent verification; omitted on legacy specs, default true for new runs. */
+  verifierTwoPass?: boolean;
   budgetLimits: BudgetLimits;
   createdAt: string;
   idempotencyKey: string;
@@ -129,6 +131,9 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
     !(PLAN_CRITIQUE_MODES as readonly string[]).includes(spec.planCritique)
   ) {
     throw new Error("Build spec planCritique must be risk_based, always, or off.");
+  }
+  if (spec.verifierTwoPass !== undefined && typeof spec.verifierTwoPass !== "boolean") {
+    throw new Error("Build spec verifierTwoPass must be a boolean.");
   }
   assertBudgetLimits(spec.budgetLimits);
   if (spec.capabilityContract !== undefined) {
@@ -224,6 +229,7 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
     ...(spec.repairPlanLimit !== undefined ? { repairPlanLimit: spec.repairPlanLimit } : {}),
     ...(spec.contextRecording !== undefined ? { contextRecording: spec.contextRecording } : {}),
     ...(spec.planCritique !== undefined ? { planCritique: spec.planCritique } : {}),
+    ...(spec.verifierTwoPass !== undefined ? { verifierTwoPass: spec.verifierTwoPass } : {}),
     ...(spec.benchmark
       ? {
           benchmark: {

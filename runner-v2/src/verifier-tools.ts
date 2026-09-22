@@ -5,7 +5,10 @@ import type {
 } from "./agent-contracts.js";
 import {
   parseVerifierCriterionVerdicts,
+  parseVerifierExpectations,
+  type VerifierCriterionReference,
   type VerifierCriterionVerdict,
+  type VerifierExpectation,
 } from "./verifier-contracts.js";
 import type { VerifierVerdictAuthority } from "./verifier-verdict-authority.js";
 
@@ -65,6 +68,19 @@ export function createSubmitVerifierVerdictTool(
                     required: ["evidenceId", "rationale"],
                     additionalProperties: false,
                   },
+                },
+                location: {
+                  type: "object",
+                  properties: {
+                    path: { type: "string", minLength: 1 },
+                    lines: { type: "string", pattern: "^\\d+(-\\d+)?$" },
+                  },
+                  required: ["path"],
+                  additionalProperties: false,
+                },
+                reproduction: {
+                  type: "array",
+                  items: { type: "string", minLength: 1 },
                 },
               },
               required: [
@@ -145,6 +161,154 @@ function validateSubmitVerifierVerdict(
       ok: false,
       issues: [error instanceof Error ? error.message : String(error)],
     };
+  }
+}
+
+export interface RecordVerificationExpectationsToolInput {
+  expectations: VerifierExpectation[];
+}
+
+export interface RecordVerificationExpectationsToolOptions {
+  authority: VerifierVerdictAuthority;
+  runId: string;
+  reviewId: string;
+  targetRevision: string;
+  baselineRevision: string;
+  runtimeId: string;
+  sessionId: string;
+  criteria: readonly VerifierCriterionReference[];
+  clock?: () => string;
+}
+
+export function createRecordVerificationExpectationsTool(
+  options: RecordVerificationExpectationsToolOptions,
+): NativeTool<RecordVerificationExpectationsToolInput> {
+  const clock = options.clock ?? (() => new Date().toISOString());
+  return {
+    definition: {
+      name: "record_verification_expectations",
+      description:
+        "Record, before seeing any implementation, what each criterion must do, its edge cases, likely regression surfaces, and the tests that should exist. Exactly one entry per protected task/criterion pair.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          expectations: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                taskId: { type: "string", minLength: 1 },
+                criterionId: { type: "string", minLength: 1 },
+                expectedBehaviors: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string", minLength: 1 },
+                },
+                edgeCases: {
+                  type: "array",
+                  minItems: 1,
+                  items: { type: "string", minLength: 1 },
+                },
+                regressionSurfaces: {
+                  type: "array",
+                  items: { type: "string", minLength: 1 },
+                },
+                requiredTests: {
+                  type: "array",
+                  items: { type: "string", minLength: 1 },
+                },
+              },
+              required: [
+                "taskId",
+                "criterionId",
+                "expectedBehaviors",
+                "edgeCases",
+                "regressionSurfaces",
+                "requiredTests",
+              ],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["expectations"],
+        additionalProperties: false,
+      },
+      readOnly: true,
+      effect: "none",
+      lifecycle: true,
+    },
+    validate: (input) => validateRecordVerificationExpectations(input, options.criteria),
+    assessAccess: () => ({
+      capability: "verifier.expectations.record",
+      external: false,
+    }),
+    execute: async (input, context) => {
+      assertExpectationsContext(context, options);
+      const review = options.authority.recordExpectations({
+        runId: options.runId,
+        reviewId: options.reviewId,
+        targetRevision: options.targetRevision,
+        baselineRevision: options.baselineRevision,
+        sessionId: options.sessionId,
+        actor: { role: "verifier", id: options.runtimeId },
+        expectations: input.expectations,
+        occurredAt: clock(),
+      });
+      return {
+        content: [{ type: "json", value: { reviewId: review.reviewId } }],
+        isError: false,
+        lifecycle: {
+          type: "verifier_expectations_recorded",
+          reviewId: options.reviewId,
+        },
+      };
+    },
+  };
+}
+
+function validateRecordVerificationExpectations(
+  input: unknown,
+  criteria: readonly VerifierCriterionReference[],
+): ValidationResult<RecordVerificationExpectationsToolInput> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return { ok: false, issues: ["Verifier expectations input must be an object."] };
+  }
+  const record = input as Record<string, unknown>;
+  const unknown = Object.keys(record).filter((key) => key !== "expectations");
+  if (unknown.length > 0) {
+    return {
+      ok: false,
+      issues: [`Verifier expectations have unknown fields: ${unknown.join(", ")}.`],
+    };
+  }
+  try {
+    return {
+      ok: true,
+      value: {
+        expectations: parseVerifierExpectations(record.expectations, criteria),
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      issues: [error instanceof Error ? error.message : String(error)],
+    };
+  }
+}
+
+function assertExpectationsContext(
+  context: ToolExecutionContext,
+  options: RecordVerificationExpectationsToolOptions,
+): void {
+  if (
+    context.runId !== options.runId ||
+    context.sessionId !== options.sessionId ||
+    context.actor.role !== "verifier" ||
+    context.actor.id !== options.runtimeId
+  ) {
+    throw new Error(
+      "Verifier expectations tool context is stale or foreign to its kernel binding.",
+    );
   }
 }
 

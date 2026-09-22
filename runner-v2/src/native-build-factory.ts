@@ -215,6 +215,7 @@ export type NativeBuildRuntimeResourceStage =
   | "integration_workspace"
   | "verification_workspace"
   | "independent_verifier_workspace"
+  | "independent_verifier_baseline_workspace"
   | "memory_store"
   | "managed_process_service";
 
@@ -649,12 +650,28 @@ export class NativeBuildFactory {
       () => verifierWorkspace.cleanup(),
     );
     await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_workspace");
+    initializationStage = "independent_verifier_baseline_workspace";
+    const verifierBaselineWorkspace = new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      integrationManager,
+      kind: "independent-verifier",
+      workspaceSuffix: "baseline",
+    });
+    constructionResources.add(
+      "independent_verifier_baseline_workspace",
+      () => verifierBaselineWorkspace.cleanup(),
+    );
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_baseline_workspace");
     if (
       schedulerEvents.length > 0 &&
       rebuildSchedulerProjection(schedulerEvents).verifier?.current?.status ===
         "submitted"
     ) {
       await verifierWorkspace.cleanup();
+      await verifierBaselineWorkspace.cleanup();
     }
     const finalVerificationCleanup = new OwnedFinalVerificationCleanup({
       stateDirectory: this.options.stateDirectory,
@@ -911,6 +928,8 @@ export class NativeBuildFactory {
       workspaceKind: "independent-verifier" as const,
       create: async (targetRevision: string) =>
         await verifierWorkspace.create(targetRevision),
+      createBaseline: (revision: string) => verifierBaselineWorkspace.create(revision),
+      cleanupBaseline: () => verifierBaselineWorkspace.cleanup(),
     };
     const nativeVerifier = new NativeVerifierRuntime({
       git: gitContext,
@@ -982,6 +1001,7 @@ export class NativeBuildFactory {
       candidateRuntimeIds: [...spec.verifierRuntimeIds],
       alwaysRequireIndependentVerifier:
         spec.alwaysRequireIndependentVerifier,
+      twoPass: spec.verifierTwoPass ?? true,
       assessRisk: async ({ projection }) => deriveNativeVerifierRiskInput({
         projection,
         sessions: await sessions.listRun(spec.runId),
@@ -999,6 +1019,8 @@ export class NativeBuildFactory {
               spec.architectRuntimeId,
             projection: request.projection,
             sessions: await sessions.listRun(spec.runId),
+            schedulerEvents: schedulerStore.readRun(spec.runId),
+            twoPass: spec.verifierTwoPass ?? true,
             risk: request.risk,
             ...(request.preferredRuntimeId
               ? { preferredRuntimeId: request.preferredRuntimeId }
@@ -1030,6 +1052,7 @@ export class NativeBuildFactory {
         }
         if (result.status === "verdict_submitted") {
           await verifierWorkspace.cleanup();
+          await verifierBaselineWorkspace.cleanup();
           return { status: "verdict_submitted" };
         }
         if (result.status === "unavailable") {
@@ -1342,6 +1365,7 @@ export class NativeBuildFactory {
             () => sessions.compactRun(spec.runId),
             () => workspaceManager.cleanup(),
             () => verifierWorkspace.cleanup(),
+            () => verifierBaselineWorkspace.cleanup(),
             () => integrationManager.cleanup(),
           ],
           spec.runId
@@ -2534,12 +2558,31 @@ export function buildPlanCritiqueRequest(input: {
   };
 }
 
+export function runBaselineRevision(
+  schedulerEvents: readonly SchedulerEvent[],
+  projection: SchedulerProjection,
+): string {
+  const first = schedulerEvents.find(
+    (event) =>
+      event.type === "integration.revision_advanced" &&
+      typeof event.payload.previousIntegrationRevision === "string" &&
+      event.payload.previousIntegrationRevision.trim().length > 0,
+  );
+  const baseline = first
+    ? (first.payload.previousIntegrationRevision as string)
+    : projection.integrationRevision;
+  if (!baseline) throw new Error("Run baseline revision is unknown.");
+  return baseline;
+}
+
 export function buildNativeVerifierInspectionRequest(input: {
   runId: string;
   objective: string;
   architectRuntimeId: string;
   projection: SchedulerProjection;
   sessions: readonly AgentSessionProjection[];
+  schedulerEvents: readonly SchedulerEvent[];
+  twoPass: boolean;
   risk: BuildRiskAssessmentProjection;
   preferredRuntimeId?: string;
   providerRetryDeadlineMs?: number;
@@ -2667,6 +2710,8 @@ export function buildNativeVerifierInspectionRequest(input: {
       ...reason,
       evidence: [...reason.evidence],
     })),
+    baselineRevision: runBaselineRevision(input.schedulerEvents, input.projection),
+    twoPass: input.twoPass,
     ...(input.preferredRuntimeId
       ? { preferredRuntimeId: input.preferredRuntimeId }
       : {}),

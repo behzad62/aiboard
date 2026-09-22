@@ -151,6 +151,8 @@ export interface IndependentVerifierDriver {
   candidateRuntimeIds: readonly string[];
   /** Optional only for legacy/test drivers; production always supplies it. */
   alwaysRequireIndependentVerifier?: boolean;
+  /** New runs default to two-pass; absent keeps a caller on single-pass. */
+  twoPass?: boolean;
   assessRisk(input: {
     runId: string;
     projection: SchedulerProjection;
@@ -1610,6 +1612,7 @@ export class BuildRuntime {
       idempotencyKey: "verifier-policy-configured",
       payload: {
         ...expected,
+        twoPass: this.independentVerifier.twoPass === true,
       },
     });
   }

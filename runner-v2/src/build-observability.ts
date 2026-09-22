@@ -108,6 +108,7 @@ export interface IndependentVerifierObservability {
     mode: "risk_based";
     candidateRuntimeIds: string[];
     alwaysRequireIndependentVerifier: boolean;
+    twoPass: boolean;
   };
   risk: {
     current?: IndependentVerifierRiskObservation;
@@ -335,6 +336,7 @@ export function projectIndependentVerifierObservability(
             ],
             alwaysRequireIndependentVerifier:
               projection.verifierPolicy.alwaysRequireIndependentVerifier,
+            twoPass: projection.verifierPolicy.twoPass === true,
           },
         }
       : {}),

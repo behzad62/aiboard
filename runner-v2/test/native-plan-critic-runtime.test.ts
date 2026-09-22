@@ -90,6 +90,18 @@ test("critic receives the task graph at the baseline revision with read-only too
       true,
     );
     const toolNames = request.tools.map((definition) => definition.name);
+    assert.deepEqual([...toolNames].sort(), [
+      "artifact.read",
+      "fs.list",
+      "fs.read",
+      "fs.search",
+      "fs.stat",
+      "git.diff",
+      "git.log",
+      "git.show",
+      "git.status",
+      "submit_plan_critique",
+    ]);
     assert.equal(toolNames.includes("submit_plan_critique"), true);
     for (const forbidden of [
       "fs.write",
@@ -833,6 +845,12 @@ function createFixture(
         targetRevision,
         canonicalRevision: BASELINE_REVISION,
       };
+    },
+    createBaseline: async () => {
+      throw new Error("Plan critic must not open the verifier baseline workspace.");
+    },
+    cleanupBaseline: async () => {
+      throw new Error("Plan critic must not clean the verifier baseline workspace.");
     },
   };
   const activeCandidates = options.candidates ?? candidates;

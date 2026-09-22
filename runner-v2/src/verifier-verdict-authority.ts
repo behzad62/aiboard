@@ -7,6 +7,7 @@ import {
   type VerifierCriterionReference,
   type VerifierCriterionVerdict,
   type VerifierExcludedModel,
+  type VerifierExpectation,
   type VerifierReviewProjection,
   type VerifierRuntimeBinding,
   type VerifierVerdictProjection,
@@ -21,6 +22,19 @@ export interface RequestVerifierReviewInput {
   runtime: VerifierRuntimeBinding;
   excludedModels: VerifierExcludedModel[];
   criteria: VerifierCriterionReference[];
+  twoPass?: boolean;
+  baselineRevision?: string;
+  occurredAt: string;
+}
+
+export interface RecordVerifierExpectationsInput {
+  runId: string;
+  reviewId: string;
+  targetRevision: string;
+  baselineRevision: string;
+  sessionId: string;
+  actor: AgentActor & { role: "verifier" };
+  expectations: VerifierExpectation[];
   occurredAt: string;
 }
 
@@ -37,6 +51,7 @@ export interface SubmitVerifierVerdictInput {
 export interface VerifierVerdictAuthority {
   requestReview(input: RequestVerifierReviewInput): VerifierReviewProjection;
   currentReview(runId: string): VerifierReviewProjection | undefined;
+  recordExpectations(input: RecordVerifierExpectationsInput): VerifierReviewProjection;
   submitVerdict(input: SubmitVerifierVerdictInput): VerifierVerdictProjection;
 }
 
@@ -66,6 +81,8 @@ implements VerifierVerdictAuthority {
         runtime: { ...input.runtime },
         excludedModels: input.excludedModels.map((model) => ({ ...model })),
         criteria: input.criteria.map((criterion) => ({ ...criterion })),
+        ...(input.twoPass === true ? { twoPass: true } : {}),
+        ...(input.baselineRevision ? { baselineRevision: input.baselineRevision } : {}),
         ...(supersedesReviewId ? { supersedesReviewId } : {}),
       },
     });
@@ -81,6 +98,40 @@ implements VerifierVerdictAuthority {
     if (events.length === 0) return undefined;
     const current = rebuildSchedulerProjection(events).verifier?.current;
     return current ? cloneVerifierReview(current) : undefined;
+  }
+
+  recordExpectations(input: RecordVerifierExpectationsInput): VerifierReviewProjection {
+    this.store.append({
+      runId: input.runId,
+      type: "verifier.expectations_recorded",
+      occurredAt: input.occurredAt,
+      actor: { ...input.actor },
+      idempotencyKey: `verifier:expectations:${input.reviewId}`,
+      payload: {
+        reviewId: input.reviewId,
+        targetRevision: input.targetRevision,
+        baselineRevision: input.baselineRevision,
+        sessionId: input.sessionId,
+        expectations: input.expectations.map((expectation) => ({
+          taskId: expectation.taskId,
+          criterionId: expectation.criterionId,
+          expectedBehaviors: [...expectation.expectedBehaviors],
+          edgeCases: [...expectation.edgeCases],
+          regressionSurfaces: [...expectation.regressionSurfaces],
+          requiredTests: [...expectation.requiredTests],
+        })),
+      },
+    });
+    const review = this.currentReview(input.runId);
+    if (
+      !review?.expectations ||
+      review.reviewId !== input.reviewId ||
+      review.expectationsSessionId !== input.sessionId ||
+      review.baselineRevision !== input.baselineRevision
+    ) {
+      throw new Error("Verifier expectations were not durably projected.");
+    }
+    return review;
   }
 
   submitVerdict(input: SubmitVerifierVerdictInput): VerifierVerdictProjection {

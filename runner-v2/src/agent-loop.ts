@@ -46,6 +46,12 @@ export type AgentLoopResult =
       messages: AgentMessage[];
     }
   | {
+      status: "verifier_expectations_recorded";
+      reviewId: string;
+      turns: number;
+      messages: AgentMessage[];
+    }
+  | {
       status: "plan_critique_submitted";
       critiqueId: string;
       blockingFindingCount: number;
@@ -969,6 +975,13 @@ function lifecycleResult(
         status: "verifier_verdict_submitted",
         reviewId: signal.reviewId,
         satisfied: signal.satisfied,
+        turns,
+        messages,
+      };
+    case "verifier_expectations_recorded":
+      return {
+        status: "verifier_expectations_recorded",
+        reviewId: signal.reviewId,
         turns,
         messages,
       };

@@ -1788,6 +1788,11 @@ export function IndependentVerifierManifest({
                     ? "Runner will bind a distinct verifier to the exact integrated revision."
                     : "The current low-risk revision does not require an independent verdict."}
             </p>
+            {review?.expectations && review.expectations.length > 0 ? (
+              <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
+                Expectations recorded ({review.expectations.length} criteria)
+              </p>
+            ) : null}
           </div>
         </div>
         {verdict && (
@@ -1822,6 +1827,21 @@ export function IndependentVerifierManifest({
                 <p className="mt-1 font-mono text-[0.65rem] text-muted-foreground">
                   Evidence: {criterion.evidenceIds.join(", ")}
                 </p>
+                {criterion.verdict === "unsatisfied" && criterion.location ? (
+                  <p className="mt-1 font-mono text-[0.65rem] text-muted-foreground">
+                    {criterion.location.path}
+                    {criterion.location.lines ? `:${criterion.location.lines}` : ""}
+                  </p>
+                ) : null}
+                {criterion.verdict === "unsatisfied" &&
+                criterion.reproduction &&
+                criterion.reproduction.length > 0 ? (
+                  <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-[0.7rem] leading-relaxed text-muted-foreground">
+                    {criterion.reproduction.map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
+                ) : null}
               </li>
             ))}
           </ul>

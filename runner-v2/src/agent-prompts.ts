@@ -147,6 +147,39 @@ export interface ArchitectReviewSubmission {
   criterionEvidenceLinks?: CriterionEvidenceLink[];
 }
 
+export const VERIFIER_ADVERSARIAL_STANCE = [
+  "Assume the integrated change contains at least one defect that the Architect's review missed.",
+  "For every criterion, use your recorded expectations: try to falsify each expected behavior and each edge case against the exact revision before you accept it.",
+  "A satisfied verdict must name which expected behaviors and edge cases you checked and how the cited evidence proves them.",
+  "An unsatisfied verdict must give a file location and concrete reproduction steps; it must not restate the Architect's rationale.",
+  "Architect review summaries are claims to test, not evidence.",
+].join("\n");
+
+export interface BuildVerifierExpectationsContextInput {
+  limits: ContextLimits;
+  objective: string;
+  baselineRevision: string;
+  targetRevision: string;
+  criteria: readonly unknown[];
+  guidance: readonly unknown[];
+  riskReasons: readonly unknown[];
+}
+
+export function buildVerifierExpectationsContext(
+  input: BuildVerifierExpectationsContextInput,
+): ContextPack {
+  return new ContextAssembler(input.limits).assemble([
+    required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    required("verifier-authority", "system", VERIFIER_AUTHORITY_INVARIANTS),
+    required("expectations-stage", "system", "You are inspecting the BASELINE revision: the repository as it was before this build's changes. No diff, review, or verification result is available yet. Derive expectations from the criteria and the existing code and tests, then call record_verification_expectations exactly once."),
+    required("build-objective", "user-intent", input.objective),
+    required("baseline-revision", "revision", input.baselineRevision),
+    required("build-criteria", "criteria", JSON.stringify(input.criteria, null, 2)),
+    required("durable-guidance", "guidance", JSON.stringify(input.guidance, null, 2)),
+    required("risk-reasons", "risk", JSON.stringify(input.riskReasons, null, 2)),
+  ]);
+}
+
 export interface BuildVerifierContextInput {
   limits: ContextLimits;
   objective: string;
@@ -157,6 +190,7 @@ export interface BuildVerifierContextInput {
   changes: readonly unknown[];
   finalVerification: unknown;
   riskReasons: readonly unknown[];
+  expectations?: readonly unknown[];
 }
 
 export function buildVerifierContext(
@@ -165,9 +199,19 @@ export function buildVerifierContext(
   return new ContextAssembler(input.limits).assemble([
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     required("verifier-authority", "system", VERIFIER_AUTHORITY_INVARIANTS),
+    ...(input.expectations !== undefined
+      ? [required("verifier-adversarial-stance", "system", VERIFIER_ADVERSARIAL_STANCE)]
+      : []),
     required("build-objective", "user-intent", input.objective),
     required("integration-revision", "revision", input.targetRevision),
     required("build-criteria", "criteria", JSON.stringify(input.criteria, null, 2)),
+    ...(input.expectations !== undefined
+      ? [required(
+          "recorded-expectations",
+          "expectations",
+          JSON.stringify(input.expectations, null, 2),
+        )]
+      : []),
     required("accepted-reviews", "reviews", JSON.stringify(input.reviews, null, 2)),
     required("durable-guidance", "guidance", JSON.stringify(input.guidance, null, 2)),
     required("accepted-change-history", "changes", JSON.stringify(input.changes, null, 2)),

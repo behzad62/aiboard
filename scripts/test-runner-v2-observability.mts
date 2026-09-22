@@ -484,6 +484,7 @@ const verifierSnapshot = {
       mode: "risk_based",
       candidateRuntimeIds: ["google:verifier"],
       alwaysRequireIndependentVerifier: false,
+      twoPass: true,
     },
     risk: {
       current: {
@@ -539,6 +540,17 @@ const verifierSnapshot = {
         state: "current",
         requestedAt: "2026-08-27T01:00:01.000Z",
         repairTaskIds: ["repair:behavior"],
+        twoPass: true,
+        baselineRevision: "b".repeat(40),
+        expectations: [{
+          taskId: "T1",
+          criterionId: "behavior",
+          expectedBehaviors: ["Authentication stays scoped to one organization."],
+          edgeCases: ["Two organizations share a user id"],
+          regressionSurfaces: ["src/auth/session.ts"],
+          requiredTests: ["AuthScope"],
+        }],
+        expectationsSessionId: "verifier:expectations:1",
         verdict: {
           reviewId: "review-current",
           targetRevision: "revision-current",
@@ -550,6 +562,12 @@ const verifierSnapshot = {
             verdict: "unsatisfied",
             rationale: "The authentication flow still fails.",
             evidenceIds: ["evidence_auth_failure"],
+            location: { path: "src/auth/session.ts", lines: "40-55" },
+            reproduction: [
+              "Sign in to two organizations",
+              "Remove the membership in the first",
+              "Observe the second session invalidated",
+            ],
           }],
           submittedAt: "2026-08-27T01:00:02.000Z",
         },
@@ -682,6 +700,19 @@ const pendingRiskMarkup = renderToStaticMarkup(
 );
 assert.match(pendingRiskMarkup, /Risk assessment pending/i);
 assert.doesNotMatch(pendingRiskMarkup, /current low-risk revision/i);
+
+const expectationsMarkup = renderToStaticMarkup(
+  createElement(IndependentVerifierManifest, {
+    verifier: verifierSnapshot.independentVerifier as unknown as NativeIndependentVerifierObservability,
+    projection: projectionWithoutHandoff as unknown as NativeBuildProjection,
+  }),
+);
+assert.match(expectationsMarkup, /Expectations recorded \(1 criteria\)/);
+assert.match(expectationsMarkup, /src\/auth\/session\.ts:40-55/);
+assert.match(expectationsMarkup, /<ol/);
+assert.match(expectationsMarkup, /Sign in to two organizations/);
+assert.match(expectationsMarkup, /Remove the membership in the first/);
+assert.match(expectationsMarkup, /Observe the second session invalidated/);
 
 const cooldownNow = 2_000;
 assert.equal(runnerNextCooldownExpiry([{

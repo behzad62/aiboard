@@ -69,6 +69,7 @@ import {
   expectedVerifierCriteria,
   parseExcludedModels,
   parseRuntimeBinding,
+  parseVerifierExpectations,
   parseVerifierReviewRequest,
   parseVerifierVerdict,
   sameVerifierReview,
@@ -156,6 +157,7 @@ export type SchedulerEventType =
   | "verifier.selection_required"
   | "verifier.selection_selected"
   | "verifier.review_requested"
+  | "verifier.expectations_recorded"
   | "verifier.verdict_submitted"
   | "verifier.repairs_planned"
   | "repair.policy_configured"
@@ -417,6 +419,7 @@ export interface VerifierPolicyProjection {
   mode: "risk_based";
   candidateRuntimeIds: string[];
   alwaysRequireIndependentVerifier: boolean;
+  twoPass: boolean;
 }
 
 export interface BuildRiskAssessmentProjection {
@@ -1598,6 +1601,7 @@ export function reduceSchedulerEvent(
   if (
     event.actor.role === "verifier" &&
     event.type !== "verifier.verdict_submitted" &&
+    event.type !== "verifier.expectations_recorded" &&
     event.type !== "plan_critique.submitted"
   ) {
     throw new Error("The verifier has no scheduler lifecycle authority.");
@@ -1921,6 +1925,13 @@ export function reduceSchedulerEvent(
         throw new Error("Only the runner may request an independent verifier review.");
       }
       recordVerifierReviewRequest(next, event.payload, event.occurredAt);
+      break;
+    }
+    case "verifier.expectations_recorded": {
+      if (event.actor.role !== "verifier") {
+        throw new Error("Only the selected verifier may record expectations.");
+      }
+      recordVerifierExpectations(next, event);
       break;
     }
     case "verifier.verdict_submitted": {
@@ -3047,11 +3058,17 @@ function parseVerifierPolicy(
       "Independent verifier qualification policy must be a boolean.",
     );
   }
+  const twoPass = payload.twoPass;
+  if (twoPass !== undefined && typeof twoPass !== "boolean") {
+    throw new Error("Independent verifier two-pass policy must be a boolean.");
+  }
   return {
     mode: "risk_based",
     candidateRuntimeIds,
     // Events written before P4.6 had only risk-based candidate selection.
     alwaysRequireIndependentVerifier: strict === true,
+    // Events written before P6.5 had no two-pass field and stay single-pass.
+    twoPass: twoPass === true,
   };
 }
 
@@ -3603,6 +3620,52 @@ function recordVerifierReviewRequest(
   };
 }
 
+function recordVerifierExpectations(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  const current = projection.verifier?.current;
+  if (!current || current.status !== "requested" || current.state !== "current") {
+    throw new Error("Verifier expectations require a current requested review.");
+  }
+  if (current.twoPass !== true) {
+    throw new Error("Verifier expectations require a two-pass review.");
+  }
+  if (event.actor.id !== current.runtime.runtimeId) {
+    throw new Error(
+      "Verifier expectations actor does not match the selected runtime identity.",
+    );
+  }
+  const reviewId = requiredString(event.payload, "reviewId");
+  const targetRevision = requiredString(event.payload, "targetRevision");
+  const baselineRevision = requiredString(event.payload, "baselineRevision");
+  const sessionId = requiredString(event.payload, "sessionId");
+  if (reviewId !== current.reviewId) {
+    throw new Error("Verifier expectations are stale or foreign to the current review.");
+  }
+  if (targetRevision !== current.targetRevision) {
+    throw new Error("Verifier expectations are stale or foreign to the current review.");
+  }
+  if (baselineRevision !== current.baselineRevision) {
+    throw new Error("Verifier expectations are stale or foreign to the current review.");
+  }
+  const expectations = parseVerifierExpectations(
+    event.payload.expectations,
+    current.criteria,
+  );
+  if (current.expectations) {
+    if (
+      current.expectationsSessionId === sessionId &&
+      sameValue(current.expectations, expectations)
+    ) {
+      return;
+    }
+    throw new Error("Verifier expectations conflict with the recorded expectations.");
+  }
+  current.expectations = expectations;
+  current.expectationsSessionId = sessionId;
+}
+
 function recordVerifierVerdict(
   projection: SchedulerProjection,
   event: SchedulerEvent,
@@ -3640,7 +3703,20 @@ function recordVerifierVerdict(
   if (event.actor.id !== current.runtime.runtimeId) {
     throw new Error("Verifier verdict actor does not match the selected runtime identity.");
   }
+  if (current.twoPass === true && !current.expectations) {
+    throw new Error("Two-pass verifier verdict requires recorded expectations.");
+  }
   const verdict = parseVerifierVerdict(event.payload, current, occurredAt);
+  if (current.twoPass === true) {
+    for (const criterionVerdict of verdict.criterionVerdicts) {
+      if (
+        criterionVerdict.verdict === "unsatisfied" &&
+        !(criterionVerdict.reproduction && criterionVerdict.reproduction.length > 0)
+      ) {
+        throw new Error("Two-pass unsatisfied verdicts require reproduction steps.");
+      }
+    }
+  }
   const submitted: typeof current = {
     ...cloneVerifierReview(current),
     status: "submitted",

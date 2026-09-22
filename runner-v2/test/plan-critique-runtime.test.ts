@@ -205,6 +205,89 @@ test("plan critic candidate runtime IDs must be unique and equal the verifier po
   }
 });
 
+test("a pre-P6.5 verifier policy stays single-pass when a new runtime defaults to two-pass", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-verifier-two-pass-compat-"));
+  let failure: unknown;
+  try {
+    const database = join(root, "scheduler.sqlite");
+    const legacy = new SqliteSchedulerStore(database);
+    try {
+      legacy.append({
+        runId: RUN_ID,
+        type: "run.initialized",
+        occurredAt: CLOCK(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "run-initialized",
+        payload: {},
+      });
+      legacy.append({
+        runId: RUN_ID,
+        type: "verifier.policy_configured",
+        occurredAt: CLOCK(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: "verifier-policy-configured",
+        payload: {
+          mode: "risk_based",
+          candidateRuntimeIds: [...CRITIC_RUNTIME_IDS],
+          alwaysRequireIndependentVerifier: false,
+        },
+      });
+    } finally {
+      legacy.close();
+    }
+    const recoveredStore = new SqliteSchedulerStore(database);
+    try {
+      const recovered = new BuildRuntime({
+        ...runtimeOptions(recoveredStore, {
+          candidateRuntimeIds: [...CRITIC_RUNTIME_IDS],
+          mode: "off",
+          stricterQualification: false,
+          architectDeclaration: () => "low",
+          critique: async () => ({ status: "unavailable", reason: "runtime_unavailable" }),
+        }, new ScriptedArchitect(1)),
+        independentVerifier: { ...stubVerifier(false), twoPass: true },
+      });
+      assert.equal(recovered.projection().verifierPolicy?.twoPass, false);
+      assert.equal(
+        recoveredStore.readRun(RUN_ID).filter((event) => event.type === "verifier.policy_configured").length,
+        1,
+      );
+    } finally {
+      recoveredStore.close();
+    }
+
+    const fresh = new SqliteSchedulerStore(join(root, "fresh.sqlite"));
+    try {
+      const created = new BuildRuntime({
+        runId: RUN_ID,
+        store: fresh,
+        workerDriver: new ScriptedWorker(fresh),
+        architectDriver: new ScriptedArchitect(1),
+        integrationDriver: {
+          integrate: async () => ({ status: "integrated" as const, integrationRevision: "unused" }),
+        },
+        independentVerifier: { ...stubVerifier(false), twoPass: true },
+        runPolicy: "finish",
+        maxConcurrency: 1,
+        workspaceFor: async (task: BuildTask) => `C:/work/${task.id}`,
+        clock: CLOCK,
+      });
+      assert.equal(created.projection().verifierPolicy?.twoPass, true);
+    } finally {
+      fresh.close();
+    }
+  } catch (error) {
+    failure = error;
+  } finally {
+    try {
+      removeTempRoot(root);
+    } catch (error) {
+      if (!failure) failure = error;
+    }
+  }
+  if (failure) throw failure;
+});
+
 test("restart after plan_critique.submitted resumes at resolution without another critic call", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-plan-critique-restart-submitted-"));
   const database = join(root, "scheduler.sqlite");
@@ -301,6 +384,20 @@ test("plan_only runs skip the critique with reason plan_only", async () => {
     assert.equal(worker.calls.length, 0);
   });
 });
+
+function removeTempRoot(root: string): void {
+  let last: unknown;
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      last = error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  throw last;
+}
 
 function runtimeOptions(
   store: SqliteSchedulerStore,
