@@ -159,7 +159,7 @@ assert.match(contractSnapshot.families[0].contract, /^acceptance-contract\.md#/)
 
 const exactHealth = {
   ok: true,
-  runnerV2: { ready: true, nodeVersion: "24.18.0" },
+  runnerV2: { ready: true },
   rjs: {
     ready: true,
     nodeVersion: "24.18.0",

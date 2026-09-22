@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, rmdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -20,13 +21,21 @@ const baseUrl = `http://127.0.0.1:${port}`;
 
 interface BridgeResponseData {
   error?: unknown;
+  code?: unknown;
+  disposition?: unknown;
   rjs?: unknown;
   attemptId?: unknown;
+  root?: unknown;
   files?: string[];
   content?: unknown;
   passed?: boolean;
   resultJson?: unknown;
   stdoutPreview?: unknown;
+}
+
+interface AttemptMetadata {
+  hiddenFiles: Record<string, string>;
+  rjsOracleLifecycle?: { state: string };
 }
 
 async function request(path: string, body?: unknown) {
@@ -53,6 +62,16 @@ async function waitForHealth() {
     await new Promise((resolveWait) => setTimeout(resolveWait, 50));
   }
   throw new Error("Bench Runner did not become ready");
+}
+
+async function metaPathFor(attemptId: string): Promise<string> {
+  const directory = join(runsRoot, ".attempt-meta");
+  for (const name of await readdir(directory)) {
+    const path = join(directory, name);
+    const value = JSON.parse(await readFile(path, "utf8"));
+    if (value.attemptId === attemptId) return path;
+  }
+  throw new Error(`missing attempt metadata for ${attemptId}`);
 }
 
 function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
@@ -150,7 +169,7 @@ try {
   assert.equal(metaFiles.length, 1);
   const attemptMeta = JSON.parse(
     await readFile(join(runsRoot, ".attempt-meta", metaFiles[0]), "utf8")
-  ) as { hiddenFiles: Record<string, string> };
+  ) as { hiddenFiles: Record<string, string>; snapshot: Record<string, string> };
   assert.doesNotMatch(attemptMeta.hiddenFiles["verify.mjs"], /__RJS_TRUSTED_RUNTIME_URL__/);
   assert.match(attemptMeta.hiddenFiles["verify.mjs"], /workbench-rjs-verifier-adapter\.mjs/);
 
@@ -166,6 +185,142 @@ try {
     content: "candidate-created file",
   });
   assert.equal(writeExtra.status, 403);
+
+  const attemptRoot = String(prepared.data.root);
+  await writeFile(join(attemptRoot, "unexpected.txt"), "outside the submitted allowlist", "utf8");
+  const extraEntryFailure = await request("/bench/run-verifier", { attemptId });
+  assert.deepEqual(
+    {
+      status: extraEntryFailure.status,
+      code: extraEntryFailure.data.code,
+      disposition: extraEntryFailure.data.disposition,
+    },
+    {
+      status: 422,
+      code: "rjs_submission_policy_violation",
+      disposition: "candidate_tool_failure",
+    },
+    "an out-of-band extra entry is rejected before evaluator execution"
+  );
+  assert.equal(existsSync(join(attemptRoot, "verifier-result.json")), false);
+  await rm(join(attemptRoot, "unexpected.txt"));
+
+  await writeFile(join(attemptRoot, ".bench-run.json"), "candidate-created legacy metadata", "utf8");
+  const legacyMetadataFailure = await request("/bench/run-verifier", { attemptId });
+  assert.deepEqual(
+    {
+      status: legacyMetadataFailure.status,
+      code: legacyMetadataFailure.data.code,
+      disposition: legacyMetadataFailure.data.disposition,
+    },
+    {
+      status: 422,
+      code: "rjs_submission_policy_violation",
+      disposition: "candidate_tool_failure",
+    },
+    "an out-of-band root .bench-run.json cannot bypass the final allowlist"
+  );
+  assert.equal(existsSync(join(attemptRoot, "verifier-result.json")), false);
+  await rm(join(attemptRoot, ".bench-run.json"));
+
+  await rename(join(attemptRoot, ".git"), join(attemptRoot, ".git-real"));
+  await writeFile(join(attemptRoot, ".git"), "candidate-created fake repository metadata", "utf8");
+  const fakeGitFailure = await request("/bench/run-verifier", { attemptId });
+  assert.equal(fakeGitFailure.status, 422);
+  assert.equal(fakeGitFailure.data.code, "rjs_submission_policy_violation");
+  assert.equal(existsSync(join(attemptRoot, "verifier-result.json")), false);
+  await rm(join(attemptRoot, ".git"));
+  await rename(join(attemptRoot, ".git-real"), join(attemptRoot, ".git"));
+
+  await writeFile(join(attemptRoot, "verify.mjs"), "tampered hidden verifier", "utf8");
+  const restoredMutationFailure = await request("/bench/run-verifier", { attemptId });
+  assert.deepEqual(
+    {
+      status: restoredMutationFailure.status,
+      code: restoredMutationFailure.data.code,
+      disposition: restoredMutationFailure.data.disposition,
+    },
+    {
+      status: 422,
+      code: "rjs_submission_policy_violation",
+      disposition: "candidate_tool_failure",
+    },
+    "a protected file changed after restoration is rejected without silent repair"
+  );
+  assert.equal(await readFile(join(attemptRoot, "verify.mjs"), "utf8"), "tampered hidden verifier");
+  assert.equal(existsSync(join(attemptRoot, "verifier-result.json")), false);
+
+  await rm(join(attemptRoot, "verify.mjs"));
+  const deletedHiddenFailure = await request("/bench/run-verifier", { attemptId });
+  assert.equal(deletedHiddenFailure.data.code, "rjs_submission_policy_violation");
+  assert.equal(existsSync(join(attemptRoot, "verify.mjs")), false, "restored deletion is not repaired");
+
+  await writeFile(join(attemptRoot, "verify.mjs"), attemptMeta.hiddenFiles["verify.mjs"], "utf8");
+  await mkdir(join(attemptRoot, "unexpected-directory"));
+  const extraDirectoryFailure = await request("/bench/run-verifier", { attemptId });
+  assert.equal(extraDirectoryFailure.data.code, "rjs_submission_policy_violation");
+  await rmdir(join(attemptRoot, "unexpected-directory"));
+
+  await rm(join(attemptRoot, "problem.md"));
+  const deletedPublicFailure = await request("/bench/run-verifier", { attemptId });
+  assert.equal(deletedPublicFailure.data.code, "rjs_submission_policy_violation");
+  await writeFile(join(attemptRoot, "problem.md"), attemptMeta.snapshot["problem.md"], "utf8");
+
+  const sentinel = join(scratch, "symlink-sentinel.txt");
+  await writeFile(sentinel, "sentinel remains unchanged", "utf8");
+  await rm(join(attemptRoot, "verify.mjs"));
+  try {
+    await symlink(sentinel, join(attemptRoot, "verify.mjs"), "file");
+    const symlinkFailure = await request("/bench/run-verifier", { attemptId });
+    assert.equal(symlinkFailure.data.code, "rjs_submission_policy_violation");
+    assert.equal(await readFile(sentinel, "utf8"), "sentinel remains unchanged");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+  } finally {
+    await rm(join(attemptRoot, "verify.mjs"), { force: true });
+    await writeFile(join(attemptRoot, "verify.mjs"), attemptMeta.hiddenFiles["verify.mjs"], "utf8");
+  }
+
+  for (const typed of [
+    {
+      attemptId: "rjs_snapshot_invalid",
+      code: "rjs_submission_snapshot_invalid",
+      disposition: "invalid_harness",
+      mutate(meta: AttemptMetadata) { delete meta.hiddenFiles["verify.mjs"]; },
+    },
+    {
+      attemptId: "rjs_restoration_incomplete",
+      code: "rjs_submission_io_failed",
+      disposition: "invalid_environment",
+      mutate(meta: AttemptMetadata) { meta.rjsOracleLifecycle = { state: "restoring" }; },
+    },
+  ]) {
+    const typedPrepared = await request("/bench/prepare", {
+      attemptId: typed.attemptId,
+      caseId: workBenchCase.id,
+      repoUrl: workBenchCase.repo.url,
+      baseCommit: workBenchCase.repo.baseCommit,
+      network: workBenchCase.environment.network,
+      timeoutSeconds: workBenchCase.environment.timeoutSeconds,
+      verifierCommand: workBenchCase.verifier.command,
+      verifierResultFile: workBenchCase.verifier.resultFile,
+      allowedCommands: workBenchCase.allowedCommands,
+      files: workBenchCase.fixtureFiles,
+      trustedPolicy: workBenchCase.trustedPolicy,
+    });
+    assert.equal(typedPrepared.status, 200);
+    const metadataPath = await metaPathFor(typed.attemptId);
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+    typed.mutate(metadata);
+    await writeFile(metadataPath, JSON.stringify(metadata), "utf8");
+    const failure = await request("/bench/run-verifier", { attemptId: typed.attemptId });
+    assert.deepEqual(
+      { status: failure.status, code: failure.data.code, disposition: failure.data.disposition },
+      { status: 500, code: typed.code, disposition: typed.disposition }
+    );
+    assert.doesNotMatch(String(failure.data.error), /verify\.mjs|case-meta\.json|replay/i);
+    await request("/bench/cleanup", { attemptId: typed.attemptId });
+  }
 
   const supportPath = join(repoRoot, "scripts", "workbench-rjs-support.mjs");
   const adapterPath = join(repoRoot, "scripts", "workbench-rjs-verifier-adapter.mjs");
@@ -281,7 +436,64 @@ try {
   assert.equal(lateCompletion.status, 500, "an aborted verifier child cannot complete later");
   await request("/bench/cleanup", { attemptId: abortAttemptId });
 
-  await request("/bench/cleanup", { attemptId });
+  const queuedAttemptId = "queued_abort_attempt";
+  const queuedPrepared = await request("/bench/prepare", {
+    attemptId: queuedAttemptId,
+    caseId: "queued-abort-case",
+    repoUrl: "fixture://inline",
+    network: "dependency-only",
+    verifierCommand: "node queued-verifier.mjs",
+    verifierResultFile: "verifier-result.json",
+    allowedCommands: ["node queued-verifier.mjs"],
+    files: {
+      "queued-verifier.mjs": [
+        "import { readFile, writeFile } from 'node:fs/promises';",
+        "const count = Number(await readFile('queue-count.txt', 'utf8').catch(() => '0')) + 1;",
+        "await writeFile('queue-count.txt', String(count));",
+        "await new Promise(resolve => setTimeout(resolve, 800));",
+        "await writeFile('verifier-result.json', JSON.stringify({passed:true,score:1,assertions:[{passed:true}],count}));",
+      ].join("\n"),
+    },
+  });
+  assert.equal(queuedPrepared.status, 200);
+  const verifierRequest = (signal?: AbortSignal) => fetch(`${baseUrl}/bench/run-verifier`, {
+    method: "POST",
+    headers: { "x-runner-token": token, "content-type": "application/json" },
+    body: JSON.stringify({ attemptId: queuedAttemptId }),
+    signal,
+  });
+  const firstQueued = verifierRequest();
+  await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  const queuedAbortController = new AbortController();
+  const cancelledQueued = verifierRequest(queuedAbortController.signal);
+  await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  queuedAbortController.abort();
+  await assert.rejects(cancelledQueued, /abort/i);
+  const thirdController = new AbortController();
+  const thirdTimeout = setTimeout(() => thirdController.abort(), 3_000);
+  const thirdQueued = verifierRequest(thirdController.signal);
+  assert.equal((await firstQueued).status, 200);
+  const thirdResponse = await thirdQueued.finally(() => clearTimeout(thirdTimeout));
+  assert.equal(thirdResponse.status, 200, "cancelling a queued verifier must release its queue slot");
+  await request("/bench/cleanup", { attemptId: queuedAttemptId });
+
+  const replayIdentity = [
+    attemptId,
+    workBenchCase.id,
+    RECOVERABLE_JOB_SERVICE_INPUT_HASHES.contractHash,
+    RECOVERABLE_JOB_SERVICE_INPUT_HASHES.suiteHash,
+  ].join("\0");
+  const attemptReplayFile = join(
+    runsRoot,
+    ".trusted-rjs-replay",
+    `${createHash("sha256").update(replayIdentity).digest("hex")}.json`
+  );
+  await writeFile(attemptReplayFile, '{"cleanup":"sentinel"}', "utf8");
+  const cleaned = await request("/bench/cleanup", { attemptId });
+  assert.equal(cleaned.status, 200);
+  assert.equal(existsSync(attemptReplayFile), false, "cleanup removes per-attempt trusted replay state");
+  const statusAfterCleanup = await request("/bench/attempt-runner/status", { attemptId });
+  assert.equal(statusAfterCleanup.status, 404, "cleanup removes the managed-runner map entry");
 } finally {
   await stop(child);
   await rm(scratch, { recursive: true, force: true });

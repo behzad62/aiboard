@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "status": "Final source/public/probe freeze; mandatory runtime qualification and independent CAL01-05 acceptance pending",
-  "frozenAt": "2026-09-12T18:09:19.152Z",
+  "frozenAt": "2026-09-21T05:22:16.299Z",
   "identity": {
     "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
     "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
@@ -1046,18 +1046,18 @@
   },
   "ledger": {
     "path": "benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-final.json",
-    "bytes": 5079269,
-    "sha256": "c3f4b9c4038edecb4313e3e2c2bd2d9d1fb1a86e78481aa7df2534db43573d84"
+    "bytes": 5080002,
+    "sha256": "595b685f2bf5f19c146a02c369bb6935295701218efaca13767a75be4a144491"
   },
   "probePlan": {
     "path": "benchmarks/recoverable-job-service/private/calibration/probe-plan-final.json",
     "bytes": 26834,
-    "sha256": "1905fe76a5262e420fb5a06bcbbca9faaaae8b12bff0e8e8c9543ec50c0c9694"
+    "sha256": "a096cff0ee871ae230d22a717a84dbb84ab1e6dc67a112027b9fce6a0ce6cbd4"
   },
   "controlManifest": {
     "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/manifest.json",
     "bytes": 2486,
-    "sha256": "bfbaa8e7cdcc1582962ae7a864dc866e7ce3490b1c8ba9051ae4eeb6e5733eab"
+    "sha256": "48983000b38f33d50661b59b4f8b599eaf18148457e3abbd345cf8da1ee69321"
   },
   "helperEvidence": {
     "path": "benchmarks/recoverable-job-service/private/calibration/source-helper-evidence.json",
@@ -1162,7 +1162,7 @@
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/manifest.json",
       "bytes": 2486,
-      "sha256": "bfbaa8e7cdcc1582962ae7a864dc866e7ce3490b1c8ba9051ae4eeb6e5733eab"
+      "sha256": "48983000b38f33d50661b59b4f8b599eaf18148457e3abbd345cf8da1ee69321"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/representation.js",
@@ -1171,13 +1171,13 @@
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/truthful-outcome.js",
-      "bytes": 56230,
-      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf"
+      "bytes": 56419,
+      "sha256": "03c638d224330273e58af80f00698985cd87c3cf732b75619587755dc6ad6987"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/controls.mjs",
-      "bytes": 10810,
-      "sha256": "b75d1ec4cdc0068d636f62d5481d360677bdf883860ae2e94220d38fe43b72d0"
+      "bytes": 10999,
+      "sha256": "e4f61b9fca571974dde56d9f6ba1fba4e9638d707a00e496938833d74f84c976"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/forbidden-neighbors.mjs",
@@ -1186,13 +1186,13 @@
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-final.json",
-      "bytes": 5079269,
-      "sha256": "c3f4b9c4038edecb4313e3e2c2bd2d9d1fb1a86e78481aa7df2534db43573d84"
+      "bytes": 5080002,
+      "sha256": "595b685f2bf5f19c146a02c369bb6935295701218efaca13767a75be4a144491"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/probe-plan-final.json",
       "bytes": 26834,
-      "sha256": "1905fe76a5262e420fb5a06bcbbca9faaaae8b12bff0e8e8c9543ec50c0c9694"
+      "sha256": "a096cff0ee871ae230d22a717a84dbb84ab1e6dc67a112027b9fce6a0ce6cbd4"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/probe-runtime.mjs",
@@ -1496,8 +1496,8 @@
     },
     {
       "path": "scripts/test-recoverable-job-service-calibration-ledger.mts",
-      "bytes": 28162,
-      "sha256": "e6f5ad33d0c2975d91e43842bc50eca1e55dc73c2c7e0389ca8e72bbdcb6fb49"
+      "bytes": 28985,
+      "sha256": "1650b7ac18e2f6b5fea0f85e1cf5acfefcb15f035fe3134525cc37ae907ca8a4"
     },
     {
       "path": "scripts/test-recoverable-job-service-calibration-preservation-diagnostic.mts",
@@ -1533,6 +1533,11 @@
       "path": "scripts/test-recoverable-job-service-calibration-representation.mts",
       "bytes": 6756,
       "sha256": "ea76f7c1f4245ad146b7ffc6d78918ab0d6ab84a5c579683abc6652f31c7e32a"
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-calibration-truthful-capacity.mts",
+      "bytes": 1012,
+      "sha256": "244c87e2e8acd3de6f1d368613eca003f23bc9d1d30000e7279da51157cf416b"
     },
     {
       "path": "scripts/test-recoverable-job-service-calibration-version.mts",
@@ -1709,7 +1714,7 @@
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/complete-controls/manifest.json",
       "bytes": 2486,
-      "sha256": "bfbaa8e7cdcc1582962ae7a864dc866e7ce3490b1c8ba9051ae4eeb6e5733eab"
+      "sha256": "48983000b38f33d50661b59b4f8b599eaf18148457e3abbd345cf8da1ee69321"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/complete-controls/representation.js",
@@ -1718,13 +1723,13 @@
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/complete-controls/truthful-outcome.js",
-      "bytes": 56230,
-      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf"
+      "bytes": 56419,
+      "sha256": "03c638d224330273e58af80f00698985cd87c3cf732b75619587755dc6ad6987"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/controls.mjs",
-      "bytes": 10810,
-      "sha256": "b75d1ec4cdc0068d636f62d5481d360677bdf883860ae2e94220d38fe43b72d0"
+      "bytes": 10999,
+      "sha256": "e4f61b9fca571974dde56d9f6ba1fba4e9638d707a00e496938833d74f84c976"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/forbidden-neighbors.mjs",
@@ -1733,13 +1738,13 @@
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-final.json",
-      "bytes": 5079269,
-      "sha256": "c3f4b9c4038edecb4313e3e2c2bd2d9d1fb1a86e78481aa7df2534db43573d84"
+      "bytes": 5080002,
+      "sha256": "595b685f2bf5f19c146a02c369bb6935295701218efaca13767a75be4a144491"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/probe-plan-final.json",
       "bytes": 26834,
-      "sha256": "1905fe76a5262e420fb5a06bcbbca9faaaae8b12bff0e8e8c9543ec50c0c9694"
+      "sha256": "a096cff0ee871ae230d22a717a84dbb84ab1e6dc67a112027b9fce6a0ce6cbd4"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/benchmarks/recoverable-job-service/private/calibration/probe-runtime.mjs",
@@ -2043,8 +2048,8 @@
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-ledger.mts",
-      "bytes": 28162,
-      "sha256": "e6f5ad33d0c2975d91e43842bc50eca1e55dc73c2c7e0389ca8e72bbdcb6fb49"
+      "bytes": 28985,
+      "sha256": "1650b7ac18e2f6b5fea0f85e1cf5acfefcb15f035fe3134525cc37ae907ca8a4"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-preservation-diagnostic.mts",
@@ -2080,6 +2085,11 @@
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-representation.mts",
       "bytes": 6756,
       "sha256": "ea76f7c1f4245ad146b7ffc6d78918ab0d6ab84a5c579683abc6652f31c7e32a"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-truthful-capacity.mts",
+      "bytes": 1012,
+      "sha256": "244c87e2e8acd3de6f1d368613eca003f23bc9d1d30000e7279da51157cf416b"
     },
     {
       "path": "benchmarks/recoverable-job-service/private/calibration/final-frozen-source/scripts/test-recoverable-job-service-calibration-version.mts",

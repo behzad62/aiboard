@@ -806,7 +806,7 @@ export function CertifiedRunPanel({
       );
       setMessage(
         readiness.ready
-          ? "Bench Runner and managed Runner V2 are ready."
+          ? "Bench Runner source and benchmark runtime are available."
           : readiness.error ?? "Bench runner check failed."
       );
     } finally {

@@ -3,7 +3,7 @@ import { exec, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rm, stat, writeFile, readdir, cp } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, lstat, open, writeFile, readdir, cp } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { specializeTrustedModule } from "./workbench-rjs-support.mjs";
@@ -96,7 +96,11 @@ const server = createServer(async (req, res) => {
     if (requestAbort.signal.aborted && res.destroyed) return;
     const status = error instanceof HttpError ? error.status : 500;
     const message = error instanceof Error ? error.message : String(error);
-    sendJson(req, res, status, { error: message });
+    sendJson(req, res, status, {
+      error: message,
+      ...(error instanceof HttpError && error.code ? { code: error.code } : {}),
+      ...(error instanceof HttpError && error.disposition ? { disposition: error.disposition } : {}),
+    });
   }
 });
 
@@ -227,7 +231,11 @@ async function route(pathname, body, signal) {
         if (!liveRunner || liveRunner.child.exitCode !== null) {
           throw new HttpError(409, "Runner V2 must be running before oracle restoration.");
         }
-        await restoreOracleFiles(attemptRoot, meta);
+        if (meta.trustedPolicy?.kind === "recoverable-job-service") {
+          await inspectAndRestoreRjsOracle(attemptRoot, meta);
+        } else {
+          await restoreOracleFiles(attemptRoot, meta);
+        }
         return { attemptId: meta.attemptId, restored: true };
       });
     case "/bench/attempt-runner/stop":
@@ -378,6 +386,11 @@ async function prepare(body) {
 
   meta.snapshot = await snapshotFiles(attemptRoot);
   meta.hiddenFiles = await hideOracleFiles(attemptRoot, meta.snapshot, meta);
+  if (trustedPolicy) {
+    validateRjsSnapshotMetadata(meta);
+    await assertPreparedHiddenFilesAbsent(attemptRoot, meta);
+    meta.rjsOracleLifecycle = { state: "prepared_hidden" };
+  }
   await initializeAttemptRepository(attemptRoot);
   await saveMeta(attemptRoot, meta);
   return { attemptId, caseId, root: attemptRoot };
@@ -638,12 +651,18 @@ async function runVerifier(attemptRoot, meta, body, signal) {
   let release;
   const current = new Promise((resolveRun) => { release = resolveRun; });
   activeVerifierRuns.set(meta.attemptId, current);
-  await waitForVerifierTurn(previous, signal);
-  try {
-    return await runVerifierExclusive(attemptRoot, meta, body, signal);
-  } finally {
+  let acquired = false;
+  const finish = () => {
     release();
     if (activeVerifierRuns.get(meta.attemptId) === current) activeVerifierRuns.delete(meta.attemptId);
+  };
+  try {
+    await waitForVerifierTurn(previous, signal);
+    acquired = true;
+    return await runVerifierExclusive(attemptRoot, meta, body, signal);
+  } finally {
+    if (acquired) finish();
+    else void previous.catch(() => undefined).then(finish);
   }
 }
 
@@ -652,14 +671,16 @@ async function runVerifierExclusive(attemptRoot, meta, body, signal) {
   if (liveRunner?.child.exitCode === null) {
     throw new HttpError(409, "Runner V2 must stop before verifier execution.");
   }
-  await restoreOracleFiles(attemptRoot, meta);
   const command = optionalString(body, "command") ?? meta.verifierCommand;
   if (!command) throw new HttpError(400, "No verifier command configured.");
   assertAllowedCommand(meta, command);
-  await assertHarnessFilesUntampered(attemptRoot, meta);
   const resultFile = optionalString(body, "resultFile") ?? meta.verifierResultFile;
   let childEnvironment;
   if (meta.trustedPolicy?.kind === "recoverable-job-service") {
+    await inspectAndRestoreRjsOracle(attemptRoot, meta);
+    if (resultFile) await removeRegularStaleVerifierResult(attemptRoot, resultFile);
+    await assertFinalRjsSubmission(attemptRoot, meta);
+    await assertHarnessFilesUntampered(attemptRoot, meta);
     await requireMatchingRjsRuntime(
       meta.trustedPolicy,
       null,
@@ -671,8 +692,10 @@ async function runVerifierExclusive(attemptRoot, meta, body, signal) {
       contractHash: meta.trustedPolicy.contractHash,
       suiteHash: meta.trustedPolicy.suiteHash,
     });
-    if (resultFile) await rm(resolveSafePath(attemptRoot, resultFile), { force: true });
     childEnvironment = { ...process.env, AIBOARD_RJS_REPLAY_STATE_FILE: replayStateFile };
+  } else {
+    await restoreOracleFiles(attemptRoot, meta);
+    await assertHarnessFilesUntampered(attemptRoot, meta);
   }
   const result = await runCommand(
     command,
@@ -728,11 +751,16 @@ function rjsReplayStatePath(meta) {
 
 async function cleanup(body) {
   const attemptId = requiredString(body, "attemptId");
-  await stopAttemptRunner({ attemptId });
   const attemptRoot = attemptWorkspacePath(attemptId);
+  const meta = await readMeta(attemptRoot).catch(() => null);
+  await stopAttemptRunner({ attemptId });
+  managedAttemptRunners.delete(attemptId);
   const statePath = runnerStatePath(attemptId);
   await rm(attemptRoot, { recursive: true, force: true });
   await rm(statePath, { recursive: true, force: true });
+  if (meta?.trustedPolicy?.kind === "recoverable-job-service") {
+    await rm(rjsReplayStatePath(meta), { force: true });
+  }
   await rm(metaPath(basename(attemptRoot)), { force: true });
   return { removed: true };
 }
@@ -740,7 +768,7 @@ async function cleanup(body) {
 async function startAttemptRunner(body) {
   const attemptId = validateAttemptId(requiredString(body, "attemptId"));
   const attemptRoot = attemptWorkspacePath(attemptId);
-  await readMeta(attemptRoot);
+  const meta = await readMeta(attemptRoot);
   if (!runnerV2Launcher) {
     throw new HttpError(
       503,
@@ -759,13 +787,32 @@ async function startAttemptRunner(body) {
   const child = spawn(invocation.command, invocation.args, {
     cwd: runnerV2Launcher.directory,
     windowsHide: true,
-    shell: process.platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const startupDeadline = Date.now() + 45_000;
   const started = await waitForRunnerV2Startup(child, 45_000).catch(async (error) => {
     await terminateChild(child);
     throw error;
   });
+  const health = await readManagedRunnerHealth(
+    started.url,
+    token,
+    attemptRoot,
+    Math.max(1, startupDeadline - Date.now())
+  ).catch(async (error) => {
+    await terminateChild(child);
+    throw error;
+  });
+  if (
+    meta.trustedPolicy?.kind === "recoverable-job-service" &&
+    health.nodeVersion !== meta.trustedPolicy.requiredNodeVersion
+  ) {
+    await terminateChild(child);
+    throw new HttpError(
+      409,
+      `Recoverable Job Service requires managed Runner Node ${meta.trustedPolicy.requiredNodeVersion}.`
+    );
+  }
   const managed = {
     attemptId,
     child,
@@ -773,7 +820,7 @@ async function startAttemptRunner(body) {
     token,
     projectPath: attemptRoot,
     statePath,
-    nodeVersion: started.nodeVersion,
+    nodeVersion: health.nodeVersion,
   };
   managedAttemptRunners.set(attemptId, managed);
   child.once("exit", () => {
@@ -909,6 +956,43 @@ function runCommand(command, cwd, timeoutSeconds, environment, signal) {
   });
 }
 
+async function readManagedRunnerHealth(url, runnerToken, expectedProjectPath, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  timeout.unref?.();
+  try {
+    const response = await fetch(`${String(url).replace(/\/$/, "")}/v2/health`, {
+      headers: { authorization: `Bearer ${runnerToken}` },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new HttpError(502, `Managed Runner V2 health returned HTTP ${response.status}.`);
+    }
+    const health = await response.json();
+    if (
+      !isRecord(health) ||
+      health.ok !== true ||
+      health.protocolVersion !== 2 ||
+      health.projectPath !== expectedProjectPath ||
+      typeof health.nodeVersion !== "string"
+    ) {
+      throw new HttpError(502, "Managed Runner V2 health identity did not match the prepared attempt.");
+    }
+    return health;
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    if (error?.name === "AbortError") {
+      throw new HttpError(504, "Managed Runner V2 health timed out.");
+    }
+    throw new HttpError(
+      502,
+      `Managed Runner V2 health failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function waitForVerifierTurn(previous, signal) {
   if (!signal) return previous.catch(() => undefined);
   if (signal.aborted) {
@@ -953,6 +1037,217 @@ async function hideOracleFiles(attemptRoot, snapshot, meta) {
     await rm(resolveSafePath(attemptRoot, relPath), { force: true });
   }
   return hiddenFiles;
+}
+
+function rjsSubmissionError(kind, message) {
+  if (kind === "policy") {
+    return new HttpError(422, message, "rjs_submission_policy_violation", "candidate_tool_failure");
+  }
+  if (kind === "snapshot") {
+    return new HttpError(500, message, "rjs_submission_snapshot_invalid", "invalid_harness");
+  }
+  return new HttpError(500, message, "rjs_submission_io_failed", "invalid_environment");
+}
+
+function validateRjsSnapshotMetadata(meta, requireLifecycle = false) {
+  if (!isRecord(meta?.snapshot) || !isRecord(meta?.hiddenFiles)) {
+    throw rjsSubmissionError("snapshot", "Trusted RJS submission snapshot is invalid.");
+  }
+  const expected = [...policyPaths(meta, "hiddenPaths")].sort();
+  const hidden = Object.keys(meta.hiddenFiles).map(normalizeWorkspacePath).sort();
+  if (
+    expected.length === 0 ||
+    expected.length !== hidden.length ||
+    expected.some((path, index) => path !== hidden[index]) ||
+    expected.some((path) => typeof meta.snapshot[path] !== "string" || meta.hiddenFiles[path] !== meta.snapshot[path])
+  ) {
+    throw rjsSubmissionError("snapshot", "Trusted RJS submission snapshot is invalid.");
+  }
+  if (requireLifecycle) {
+    const lifecycle = meta.rjsOracleLifecycle;
+    if (!isRecord(lifecycle) || !["prepared_hidden", "restoring", "restored"].includes(lifecycle.state)) {
+      throw rjsSubmissionError("snapshot", "Trusted RJS restoration state is invalid.");
+    }
+  }
+}
+
+async function lstatOrNull(path) {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function inspectRealParents(attemptRoot, relPath, createMissing = false) {
+  const parts = normalizeWorkspacePath(relPath).split("/").slice(0, -1);
+  let current = attemptRoot;
+  for (const part of parts) {
+    current = join(current, part);
+    let info = await lstatOrNull(current);
+    if (!info && createMissing) {
+      await mkdir(current);
+      info = await lstat(current);
+    }
+    if (!info?.isDirectory() || info.isSymbolicLink()) {
+      throw rjsSubmissionError("policy", "RJS submission contains a disallowed workspace entry.");
+    }
+  }
+}
+
+async function assertPreparedHiddenFilesAbsent(attemptRoot, meta) {
+  try {
+    for (const relPath of policyPaths(meta, "hiddenPaths")) {
+      await inspectRealParents(attemptRoot, relPath);
+      if (await lstatOrNull(resolveSafePath(attemptRoot, relPath))) {
+        throw rjsSubmissionError("snapshot", "Trusted RJS hidden-file preparation is inconsistent.");
+      }
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw rjsSubmissionError("io", "Could not inspect the trusted RJS submission workspace.");
+  }
+}
+
+async function compareRestoredHiddenFiles(attemptRoot, meta) {
+  try {
+    for (const relPath of policyPaths(meta, "hiddenPaths")) {
+      await inspectRealParents(attemptRoot, relPath);
+      const path = resolveSafePath(attemptRoot, relPath);
+      const info = await lstatOrNull(path);
+      if (!info?.isFile() || info.isSymbolicLink()) {
+        throw rjsSubmissionError("policy", "RJS submission changed a protected workspace entry.");
+      }
+      const handle = await open(path, "r");
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile() || (await handle.readFile("utf8")) !== meta.hiddenFiles[relPath]) {
+          throw rjsSubmissionError("policy", "RJS submission changed a protected workspace entry.");
+        }
+      } finally {
+        await handle.close();
+      }
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw rjsSubmissionError("io", "Could not inspect the trusted RJS submission workspace.");
+  }
+}
+
+async function inspectAndRestoreRjsOracle(attemptRoot, meta) {
+  validateRjsSnapshotMetadata(meta, true);
+  const state = meta.rjsOracleLifecycle.state;
+  if (state === "restoring") {
+    throw rjsSubmissionError("io", "Trusted RJS restoration did not complete.");
+  }
+  if (state === "restored") {
+    await compareRestoredHiddenFiles(attemptRoot, meta);
+    return;
+  }
+  await assertPreparedHiddenFilesAbsent(attemptRoot, meta);
+  meta.rjsOracleLifecycle = { state: "restoring" };
+  try {
+    await saveMeta(attemptRoot, meta);
+    for (const [relPath, content] of Object.entries(meta.hiddenFiles)) {
+      await inspectRealParents(attemptRoot, relPath, true);
+      const handle = await open(resolveSafePath(attemptRoot, relPath), "wx", 0o600);
+      try {
+        await handle.writeFile(content, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    }
+    await compareRestoredHiddenFiles(attemptRoot, meta);
+    meta.rjsOracleLifecycle = { state: "restored", restoredAt: new Date().toISOString() };
+    await saveMeta(attemptRoot, meta);
+  } catch (error) {
+    if (error instanceof HttpError && error.code === "rjs_submission_snapshot_invalid") throw error;
+    throw rjsSubmissionError("io", "Trusted RJS restoration could not be completed.");
+  }
+}
+
+async function removeRegularStaleVerifierResult(attemptRoot, resultFile) {
+  try {
+    const path = resolveSafePath(attemptRoot, resultFile);
+    const info = await lstatOrNull(path);
+    if (!info) return;
+    if (!info.isFile() || info.isSymbolicLink()) {
+      throw rjsSubmissionError("policy", "RJS submission contains a disallowed verifier output entry.");
+    }
+    await rm(path);
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw rjsSubmissionError("io", "Could not inspect the RJS verifier output.");
+  }
+}
+
+async function assertFinalRjsSubmission(attemptRoot, meta) {
+  try {
+    validateRjsSnapshotMetadata(meta, true);
+    const editable = [...policyPaths(meta, "editablePaths")];
+    if (editable.length !== 1 || editable[0] !== "service.js") {
+      throw rjsSubmissionError("snapshot", "Trusted RJS editable-file policy is invalid.");
+    }
+    const expectedFiles = new Set(Object.keys(meta.snapshot).map(normalizeWorkspacePath));
+    const expectedDirectories = new Set();
+    for (const path of expectedFiles) {
+      const parts = path.split("/");
+      for (let index = 1; index < parts.length; index++) {
+        expectedDirectories.add(parts.slice(0, index).join("/"));
+      }
+    }
+    const seenFiles = new Set();
+    const seenDirectories = new Set();
+    const visit = async (directory, prefix = "") => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        const fullPath = join(directory, entry.name);
+        const info = await lstat(fullPath);
+        if (!prefix && entry.name === ".git") {
+          if (info.isSymbolicLink() || !info.isDirectory()) {
+            throw rjsSubmissionError("policy", "RJS submission contains an invalid repository metadata entry.");
+          }
+          continue;
+        }
+        if (info.isSymbolicLink()) {
+          throw rjsSubmissionError("policy", "RJS submission contains a disallowed workspace entry.");
+        }
+        if (info.isDirectory()) {
+          seenDirectories.add(relPath);
+          if (!expectedDirectories.has(relPath)) {
+            throw rjsSubmissionError("policy", "RJS submission contains a disallowed workspace entry.");
+          }
+          await visit(fullPath, relPath);
+        } else if (info.isFile()) {
+          seenFiles.add(relPath);
+          if (!expectedFiles.has(relPath)) {
+            throw rjsSubmissionError("policy", "RJS submission contains a disallowed workspace entry.");
+          }
+        } else {
+          throw rjsSubmissionError("policy", "RJS submission contains a disallowed workspace entry.");
+        }
+      }
+    };
+    await visit(attemptRoot);
+    if (
+      !seenFiles.has("service.js") ||
+      [...expectedFiles].some((path) => !seenFiles.has(path)) ||
+      [...expectedDirectories].some((path) => !seenDirectories.has(path))
+    ) {
+      throw rjsSubmissionError("policy", "RJS submission is missing a required workspace entry.");
+    }
+    for (const relPath of expectedFiles) {
+      if (relPath === "service.js") continue;
+      if ((await readFile(resolveSafePath(attemptRoot, relPath), "utf8")) !== meta.snapshot[relPath]) {
+        throw rjsSubmissionError("policy", "RJS submission changed a protected workspace entry.");
+      }
+    }
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw rjsSubmissionError("io", "Could not compare the RJS submission workspace.");
+  }
 }
 
 async function restoreOracleFiles(attemptRoot, meta) {
@@ -1574,8 +1869,10 @@ function parseAppOrigins(extraOrigins) {
 }
 
 class HttpError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code, disposition) {
     super(message);
     this.status = status;
+    if (code) this.code = code;
+    if (disposition) this.disposition = disposition;
   }
 }

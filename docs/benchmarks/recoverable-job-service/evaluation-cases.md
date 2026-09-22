@@ -1,23 +1,24 @@
 # Private evaluator catalogue — Recoverable Job Service
 
-Status: proposed behavioral families, not implemented/admitted hidden tests.
+Status: 69 scoring-admitted behavioral families implemented as 302 mandatory
+variants for the frozen modeled profile.
 Do not include this document, the source map or historical reports in the model's
 starter project. The [public problem](problem.md) contains the normative contract.
 The [public acceptance contract](acceptance-contract.md) also publishes every
 candidate family and expected outcome. This private file provides provenance and
 fault ideas; it cannot add scoring obligations beyond those public documents.
 
-Every family remains unscored until the admission checks in
-`scoring-admission.json` are fulfilled. That file records design readiness, not an
-implemented evaluator. A public clause link alone does not establish that a test's
-exact expectation follows from the clause.
+The admission checks in `scoring-admission.json` are fulfilled for
+`rjs-contract-2.0.1` / `rjs-suite-2.0.1`. A public clause link alone was not used
+as qualification: the accepted calibration also establishes predicate sensitivity,
+complete controls, replay identity, capacity, determinism, and restored controls.
 
 These scenarios generalize the C1–C5 experience without reusing its implementation.
 Each row can contain several variants, but earns at most one family result. Group
 weights are equal as specified in the [benchmark design](../../superpowers/specs/2026-09-08-recoverable-job-service-benchmark-design.md).
 Source keys refer to the private historical map at the end. A historical accepted
-fix does not admit a standalone benchmark case: every row still requires an
-independent known-good reference and a meaningful faulty-core control.
+fix did not by itself admit a standalone benchmark case. Final admission required
+the separate frozen reference, complete controls, and material predicate probes.
 
 `Required` means candidate behavior in the stated profile. `Infrastructure` means
 qualification of the trusted evaluator, with no candidate points. `Unresolved source`
@@ -64,7 +65,7 @@ must be proven independently and must not use the old failure as its answer key.
 | B14 / B1–B5 | Within published job capacity, place an unfinished record beyond one declared recovery batch, preceded by terminal records. Close accounts for every owned record. A fixed batch size or a particular scan algorithm is not required. | Equate completion of one bounded recovery pass with all ownership being released; do not require a fixed 1,024-row implementation. | S07 |
 | B15 / B1–B5 | A setup record is handed off to a released successor; compare missing, foreign and unfinished successor variants. Accept only its exact released pair. | Reject every handed-off record, or accept handed-off status without validating the successor. | S07 |
 | B16 / B5 | A settlement fails or late-cleanup failure is reported after other jobs become terminal. All recovery work used by close contributes to its outcome, and inspection/retry remains possible. No specific number of recovery passes is required. | Ignore recovery failures because the final durable scan looks terminal. | S07 |
-| B17 / B2–B4, C5 | After setup-channel intent but before initial checkpoint creation, prove current exact authority, no earlier accepted/consumed/retired output and a reconstructible retained stream. Bootstrap one atomic private continuation and progress. A previously created but missing checkpoint, ambiguous retirement or corrupt bytes must block. | Unconditionally reject all such recovery, or initialize an empty checkpoint from absence alone. **Unresolved source; independent reference required.** | S17 |
+| B17 / B2–B4, C5 | After setup-channel intent but before initial checkpoint creation, prove current exact authority, no earlier accepted/consumed/retired suffix output and a reconstructible retained stream or authenticated source prefix. Bootstrap one atomic private continuation and progress. A previously created but missing checkpoint, ambiguous retirement or corrupt bytes must block. | Unconditionally reject all such recovery, reset an authenticated nonzero source position to zero, or initialize an empty checkpoint from absence alone. Qualified by the final authenticated-source controls and probes. | S17 |
 
 ## C — Durable evidence
 
@@ -143,9 +144,9 @@ the model for infrastructure it does not control.
   including both initially defective fixes and their subsequent corrections. They
   are requirements for a new core, not claims that old source is copied or fully
   validated in this benchmark.
-- B17's historical pre-checkpoint recovery gap is source-confirmed but has no
-  accepted successful reference. Implement its standalone positive and negative
-  cases independently before admitting it; current native residue is not an input.
+- B17 has an accepted successful reference. Its standalone positive and negative
+  source-guard cases are represented in the final predicate ledger and admitted
+  independently; historical native residue is not an evaluator input.
 - The original native acquisition exception was not retained. Do not assert that
   path length, observation starvation or checkpoint initialization caused it merely
   because those defects were found elsewhere.

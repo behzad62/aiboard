@@ -1,56 +1,28 @@
-# Instruction sufficiency audit — 2026-09-08
+# Instruction sufficiency audit
 
-The owner required that candidates lose no points for behavior they were not
-properly instructed to implement. The previous draft had broad requirement links,
-but those links alone did not prove sufficient instructions for every private case.
+The benchmark may deduct points only for behavior that a candidate can derive from the files it receives. The final `rjs-contract-2.0.1` candidate package publishes every one of the 69 scored families, its prerequisites, permitted alternatives, fault boundary, expected outcome, numeric limits, schemas, and adapter responsibilities. Hidden tests choose data and lawful schedules within those rules; they do not add obligations.
 
-## Result
+## Final disposition
 
-All 69 proposed behavioral families now have candidate-visible expectations in
-[acceptance-contract.md](acceptance-contract.md), referenced by stable family IDs.
-The public contract includes terminology, cleanup ordering, deadline boundaries,
-the permitted fault-model boundary, outcome examples and fairness rules. Private
-tests may choose data and lawful event schedules; they cannot add obligations.
+All 69 families and 302 mandatory variants are admitted for the deterministic modeled profile. Each family in [scoring-admission.json](scoring-admission.json) links to its stable public clause. `contract.d.ts`, `runtime-contract.md`, and `source-bootstrap.md` define the exact callable interfaces and authenticated source-recovery rules. The examples are illustrative and cannot narrow the normative contracts.
 
-Twenty-eight family descriptions were clarified to remove reference-specific
-assumptions or state their public prerequisites. This is a design audit, not blind
-instruction review or test qualification. **Zero families are admitted for scoring.**
-[scoring-admission.json](scoring-admission.json) records that status explicitly.
-The record is declarative; a grading implementation that enforces it has not yet
-been written.
+The evaluator-only H01-H09 checks qualify the harness, inputs, isolation, determinism, resource disposal, and score transport. They award no candidate points. Native Windows, Linux, filesystem, and container equivalence remains outside the modeled profile and is not inferred from QuickJS behavior.
 
-## Gaps found and disposition
+## Ambiguities resolved before admission
 
-| Gap | Change or admission blocker |
+| Earlier risk | Published resolution |
 | --- | --- |
-| Broad clauses did not tell candidates all the behavioral families being assessed. | Publish all 69 families and expected outcomes; keep only concrete tests, seeds and source history private. |
-| Two recovery passes and a 1,024-record batch were inherited implementation details. | B14/B16 now require complete accounting within published capacity, independent of algorithm or pass count. |
-| Particular page/spool/SQL layouts and two store implementations appeared mandatory. | C02/C09/C15–C18 now grade observable durability/integrity on required profiles and accept alternative representations. |
-| Rejecting every extra field assumed an unpublished closed schema. | C05 follows the supplied schema's closed/open policy. Exact schemas remain an admission blocker. |
-| Process coordination holder tracking was not clearly assigned to candidate or adapter. | Add public D5 and conditional D07 responsibility. Adapter-owned behavior is infrastructure-only and earns no candidate points. |
-| 'Active handoff' and 'terminal transfer' could imply conflicting rules about finalized evidence. | Define them as separate operations and clarify C12/C16. Exact public transition types remain required. |
-| Progress versus safe refusal depended on unstated available proofs. | Define the prerequisite rule and paired examples; exact receipts, reconstruction and loss policies must be supplied before scoring. |
-| Deadline ordering and dependency prerequisites were insufficiently concrete. | Publish the exclusive success/expiry boundary and cleanup order. Numeric clocks, leases, reserve and bounds still block admission. |
-| Unknown native/legacy guarantees could become hidden prerequisites. | Require explicit profiles, formats, capability guarantees and candidate responsibility before an affected family may count. |
-| A reference-shaped test might reject a design that prevents its assumed intermediate state. | Tests must use public fixtures/boundaries and accept equivalent correctness; private-state injection is disallowed. |
+| Broad requirements did not enumerate assessed behavior. | Every scored family has a public ID and outcome clause; `families.json` provides the machine-readable registry. |
+| Recovery could depend on a particular loop, page size, database, filename, or pass count. | Contracts require observable complete accounting within published capacity and accept equivalent representations and algorithms. |
+| Candidate and adapter responsibilities overlapped. | The runtime and source-bootstrap contracts identify adapter guarantees and candidate-owned decisions. Adapter-owned behavior earns no candidate point. |
+| Safe refusal and eventual progress depended on unstated evidence. | Each operation lists required authenticated evidence, retry/reconciliation behavior, blockers, and deadline ordering. |
+| Empty retained output could erase an already consumed source prefix. | The authenticated source-bootstrap interface publishes source positions, proof adoption, prefix accounting, and the no-invented-consumption rule. |
+| A valid signature might be mistaken for semantic validity. | Closed schemas, identity relationships, range coverage, and semantic checks remain mandatory after authentication. |
+| Hidden schedules could require impossible progress. | Tests must make published prerequisites available before demanding progress; otherwise the documented safe blocker is accepted. |
+| A reference-shaped test could reject a preventive design. | Tests grade public effects, durable facts, receipts, and outcomes. Private state layouts and reference control flow are not requirements. |
 
-## Required release audit
+## Qualification evidence
 
-For each concrete scoring assertion, record the exact public family, requirement,
-given conditions, permissible events, expected alternatives and violated observable
-outcome. A reviewer who has only the candidate package must be able to derive that
-decision without reference code or private project history. If not, clarify before
-release or leave the case unscored. This rule also applies to safety gates.
+The accepted calibration used a frozen 80-source manifest, an all-passing reference, three substantively different complete controls, eight probe classes, 61 material predicate groups, 302 intended material failures with restored controls, replay/input correspondence, deterministic diagnostics, capacity checks, and cleanup checks. The final identity is contract hash `e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520` and suite hash `1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e`.
 
-The release package still needs compile-ready interfaces/adapters, exact schemas,
-numeric profiles, responsibility and score manifests, executable public examples,
-a reviewed independent reference and qualified hidden/fault controls. This audit
-does not pretend those artifacts are present. Existing tests are not run because
-the task modified design documents only.
-
-After a campaign starts, ambiguity is handled as a benchmark defect consistently
-for every affected submission. No retroactive instruction, private reviewer
-preference or new edge-case requirement may reduce an earlier candidate's score.
-
-
-September 12 status: executable producer sources now exist. This historical design audit is not executable qualification evidence. Amended-profile qualification, independent public-only correct-control admission and end-to-end AI Board validation remain pending.
+If a future test requires behavior that is not derivable from the frozen public package, that is a benchmark defect. The affected result must not reduce a score until the contract, suite identity, qualification, and comparison cohort are versioned again.

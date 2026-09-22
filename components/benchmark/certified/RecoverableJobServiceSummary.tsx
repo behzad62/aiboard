@@ -44,6 +44,9 @@ export function RecoverableJobServiceSummary({
 
   const { diagnostics, contract } = evidence;
   const familiesById = new Map(contract.families.map((family) => [family.id, family]));
+  const passedFamilyCount = diagnostics.families.filter((family) => family.passed).length;
+  const variants = diagnostics.families.flatMap((family) => family.variants);
+  const passedVariantCount = variants.filter((variant) => variant.passed).length;
   const anchorPrefix = `rjs-${encodeAnchor(attemptId)}`;
   return (
     <div className="space-y-4 rounded-md border p-3 text-sm">
@@ -55,6 +58,9 @@ export function RecoverableJobServiceSummary({
               ? "Every mandatory family and variant passed with measured safety evidence."
               : "At least one mandatory outcome did not pass. Binary score: 0."
             : diagnostics.error?.message ?? "The trusted evaluation was excluded."}
+        </p>
+        <p className="mt-1 text-xs font-medium">
+          {passedFamilyCount}/{diagnostics.families.length} mandatory families passed · {passedVariantCount}/{variants.length} variants passed
         </p>
       </div>
 

@@ -1,48 +1,78 @@
 {
-  "verifiedAt": "2026-09-08T05:37:06.428Z",
+  "verifiedAt": "2026-09-22",
+  "qualification": "accepted",
+  "method": "rjs-simplification-audit-1",
+  "contractVersion": "rjs-contract-2.0.1",
+  "suiteVersion": "rjs-suite-2.0.1",
+  "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+  "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e",
   "checks": [
-    "69 public/private/admission family IDs agree",
+    "69 public, evaluator, and admission family IDs agree",
+    "302 mandatory variants are represented by the frozen suite identity",
     "all referenced public requirement IDs and anchors exist",
-    "all local document links resolve",
-    "public problem and acceptance contract contain no app internals",
-    "JSON parses and documents have no trailing whitespace",
-    "all 69 families explicitly not admitted; zero may affect scores in the proposed admission policy"
+    "all four mirrored candidate documents are byte-identical to their documentation mirrors",
+    "the generated AI Board fixture matches all 11 canonical model-visible files",
+    "all 69 families are instruction-qualified and scoring-admitted",
+    "H01-H09 remain evaluator-only and award no candidate points",
+    "reference and three complete controls pass all 302 variants",
+    "61 material predicate groups fail and restore as expected",
+    "dedicated extracted runner executes the real evaluator under Node 24.18.0",
+    "browser selection, reload, results, clause evidence, and export are covered end to end"
   ],
   "candidateFamilies": 69,
+  "mandatoryVariants": 302,
   "evaluatorFamilies": 9,
-  "admittedFamilies": 0,
-  "sourceDocuments": 37,
-  "reviewDocuments": 20,
-  "executableTestsRun": 0,
-  "qualification": "Document consistency audit only. Semantic blind review, complete public adapter/profile contracts and executable evaluator qualification remain pending. No scoring enforcement implementation exists.",
+  "admittedFamilies": 69,
+  "modelVisibleFiles": 11,
+  "scope": "Deterministic modeled QuickJS profile; native OS process, filesystem, and container equivalence excluded.",
   "files": [
     {
       "path": "docs/superpowers/specs/2026-09-08-recoverable-job-service-benchmark-design.md",
-      "sha256": "4dfb0f2f362b978136243815d398bd4f2b25fa329e7925a8b8b44fa7b7357de2"
+      "sha256": "c540aac81316a06419a38c910753a8c14c5d251626b5709ccbd9578035c163ef"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/README.md",
+      "sha256": "abf59aa9a5e6dda5e4e63d6f8c96f989789a958c5ee14616a3b1f3afaea497dd"
     },
     {
       "path": "docs/benchmarks/recoverable-job-service/problem.md",
-      "sha256": "3894b309cc7ea56ed70c4b4be995318db8580020c1e7a562be4232b3a6850ab8"
+      "sha256": "b1beee87c0f6786e3dd95b3ba7a35515537129cf47262aefc023bcc58e6fc80c"
     },
     {
       "path": "docs/benchmarks/recoverable-job-service/acceptance-contract.md",
-      "sha256": "c7210f626095cbe6755862774feb35d673807c36d58756193e8551fc92f8e52f"
+      "sha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/runtime-contract.md",
+      "sha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8"
+    },
+    {
+      "path": "docs/benchmarks/recoverable-job-service/source-bootstrap.md",
+      "sha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b"
     },
     {
       "path": "docs/benchmarks/recoverable-job-service/evaluation-cases.md",
-      "sha256": "a36e9d8dcb22eb5547d46217f7548a025a131439df1bf369e7ef58b68e97db37"
+      "sha256": "844649e6bb773ebc8df58e1d5e66b1d4be59667be548331e4ceb83e7ab2786f0"
     },
     {
       "path": "docs/benchmarks/recoverable-job-service/source-map.json",
-      "sha256": "bbdf495d85a9323ca4626461660f6bd0daaeb8884531bf9b815d33385664bfad"
+      "sha256": "11a03a5de32911010df53dc03305d1db569702ce04b0f087376c381ddaf533fc"
     },
     {
       "path": "docs/benchmarks/recoverable-job-service/scoring-admission.json",
-      "sha256": "61457a20231c9212b74e4189124b9feb47dba7ebd368204ac50ed1a20748bc0e"
+      "sha256": "00a891599d054c0dfaf89b2c0aa8606feb917699c2acef1eb496d74b4c87f47d"
     },
     {
       "path": "docs/benchmarks/recoverable-job-service/instruction-audit.md",
-      "sha256": "2cc41f8d40f8110f65d91cc40a24e99141b28cd9145a9778a8b0f71d8654c781"
+      "sha256": "c88df63e6ba50346f98f812ed4264da63b8a80b39ffc1dfc09c7ec2193471b31"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/qualification-metadata.json",
+      "sha256": "2d51c779ffecb76332aabdd7da202af20985ba3a11ce44401035c96a2ea83ae9"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/calibration/final-source-freeze.json",
+      "sha256": "f5f7f385fb9c6e39a8f0564ad30e9adae5a3cc7d5a2b9ec810cea4aab4b115c5"
     }
   ]
 }

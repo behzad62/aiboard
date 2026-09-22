@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkBenchRunner, runBenchCommand } from "../lib/client/bench-runner";
 import { executeWorkBenchVerifierOnly } from "../lib/benchmark/workbench/executor";
+import { isScoredCertifiedAttempt } from "../lib/benchmark/metrics";
 import { createRecoverableJobServiceCase } from "../lib/benchmark/workbench/recoverable-job-service/case-pack";
 import {
   RECOVERABLE_JOB_SERVICE_FAMILIES,
@@ -56,6 +57,8 @@ interface FakeRunnerOptions {
   prepareDelayMs?: number;
   verifierStatus?: number;
   verifierError?: string;
+  verifierCode?: string;
+  verifierDisposition?: string;
   verifierDelayMs?: number;
   verifierResultJson?: string;
   verifierPassed?: boolean;
@@ -112,7 +115,11 @@ async function startCanonicalAttemptRunner(preparedAttemptId: string, options: F
         if (options.verifierGate) await options.verifierGate;
         if (options.verifierDelayMs) await delay(options.verifierDelayMs);
         if (options.verifierStatus && options.verifierStatus >= 400) {
-          sendJsonResponse(res, options.verifierStatus, { error: options.verifierError ?? "verifier failed" });
+          sendJsonResponse(res, options.verifierStatus, {
+            error: options.verifierError ?? "verifier failed",
+            ...(options.verifierCode ? { code: options.verifierCode } : {}),
+            ...(options.verifierDisposition ? { disposition: options.verifierDisposition } : {}),
+          });
           return;
         }
         sendJsonResponse(res, 200, {
@@ -699,6 +706,139 @@ try {
 }
 
 const rjsCase = createRecoverableJobServiceCase();
+const typedRjsFailures = [
+  {
+    label: "policy",
+    status: 422,
+    code: "rjs_submission_policy_violation",
+    disposition: "candidate_tool_failure",
+    expectedStatus: "failed_tool_use" as CertifiedAttemptStatus,
+    scoreable: true,
+  },
+  {
+    label: "snapshot",
+    status: 500,
+    code: "rjs_submission_snapshot_invalid",
+    disposition: "invalid_harness",
+    expectedStatus: "invalid_harness" as CertifiedAttemptStatus,
+    scoreable: false,
+  },
+  {
+    label: "filesystem",
+    status: 500,
+    code: "rjs_submission_io_failed",
+    disposition: "invalid_environment",
+    expectedStatus: "invalid_environment" as CertifiedAttemptStatus,
+    scoreable: false,
+  },
+];
+for (const typed of typedRjsFailures) {
+  const typedRunner = await startCanonicalAttemptRunner(`typed-rjs-${typed.label}`, {
+    verifierStatus: typed.status,
+    verifierError: "RJS submission could not be evaluated.",
+    verifierCode: typed.code,
+    verifierDisposition: typed.disposition,
+  });
+  try {
+    const result = await executeWorkBenchVerifierOnly({
+      case: rjsCase,
+      runner: { url: typedRunner.url, token: typedRunner.token },
+      attemptId: `typed-rjs-${typed.label}`,
+      runId: `run-typed-rjs-${typed.label}`,
+      teamCompositionId: "team-fixture",
+      runBuild: async () => ({
+        traceIds: [`trace-typed-rjs-${typed.label}`],
+        artifactIds: [`artifact-typed-rjs-${typed.label}`],
+        modelCalls: 1,
+        toolCalls: 2,
+        validToolCalls: 2,
+        costUsd: 0.01,
+      }),
+    });
+    check(
+      `typed RJS ${typed.label} failure has the exact attribution`,
+      result.attempt.status === typed.expectedStatus &&
+        result.attempt.failureIds.includes(`typed-rjs-${typed.label}:failure:${typed.code}`) &&
+        isScoredCertifiedAttempt(result.attempt) === typed.scoreable,
+      result.attempt
+    );
+    check(
+      `typed RJS ${typed.label} failure records a zero pre-evaluation result`,
+      result.attempt.verifiedQuality === 0 &&
+        result.attempt.jobSuccessScore === 0 &&
+        result.attempt.efficiencyScore === 0 &&
+        result.verifierResult.assertionResults.length === 0 &&
+        result.parsedVerifierResult.assertions.length === 0 &&
+        result.parsedVerifierResult.recoverableJobService === undefined,
+      result
+    );
+    check(
+      `typed RJS ${typed.label} failure preserves audit artifacts`,
+      result.attempt.traceIds.includes(`trace-typed-rjs-${typed.label}`) &&
+        result.artifacts.some((artifact) => artifact.id.endsWith(":failure-log")) &&
+        result.artifacts.some((artifact) => artifact.id.endsWith(":rjs-public-contract")),
+      result.artifacts
+    );
+  } finally {
+    await typedRunner.stop();
+  }
+}
+for (const contradictory of [
+  {
+    label: "status",
+    status: 500,
+    code: "rjs_submission_policy_violation",
+    disposition: "candidate_tool_failure",
+  },
+  {
+    label: "disposition",
+    status: 500,
+    code: "rjs_submission_snapshot_invalid",
+    disposition: "candidate_tool_failure",
+  },
+  {
+    label: "code",
+    status: 500,
+    code: "rjs_submission_snapshot_invalid",
+    disposition: "invalid_environment",
+  },
+]) {
+  const contradictoryRunner = await startCanonicalAttemptRunner(
+    `contradictory-rjs-${contradictory.label}`,
+    {
+      verifierStatus: contradictory.status,
+      verifierError: "Contradictory typed RJS failure.",
+      verifierCode: contradictory.code,
+      verifierDisposition: contradictory.disposition,
+    }
+  );
+  try {
+    const result = await executeWorkBenchVerifierOnly({
+      case: rjsCase,
+      runner: { url: contradictoryRunner.url, token: contradictoryRunner.token },
+      attemptId: `contradictory-rjs-${contradictory.label}`,
+      runId: `run-contradictory-rjs-${contradictory.label}`,
+      teamCompositionId: "team-fixture",
+      runBuild: async () => ({
+        traceIds: [`trace-contradictory-rjs-${contradictory.label}`],
+        modelCalls: 1,
+      }),
+    });
+    check(
+      `contradictory RJS ${contradictory.label} tuple fails closed as invalid harness`,
+      result.attempt.status === "invalid_harness" &&
+        !isScoredCertifiedAttempt(result.attempt) &&
+        result.attempt.failureIds.includes(
+          `contradictory-rjs-${contradictory.label}:failure:rjs_submission_protocol_mismatch`
+        ) &&
+        result.verifierResult.assertionResults.length === 0 &&
+        result.parsedVerifierResult.assertions.length === 0,
+      result
+    );
+  } finally {
+    await contradictoryRunner.stop();
+  }
+}
 const invalidRjsResult = invalidRecoverableJobServiceResult();
 const invalidRjsRunner = await startCanonicalAttemptRunner("invalid-rjs-attempt", {
   verifierResultJson: invalidRjsResult,

@@ -361,6 +361,15 @@
         "suiteHash": "14b7d5028b6a2bb08b64f21171208c3266e67f3ef0d05b6f83991c8e5db2fcd5"
       },
       "scope": "Narrow same-history C09 digest correction; final full evidence remains pending."
+    },
+    {
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\truthful-capacity-correction.json",
+      "sha256": "e3f851f3e252d4cc49d5c0ef340338a3db96769e772bfa83b0b6f8ca58f81778",
+      "identity": {
+        "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+        "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
+      },
+      "scope": "Full qualification exposed repeated control-only clock observations at B14 capacity; request-scoped correction and regression retained."
     }
   ],
   "correctionDisposition": {
@@ -371,7 +380,8 @@
       "rootTiming": "Mandatory pre-launch boundary; one coherent correction",
       "category": "Prior A01/A07 categorical history; one coherent correction",
       "reserveProbe": "CAL-PROBE-RESERVE construction defect; correction 1/3",
-      "mappingTool": "Prior audit mapping correction remains 1/3"
+      "mappingTool": "Prior audit mapping correction remains 1/3",
+      "truthfulCapacity": "CAL-CONTROL-TRUTHFUL-B14-CAPACITY; full-run construction correction 1/3, preserving the fixed 100000-operation limit and scored inputs"
     },
     "pending": [
       "Independent scoped review",

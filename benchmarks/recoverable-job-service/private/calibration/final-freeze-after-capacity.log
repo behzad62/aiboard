@@ -1,0 +1,55 @@
+{
+  "freeze": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/final-source-freeze.json",
+    "bytes": 97695,
+    "sha256": "f5f7f385fb9c6e39a8f0564ad30e9adae5a3cc7d5a2b9ec810cea4aab4b115c5"
+  },
+  "identity": {
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
+  },
+  "versions": {
+    "contract": "rjs-contract-2.0.1",
+    "suite": "rjs-suite-2.0.1"
+  },
+  "sourceCount": 110,
+  "changedProducerFiles": [
+    "benchmarks/recoverable-job-service/private/control-expectations.json",
+    "benchmarks/recoverable-job-service/private/evaluator.mjs",
+    "benchmarks/recoverable-job-service/private/generate-assets.mjs",
+    "benchmarks/recoverable-job-service/private/scenarios.mjs",
+    "benchmarks/recoverable-job-service/private/variants.mjs",
+    "benchmarks/recoverable-job-service/public/acceptance-contract.md",
+    "benchmarks/recoverable-job-service/public/runtime-contract.md",
+    "benchmarks/recoverable-job-service/public/source-bootstrap.md",
+    "docs/benchmarks/recoverable-job-service/acceptance-contract.md",
+    "docs/benchmarks/recoverable-job-service/runtime-contract.md",
+    "docs/benchmarks/recoverable-job-service/source-bootstrap.md",
+    "lib/benchmark/workbench/recoverable-job-service/assets.generated.ts"
+  ],
+  "controls": [
+    {
+      "id": "representation",
+      "sha256": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445"
+    },
+    {
+      "id": "algorithm",
+      "sha256": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac"
+    },
+    {
+      "id": "truthful-outcome",
+      "sha256": "03c638d224330273e58af80f00698985cd87c3cf732b75619587755dc6ad6987"
+    }
+  ],
+  "ledger": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-final.json",
+    "bytes": 5080002,
+    "sha256": "595b685f2bf5f19c146a02c369bb6935295701218efaca13767a75be4a144491"
+  },
+  "probePlan": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/probe-plan-final.json",
+    "bytes": 26834,
+    "sha256": "a096cff0ee871ae230d22a717a84dbb84ab1e6dc67a112027b9fce6a0ce6cbd4"
+  },
+  "publicFiles": 11
+}

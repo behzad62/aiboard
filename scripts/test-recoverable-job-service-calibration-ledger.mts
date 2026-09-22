@@ -37,6 +37,12 @@ if (finalMap) {
   assert.equal(sha(proofBytes), c09.green.sha256); assert(proof.passed);
   assert.equal(sha(await readFile(join(base, 'private/variants.mjs'))), proof.variantsSha256);
   correctionEvidence.push({path: c09Path, sha256: sha(await readFile(c09Path)), identity: proof.identity, scope: 'Narrow same-history C09 digest correction; final full evidence remains pending.'});
+  const truthfulCapacityPath = join(base, 'private/calibration/truthful-capacity-correction.json');
+  const truthfulCapacityBytes = await readFile(truthfulCapacityPath), truthfulCapacity = JSON.parse(truthfulCapacityBytes.toString());
+  assert.equal(truthfulCapacity.issue, 'CAL-CONTROL-TRUTHFUL-B14-CAPACITY');
+  assert.equal(truthfulCapacity.preservation.operationLimit, 100000);
+  correctionEvidence.push({path: truthfulCapacityPath, sha256: sha(truthfulCapacityBytes), identity: await scoreInputHashes(),
+    scope: 'Full qualification exposed repeated control-only clock observations at B14 capacity; request-scoped correction and regression retained.'});
   for (const id of c09.variants) currentProof.set(id, []);
   for (const run of proof.runs) {
     const path = join(dirname(c09.green.path), run.name + '.result.json'), bytes = await readFile(path), result = JSON.parse(bytes.toString());
@@ -313,7 +319,8 @@ const ledger = {schemaVersion: 1, method: 'rjs-simplification-audit-1', status: 
   correctionEvidence,
   correctionDisposition: hasCorrection ? {ruling: '.superpowers/sdd/2026-09-08-recoverable-job-service-integration/calibration-coupling-correction-ruling.md',
     histories: {attachment: 'Prior B06 setup-phase history; one coherent correction', privateRecord: 'Existing representation-independence history; private-record, first instrumentation failure and ruled nonfinal-digest follow-up retained without reset',
-      rootTiming: 'Mandatory pre-launch boundary; one coherent correction', category: 'Prior A01/A07 categorical history; one coherent correction', reserveProbe: 'CAL-PROBE-RESERVE construction defect; correction 1/3', mappingTool: 'Prior audit mapping correction remains 1/3'},
+      rootTiming: 'Mandatory pre-launch boundary; one coherent correction', category: 'Prior A01/A07 categorical history; one coherent correction', reserveProbe: 'CAL-PROBE-RESERVE construction defect; correction 1/3', mappingTool: 'Prior audit mapping correction remains 1/3',
+      truthfulCapacity: 'CAL-CONTROL-TRUTHFUL-B14-CAPACITY; full-run construction correction 1/3, preserving the fixed 100000-operation limit and scored inputs'},
     pending: ['Independent scoped review', 'Three complete controls/eight probe classes', 'Final public/version identity and mandatory full qualification'],
   } : null,
   reviewLimits: ['AST extraction identifies exact selected clauses and conservative transitive code; it is source review, not runtime proof.',

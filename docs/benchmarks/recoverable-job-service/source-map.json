@@ -1,9 +1,9 @@
 {
-  "version": "design-2026-09-08",
+  "version": "qualification-provenance-2026-09-22",
   "createdAt": "2026-09-08T05:17:40.406Z",
-  "purpose": "Private historical pattern provenance; exclude from standalone candidate export.",
-  "implementation": "No executable cases or reference core exist in this design.",
-  "coverageClaim": "69 publicly listed proposed behavioral families; zero scoring-admitted. Finding-level source reconciliation and instruction-sufficiency review pending.",
+  "purpose": "Private historical pattern provenance and qualification pointer; exclude from candidate export.",
+  "implementation": "Executable standalone evaluator integrated through AI Board WorkBench; candidate runtime remains independent of the source application.",
+  "coverageClaim": "69 scoring-admitted public families and 302 mandatory hidden variants under the frozen modeled profile.",
   "sourceKeys": {
     "S01": [
       "task-1-report.md"
@@ -349,7 +349,7 @@
       "mappedSourceKeys": [
         "S03"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-round4-review.md",
@@ -357,7 +357,7 @@
       "mappedSourceKeys": [
         "S02"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-round5-review.md",
@@ -365,7 +365,7 @@
       "mappedSourceKeys": [
         "S03"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-close-conjunction-review.md",
@@ -373,7 +373,7 @@
       "mappedSourceKeys": [
         "S07"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round3.md",
@@ -381,7 +381,7 @@
       "mappedSourceKeys": [
         "S04"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round4.md",
@@ -389,7 +389,7 @@
       "mappedSourceKeys": [
         "S04"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round5.md",
@@ -397,7 +397,7 @@
       "mappedSourceKeys": [
         "S04"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-round6-review.md",
@@ -405,7 +405,7 @@
       "mappedSourceKeys": [
         "S05"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-round7-review.md",
@@ -413,7 +413,7 @@
       "mappedSourceKeys": [
         "S06"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-review-round1.md",
@@ -422,7 +422,7 @@
         "S05",
         "S09"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round1-review.md",
@@ -430,7 +430,7 @@
       "mappedSourceKeys": [
         "S09"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round2-review.md",
@@ -438,7 +438,7 @@
       "mappedSourceKeys": [
         "S09"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round3-review.md",
@@ -446,7 +446,7 @@
       "mappedSourceKeys": [
         "S10"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round4-review.md",
@@ -454,7 +454,7 @@
       "mappedSourceKeys": [
         "S11"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-rereview-round1.md",
@@ -462,7 +462,7 @@
       "mappedSourceKeys": [
         "S12"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-rereview-round2.md",
@@ -470,7 +470,7 @@
       "mappedSourceKeys": [
         "S12"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-review.md",
@@ -478,7 +478,7 @@
       "mappedSourceKeys": [
         "S12"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round3-review.md",
@@ -486,7 +486,7 @@
       "mappedSourceKeys": [
         "S14"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round4-review.md",
@@ -494,7 +494,7 @@
       "mappedSourceKeys": [
         "S15"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     },
     {
       "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round5-review.md",
@@ -502,7 +502,7 @@
       "mappedSourceKeys": [
         "S16"
       ],
-      "findingLevelReconciliation": "pending"
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
     }
   ],
   "cases": [
@@ -513,8 +513,8 @@
       "sourceKeys": [
         "S01"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a01",
       "candidateScoringFamily": true
     },
@@ -525,8 +525,8 @@
       "sourceKeys": [
         "S01"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a02",
       "candidateScoringFamily": true
     },
@@ -537,8 +537,8 @@
       "sourceKeys": [
         "S01"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a03",
       "candidateScoringFamily": true
     },
@@ -549,8 +549,8 @@
       "sourceKeys": [
         "S01"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a04",
       "candidateScoringFamily": true
     },
@@ -561,8 +561,8 @@
       "sourceKeys": [
         "S01"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a05",
       "candidateScoringFamily": true
     },
@@ -573,8 +573,8 @@
       "sourceKeys": [
         "S01"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a06",
       "candidateScoringFamily": true
     },
@@ -586,8 +586,8 @@
         "S01",
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a07",
       "candidateScoringFamily": true
     },
@@ -598,8 +598,8 @@
       "sourceKeys": [
         "S01"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a08",
       "candidateScoringFamily": true
     },
@@ -610,8 +610,8 @@
       "sourceKeys": [
         "S02"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a09",
       "candidateScoringFamily": true
     },
@@ -622,8 +622,8 @@
       "sourceKeys": [
         "S02"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a10",
       "candidateScoringFamily": true
     },
@@ -635,8 +635,8 @@
         "S02",
         "S03"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a11",
       "candidateScoringFamily": true
     },
@@ -647,8 +647,8 @@
       "sourceKeys": [
         "S03"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a12",
       "candidateScoringFamily": true
     },
@@ -659,8 +659,8 @@
       "sourceKeys": [
         "S03"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a13",
       "candidateScoringFamily": true
     },
@@ -671,8 +671,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a14",
       "candidateScoringFamily": true
     },
@@ -683,8 +683,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#a15",
       "candidateScoringFamily": true
     },
@@ -695,8 +695,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b01",
       "candidateScoringFamily": true
     },
@@ -707,8 +707,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b02",
       "candidateScoringFamily": true
     },
@@ -719,8 +719,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b03",
       "candidateScoringFamily": true
     },
@@ -731,8 +731,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b04",
       "candidateScoringFamily": true
     },
@@ -743,8 +743,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b05",
       "candidateScoringFamily": true
     },
@@ -755,8 +755,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b06",
       "candidateScoringFamily": true
     },
@@ -767,8 +767,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b07",
       "candidateScoringFamily": true
     },
@@ -779,8 +779,8 @@
       "sourceKeys": [
         "S04"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b08",
       "candidateScoringFamily": true
     },
@@ -792,8 +792,8 @@
         "S04",
         "S07"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b09",
       "candidateScoringFamily": true
     },
@@ -804,8 +804,8 @@
       "sourceKeys": [
         "S05"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b10",
       "candidateScoringFamily": true
     },
@@ -816,8 +816,8 @@
       "sourceKeys": [
         "S06"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b11",
       "candidateScoringFamily": true
     },
@@ -829,8 +829,8 @@
         "S04",
         "S05"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b12",
       "candidateScoringFamily": true
     },
@@ -841,8 +841,8 @@
       "sourceKeys": [
         "S07"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b13",
       "candidateScoringFamily": true
     },
@@ -853,8 +853,8 @@
       "sourceKeys": [
         "S07"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b14",
       "candidateScoringFamily": true
     },
@@ -865,8 +865,8 @@
       "sourceKeys": [
         "S07"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b15",
       "candidateScoringFamily": true
     },
@@ -877,8 +877,8 @@
       "sourceKeys": [
         "S07"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b16",
       "candidateScoringFamily": true
     },
@@ -889,8 +889,8 @@
       "sourceKeys": [
         "S17"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#b17",
       "candidateScoringFamily": true
     },
@@ -901,8 +901,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c01",
       "candidateScoringFamily": true
     },
@@ -913,8 +913,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c02",
       "candidateScoringFamily": true
     },
@@ -925,8 +925,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c03",
       "candidateScoringFamily": true
     },
@@ -937,8 +937,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c04",
       "candidateScoringFamily": true
     },
@@ -949,8 +949,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c05",
       "candidateScoringFamily": true
     },
@@ -961,8 +961,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c06",
       "candidateScoringFamily": true
     },
@@ -973,8 +973,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c07",
       "candidateScoringFamily": true
     },
@@ -985,8 +985,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c08",
       "candidateScoringFamily": true
     },
@@ -997,8 +997,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c09",
       "candidateScoringFamily": true
     },
@@ -1009,8 +1009,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c10",
       "candidateScoringFamily": true
     },
@@ -1021,8 +1021,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c11",
       "candidateScoringFamily": true
     },
@@ -1033,8 +1033,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c12",
       "candidateScoringFamily": true
     },
@@ -1046,8 +1046,8 @@
         "S08",
         "S11"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c13",
       "candidateScoringFamily": true
     },
@@ -1058,8 +1058,8 @@
       "sourceKeys": [
         "S09"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c14",
       "candidateScoringFamily": true
     },
@@ -1070,8 +1070,8 @@
       "sourceKeys": [
         "S09"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c15",
       "candidateScoringFamily": true
     },
@@ -1083,8 +1083,8 @@
         "S08",
         "S09"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c16",
       "candidateScoringFamily": true
     },
@@ -1095,8 +1095,8 @@
       "sourceKeys": [
         "S08"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c17",
       "candidateScoringFamily": true
     },
@@ -1107,8 +1107,8 @@
       "sourceKeys": [
         "S10"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c18",
       "candidateScoringFamily": true
     },
@@ -1119,8 +1119,8 @@
       "sourceKeys": [
         "S11"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#c19",
       "candidateScoringFamily": true
     },
@@ -1131,8 +1131,8 @@
       "sourceKeys": [
         "S12"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d01",
       "candidateScoringFamily": true
     },
@@ -1143,8 +1143,8 @@
       "sourceKeys": [
         "S12"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d02",
       "candidateScoringFamily": true
     },
@@ -1155,8 +1155,8 @@
       "sourceKeys": [
         "S12"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d03",
       "candidateScoringFamily": true
     },
@@ -1167,8 +1167,8 @@
       "sourceKeys": [
         "S12"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d04",
       "candidateScoringFamily": true
     },
@@ -1179,8 +1179,8 @@
       "sourceKeys": [
         "S12"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d05",
       "candidateScoringFamily": true
     },
@@ -1191,8 +1191,8 @@
       "sourceKeys": [
         "S12"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d06",
       "candidateScoringFamily": true
     },
@@ -1203,8 +1203,8 @@
       "sourceKeys": [
         "S12"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d07",
       "candidateScoringFamily": true
     },
@@ -1215,8 +1215,8 @@
       "sourceKeys": [
         "S12"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d08",
       "candidateScoringFamily": true
     },
@@ -1228,8 +1228,8 @@
         "S12",
         "S05"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#d09",
       "candidateScoringFamily": true
     },
@@ -1240,8 +1240,8 @@
       "sourceKeys": [
         "S18"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e01",
       "candidateScoringFamily": true
     },
@@ -1253,8 +1253,8 @@
         "S15",
         "S18"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e02",
       "candidateScoringFamily": true
     },
@@ -1265,8 +1265,8 @@
       "sourceKeys": [
         "S18"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e03",
       "candidateScoringFamily": true
     },
@@ -1277,8 +1277,8 @@
       "sourceKeys": [
         "S18"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e04",
       "candidateScoringFamily": true
     },
@@ -1290,8 +1290,8 @@
         "S13",
         "S15"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e05",
       "candidateScoringFamily": true
     },
@@ -1302,8 +1302,8 @@
       "sourceKeys": [
         "S15"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e06",
       "candidateScoringFamily": true
     },
@@ -1314,8 +1314,8 @@
       "sourceKeys": [
         "S15"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e07",
       "candidateScoringFamily": true
     },
@@ -1326,8 +1326,8 @@
       "sourceKeys": [
         "S15"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e08",
       "candidateScoringFamily": true
     },
@@ -1338,8 +1338,8 @@
       "sourceKeys": [
         "S16"
       ],
-      "admission": "not-admitted",
-      "candidateScored": false,
+      "admission": "admitted",
+      "candidateScored": true,
       "publicContract": "acceptance-contract.md#e09",
       "candidateScoringFamily": true
     },
@@ -1350,7 +1350,7 @@
       "sourceKeys": [
         "S07"
       ],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     },
     {
@@ -1361,7 +1361,7 @@
         "S07",
         "S15"
       ],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     },
     {
@@ -1371,7 +1371,7 @@
       "sourceKeys": [
         "S18"
       ],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     },
     {
@@ -1383,7 +1383,7 @@
         "S15",
         "S18"
       ],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     },
     {
@@ -1394,7 +1394,7 @@
         "S13",
         "S14"
       ],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     },
     {
@@ -1407,7 +1407,7 @@
         "S13",
         "S15"
       ],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     },
     {
@@ -1418,7 +1418,7 @@
         "S15",
         "S18"
       ],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     },
     {
@@ -1430,7 +1430,7 @@
         "S15",
         "S16"
       ],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     },
     {
@@ -1438,9 +1438,16 @@
       "group": "H",
       "publicClause": null,
       "sourceKeys": [],
-      "admission": "proposed-not-executable",
+      "admission": "evaluator-qualified",
       "candidateScored": false
     }
   ],
-  "currentExecutionStatus": "Executable producer implemented for earlier profile; rjs-contract-2.0.0 producer qualification, independent correct-control admission and end-to-end UI validation remain pending."
+  "currentExecutionStatus": "rjs-contract-2.0.1 / rjs-suite-2.0.1: 69 candidate families and 302 mandatory variants are executable and scoring-admitted for the modeled profile; H01-H09 are qualified evaluator-only checks.",
+  "qualification": {
+    "method": "rjs-simplification-audit-1",
+    "status": "accepted",
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e",
+    "acceptanceReview": "benchmarks/recoverable-job-service/private/calibration/final-acceptance-review.md#sha256-1c492c610b96299cf5283323a1f3ffe446c70f817942d6a4eb98ea32d2d1b7a8"
+  }
 }

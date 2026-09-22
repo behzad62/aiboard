@@ -897,9 +897,9 @@ export const RECOVERABLE_JOB_SERVICE_METADATA = {
   "calibration": {
     "schemaVersion": 1,
     "method": "rjs-simplification-audit-1",
-    "status": "pending",
-    "admission": "pending",
-    "evidenceManifest": null,
-    "authority": "Independent calibration review and controller acceptance of CAL01–05; UI and integration release gates remain separate."
+    "status": "accepted",
+    "admission": "calibrated",
+    "evidenceManifest": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/calibration-final-acceptance-review.md#sha256-1c492c610b96299cf5283323a1f3ffe446c70f817942d6a4eb98ea32d2d1b7a8",
+    "authority": "Independent CAL01–05 acceptance; Task 2 packaging/UI and Task 3 release gates remain separate."
   }
 } as const;

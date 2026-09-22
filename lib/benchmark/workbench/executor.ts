@@ -1,4 +1,10 @@
-import { cleanupBenchRun, getBenchDiff, prepareBenchCase, runBenchVerifier } from "@/lib/client/bench-runner";
+import {
+  BenchRunnerRequestError,
+  cleanupBenchRun,
+  getBenchDiff,
+  prepareBenchCase,
+  runBenchVerifier,
+} from "@/lib/client/bench-runner";
 import type { BenchmarkAttemptV2, BenchmarkVerifierResult, CertifiedAttemptStatus } from "@/lib/benchmark/types";
 import { scoreWorkBenchAttempt } from "@/lib/benchmark/scoring/workbench";
 import { round } from "@/lib/benchmark/scoring/types";
@@ -173,19 +179,27 @@ export async function executeWorkBenchVerifierOnly(
       throwIfCertifiedRunAborted(input.signal);
     } catch (error) {
       throwIfCertifiedRunAborted(input.signal);
+      const preEvaluationFailure = input.case.trustedPolicy?.kind === "recoverable-job-service"
+        ? classifyRjsPreEvaluationFailure(error)
+        : null;
       return createFailedWorkBenchAttempt(input, {
         attemptId,
         startedAt,
         startedMs,
         harnessProfile,
-        status: input.case.trustedPolicy?.kind === "recoverable-job-service"
-          ? "invalid_harness"
-          : "invalid_case",
-        code: input.case.trustedPolicy?.kind === "recoverable-job-service"
-          ? "trusted_verifier_failed"
-          : "verifier_failed",
+        status: preEvaluationFailure?.status ?? (
+          input.case.trustedPolicy?.kind === "recoverable-job-service"
+            ? "invalid_harness"
+            : "invalid_case"
+        ),
+        code: preEvaluationFailure?.code ?? (
+          input.case.trustedPolicy?.kind === "recoverable-job-service"
+            ? "trusted_verifier_failed"
+            : "verifier_failed"
+        ),
         message: errorMessage(error),
         buildResult,
+        preEvaluationFailure: preEvaluationFailure !== null,
       });
     }
 
@@ -341,6 +355,7 @@ interface FailedWorkBenchAttemptContext {
   message?: string;
   buildResult?: Partial<WorkBenchBuildExecutionResult>;
   retainedPaths?: { projectPath: string; statePath: string };
+  preEvaluationFailure?: boolean;
 }
 
 export function createFailedWorkBenchAttempt(
@@ -404,7 +419,7 @@ export function createFailedWorkBenchAttempt(
       passed: false,
       score: 0,
       summary: message,
-      assertions: [
+      assertions: context.preEvaluationFailure ? [] : [
         {
           id: code,
           label: failureSummaryForStatus(status),
@@ -414,7 +429,7 @@ export function createFailedWorkBenchAttempt(
         },
       ],
     }),
-    assertionResults: [
+    assertionResults: context.preEvaluationFailure ? [] : [
       {
         id: code,
         label: failureSummaryForStatus(status),
@@ -470,7 +485,16 @@ export function createFailedWorkBenchAttempt(
   return {
     attempt,
     verifierResult,
-    parsedVerifierResult: parseVerifierResult("", verifierResult.resultJson),
+    parsedVerifierResult: context.preEvaluationFailure
+      ? {
+          passed: false,
+          score: 0,
+          summary: message,
+          assertions: [],
+          rawJson: verifierResult.resultJson,
+          failureClass: status,
+        }
+      : parseVerifierResult("", verifierResult.resultJson),
     score,
     artifacts: [
       logArtifact,
@@ -478,6 +502,40 @@ export function createFailedWorkBenchAttempt(
       ...(publicContractArtifact ? [publicContractArtifact] : []),
     ],
   };
+}
+
+function classifyRjsPreEvaluationFailure(
+  error: unknown
+): { status: CertifiedAttemptStatus; code: string } | null {
+  if (!(error instanceof BenchRunnerRequestError)) return null;
+  if (
+    error.status === 422 &&
+    error.code === "rjs_submission_policy_violation" &&
+    error.disposition === "candidate_tool_failure"
+  ) {
+    return { status: "failed_tool_use", code: error.code };
+  }
+  if (
+    error.status === 500 &&
+    error.code === "rjs_submission_snapshot_invalid" &&
+    error.disposition === "invalid_harness"
+  ) {
+    return { status: "invalid_harness", code: error.code };
+  }
+  if (
+    error.status === 500 &&
+    error.code === "rjs_submission_io_failed" &&
+    error.disposition === "invalid_environment"
+  ) {
+    return { status: "invalid_environment", code: error.code };
+  }
+  if (error.code?.startsWith("rjs_submission_") || error.disposition !== undefined) {
+    return {
+      status: "invalid_harness",
+      code: "rjs_submission_protocol_mismatch",
+    };
+  }
+  return null;
 }
 
 function retainedRunnerPaths(

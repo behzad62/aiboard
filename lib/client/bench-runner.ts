@@ -10,6 +10,20 @@ export const DEFAULT_BENCH_RUNNER_URL = "http://127.0.0.1:8797";
 
 export type BenchRunnerConfig = WorkBenchRunnerConfig;
 
+export class BenchRunnerRequestError extends Error {
+  readonly status: number;
+  readonly code?: string;
+  readonly disposition?: string;
+
+  constructor(message: string, status: number, code?: string, disposition?: string) {
+    super(message);
+    this.name = "BenchRunnerRequestError";
+    this.status = status;
+    this.code = code;
+    this.disposition = disposition;
+  }
+}
+
 export interface BenchRunnerHealth {
   ok: boolean;
   version?: number;
@@ -90,13 +104,10 @@ export function getTrustedBenchRunnerReadiness(
       error: trusted?.error ?? "Recoverable Job Service trusted runtime is unavailable.",
     };
   }
-  if (
-    trusted.nodeVersion !== policy.requiredNodeVersion ||
-    health.runnerV2.nodeVersion !== policy.requiredNodeVersion
-  ) {
+  if (trusted.nodeVersion !== policy.requiredNodeVersion) {
     return {
       ready: false,
-      error: `Recoverable Job Service requires Node ${policy.requiredNodeVersion} in both runners.`,
+      error: `Recoverable Job Service requires Bench Runner Node ${policy.requiredNodeVersion}.`,
     };
   }
   if (trusted.quickjsVersion !== policy.requiredQuickJsVersion) {
@@ -347,9 +358,18 @@ async function requestJson<T>(
     body: body === undefined ? undefined : JSON.stringify(body),
     signal,
   });
-  const data = (await response.json().catch(() => ({}))) as { error?: string };
+  const data = (await response.json().catch(() => ({}))) as {
+    error?: string;
+    code?: string;
+    disposition?: string;
+  };
   if (!response.ok) {
-    throw new Error(data.error ?? `Bench runner request failed (HTTP ${response.status})`);
+    throw new BenchRunnerRequestError(
+      data.error ?? `Bench runner request failed (HTTP ${response.status})`,
+      response.status,
+      typeof data.code === "string" ? data.code : undefined,
+      typeof data.disposition === "string" ? data.disposition : undefined
+    );
   }
   return data as T;
 }

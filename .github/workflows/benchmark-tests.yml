@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        node-version: [22.x, 24.x]
+        node-version: [22.x, 24.18.0]
 
     steps:
       - name: Checkout
@@ -23,6 +23,9 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+
+      - name: Acquire pinned Recoverable Job Service Runner source
+        run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
 
       - name: Install dependencies
         run: npm ci

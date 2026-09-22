@@ -8,11 +8,11 @@
   },
   "ledger": {
     "path": "benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-final.json",
-    "sha256": "c3f4b9c4038edecb4313e3e2c2bd2d9d1fb1a86e78481aa7df2534db43573d84"
+    "sha256": "595b685f2bf5f19c146a02c369bb6935295701218efaca13767a75be4a144491"
   },
   "controlManifest": {
     "path": "benchmarks/recoverable-job-service/private/calibration/complete-controls/manifest.json",
-    "sha256": "bfbaa8e7cdcc1582962ae7a864dc866e7ce3490b1c8ba9051ae4eeb6e5733eab"
+    "sha256": "48983000b38f33d50661b59b4f8b599eaf18148457e3abbd345cf8da1ee69321"
   },
   "controls": [
     {
@@ -51,8 +51,8 @@
         "unknown client delivery with its durable exact ID",
         "truthful aggregate recovery views when every remaining job has an unresolved source/client obligation"
       ],
-      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf",
-      "bytes": 56230,
+      "sha256": "03c638d224330273e58af80f00698985cd87c3cf732b75619587755dc6ad6987",
+      "bytes": 56419,
       "path": "benchmarks\\recoverable-job-service\\private\\calibration\\complete-controls\\truthful-outcome.js"
     }
   ],

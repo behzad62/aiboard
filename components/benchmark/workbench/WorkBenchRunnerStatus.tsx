@@ -42,7 +42,7 @@ export function WorkBenchRunnerStatus({
   const managedStatusText = !health
     ? "Managed Runner V2 not checked"
     : managedReady
-      ? `Managed Runner V2 ready${health.runnerV2?.source ? ` (${health.runnerV2.source})` : ""}`
+      ? `Managed Runner V2 source available${health.runnerV2?.source ? ` (${health.runnerV2.source})` : ""}`
       : health.runnerV2?.error ??
         "Managed Runner V2 unavailable. Restart bench-runner with --runner-v2-dir C:\\path\\to\\aiboard-runner-v2.";
   const BenchStatusIcon = health?.ok ? CheckCircle2 : health ? XCircle : RefreshCw;
@@ -60,6 +60,18 @@ export function WorkBenchRunnerStatus({
     : trustedReadiness?.ready
       ? `Recoverable Job Service runtime ready (${health.rjs?.profile ?? "profile unavailable"})`
       : trustedReadiness?.error;
+  const recoverableJobService = workBenchCase?.trustedPolicy?.kind === "recoverable-job-service";
+  const download = recoverableJobService
+    ? {
+        href: "/aiboard-rjs-workbench-runner.zip",
+        filename: "aiboard-rjs-workbench-runner.zip",
+        label: "Download Recoverable Job Service runner",
+      }
+    : {
+        href: "/aiboard-workbench-runner.zip",
+        filename: "aiboard-workbench-runner.zip",
+        label: "Download WorkBench runner bundle",
+      };
 
   return (
     <div className="@container rounded-md border p-3">
@@ -92,11 +104,11 @@ export function WorkBenchRunnerStatus({
               asChild
             >
               <a
-                href="/aiboard-workbench-runner.zip"
-                download="aiboard-workbench-runner.zip"
+                href={download.href}
+                download={download.filename}
               >
                 <Download className="h-4 w-4 shrink-0" />
-                Download WorkBench runner bundle
+                {download.label}
               </a>
             </Button>
             <Button
@@ -110,8 +122,13 @@ export function WorkBenchRunnerStatus({
             </Button>
           </div>
           <p className="text-xs text-muted-foreground @[64rem]:text-right">
-            Includes Runner V2. After extraction, run <code>npm install</code> and{" "}
-            <code>npm run setup:browser</code>.
+            {recoverableJobService ? (
+              <>Requires Node.js 24.18.0. After extraction, run <code>npm ci</code> and{" "}
+                <code>npm run setup:browser</code>.</>
+            ) : (
+              <>Includes Runner V2. After extraction, run <code>npm install</code> and{" "}
+                <code>npm run setup:browser</code>.</>
+            )}
           </p>
         </div>
       </div>

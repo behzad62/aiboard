@@ -1,0 +1,2287 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Real eight-class calibration probe evidence; full production acceptance remains separately gated",
+  "output": "benchmarks/recoverable-job-service/private/calibration/probes-2026-09-21T05-25-47-535Z",
+  "identity": {
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
+  },
+  "classes": [
+    "P01-zero-prefix",
+    "P02-source-freshness",
+    "P03-source-obligations",
+    "P04-setup-attachment",
+    "P05-frame-category",
+    "P06-authority-deadline",
+    "P08-reclamation"
+  ],
+  "capacityOnly": false,
+  "runs": [
+    {
+      "name": "reference-positive",
+      "sourceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+      "reusedFinalFullPositive": {
+        "path": "benchmarks/recoverable-job-service/private/task2-2026-09-21T05-06-52-478Z/reference-diagnostics.json",
+        "sha256": "858605a8d01485ac82f107bb5a65c1ec5edc5244637fd2fd498ce27034aa5b81"
+      },
+      "selected": 36,
+      "pass": 36,
+      "skip": 0,
+      "material": false
+    },
+    {
+      "name": "algorithm-positive",
+      "sourceHash": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+      "reusedFinalFullPositive": {
+        "path": "benchmarks\\recoverable-job-service\\private\\calibration\\qualification-2026-09-21T05-22-25-546Z\\algorithm.result.json",
+        "sha256": "ba97fc06473a9c08f0137985f56974d55d270f924cb374b684bda50e02418491"
+      },
+      "selected": 21,
+      "pass": 21,
+      "skip": 0,
+      "material": false
+    },
+    {
+      "name": "truthful-outcome-positive",
+      "sourceHash": "03c638d224330273e58af80f00698985cd87c3cf732b75619587755dc6ad6987",
+      "reusedFinalFullPositive": {
+        "path": "benchmarks\\recoverable-job-service\\private\\calibration\\qualification-2026-09-21T05-22-25-546Z\\truthful-outcome.result.json",
+        "sha256": "20ea5a2dbb5e09fd570b4feeb75df594c4f62c8a4c720e38a940ba70bc975e3d"
+      },
+      "selected": 16,
+      "pass": 16,
+      "skip": 0,
+      "material": false
+    },
+    {
+      "name": "representation-positive",
+      "sourceHash": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445",
+      "reusedFinalFullPositive": {
+        "path": "benchmarks\\recoverable-job-service\\private\\calibration\\qualification-2026-09-21T05-22-25-546Z\\representation.result.json",
+        "sha256": "4a59d9a5cd0accd946c96fc5fcfa6a9c0ba642bcab543a1a431f139b2f5fae0f"
+      },
+      "selected": 9,
+      "pass": 9,
+      "skip": 0,
+      "material": false
+    },
+    {
+      "name": "algorithm-material-optimistic-reconciliation",
+      "sourceHash": "a7fbba1f9a6d4f5992fd2444c2e743f921a405fef101fd9e328b158546061b06",
+      "status": "valid",
+      "selected": 4,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "B06/primary",
+          "reason": "stop must refuse"
+        },
+        {
+          "id": "B06/deadline-driver.attach.before",
+          "reason": "stop must refuse"
+        },
+        {
+          "id": "B17/primary",
+          "reason": "restore must refuse"
+        },
+        {
+          "id": "B17/source-observation-response-unknown",
+          "reason": "lost source response retains unknown operation"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-material-misreport-source-prefix",
+      "sourceHash": "a8d47979f401362108c0a67fc47f53c9a303d9da3b46f028d72b38042832d4ff",
+      "status": "valid",
+      "selected": 8,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "B17/source-zero",
+          "reason": "source accounting stdout preserves exact prefix and actual suffix"
+        },
+        {
+          "id": "B17/source-both",
+          "reason": "source accounting stdout preserves exact prefix and actual suffix"
+        },
+        {
+          "id": "B17/source-tail",
+          "reason": "source accounting stdout preserves exact prefix and actual suffix"
+        },
+        {
+          "id": "B17/source-pristine-early",
+          "reason": "source accounting stdout preserves exact prefix and actual suffix"
+        },
+        {
+          "id": "B17/source-fresh-restart",
+          "reason": "source accounting stdout preserves exact prefix and actual suffix"
+        },
+        {
+          "id": "B17/source-proof-stale",
+          "reason": "source accounting stdout preserves exact prefix and actual suffix"
+        },
+        {
+          "id": "B17/source-changed-output",
+          "reason": "source accounting stdout preserves exact prefix and actual suffix"
+        },
+        {
+          "id": "B17/source-changed-ack",
+          "reason": "source accounting stdout preserves exact prefix and actual suffix"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-material-omit-failure-diagnostic",
+      "sourceHash": "247c51a3e8a27b1977e31597db884202a30683d374871ae55626f036d44ee7a9",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "B01/recover-driver.attach.before",
+          "reason": "rejection has explicit failure presence"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-material-discard-reconciliation-receipts",
+      "sourceHash": "7a76aa8ad6f421eef81422181f40e9c38f3ef6b9b9d1e4d4dc7879f42eac673a",
+      "status": "valid",
+      "selected": 2,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "B07/issued-driver.attach.before",
+          "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}"
+        },
+        {
+          "id": "B07/resource-intent-reader",
+          "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-material-skip-barrier-tail",
+      "sourceHash": "ba2ffa00eecd625bc8919897afbafbcb365bdb9e295b5a28c052ed34c60012ef",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "B10/primary",
+          "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\",\"jobId\":\"<opaque>\"}],\"failures\":[]}"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-material-skip-reclamation",
+      "sourceHash": "68b76642d8d0330252d2340632335993f776cf093148aa9a84a7d481d0fe841c",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C18/primary",
+          "reason": "existing aliased adopted root remains protected"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-material-ignore-removal-failure",
+      "sourceHash": "3992f8ac71861984e7d0995e9090983e753a09465656c1236adcfe58d2f8233d",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "E08/primary",
+          "reason": "first removal committed, remaining exact, original failure retained"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-material-delete-retained-evidence",
+      "sourceHash": "b4dc2dba3cf2910b3c9f4c14350adf7bbc90d8d821a5b5d76ee011b978ca03c3",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C17/primary",
+          "reason": "readEvidence must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-material-trust-scratch-handle",
+      "sourceHash": "1828eabf030a6918baa2afe6a125a81dd68b74105c987473a3f4127f6fe7fbdc",
+      "status": "valid",
+      "selected": 2,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C18/root-birth",
+          "reason": "ownScratch must refuse"
+        },
+        {
+          "id": "C18/root-retained",
+          "reason": "ownScratch must refuse"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-restored",
+      "sourceHash": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+      "status": "valid",
+      "selected": 21,
+      "pass": 21,
+      "skip": 0,
+      "material": false,
+      "failed": []
+    },
+    {
+      "name": "truthful-outcome-material-optimistic-reconciliation",
+      "sourceHash": "1f18cdbfb52a64021374a227a29609e24af8fd7b3133896cdb1159c7ec669237",
+      "status": "valid",
+      "selected": 16,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "A01/primary",
+          "reason": "stop must refuse"
+        },
+        {
+          "id": "A01/takeover-before",
+          "reason": "stop must refuse"
+        },
+        {
+          "id": "A01/takeover-after",
+          "reason": "stop must refuse"
+        },
+        {
+          "id": "A04/primary",
+          "reason": "restore must refuse"
+        },
+        {
+          "id": "A04/sequence-unsafe",
+          "reason": "restore must refuse"
+        },
+        {
+          "id": "A07/primary",
+          "reason": "poll must refuse"
+        },
+        {
+          "id": "A07/invalid-stream",
+          "reason": "poll must refuse"
+        },
+        {
+          "id": "A07/invalid-seq",
+          "reason": "poll must refuse"
+        },
+        {
+          "id": "A07/invalid-offset",
+          "reason": "poll must refuse"
+        },
+        {
+          "id": "A07/invalid-digest",
+          "reason": "poll must refuse"
+        },
+        {
+          "id": "A07/invalid-artifactId",
+          "reason": "poll must refuse"
+        },
+        {
+          "id": "A07/invalid-channelId",
+          "reason": "poll must refuse"
+        },
+        {
+          "id": "B06/primary",
+          "reason": "stop must refuse"
+        },
+        {
+          "id": "B17/source-pending-ack-stdout",
+          "reason": "source ACK obligation retains exact state and ID"
+        },
+        {
+          "id": "B17/source-unknown-ack-stderr",
+          "reason": "source ACK obligation retains exact state and ID"
+        },
+        {
+          "id": "B17/source-consumer-unknown",
+          "reason": "stop must refuse"
+        }
+      ]
+    },
+    {
+      "name": "truthful-outcome-restored",
+      "sourceHash": "03c638d224330273e58af80f00698985cd87c3cf732b75619587755dc6ad6987",
+      "status": "valid",
+      "selected": 16,
+      "pass": 16,
+      "skip": 0,
+      "material": false,
+      "failed": []
+    },
+    {
+      "name": "representation-material-omit-evidence-write",
+      "sourceHash": "91527e736debfa8c6b492257816b747bcb915b5bfdafa45f3c924d2a1722863c",
+      "status": "valid",
+      "selected": 3,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C01/primary",
+          "reason": "consume must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance"
+        },
+        {
+          "id": "C09/restore-store.commit.before",
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance"
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance"
+        }
+      ]
+    },
+    {
+      "name": "representation-material-skip-evidence-validation",
+      "sourceHash": "4cde858c83e0cfe91d63663886d0d111dada03aff53fc927ba4f12db424a7a9e",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C03/primary",
+          "reason": "readEvidence must refuse"
+        }
+      ]
+    },
+    {
+      "name": "representation-material-ignore-payload-budget",
+      "sourceHash": "40416798556997f00ce18fe0e2f328de05c59b5190435dd3bab0e856024cfb4e",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C04/primary",
+          "reason": "payload cap with exact logical positions"
+        }
+      ]
+    },
+    {
+      "name": "representation-material-unawaited-evidence-write",
+      "sourceHash": "c111f0d7de372903336f10504c8696ac592cceb9a511a74a8d31ad7af741105c",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C06/primary",
+          "reason": "Observed public behavior and durable consequences.; safety: evidence-before-acceptance"
+        }
+      ]
+    },
+    {
+      "name": "representation-material-delete-retained-evidence",
+      "sourceHash": "5feeba5274eba0736c4cd910761495462291dc9313453fc20a1fb8917eefd704",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C17/primary",
+          "reason": "readEvidence must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}"
+        }
+      ]
+    },
+    {
+      "name": "representation-material-skip-reclamation",
+      "sourceHash": "4e433333239a39e099bc1a48023ce293d39498b537d968afddc346a80cdb8e56",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "C18/primary",
+          "reason": "existing aliased adopted root remains protected"
+        }
+      ]
+    },
+    {
+      "name": "representation-material-ignore-removal-failure",
+      "sourceHash": "cf6390c2ef6c43b6bf80e94c13add4855afa0e44e39e9a4df70a3f2ac6874af5",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "E08/primary",
+          "reason": "first removal committed, remaining exact, original failure retained"
+        }
+      ]
+    },
+    {
+      "name": "representation-restored",
+      "sourceHash": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445",
+      "status": "valid",
+      "selected": 9,
+      "pass": 9,
+      "skip": 0,
+      "material": false,
+      "failed": []
+    },
+    {
+      "name": "forbidden-backend",
+      "sourceHash": "11b47cb1383d0683cb53e23e0021dcd329c6bf2f57ae7bde48a9c431512b2b8c",
+      "selected": 5,
+      "pass": 0,
+      "skip": 0,
+      "forbidden": true
+    },
+    {
+      "name": "forbidden-input",
+      "sourceHash": "d4fd1fa4c4915b340e1ab3c1dadde22f0999d6c486f72c6b9ab97c37557986bd",
+      "selected": 5,
+      "pass": 0,
+      "skip": 0,
+      "forbidden": true
+    },
+    {
+      "name": "forbidden-cleanup-authority",
+      "sourceHash": "8d7d883d0241a12650b2fdb63eb21e6941a28a55bf0654b652cc70c8ae56ae5e",
+      "selected": 3,
+      "pass": 0,
+      "skip": 0,
+      "forbidden": true
+    }
+  ],
+  "traces": [
+    {
+      "name": "P01-zero-prefix-reference-B17-primary",
+      "variantId": "B17/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 331,
+      "promiseJobs": 1499
+    },
+    {
+      "name": "P01-zero-prefix-algorithm-B17-primary",
+      "variantId": "B17/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 321,
+      "promiseJobs": 1997
+    },
+    {
+      "name": "P01-zero-prefix-reference-B17-source-zero",
+      "variantId": "B17/source-zero",
+      "failure": null,
+      "safety": [],
+      "operations": 414,
+      "promiseJobs": 1931
+    },
+    {
+      "name": "P01-zero-prefix-algorithm-B17-source-zero",
+      "variantId": "B17/source-zero",
+      "failure": null,
+      "safety": [],
+      "operations": 385,
+      "promiseJobs": 2433
+    },
+    {
+      "name": "P01-zero-prefix-reference-B17-source-both",
+      "variantId": "B17/source-both",
+      "failure": null,
+      "safety": [],
+      "operations": 426,
+      "promiseJobs": 1968
+    },
+    {
+      "name": "P01-zero-prefix-algorithm-B17-source-both",
+      "variantId": "B17/source-both",
+      "failure": null,
+      "safety": [],
+      "operations": 392,
+      "promiseJobs": 2468
+    },
+    {
+      "name": "P01-zero-prefix-reference-B17-source-pristine-early",
+      "variantId": "B17/source-pristine-early",
+      "failure": null,
+      "safety": [],
+      "operations": 426,
+      "promiseJobs": 1968
+    },
+    {
+      "name": "P01-zero-prefix-algorithm-B17-source-pristine-early",
+      "variantId": "B17/source-pristine-early",
+      "failure": null,
+      "safety": [],
+      "operations": 392,
+      "promiseJobs": 2468
+    },
+    {
+      "name": "P01-zero-prefix-reference-B17-source-tail",
+      "variantId": "B17/source-tail",
+      "failure": null,
+      "safety": [],
+      "operations": 621,
+      "promiseJobs": 2795
+    },
+    {
+      "name": "P01-zero-prefix-algorithm-B17-source-tail",
+      "variantId": "B17/source-tail",
+      "failure": null,
+      "safety": [],
+      "operations": 569,
+      "promiseJobs": 3523
+    },
+    {
+      "name": "P01-zero-prefix-reference-B17-source-fresh-restart",
+      "variantId": "B17/source-fresh-restart",
+      "failure": null,
+      "safety": [],
+      "operations": 542,
+      "promiseJobs": 2451
+    },
+    {
+      "name": "P01-zero-prefix-algorithm-B17-source-fresh-restart",
+      "variantId": "B17/source-fresh-restart",
+      "failure": null,
+      "safety": [],
+      "operations": 470,
+      "promiseJobs": 2912
+    },
+    {
+      "name": "P02-source-freshness-reference-B17-source-changed-ack",
+      "variantId": "B17/source-changed-ack",
+      "failure": null,
+      "safety": [],
+      "operations": 458,
+      "promiseJobs": 2101
+    },
+    {
+      "name": "P02-source-freshness-algorithm-B17-source-changed-ack",
+      "variantId": "B17/source-changed-ack",
+      "failure": null,
+      "safety": [],
+      "operations": 421,
+      "promiseJobs": 2638
+    },
+    {
+      "name": "P02-source-freshness-reference-B17-source-changed-output",
+      "variantId": "B17/source-changed-output",
+      "failure": null,
+      "safety": [],
+      "operations": 553,
+      "promiseJobs": 2506
+    },
+    {
+      "name": "P02-source-freshness-algorithm-B17-source-changed-output",
+      "variantId": "B17/source-changed-output",
+      "failure": null,
+      "safety": [],
+      "operations": 507,
+      "promiseJobs": 3152
+    },
+    {
+      "name": "P02-source-freshness-reference-B17-source-proof-stale",
+      "variantId": "B17/source-proof-stale",
+      "failure": null,
+      "safety": [],
+      "operations": 581,
+      "promiseJobs": 2621
+    },
+    {
+      "name": "P02-source-freshness-algorithm-B17-source-proof-stale",
+      "variantId": "B17/source-proof-stale",
+      "failure": null,
+      "safety": [],
+      "operations": 532,
+      "promiseJobs": 3296
+    },
+    {
+      "name": "P02-source-freshness-reference-B17-source-observation-response-unknown",
+      "variantId": "B17/source-observation-response-unknown",
+      "failure": null,
+      "safety": [],
+      "operations": 488,
+      "promiseJobs": 2247
+    },
+    {
+      "name": "P02-source-freshness-algorithm-B17-source-observation-response-unknown",
+      "variantId": "B17/source-observation-response-unknown",
+      "failure": null,
+      "safety": [],
+      "operations": 418,
+      "promiseJobs": 2632
+    },
+    {
+      "name": "P03-source-obligations-reference-B17-source-pending-ack-stdout",
+      "variantId": "B17/source-pending-ack-stdout",
+      "failure": null,
+      "safety": [],
+      "operations": 611,
+      "promiseJobs": 2786
+    },
+    {
+      "name": "P03-source-obligations-truthful-outcome-B17-source-pending-ack-stdout",
+      "variantId": "B17/source-pending-ack-stdout",
+      "failure": null,
+      "safety": [],
+      "operations": 626,
+      "promiseJobs": 2833
+    },
+    {
+      "name": "P03-source-obligations-reference-B17-source-unknown-ack-stderr",
+      "variantId": "B17/source-unknown-ack-stderr",
+      "failure": null,
+      "safety": [],
+      "operations": 611,
+      "promiseJobs": 2786
+    },
+    {
+      "name": "P03-source-obligations-truthful-outcome-B17-source-unknown-ack-stderr",
+      "variantId": "B17/source-unknown-ack-stderr",
+      "failure": null,
+      "safety": [],
+      "operations": 626,
+      "promiseJobs": 2833
+    },
+    {
+      "name": "P03-source-obligations-reference-B17-source-consumer-unknown",
+      "variantId": "B17/source-consumer-unknown",
+      "failure": null,
+      "safety": [],
+      "operations": 458,
+      "promiseJobs": 2043
+    },
+    {
+      "name": "P03-source-obligations-truthful-outcome-B17-source-consumer-unknown",
+      "variantId": "B17/source-consumer-unknown",
+      "failure": null,
+      "safety": [],
+      "operations": 485,
+      "promiseJobs": 2131
+    },
+    {
+      "name": "P04-setup-attachment-reference-B06-primary",
+      "variantId": "B06/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 206,
+      "promiseJobs": 961
+    },
+    {
+      "name": "P04-setup-attachment-algorithm-B06-primary",
+      "variantId": "B06/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 209,
+      "promiseJobs": 1319
+    },
+    {
+      "name": "P04-setup-attachment-reference-B01-recover-driver.attach.before",
+      "variantId": "B01/recover-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "reusedAcceptedScope": true,
+      "evidence": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json"
+    },
+    {
+      "name": "P04-setup-attachment-algorithm-B01-recover-driver.attach.before",
+      "variantId": "B01/recover-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 381,
+      "promiseJobs": 2410
+    },
+    {
+      "name": "P04-setup-attachment-reference-B06-deadline-driver.attach.before",
+      "variantId": "B06/deadline-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "reusedAcceptedScope": true,
+      "evidence": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json"
+    },
+    {
+      "name": "P04-setup-attachment-algorithm-B06-deadline-driver.attach.before",
+      "variantId": "B06/deadline-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 189,
+      "promiseJobs": 1266
+    },
+    {
+      "name": "P04-setup-attachment-reference-B07-issued-driver.attach.before",
+      "variantId": "B07/issued-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "reusedAcceptedScope": true,
+      "evidence": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json"
+    },
+    {
+      "name": "P04-setup-attachment-algorithm-B07-issued-driver.attach.before",
+      "variantId": "B07/issued-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 363,
+      "promiseJobs": 2277
+    },
+    {
+      "name": "P04-setup-attachment-reference-B07-resource-intent-reader",
+      "variantId": "B07/resource-intent-reader",
+      "failure": null,
+      "safety": [],
+      "reusedAcceptedScope": true,
+      "evidence": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json"
+    },
+    {
+      "name": "P04-setup-attachment-algorithm-B07-resource-intent-reader",
+      "variantId": "B07/resource-intent-reader",
+      "failure": null,
+      "safety": [],
+      "operations": 363,
+      "promiseJobs": 2277
+    },
+    {
+      "name": "P04-setup-attachment-reference-B10-primary",
+      "variantId": "B10/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 505,
+      "promiseJobs": 2318
+    },
+    {
+      "name": "P04-setup-attachment-algorithm-B10-primary",
+      "variantId": "B10/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 467,
+      "promiseJobs": 2921
+    },
+    {
+      "name": "P05-frame-category-reference-A04-primary",
+      "variantId": "A04/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 364,
+      "promiseJobs": 1638
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A04-primary",
+      "variantId": "A04/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 370,
+      "promiseJobs": 1650
+    },
+    {
+      "name": "P05-frame-category-reference-A04-sequence-unsafe",
+      "variantId": "A04/sequence-unsafe",
+      "failure": null,
+      "safety": [],
+      "operations": 297,
+      "promiseJobs": 1340
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A04-sequence-unsafe",
+      "variantId": "A04/sequence-unsafe",
+      "failure": null,
+      "safety": [],
+      "operations": 302,
+      "promiseJobs": 1350
+    },
+    {
+      "name": "P05-frame-category-reference-A07-primary",
+      "variantId": "A07/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 302,
+      "promiseJobs": 1376
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A07-primary",
+      "variantId": "A07/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 308,
+      "promiseJobs": 1388
+    },
+    {
+      "name": "P05-frame-category-reference-A07-invalid-stream",
+      "variantId": "A07/invalid-stream",
+      "failure": null,
+      "safety": [],
+      "reusedAcceptedScope": true,
+      "evidence": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json"
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A07-invalid-stream",
+      "variantId": "A07/invalid-stream",
+      "failure": null,
+      "safety": [],
+      "operations": 219,
+      "promiseJobs": 1018
+    },
+    {
+      "name": "P05-frame-category-reference-A07-invalid-digest",
+      "variantId": "A07/invalid-digest",
+      "failure": null,
+      "safety": [],
+      "reusedAcceptedScope": true,
+      "evidence": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json"
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A07-invalid-digest",
+      "variantId": "A07/invalid-digest",
+      "failure": null,
+      "safety": [],
+      "operations": 220,
+      "promiseJobs": 1020
+    },
+    {
+      "name": "P05-frame-category-reference-A07-invalid-artifactId",
+      "variantId": "A07/invalid-artifactId",
+      "failure": null,
+      "safety": [],
+      "reusedAcceptedScope": true,
+      "evidence": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json"
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A07-invalid-artifactId",
+      "variantId": "A07/invalid-artifactId",
+      "failure": null,
+      "safety": [],
+      "operations": 219,
+      "promiseJobs": 1018
+    },
+    {
+      "name": "P05-frame-category-reference-A07-invalid-channelId",
+      "variantId": "A07/invalid-channelId",
+      "failure": null,
+      "safety": [],
+      "reusedAcceptedScope": true,
+      "evidence": "benchmarks/recoverable-job-service/private/calibration/correction-source-freeze.json"
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A07-invalid-channelId",
+      "variantId": "A07/invalid-channelId",
+      "failure": null,
+      "safety": [],
+      "operations": 219,
+      "promiseJobs": 1018
+    },
+    {
+      "name": "P05-frame-category-reference-A07-invalid-seq",
+      "variantId": "A07/invalid-seq",
+      "failure": null,
+      "safety": [],
+      "operations": 219,
+      "promiseJobs": 1021
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A07-invalid-seq",
+      "variantId": "A07/invalid-seq",
+      "failure": null,
+      "safety": [],
+      "operations": 222,
+      "promiseJobs": 1027
+    },
+    {
+      "name": "P05-frame-category-reference-A07-invalid-offset",
+      "variantId": "A07/invalid-offset",
+      "failure": null,
+      "safety": [],
+      "operations": 219,
+      "promiseJobs": 1021
+    },
+    {
+      "name": "P05-frame-category-truthful-outcome-A07-invalid-offset",
+      "variantId": "A07/invalid-offset",
+      "failure": null,
+      "safety": [],
+      "operations": 222,
+      "promiseJobs": 1027
+    },
+    {
+      "name": "P06-authority-deadline-reference-A01-primary",
+      "variantId": "A01/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 480,
+      "promiseJobs": 2205
+    },
+    {
+      "name": "P06-authority-deadline-truthful-outcome-A01-primary",
+      "variantId": "A01/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 484,
+      "promiseJobs": 2213
+    },
+    {
+      "name": "P06-authority-deadline-reference-A01-takeover-before",
+      "variantId": "A01/takeover-before",
+      "failure": null,
+      "safety": [],
+      "operations": 480,
+      "promiseJobs": 2205
+    },
+    {
+      "name": "P06-authority-deadline-truthful-outcome-A01-takeover-before",
+      "variantId": "A01/takeover-before",
+      "failure": null,
+      "safety": [],
+      "operations": 484,
+      "promiseJobs": 2213
+    },
+    {
+      "name": "P06-authority-deadline-reference-A01-takeover-after",
+      "variantId": "A01/takeover-after",
+      "failure": null,
+      "safety": [],
+      "operations": 459,
+      "promiseJobs": 2108
+    },
+    {
+      "name": "P06-authority-deadline-truthful-outcome-A01-takeover-after",
+      "variantId": "A01/takeover-after",
+      "failure": null,
+      "safety": [],
+      "operations": 463,
+      "promiseJobs": 2116
+    },
+    {
+      "name": "P06-authority-deadline-reference-B06-primary",
+      "variantId": "B06/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 208,
+      "promiseJobs": 969
+    },
+    {
+      "name": "P06-authority-deadline-truthful-outcome-B06-primary",
+      "variantId": "B06/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 211,
+      "promiseJobs": 975
+    },
+    {
+      "name": "P08-reclamation-reference-C18-primary",
+      "variantId": "C18/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 493,
+      "promiseJobs": 2257
+    },
+    {
+      "name": "P08-reclamation-algorithm-C18-primary",
+      "variantId": "C18/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 473,
+      "promiseJobs": 2981
+    },
+    {
+      "name": "P08-reclamation-reference-E08-primary",
+      "variantId": "E08/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 560,
+      "promiseJobs": 2544
+    },
+    {
+      "name": "P08-reclamation-algorithm-E08-primary",
+      "variantId": "E08/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 549,
+      "promiseJobs": 3464
+    },
+    {
+      "name": "P08-reclamation-reference-C17-primary",
+      "variantId": "C17/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 545,
+      "promiseJobs": 2493
+    },
+    {
+      "name": "P08-reclamation-algorithm-C17-primary",
+      "variantId": "C17/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 510,
+      "promiseJobs": 3200
+    },
+    {
+      "name": "P08-reclamation-reference-C18-root-birth",
+      "variantId": "C18/root-birth",
+      "failure": null,
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1005
+    },
+    {
+      "name": "P08-reclamation-algorithm-C18-root-birth",
+      "variantId": "C18/root-birth",
+      "failure": null,
+      "safety": [],
+      "operations": 219,
+      "promiseJobs": 1379
+    },
+    {
+      "name": "P08-reclamation-reference-C18-root-retained",
+      "variantId": "C18/root-retained",
+      "failure": null,
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1005
+    },
+    {
+      "name": "P08-reclamation-algorithm-C18-root-retained",
+      "variantId": "C18/root-retained",
+      "failure": null,
+      "safety": [],
+      "operations": 219,
+      "promiseJobs": 1379
+    },
+    {
+      "name": "forbidden-backend-A04-primary",
+      "variantId": "A04/primary",
+      "failure": "restore categorical blocker",
+      "safety": [],
+      "operations": 297,
+      "promiseJobs": 1347
+    },
+    {
+      "name": "forbidden-backend-A07-invalid-stream",
+      "variantId": "A07/invalid-stream",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "forbidden-backend-A07-invalid-digest",
+      "variantId": "A07/invalid-digest",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 217,
+      "promiseJobs": 1018
+    },
+    {
+      "name": "forbidden-backend-A07-invalid-artifactId",
+      "variantId": "A07/invalid-artifactId",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "forbidden-backend-A07-invalid-channelId",
+      "variantId": "A07/invalid-channelId",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "forbidden-input-A04-primary",
+      "variantId": "A04/primary",
+      "failure": "restore categorical blocker",
+      "safety": [],
+      "operations": 297,
+      "promiseJobs": 1347
+    },
+    {
+      "name": "forbidden-input-A07-invalid-stream",
+      "variantId": "A07/invalid-stream",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "forbidden-input-A07-invalid-digest",
+      "variantId": "A07/invalid-digest",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 217,
+      "promiseJobs": 1018
+    },
+    {
+      "name": "forbidden-input-A07-invalid-artifactId",
+      "variantId": "A07/invalid-artifactId",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "forbidden-input-A07-invalid-channelId",
+      "variantId": "A07/invalid-channelId",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "forbidden-cleanup-authority-A01-primary",
+      "variantId": "A01/primary",
+      "failure": "stop categorical blocker",
+      "safety": [],
+      "operations": 284,
+      "promiseJobs": 1311
+    },
+    {
+      "name": "forbidden-cleanup-authority-A01-takeover-before",
+      "variantId": "A01/takeover-before",
+      "failure": "stop categorical blocker",
+      "safety": [],
+      "operations": 284,
+      "promiseJobs": 1311
+    },
+    {
+      "name": "forbidden-cleanup-authority-A01-takeover-after",
+      "variantId": "A01/takeover-after",
+      "failure": "stop categorical blocker",
+      "safety": [],
+      "operations": 284,
+      "promiseJobs": 1311
+    }
+  ],
+  "checks": [
+    {
+      "label": "algorithm-material-optimistic-reconciliation: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-optimistic-reconciliation: B06/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-optimistic-reconciliation: B06/deadline-driver.attach.before intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-optimistic-reconciliation: B17/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-optimistic-reconciliation: B17/source-observation-response-unknown intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: B17/source-zero intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: B17/source-both intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: B17/source-tail intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: B17/source-pristine-early intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: B17/source-fresh-restart intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: B17/source-proof-stale intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: B17/source-changed-output intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-misreport-source-prefix: B17/source-changed-ack intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-omit-failure-diagnostic: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-omit-failure-diagnostic: B01/recover-driver.attach.before intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-discard-reconciliation-receipts: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-discard-reconciliation-receipts: B07/issued-driver.attach.before intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-discard-reconciliation-receipts: B07/resource-intent-reader intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-skip-barrier-tail: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-skip-barrier-tail: B10/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-skip-reclamation: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-skip-reclamation: C18/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-ignore-removal-failure: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-ignore-removal-failure: E08/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-delete-retained-evidence: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-delete-retained-evidence: C17/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-trust-scratch-handle: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-trust-scratch-handle: C18/root-birth intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-trust-scratch-handle: C18/root-retained intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B01/recover-driver.attach.before positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B06/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B06/deadline-driver.attach.before positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B07/issued-driver.attach.before positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B07/resource-intent-reader positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B10/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-zero positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-both positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-tail positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-pristine-early positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-fresh-restart positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-observation-response-unknown positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-proof-stale positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-changed-output positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B17/source-changed-ack positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: C17/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: C18/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: C18/root-birth positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: C18/root-retained positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: E08/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A01/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A01/takeover-before intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A01/takeover-after intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A04/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A04/sequence-unsafe intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A07/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A07/invalid-stream intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A07/invalid-seq intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A07/invalid-offset intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A07/invalid-digest intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A07/invalid-artifactId intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: A07/invalid-channelId intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: B06/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: B17/source-pending-ack-stdout intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: B17/source-unknown-ack-stderr intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-material-optimistic-reconciliation: B17/source-consumer-unknown intended material failure",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A01/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A01/takeover-before positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A01/takeover-after positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A04/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A04/sequence-unsafe positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A07/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A07/invalid-stream positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A07/invalid-seq positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A07/invalid-offset positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A07/invalid-digest positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A07/invalid-artifactId positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: A07/invalid-channelId positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: B06/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: B17/source-pending-ack-stdout positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: B17/source-unknown-ack-stderr positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "truthful-outcome-restored: B17/source-consumer-unknown positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-material-omit-evidence-write: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "representation-material-omit-evidence-write: C01/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-material-omit-evidence-write: C09/restore-store.commit.before intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-material-omit-evidence-write: C09/restore-store.commit.after intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-material-skip-evidence-validation: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "representation-material-skip-evidence-validation: C03/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-material-ignore-payload-budget: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "representation-material-ignore-payload-budget: C04/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-material-unawaited-evidence-write: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "representation-material-unawaited-evidence-write: C06/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-material-delete-retained-evidence: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "representation-material-delete-retained-evidence: C17/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-material-skip-reclamation: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "representation-material-skip-reclamation: C18/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-material-ignore-removal-failure: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "representation-material-ignore-removal-failure: E08/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: C01/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: C03/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: C04/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: C06/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: C09/restore-store.commit.before positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: C09/restore-store.commit.after positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: C17/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: C18/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "representation-restored: E08/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-zero: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-zero: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-zero: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-zero: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-both: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-both: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-both: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-both: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-pristine-early: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-pristine-early: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-pristine-early: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-pristine-early: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-tail: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-tail: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-tail: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-tail: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-fresh-restart: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-reference-B17-source-fresh-restart: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-fresh-restart: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P01-zero-prefix-algorithm-B17-source-fresh-restart: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-reference-B17-source-changed-ack: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-reference-B17-source-changed-ack: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-algorithm-B17-source-changed-ack: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-algorithm-B17-source-changed-ack: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-reference-B17-source-changed-output: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-reference-B17-source-changed-output: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-algorithm-B17-source-changed-output: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-algorithm-B17-source-changed-output: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-reference-B17-source-proof-stale: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-reference-B17-source-proof-stale: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-algorithm-B17-source-proof-stale: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-algorithm-B17-source-proof-stale: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-reference-B17-source-observation-response-unknown: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-reference-B17-source-observation-response-unknown: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-algorithm-B17-source-observation-response-unknown: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P02-source-freshness-algorithm-B17-source-observation-response-unknown: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-reference-B17-source-pending-ack-stdout: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-reference-B17-source-pending-ack-stdout: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-truthful-outcome-B17-source-pending-ack-stdout: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-truthful-outcome-B17-source-pending-ack-stdout: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-reference-B17-source-unknown-ack-stderr: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-reference-B17-source-unknown-ack-stderr: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-truthful-outcome-B17-source-unknown-ack-stderr: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-truthful-outcome-B17-source-unknown-ack-stderr: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-reference-B17-source-consumer-unknown: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-reference-B17-source-consumer-unknown: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-truthful-outcome-B17-source-consumer-unknown: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P03-source-obligations-truthful-outcome-B17-source-consumer-unknown: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-reference-B06-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-reference-B06-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B06-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B06-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B01-recover-driver.attach.before: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B01-recover-driver.attach.before: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B06-deadline-driver.attach.before: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B06-deadline-driver.attach.before: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B07-issued-driver.attach.before: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B07-issued-driver.attach.before: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B07-resource-intent-reader: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B07-resource-intent-reader: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-reference-B10-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-reference-B10-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B10-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P04-setup-attachment-algorithm-B10-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A04-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A04-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A04-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A04-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A04-sequence-unsafe: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A04-sequence-unsafe: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A04-sequence-unsafe: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A04-sequence-unsafe: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A07-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A07-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-stream: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-stream: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-digest: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-digest: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-artifactId: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-artifactId: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-channelId: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-channelId: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A07-invalid-seq: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A07-invalid-seq: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-seq: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-seq: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A07-invalid-offset: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-reference-A07-invalid-offset: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-offset: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P05-frame-category-truthful-outcome-A07-invalid-offset: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-reference-A01-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-reference-A01-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-truthful-outcome-A01-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-truthful-outcome-A01-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-reference-A01-takeover-before: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-reference-A01-takeover-before: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-truthful-outcome-A01-takeover-before: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-truthful-outcome-A01-takeover-before: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-reference-A01-takeover-after: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-reference-A01-takeover-after: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-truthful-outcome-A01-takeover-after: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-truthful-outcome-A01-takeover-after: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-reference-B06-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-reference-B06-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-truthful-outcome-B06-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P06-authority-deadline-truthful-outcome-B06-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-C18-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-C18-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-C18-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-C18-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-E08-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-E08-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-E08-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-E08-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-C17-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-C17-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-C17-primary: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-C17-primary: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-C18-root-birth: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-C18-root-birth: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-C18-root-birth: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-C18-root-birth: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-C18-root-retained: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-reference-C18-root-retained: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-C18-root-retained: actual predicate and supplemental public facts",
+      "passed": true
+    },
+    {
+      "label": "P08-reclamation-algorithm-C18-root-retained: all guest/call resources disposed",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend: actual complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend: A04/primary exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend: A07/invalid-stream exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend: A07/invalid-digest exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend: A07/invalid-artifactId exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend: A07/invalid-channelId exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend-A04-primary: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend-A07-invalid-stream: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend-A07-invalid-digest: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend-A07-invalid-artifactId: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-backend-A07-invalid-channelId: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input: actual complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input: A04/primary exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input: A07/invalid-stream exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input: A07/invalid-digest exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input: A07/invalid-artifactId exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input: A07/invalid-channelId exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input-A04-primary: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input-A07-invalid-stream: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input-A07-invalid-digest: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input-A07-invalid-artifactId: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-input-A07-invalid-channelId: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-cleanup-authority: actual complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "forbidden-cleanup-authority: A01/primary exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-cleanup-authority: A01/takeover-before exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-cleanup-authority: A01/takeover-after exact intended categorical rejection",
+      "passed": true
+    },
+    {
+      "label": "forbidden-cleanup-authority-A01-primary: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-cleanup-authority-A01-takeover-before: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    },
+    {
+      "label": "forbidden-cleanup-authority-A01-takeover-after: real forbidden category, safe cleanup and disposed guests",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

@@ -85,6 +85,11 @@ const readinessHtml = renderToStaticMarkup(
   })
 );
 assert.match(readinessHtml, /suite identity does not match/i);
+assert.match(readinessHtml, /href="\/aiboard-rjs-workbench-runner\.zip"/);
+assert.match(readinessHtml, /download="aiboard-rjs-workbench-runner\.zip"/);
+assert.match(readinessHtml, /Download Recoverable Job Service runner/);
+assert.match(readinessHtml, /Node\.js 24\.18\.0/);
+assert.match(readinessHtml, /npm ci/);
 
 const uncheckedReadinessHtml = renderToStaticMarkup(
   createElement(WorkBenchRunnerStatus, {

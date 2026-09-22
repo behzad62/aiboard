@@ -43,8 +43,8 @@
         "unknown client delivery with its durable exact ID",
         "truthful aggregate recovery views when every remaining job has an unresolved source/client obligation"
       ],
-      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf",
-      "bytes": 56230,
+      "sha256": "03c638d224330273e58af80f00698985cd87c3cf732b75619587755dc6ad6987",
+      "bytes": 56419,
       "path": "benchmarks\\recoverable-job-service\\private\\calibration\\complete-controls\\truthful-outcome.js"
     }
   ],
