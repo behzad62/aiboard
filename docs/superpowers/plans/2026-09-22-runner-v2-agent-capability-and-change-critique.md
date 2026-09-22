@@ -1,6 +1,6 @@
 # Runner V2 — Agent capability model (execution plan)
 
-**Revision 6.** The filename is kept for reference stability; change critique and coverage
+**Revision 7.** The filename is kept for reference stability; change critique and coverage
 review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this plan.
 **Execution has not started.** Verdict in §11.
 
@@ -10,14 +10,14 @@ review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this p
 
 | | |
 |---|---|
-| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 2 |
+| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 3 |
 | Moved scope | D4, D5, D7 → `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md` |
 | Base revision | `6c166f97` on `main` |
 | PLAN_DIR | this file + `.superpowers/sdd/2026-09-22-runner-v2-agent-capability/` |
 | PROJECT_RULES | `CLAUDE.md`, `AGENTS.md`, the Runner V2 Task 12 mandate |
 | MAX_WORKERS | 4 permitted; **this plan derives 2** — see §5 |
-| REPAIR_BUDGET | 3 evidence-backed cycles per tracked blocking issue; ESC-1 carries one owner-granted extra cycle |
-| Planning history | four independent reviews of revisions 1–5: `evidence/plan-review-r1.md` … `-r4.md` |
+| REPAIR_BUDGET | 3 evidence-backed cycles per tracked blocking issue; ESC-1 granted one extra cycle (used by revision 6); **ESC-3 grants one final cycle each to B-1 `abort` and to A5** (used by revision 7) |
+| Planning history | five independent reviews of revisions 1–6: `evidence/plan-review-r1.md` … `-r5.md` |
 
 ### 0.1 Host capabilities — observed
 
@@ -64,6 +64,7 @@ chained scripts PASS; both typechecks exit 0; `npm run build` exit 0, 20/20 rout
 | AC-10 | The Architect admits only mapper-`readOnly` MCP tools, as an asserted class | D3 | A | A2 | stub server: `readOnlyHint` alone refused; `readOnlyHint && !destructiveHint` admitted; verifier and critic remain MCP-free | PLANNED |
 | AC-17 | An Architect document write lands as a kernel-applied `architect_document` task with Architect attribution in git, absent from accepted change sessions | D6 | A | A5 | the integration branch contains the file in a commit carrying the Architect trailer; `acceptedChangeSessions` does not list it; zero model calls to apply it | PLANNED |
 | AC-18 | Pre-change runs keep current semantics and replay | compat | A→D | A0 records, D1g compares | fixture captured before the first source packet, replayed at D1g to an identical projection | PLANNED |
+| AC-24 | Verifier and plan-critic selection prefer a distinct model, else fall back to a fresh session with an empty event list; recorded as `distinct_model` / `fresh_context` and shown; pause only when no eligible candidate exists | D8 | R | R1 | router tests for both outcomes and for zero candidates; a sentinel string placed in the Architect and worker sessions is absent from the fallback reviewer's first provider request; the recorded field round-trips and legacy events replay as `distinct_model`; UI label test | PLANNED |
 
 ### 1.1 Reverse traceability
 
@@ -79,6 +80,7 @@ chained scripts PASS; both typechecks exit 0; `npm run build` exit 0, 20/20 rout
 | A5 | AC-17 |
 | B1 | AC-1 |
 | B2 | AC-2, AC-3, AC-4 |
+| R1 | AC-24 |
 | D1g | AC-18 (compare), program gate |
 
 Every packet supports an obligation; every obligation has an owning packet. AC-11..AC-16 and
@@ -94,6 +96,9 @@ AC-19..AC-23 are owned by P6.6 (EP33–EP38), not dropped.
 (capture). **No packet writes a source file before A0 integrates.**
 
 **Phase B — manifest recording resolution.** B1, B2. AC-1..AC-4. Entry: A0 integrated.
+
+**Phase R — reviewer independence.** R1. AC-24. Entry: A3 and A5 accepted (R1 writes files
+both lanes held earlier).
 
 **Phase D — program gate.** D1g.
 
@@ -222,24 +227,69 @@ allow-list with a `runner-v2/src` denylist → the `lib/` refusal test reddens.
 | | |
 |---|---|
 | Requirements | AC-17 |
-| Writable | `task-contracts.ts` (`BuildTaskKind`), `task-graph.ts`, `acceptance-contracts.ts`, `scheduler-store.ts`, `task-scheduler.ts`, `build-runtime.ts`, `workspace-manager.ts` (Architect commit trailer), their tests |
+| Writable | `task-contracts.ts` (`BuildTaskKind`), `task-graph.ts`, `acceptance-contracts.ts`, `scheduler-store.ts`, `task-scheduler.ts`, `build-runtime.ts`, `workspace-manager.ts` (document write + Architect commit trailer), **`native-build-factory.ts`** (the document applier), their tests |
+| Forbidden | `integration-manager.ts`, `change-set.ts`, the existing `integrationDriver` in `native-build-factory.ts:1075-1093`, `acceptedChangeSessions` (`:2725-2743`), the session store and `worker-runtime.ts` |
 | Depends on | A4 |
 
-**Named mechanism.** `architect_document.requested` creates a task of kind
-`architect_document`. The scheduler routes that kind to a **runner-applied** path, not a worker
-driver: `WorkspaceManager.createTaskWorkspace(taskId)`, write the file, `commitTask` with an
-Architect trailer, `createChangeSet` with the content hash as its evidence hash, then
-`IntegrationManager.integrate` (`integration-manager.ts:474`).
+**Why this shape (fifth review).** `BuildRuntime` integrates through `integrationDriver`, which
+loads a **worker** session and rejects a change set it cannot find there. A document task has no
+worker session, and creating one would list it in `acceptedChangeSessions`, which ESC-2
+forbids. So the document path gets its **own** port, and the worker driver is not touched.
 
-**Must also hold:** the task carries no acceptance criteria and is exempt from the
-acceptance-contract upgrade requirement; it counts toward completion readiness only as a
-terminal `integrated` task; it makes **zero** model calls; and it does not appear in
-`acceptedChangeSessions`, because it has no worker session — consistent with ESC-2 and with no
-change to that filter.
+**Named mechanism.**
 
-**Budget.** AC-17 was changed by owner decision ESC-2. This is a new mechanism under a changed
-requirement, reviewed once; if review finds it unsound it escalates again rather than
-consuming a fresh budget.
+1. **New port.** `BuildRuntimeOptions.documentApplier: ArchitectDocumentApplier` with one method,
+   `apply({ taskId, path, content, summary })`, returning either
+   `{ status: "integrated", integrationRevision, commit, changeSetId }` or
+   `{ status: "conflict", integrationRevision, conflictPaths }`.
+2. **Factory implementation** in `native-build-factory.ts`, closed over the `WorkspaceManager`
+   and `IntegrationManager` it already constructs (`:607` and the driver above), in order:
+   - `workspaceManager.createTaskWorkspace(taskId, { workspaceId: "<taskId>:document",
+     baselineRevision: integrationManager.revision })`;
+   - `workspaceManager.writeDocument(taskId, path, content)` — new; re-validates that the path is
+     inside the workspace and on the I2 allow-list;
+   - `workspaceManager.commitTask(taskId, summary, { author: "architect" })` — new option:
+     author `AIBoard Architect` and trailer `AIBoard-Author: architect`, beside the existing
+     `AIBoard-Run` / `AIBoard-Task` trailers;
+   - `artifacts.put(content)` for the evidence hash;
+   - `createChangeSet({ workspacePath, taskCommit, artifacts, evidenceArtifactHashes: [hash],
+     taskId })` with **no** acceptance criteria (`change-set.ts:63-100` needs none);
+   - `integrationManager.integrate(changeSet)` with the **change-set object**.
+3. **Scheduler routing.** `architect_document.requested` (A4) creates a `planned` task of kind
+   `architect_document`. `stepOnce` applies each such task **before** `scheduler.tick()`
+   (`build-runtime.ts:837`) and appends one runner-actor event: `architect_document.applied`
+   (commit, change-set id, integration revision) or `architect_document.conflicted` (paths).
+   The reducer allows `planned → integrated` **only** for this kind and only through that event;
+   every other kind keeps `task-graph.ts:11-24` unchanged. `tick` skips the kind, the way it
+   skips `isFinalVerificationTask`.
+4. **Exemptions, in the files A5 owns.** `acceptanceContractStatusForTasks`
+   (`scheduler-store.ts:5414-5441`) and `validateTaskGraph` (`task-graph.ts:118-130`) both skip
+   the kind; `buildCompletionReadiness` counts it only once `integrated`; a `conflicted`
+   document task is terminal-failed and is reported to the Architect, which may request again.
+5. **Restart safety.** Before applying, the applier checks the integration branch for a commit
+   carrying both `AIBoard-Task: <taskId>` and `AIBoard-Author: architect`; if one exists it
+   returns that result without integrating again. A crash between integrate and the event
+   therefore records `applied` exactly once.
+6. **Filesystem routing.** `writeDocument` extends an existing `node:fs` importer. If
+   `filesystem-mutation-routing.test.ts` reddens, report it and stop; that file is the
+   controller's.
+
+**Acceptance.** Per AC-17, plus:
+- the integration branch has exactly one commit for the task, with both trailers;
+- `acceptedChangeSessions` returns the same list with and without the document task;
+- a provider stub records **zero** model calls during application;
+- a criteria-less document task beside criteria-bearing siblings passes `validateTaskGraph` and
+  leaves `acceptanceContractStatusForTasks` unchanged;
+- completion readiness waits for `applied`;
+- a conflict fixture yields `conflicted` and no integration;
+- the restart test in step 5;
+- the worker integration driver's existing tests pass unchanged.
+
+Prove-red: route the kind through `tick` → a worker dispatch is attempted and the zero-dispatch
+test reddens; drop the trailer check → the restart test finds two commits.
+
+**Budget.** ESC-3 granted this one final cycle. If review finds it unsound, it escalates to the
+owner again.
 
 ### B1 — Retry, typed error and recording suspension
 
@@ -262,7 +312,8 @@ suspension check — each reddens.
 | | |
 |---|---|
 | Requirements | AC-2, AC-3, AC-4 |
-| Writable | `build-runtime.ts`, `task-scheduler.ts`, `architect-tools.ts`, `user-steering-contracts.ts`, `scheduler-store.ts`, `native-build-manager.ts` (the abort path), `lib/client/runner-v2.ts`, `components/RunnerV2ObservabilityPanel.tsx`, their tests and the two UI scripts |
+| Writable | `build-runtime.ts`, `task-scheduler.ts`, `architect-tools.ts`, `user-steering-contracts.ts`, `scheduler-store.ts`, `native-build-manager.ts` (the lifecycle hook), **`cli.ts`** (installing that hook, and the pump sync), `lib/client/runner-v2.ts`, `components/RunnerV2ObservabilityPanel.tsx`, their tests and the two UI scripts |
+| Forbidden | `run-supervisor.ts`, `reducer.ts`, `control-server.ts` |
 | Depends on | B1 |
 
 **Worker path.** In the scheduler's catch, on `ContextManifestRecordingError` only: append the
@@ -281,16 +332,74 @@ note and pauses the run through the existing pause mechanism.
   **every runtime construction**, re-derive suspension from the durable waiver **before the
   first dispatch**, so a crash between the waiver and the next dispatch cannot redispatch into
   the same failure.
-- `abort`: `RunSupervisor.fail(runId, key, "context_recording_aborted")`
-  (`run-supervisor.ts:117`). The run is terminal and nothing redispatches.
+- `abort` — two steps, scheduler first (SOURCE D1 constraint 4). The fifth review showed the
+  live `RunSupervisor` exists only in `cli.ts`, so a call from B2's other files cannot reach it.
+  1. **Scheduler terminal.** The durable abort resolution sets the scheduler projection's
+     `status` to `"failed"` with `failureReason: "context_recording_aborted"`. The type already
+     allows `"failed"` (`scheduler-store.ts:474`); nothing sets it today. The reducer refuses
+     `run.resumed` and every dispatch or task-transition event on a failed run.
+     `BuildStepResult.status` (`build-runtime.ts:208-211`) gains `"failed"`, and `stepOnce`
+     returns `{ status: "failed", action: "context_recording_aborted" }` for a failed
+     projection, beside the existing `completed` / `paused` checks and **before**
+     `scheduler.tick()`.
+  2. **Supervisor terminal.** `NativeBuildManagerOptions` gains `onBuildFailed?(runId, reason)`.
+     The manager calls it (a) right after appending the abort resolution, and (b) during
+     recovery, for a recovered spec whose scheduler projection is `failed`, **before**
+     activation. `cli.ts` installs it next to `onPumpResult` (`cli.ts:190-196`) as a guarded
+     `supervisor.fail(runId, "build-failed:<lastSequence>", reason)` that returns without
+     acting when the supervisor state is already terminal. `syncAutonomousBuildLifecycle`
+     (`cli.ts:300-322`) adds the same guarded call for a pump result with status `failed`.
+     `running → failed` and `paused → failed` are both legal supervisor transitions
+     (`reducer.ts:15-26`).
 
-Tests per AC-2..AC-4, including the three restart tests.
+Tests per AC-2..AC-4, including the three restart tests. The post-abort restart test covers the
+crash window explicitly: append the abort resolution, do **not** call the hook, restart →
+recovery calls `onBuildFailed`, the supervisor run is `failed`, and a stub driver records zero
+dispatches. Also: a user `resume` after abort is refused, and `shouldRecoverSpec` returns false
+on the next start. Prove-red: remove the `stepOnce` failed check → the restart test dispatches;
+remove the recovery call → the supervisor stays `paused`.
+
+### R1 — Reviewer independence: distinct model preferred, fresh context fallback
+
+| | |
+|---|---|
+| Requirements | AC-24 |
+| Writable | `runtime-router.ts`, `native-verifier-runtime.ts`, `native-plan-critic-runtime.ts`, `verifier-verdict-authority.ts`, `plan-critique-authority.ts`, `scheduler-store.ts` (the two events' `independence` field), `lib/client/runner-v2.ts`, `components/RunnerV2ObservabilityPanel.tsx`, their tests and the UI scripts |
+| Forbidden | `build-spec.ts` (verifier runtime configuration is unchanged); `build-runtime.ts` (the zero-candidate pause at `:1266` and `:1724` is unchanged) |
+| Depends on | A3, A5 |
+
+1. **Router.** `selectVerifier` keeps today's first choice. When it finds no distinct-model
+   candidate, it chooses the first eligible allowed candidate that is not in
+   `excludedRuntimeIds`, ignoring model identity. The result gains
+   `independence: "distinct_model" | "fresh_context"`. `unavailable` is returned only when no
+   eligible allowed candidate exists.
+2. **Fresh context.** Both runtimes already create a new session (`native-verifier-runtime.ts:411`,
+   `:682`; `native-plan-critic-runtime.ts:239`). Assert it: the session's event list is empty
+   before the first provider request, and that request is built only from the role's own
+   request pack. A `fresh_context` reviewer never resumes or reuses another session.
+3. **Record.** `verifier.review_requested` (`verifier-verdict-authority.ts:73`) and
+   `plan_critique.requested` (`plan-critique-authority.ts:54`) carry `independence`. The reducer
+   accepts only the two values; a missing field replays as `distinct_model`.
+4. **Show.** The observability panel labels a fresh-context review "same model, fresh context".
+
+**Acceptance.**
+- Router: a distinct candidate available → `distinct_model`; only the Architect's model
+  available → `fresh_context`; only a provider-error-excluded runtime → `unavailable`.
+- Fresh context: a sentinel string written into the Architect session and a worker session is
+  absent from the fallback reviewer's first provider request, for both roles.
+- Record: round-trip, rejection of an unknown value, legacy replay.
+- UI: the label renders.
+- `alwaysRequireIndependentVerifier` keeps its meaning (a verifier is required at high risk); it
+  does not require a distinct model.
+
+Prove-red: restore the old `unavailable` return → the single-model test reddens; reuse the
+Architect's session → the sentinel test reddens.
 
 ---
 
 ### D1g — Compatibility and program gate
 
-Depends on **A5** — the only leaf; every packet has a path to it. Independent source-to-delivery
+Depends on **R1** — the only leaf; every packet has a path to it. Independent source-to-delivery
 reconciliation, then AC-18 replay of the A0 fixture, then the full suite, then the publication
 commit.
 
@@ -306,11 +415,13 @@ A1 → A2 → A3
 A1 → A1b       B1 → B2 → A1b
 I2 → A4        A3 → A4        A1b → A4
 A4 → A5
-A5 → D1g
+A3 → R1        A5 → R1
+R1 → D1g
 ```
 
-Acyclic. **Longest path 7**, two of them:
-`A0 → A1 → A2 → A3 → A4 → A5 → D1g` and `A0 → B1 → B2 → A1b → A4 → A5 → D1g`.
+Acyclic. **Longest path 8**, two of them:
+`A0 → A1 → A2 → A3 → A4 → A5 → R1 → D1g` and `A0 → B1 → B2 → A1b → A4 → A5 → R1 → D1g`.
+`A3 → R1` is also implied through A4 and A5; it is listed because R1 writes A3's files.
 
 ---
 
@@ -321,10 +432,11 @@ Acyclic. **Longest path 7**, two of them:
 | Lane | Packets | Notes |
 |---|---|---|
 | **Lane A** | I2, A1, A2, A3 | runtimes, `role-capabilities.ts`, `agent-prompts.ts`, `native-build-factory.ts` |
-| **Lane B** | A0, B1, B2, A1b, A4, A5 | recording, scheduler, dispatcher, Architect tools, the new task kind |
+| **Lane B** | A0, B1, B2, A1b, A4, A5, R1 | recording, scheduler, dispatcher, Architect tools, the new task kind, reviewer independence |
 
 Two lanes, not four: after A3 and B2 both lanes converge on the same files, so a third or fourth
-lane would be false parallelism. **Real parallelism is A1–A3 alongside B1–B2**, which touch no
+lane would be false parallelism. R1 runs last in Lane B; the Lane A files it writes are free
+once A3 is accepted. **Real parallelism is A1–A3 alongside B1–B2**, which touch no
 common file. They are not behaviourally independent — B2's tests construct runtimes whose tool
 lists A1 changes — so the controller re-runs the affected graph after integrating each.
 
@@ -333,14 +445,18 @@ lists A1 changes — so the controller re-runs the affected graph after integrat
 | Surface | Owner sequence |
 |---|---|
 | `build-runtime.ts` | B2 → A1b → A4 → A5 |
-| `scheduler-store.ts` | B2 → A4 → A5 |
-| `task-scheduler.ts` | B2 → A5 |
+| `scheduler-store.ts` | B2 → A4 → A5 → R1 |
 | `architect-tools.ts` | B2 → A4 |
 | `role-capabilities.ts` | A1 → A2 → A3 → A4 |
 | `native-architect-runtime.ts` | A1 → A2 → A3 |
-| `native-verifier-runtime.ts`, `native-plan-critic-runtime.ts` | A1 → A3 |
-| `agent-prompts.ts`, `native-build-factory.ts` | A3 only |
-| `native-build-manager.ts`, `lib/client/runner-v2.ts`, the panel | B2 only |
+| `native-verifier-runtime.ts`, `native-plan-critic-runtime.ts` | A1 → A3 → R1 |
+| `agent-prompts.ts` | A3 only |
+| `native-build-factory.ts` | A3 → A5 |
+| `workspace-manager.ts`, `task-graph.ts`, `task-contracts.ts`, `acceptance-contracts.ts` | A5 only |
+| `task-scheduler.ts` | B2 → A5 |
+| `native-build-manager.ts`, `cli.ts` | B2 only |
+| `lib/client/runner-v2.ts`, the panel | B2 → R1 |
+| `runtime-router.ts`, `verifier-verdict-authority.ts`, `plan-critique-authority.ts` | R1 only |
 | `context-manifest-store.ts` | B1 only |
 | `filesystem-mutation-routing.test.ts` | controller only |
 | the five `recordContextPack` call sites | **nobody** |
@@ -376,8 +492,9 @@ PLANNED, READY, RUNNING, IN_REVIEW, READY_TO_INTEGRATE, BLOCKED, ACCEPTED.
 Three evidence-backed cycles per blocking issue, counted across sessions and agents; related
 symptoms share a record; renaming does not reset the count. Escalate only for an authority
 decision, unsafe action, requirement conflict, owner-dependent blocker, weakened control or
-exhausted budget. **ESC-1 holds one owner-granted cycle; if B-1 is still unsound after this
-revision's review, it escalates again.**
+exhausted budget. ESC-1's extra cycle was spent by revision 6. **ESC-3 grants one final cycle
+each to B-1 `abort` and to A5, spent by revision 7. If either is still unsound, it escalates to
+the owner again; no new variation is proposed without the owner.**
 
 ## 9. Program closure
 
@@ -397,28 +514,28 @@ one lane, re-run the other lane's affected graph. Reserve the full suite for D1g
 B's. A3 changes the security posture and must correct the verifier authority sentence in the
 same packet. Do not commit, stage or stash.
 
-**Lane B.** You own A0, B1, B2, A1b, A4, A5, in that order. **A0 first.** B1 must not touch any
-`recordContextPack` call site. B2 must not re-raise from the scheduler. A4 waits for I2 and A3
-from Lane A. Do not commit, stage or stash.
+**Lane B.** You own A0, B1, B2, A1b, A4, A5, R1, in that order. **A0 first.** B1 must not touch
+any `recordContextPack` call site. B2 must not re-raise from the scheduler; its abort reaches the
+supervisor only through the `onBuildFailed` hook that `cli.ts` installs. A4 waits for I2 and A3
+from Lane A. A5 must not touch the worker `integrationDriver` or `acceptedChangeSessions`. R1
+waits for A3 and A5. Do not commit, stage or stash.
 
 ---
 
 ## 11. Verdict
 
-**PLAN BLOCKED — revision 6 not yet independently re-reviewed.**
+**PLAN BLOCKED — revision 7 not yet independently re-reviewed.**
 
-Revision 6 is a scope reduction plus two owner decisions, not a routine repair:
+Revision 7 is the last owner-granted repair (ESC-3) plus one owner decision:
 
 | Change | Reason |
 |---|---|
-| D4, D5, D7 and phases C and E removed | owner amendment moving them to P6.6, which already owns coverage review (T3) and deliverable review (T6) and forbids a second competing authority |
-| ESC-1 → one more cycle | B-1's remaining defects were contract assignment (the suspension registry now belongs to B1), stale text (the re-raise rationale is gone), an unspecified `abort` (now `RunSupervisor.fail`) and crash recovery (suspension re-derived before the first dispatch; three restart tests) |
-| ESC-2 → git attribution, not the audit list | the commit path is now a kernel-applied `architect_document` task, which supplies the workspace, task id, commit and evidence every existing API requires, and is absent from `acceptedChangeSessions` without changing it |
-| Architect gets no filesystem mutation tool | document writes go through `write_plan_document` and the kernel, which removes the isolation problem of writing into `projectRoot` |
-| Plan critic stays execution-free | P6.6 forbids execution during planning; the change-review stage that needed it moved to P6.6 |
+| B2 `abort` is terminal in the scheduler first, then reaches the supervisor through a hook that `cli.ts` installs; `cli.ts` added to B2 | fifth review: `RunSupervisor` lives only in `cli.ts`, which no packet could write |
+| A5 applies documents through its own `documentApplier` port, which passes the change-set object to `IntegrationManager.integrate`; `native-build-factory.ts` added to A5, after A3 | fifth review: the existing driver requires a worker session, and a worker session would list the document in `acceptedChangeSessions` |
+| New packet R1 and phase R (AC-24, SOURCE D8) | owner: prefer a distinct reviewer model, otherwise the same model in a fresh context — the same rule everywhere |
 
 - **Responsible owner:** controller.
-- **Unblock action:** one independent review of revision 6 against revision 2 of the SOURCE,
-  covering the whole revised plan because the scope change touches every section.
+- **Unblock action:** one independent re-review scoped to these three corrections and the
+  graph, lane and §5.2 changes they cause, against revision 3 of the SOURCE.
 
 **Execution has not started. Planning readiness does not authorize execution.**

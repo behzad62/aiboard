@@ -1,5 +1,11 @@
 # Runner V2 P6.6 — Owner amendment, 2026-09-22
 
+**Revision 2** (2026-09-22, same day). Revision 1 held OA-1..OA-9. Revision 2 applies the
+owner's later decisions: OA-3's reviewer rule is loosened (distinct model preferred, fresh
+context fallback); OA-9 is confirmed; OA-10 records the owner's choices on the five narrowings
+the first coverage review found; OA-11..OA-17 add the owner-approved robustness suggestions,
+written to work for every language the runner may build.
+
 **Status:** APPROVED OWNER AMENDMENT to P6.6. It is a SOURCE document for
 `docs/superpowers/plans/2026-09-06-runner-v2-evidence-gated-planning.md` alongside the
 existing source `docs/superpowers/specs/2026-09-08-runner-v2-evidence-gated-planning-source.txt`
@@ -17,9 +23,29 @@ Owner decisions in session 2026-09-22, recorded verbatim:
 > to take your suggestions also to make the best and most robust possible agent harness tool
 > without wasting tokens. And yes we need to support questions in the build mode too."
 
-Two design goals therefore govern every item below and are themselves obligations:
+Later in the same session, recorded verbatim:
+
+> "in the case that user had no access to many models that fit as reviewer they might use the
+> same model for different tasks. we should not enfore different model in that case but instead
+> use a clear context one to make sure it has not prior context" — then: "A, same rule everywhere".
+
+> "all six, add them to P6.6. good ideas. just for 1 and 2, can runner reliably do them? given it
+> is only a tool?" — then: "go with yours. … runner is a generic AI harness that can run code in
+> all languages like c++ and c# too. make sure what you said work in all conditions".
+
+> "yes, 24.x is fine."
+
+Three design goals therefore govern every item below and are themselves obligations:
 **robustness** — a defect should be caught by structure, not by hoping a model notices — and
-**token economy** — no model pass without a stated purpose, and no pass over unchanged input.
+**token economy** — no model pass without a stated purpose, and no pass over unchanged input;
+and **language neutrality** — every mechanism the runner performs itself works for any language
+and build system, degrades through recorded steps, and never reports "passed" where it could
+not check.
+
+**Capability ladders.** Where the runner performs a check itself (OA-11, OA-12, OA-13), it uses a
+**ladder**: try the most precise method the project supports, step down when it is not
+available, and **record which rung was used**. The bottom rung is always safe — the full suite,
+or an explicit "not available" — never a guess. The rule is: always correct, sometimes slower.
 
 ## Origin
 
@@ -94,9 +120,20 @@ and evidence. **Obligation:** that review forms its findings from the source cri
 exact diff **before** it is shown the worker's report or self-assessment, then marks each worker
 claim `verified` or `unverified`.
 
-**Selection excludes both the Architect's model identity and every model that authored the
-change.** `RuntimeRouter.selectVerifier` already accepts `acceptedChangeAuthorRuntimeIds`
-(`runtime-router.ts:189`); reuse it.
+**Selection prefers a distinct model and otherwise requires a fresh context** (revision 2; the
+same rule the agent-capability program's D8 applies to the verifier and the plan critic):
+
+1. Prefer a candidate whose model identity differs from the Architect's and from every model
+   that authored the change. `RuntimeRouter.selectVerifier` already computes these exclusions
+   from `acceptedChangeAuthorRuntimeIds` (`runtime-router.ts:189`); reuse it.
+2. If no such candidate exists, use an eligible candidate that shares a model identity, in a
+   **new session whose event list is empty** when it starts — no messages, tool results or
+   context from any other session.
+3. Record `independence: "distinct_model"` or `"fresh_context"` durably and show it.
+4. Pause for a user selection only when no eligible candidate exists at all.
+
+The agent-capability program's packet R1 delivers the router fallback; P6.6 reuses it. The
+same rule applies to the coverage reviewer (OA-1) and the opt-in answer review (OA-5).
 
 **Why.** Four P6.5 workers reported green on broken work. A reviewer that reads the report first
 starts from "it works".
@@ -110,7 +147,7 @@ obligation makes that reason **computed**, not asserted.
 
 | Signal | Rationale |
 |---|---|
-| author model tier | fast, cheap workers earn more scrutiny |
+| author model tier | fast, cheap workers earn more scrutiny — a lower tier **raises** risk; the tier comes from the model's recorded track record (OA-16) where one exists |
 | shared kernel surface touched | an explicit named set, not prose |
 | source changed with no test changed | the loudest single smell in P6.5 |
 | task needed more than one attempt | it already struggled |
@@ -125,12 +162,14 @@ obligation makes that reason **computed**, not asserted.
 | medium | the standard review with repository inspection |
 | high | specialist depth: the reviewer **runs the affected tests itself**, recorded as evidence |
 
-The high-tier command must be the **affected-test command derived mechanically** from a named
-rule. An arbitrary command must not satisfy it — planning review showed `echo ok` would otherwise
-pass.
+The high-tier command must be the **affected-test command derived mechanically** by the OA-12
+ladder, and its outcome is read through OA-13. An arbitrary command must not satisfy it —
+planning review showed `echo ok` would otherwise pass. At high tier the runner also runs the
+OA-11 break-it probe and hands the reviewer its result.
 
 **Thresholds are measured, not chosen.** Replayed over the fourteen P6.5 packet commits, whose
-review-found defects are recorded in the P6.5 ledger, thresholds are accepted only if: no
+review-found defects are recorded in the P6.5 ledger — the ledger, not a new labelling, is the
+source of which commits carried a defect — thresholds are accepted only if: no
 defect-carrying commit lands in `low`; at least one trivially safe commit lands in `low`; and at
 least one commit whose defect was only provable by execution lands in `high`.
 
@@ -184,14 +223,111 @@ execution during planning. The OA-5 answer path is not planning state.
 
 ## OA-8 — Ordering
 
-P6.6 now depends on the agent-capability program as well as P6.5. Campaign order:
+P6.6 now depends on the agent-capability program as well as P6.5. That program adds a task kind,
+`architect_document` (runner-applied, no acceptance criteria, no worker, zero model calls), which
+P6.6's task contracts and admission must recognise and exempt. Campaign order:
 **P6.5 → agent-capability program → P6.6 → P7.** OA-4's high tier and OA-5's command use depend on
 that program's reader execution; OA-3's model exclusion and OA-6's accounting depend on P6.5 APIs
 now merged at `6c166f97`.
 
-## OA-9 — Runtime policy, for the owner to confirm
+## OA-9 — Runtime policy: CONFIRMED
 
-P6.6 is currently **PLAN BLOCKED** on its own decision D3: exact Node 24.18.0 versus a range. Since
-then the owner stated "that node 22 support is stale for sure, we dropped that", and
-`package.json` engines is `>=24.0.0 <25`. That evidence points to **Node 24.x, with 24.18.0 as the
-verified local version**. It is recorded as the proposed resolution; it is not assumed.
+P6.6's decision D3 (exact Node 24.18.0 versus a range) is **resolved by the owner: Node 24.x**
+("yes, 24.x is fine"), matching `package.json` engines `>=24.0.0 <25`. 24.18.0 is the verified
+local version, not a pin. D3 no longer blocks P6.6.
+
+## OA-10 — Owner decisions on the five narrowings
+
+The first coverage review of this amendment found five places where the moved agent-capability
+text (revision 1, D4/D5/D7) was narrowed rather than carried over. The owner decided each:
+
+| # | Pre-split text | Decision | Obligation now |
+|---|---|---|---|
+| 1 | AC-11: a separate change-critique stage before the verifier | **accept the narrowing** | none — T6's one deliverable review is the change review; P6.6 forbids a second critic |
+| 2 | AC-13: stage 2 blind to stage 1's findings | **restore, generalized** | every reviewer records its own findings **before** it may see any other reviewer's findings on the same artifact. For a fix re-review: record its view of the fix first, then receive the prior findings to check each is resolved |
+| 3 | AC-15: a recorded skip at low risk | **accept the narrowing** | none — low tier is still the one mandatory review, reading only |
+| 4 | AC-20: obligations recorded before the diff | **restore at high risk only** | at high tier, the deliverable reviewer records the obligations it derives from the source criteria **before** it receives the diff; at low and medium, OA-3's order (criteria and diff first, report later) is enough |
+| 5 | AC-21: a blocking miss or weakening holds the build | **restore the hold** | a coverage verdict of `missing` or `weakened` at blocking severity holds plan readiness until resolved, exactly like an omitted obligation |
+
+## OA-11 — Break-it probe (mutation check) at high risk
+
+**Obligation.** At high tier, the **runner** — not a model — changes small pieces of the task's
+changed lines, one at a time, runs the OA-12 affected tests against each change, and records
+which changes the tests did **not** catch ("survivors"). A survivor means the tests may not
+check that line. It costs no model tokens.
+
+**Ladder (language-neutral):**
+
+1. **The project's own mutation tool**, when the project already configures one — for example
+   Stryker (JavaScript/TypeScript), Stryker.NET (C#), PIT (Java), mutmut (Python),
+   cargo-mutants (Rust), Mull (C/C++). The runner runs it scoped to the changed files.
+2. **The runner's built-in token-level mutator**, by syntax family: C-family (C, C++, C#, Java,
+   JavaScript, TypeScript, Go, Rust, Kotlin, Swift) and Python-family. It swaps simple tokens on
+   changed lines only — comparison operators, boolean literals, `+`/`-`, `&&`/`||` — using a
+   lexer that skips comments and strings.
+3. **"Not available"**, recorded, for any other language or when no affected-test command
+   exists.
+
+**Rules for every rung.** A change that does not build is **discarded**, not counted as caught.
+Work runs in a disposable copy, never the task workspace or the project. A cap on the number of
+changes and on time applies; when it stops early, the partial coverage is recorded. **Survivors
+are evidence for the reviewer, not automatic blockers** — the reviewer decides whether each is a
+real gap. The rung used is recorded.
+
+## OA-12 — Affected tests: a ladder with a safe floor
+
+**Obligation.** "The affected tests" for a change is computed by a ladder, and the rung used is
+recorded:
+
+1. **The project's own impact tool**, when configured — for example `nx affected`,
+   `jest --findRelatedTests`, `bazel query rdeps`, `dotnet-affected`, pytest-testmon.
+2. **Compiler or language-server references** through the runner's existing generic LSP client
+   (`lsp-client.ts`, `language-provider-router.ts`): the tests that reference changed symbols.
+3. **The build system's module graph — the floor that always exists when there is a build
+   system:** every test in the module that contains a changed file and in the modules that
+   depend on it — for example the npm workspace, the `.csproj` / solution project, the CMake
+   target, the Cargo crate, the Go package, the Maven/Gradle module.
+4. **The full suite.**
+
+**Widening.** A change to build configuration, a lockfile, a shared header, generated code, or
+a file type the ladder does not understand steps down to at least rung 3, and to rung 4 when
+no module graph exists. The ladder never narrows below what it can justify.
+
+## OA-13 — Test results are read, not assumed
+
+**Obligation.** The runner reads machine-readable test reports where the tool emits them:
+**JUnit XML** (Java, gtest `--gtest_output=xml`, `ctest --output-junit`, pytest `--junitxml`,
+jest-junit, cargo-nextest, go-junit-report) and **TRX** (`dotnet test --logger trx`). It records
+selected, passed, failed and skipped counts. **A missing or unreadable report makes the result
+"unknown", never "passed".** Exit status alone is recorded as exit status, not as proof that a
+test ran — this is the existing T5 rule that zero selected tests is not green.
+
+## OA-14 — A flaky failure is isolated before it costs a repair cycle
+
+**Obligation.** Before a failing check charges a repair cycle, the runner re-runs **only the
+failing tests once**, on the same revision and environment. If they then pass, the failure is
+recorded as **flaky**, no cycle is charged, and the flake stays visible as a finding. If they
+fail again, the cycle is charged as usual. This never turns a failure into a pass: a flaky
+required check still blocks acceptance until it passes on its own run.
+
+## OA-15 — Defect classes the reviewers found are remembered
+
+**Obligation.** Each defect a review finds is recorded with a short class (for example "guard
+never exercised", "error swallowed", "restart path untested"), per project. Worker and reviewer
+briefs include the most frequent classes for that project, capped (default: five classes,
+300 tokens). The cap and the inclusion are recorded under OA-6.
+
+## OA-16 — A model's track record feeds change risk
+
+**Obligation.** The runner keeps, per model identity, how often review found a defect in its
+accepted work. OA-4's author-tier signal reads a **snapshot** of that record taken at risk
+computation, so risk stays deterministic for identical inputs. With no record yet, the default
+tier is used and that is recorded.
+
+## OA-17 — No leftovers after a task
+
+**Obligation.** After each task attempt and each verification, the runner checks for processes
+it started that are still alive and for temporary files it created outside the workspace. It
+uses the runner's existing process ownership, so this is the same on every language and OS the
+runner supports. A leftover is cleaned up where ownership is proven, and is recorded as a
+finding either way; uncertain ownership is retained and reported, never killed on a guess.

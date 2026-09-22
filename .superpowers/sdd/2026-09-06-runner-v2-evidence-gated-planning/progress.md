@@ -1,23 +1,42 @@
 # Planning state — docs/superpowers/plans/2026-09-06-runner-v2-evidence-gated-planning.md
 
-## Current revision — 2026-09-22 owner amendment
+## Current revision — 2026-09-22 owner amendment, revision 2
 
-PLAN BLOCKED — two conditions:
-1. **Independent coverage review of the amendment delta** (EP33–EP41, T9, and the T3/T5/T6/T7/T8
-   extensions) has not been performed. Earlier coverage verdicts apply only to their recorded
-   source and plan identities. Owner: controller.
-2. **D3 runtime policy** awaits owner confirmation of the proposed resolution recorded as OA-9:
-   Node 24.x, with 24.18.0 as the verified local version. Owner: owner.
+PLAN BLOCKED — one condition: **the scoped independent re-review of amendment revision 2** has
+not been performed. Owner: controller. Unblock: dispatch one fresh-context re-review scoped to
+the corrections below and the new OA-3, OA-10..OA-17 content.
 
-Execution is not started or authorized.
+D3 is **resolved**: the owner confirmed Node 24.x on 2026-09-22 (OA-9). It no longer blocks.
 
-Amendment source: `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md`
-(OA-1..OA-9). It adds obligations and removes none. Three items moved here from the
-agent-capability design because they duplicated T3 and T6; the remainder follow the owner's
-direction to make the harness as robust as possible without wasting tokens, plus support for
-questions in Build mode.
+Execution is not started or authorized. P6.6 execution additionally waits for the accepted
+agent-capability program (OA-8).
 
-Ordering changed: **P6.5 → agent-capability program → P6.6 → P7** (OA-8).
+Amendment source: `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md`,
+revision 2 (OA-1..OA-17). It adds obligations and removes none.
+
+Campaign order: **P6.5 → agent-capability program → P6.6 → P7** (OA-8).
+
+### Amendment review history
+
+| Step | Outcome |
+|---|---|
+| Revision 1 (OA-1..OA-9, EP33–EP41, T9) | reviewed — PLAN COVERAGE INSUFFICIENT (`amendment-review-r1.md`): B1 (OA-8 order absent at entry sites), B2 (EP01–EP32 ownership and campaign gate), B3 (`architect_document` unknown to T1/T4); I1 (planning-state predicate), I2 (category identifiers), I3 (T9 placement); M1–M4; five narrowings of moved text |
+| Owner decisions | narrowings: 1 accept, 2 restore generalized, 3 accept, 4 restore at high risk only, 5 restore the blocking hold (OA-10); reviewer rule loosened to distinct-model-preferred, fresh-context fallback, everywhere (OA-3); Node 24.x confirmed (OA-9); six robustness suggestions added, language-neutral (OA-11..OA-17) |
+| Revision 2 | B1: BP1 entry, Relationship, D1 and the header carry the OA-8 order; T1 inspects the post-agent-capability tree. B2: ownership sentence and campaign gate say EP01–EP51 and T1–T9. B3: section 3, T1 and T4 name and exempt `architect_document`. I1: T3 defines the planning-state predicate; EP41 positive moved to T9; EP32 scoped to planning state. I2: four identifiers named, cross-vocabulary rejection. I3: BP2 exit has both paths; T4 base is accepted T9; T5 base stays T3; T9 card; registry and queue below. M1–M4 applied. New EP42–EP51. |
+| **Scoped re-review of revision 2** | **OUTSTANDING — blocks PLAN READY** |
+
+### Assignment registry (single controller authority; supersedes the 2026-09-08 table below)
+
+| Lane | Packets | State / claim | Required next base | Next eligible action |
+|---|---|---|---|---|
+| A | T1, T2, T3, then T9, then T4, then T6, T7, T8 | PLANNED; no worker/session/branch/worktree claim | Accepted agent-capability program for T1; later accepted packet snapshots; T4 on accepted T9 | None before prerequisites and execution authority; T1 first afterward |
+| B | T5 | PLANNED; no claim | Accepted T3, isolated from lane A's T9/T4 worktrees | None before T3, ownership and capacity gates |
+| Controller | Assignment, integration, acceptance | Planning only | Actual approved snapshots | Dispatch the scoped re-review |
+
+### Execution queue (not started; supersedes the queue further below)
+
+T1 → T2 → T3 → T9 → (T4 || T5; separate owned worktrees; T4 on T9, T5 on T3) → integrate T4
+then T5 → T6 → T7 → T8.
 
 These state files were copied onto `main`'s planning branch
 `docs/agent-capability-and-change-critique` on 2026-09-22 from the

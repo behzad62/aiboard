@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 2 |
-| PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`, revision 6 |
+| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 3 |
+| PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`, revision 7 |
 | Moved scope | D4, D5, D7 → P6.6 owner amendment `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md` |
 | Base revision | `6c166f97` on `main` |
 | Planning branch | `docs/agent-capability-and-change-critique` |
-| Program state | **PLANNING — revision 6. PLAN BLOCKED on independent review of revision 6.** |
+| Program state | **PLANNING — revision 7. PLAN BLOCKED on independent re-review of revision 7.** |
 | Execution | **NOT STARTED.** No implementation worker has been launched. |
 | Last updated | 2026-09-22 |
 
@@ -26,15 +26,19 @@
 | Revision 5 | five repairs; ESC-1 and ESC-2 escalated to the owner |
 | Owner decisions 2026-09-22 | ESC-1 → A (one more cycle); ESC-2 → A (git attribution, not the audit list); **split: D4, D5, D7 moved to P6.6** |
 | Revision 6 | scope reduced to D1, D2, D3, D6; both ESC decisions applied |
-| **Independent review of revision 6** | **OUTSTANDING — blocks PLAN READY** |
+| Review of revision 6 | INSUFFICIENT (`evidence/plan-review-r5.md`): pause, retry, waiver, D2, D3, graph and moved scope all clean; **B-1 `abort` NOT FIXED** (supervisor unreachable) and **A5 UNSOUND** (integration driver needs a worker session) |
+| Owner decisions 2026-09-22 (2) | **ESC-3 → A, both:** one final cycle each for B-1 `abort` and A5. **D8:** reviewer independence — distinct model preferred, fresh context fallback, same rule everywhere |
+| Revision 7 | SOURCE revision 3 (D1 constraint 4, D6 reachable wiring, D8/AC-24); plan: B2 abort via scheduler `failed` + `cli.ts` hook; A5 via its own `documentApplier` port in `native-build-factory.ts`; new packet R1 |
+| **Independent re-review of revision 7** | **OUTSTANDING — blocks PLAN READY** |
 
 ---
 
 ## 2. Next eligible action
 
-**One action:** an independent review of revision 6 against revision 2 of the SOURCE. The
-whole plan is in scope because the scope change touches every section. ESC-1 is on its
-owner-granted extra cycle: if B-1 is still unsound, it escalates to the owner again.
+**One action:** an independent re-review of revision 7 against revision 3 of the SOURCE, scoped
+to B2 `abort`, A5, R1, and the graph, lane and §5.2 changes they cause. Accepted findings of
+`plan-review-r5.md` are reused. ESC-3 is the final owner-granted cycle for B-1 `abort` and A5:
+if either is still unsound, it escalates to the owner again.
 
 Nothing else is eligible. Planning readiness does not authorize execution.
 
@@ -69,7 +73,8 @@ All `PLANNED`. Each `Depends on` copies the plan's §4 edge list.
 | A1b | B | A1, B2 |
 | A4 | B | I2, A3, A1b |
 | A5 | B | A4 |
-| D1g | controller | A5 |
+| R1 | B | A3, A5 |
+| D1g | controller | R1 |
 
 A1 and A1b are one acceptance unit sharing one evidence file.
 
@@ -89,7 +94,9 @@ Empty.
 | ESC-1 | — | **DECIDED:** option A, one owner-granted extra repair cycle for B-1 | owner | applied in revision 6 |
 | ESC-2 | — | **DECIDED:** option A, Architect ChangeSet attributed in git, absent from the audit's accepted-change list | owner | applied in revision 6 |
 | BL-5 | — | CLOSED — superseded by the scope change | controller | — |
-| **BL-6** | PLAN READY | revision 6 not independently reviewed | controller | dispatch one review |
+| BL-6 | — | CLOSED — review of revision 6 performed (`plan-review-r5.md`) | controller | — |
+| ESC-3 | — | **DECIDED:** option A for both — one final cycle each for B-1 `abort` and A5 | owner | applied in revision 7 |
+| **BL-7** | PLAN READY | revision 7 not independently re-reviewed | controller | dispatch one scoped re-review |
 
 ---
 
@@ -115,11 +122,14 @@ Empty.
 | PD-8 | A0 captures the compatibility fixture first | after the work lands, "before" cannot be recorded. |
 | PD-12 | B-1 uses the existing `paused` outcome, never a re-raise | round 3: a re-raise skips `recordOutcome`, so the next tick redispatches the task into the same error. |
 | PD-14 | The suspension registry belongs to B1 and is re-derived before the first dispatch | round 4: it was described in B2 but contracted to no packet, and a restart could redispatch before a waiver took effect. |
-| PD-15 | `abort` uses `RunSupervisor.fail` | round 4: `abort` was unspecified against a `running` task. |
+| PD-15 | `abort` uses `RunSupervisor.fail` | round 4: `abort` was unspecified against a `running` task. **Refined by PD-20.** |
 | PD-16 | Architect document writes are a kernel-applied `architect_document` task | round 4: every commit API needs a task workspace, `createChangeSet` needs a task id, commit and evidence, and nothing on the Architect path built them. A real task supplies all three at zero model cost and stays out of `acceptedChangeSessions`, matching ESC-2. |
 | PD-17 | The Architect gets no filesystem mutation tool | writing into `projectRoot` bypasses isolation and the P6 handoff. |
 | PD-18 | The plan critic stays execution-free | P6.6 forbids execution during planning; the change-review stage needing it moved to P6.6. |
 | PD-19 | D4, D5, D7 moved to P6.6 | owner decision. P6.6 already owns coverage review (T3) and deliverable review (T6), and forbids a second competing authority. |
+| PD-20 | `abort` sets the scheduler run `failed` first, then reaches `RunSupervisor.fail` through an `onBuildFailed` hook that `cli.ts` installs | round 5: the live supervisor exists only in `cli.ts`. Scheduler-first makes the crash window safe. |
+| PD-21 | `architect_document` integrates through its own `documentApplier` port, never the worker `integrationDriver` | round 5: that driver requires a worker session, and a worker session would put the document on `acceptedChangeSessions`. |
+| PD-22 | Reviewer independence: distinct model preferred, fresh context fallback, recorded | owner decision D8, "same rule everywhere". P6.6 applies the same rule to its deliverable and coverage reviewers. |
 
 ---
 
@@ -128,6 +138,6 @@ Empty.
 | File | Contents |
 |---|---|
 | `evidence/TEMPLATE.md` | evidence record shape |
-| `evidence/plan-review-r1.md` … `-r4.md` | the four planning reviews of revisions 1–4 |
+| `evidence/plan-review-r1.md` … `-r5.md` | the five planning reviews of revisions 1–6 |
 
 No packet evidence exists yet.

@@ -1,6 +1,6 @@
 # Runner V2 — Agent capability model (design)
 
-**Status:** APPROVED SOURCE, **revision 2** (2026-09-22). Owner-approved. SOURCE for
+**Status:** APPROVED SOURCE, **revision 3** (2026-09-22). Owner-approved. SOURCE for
 `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`.
 
 **Base revision:** `6c166f97` on `main` (P6.5 merged as PR #98; lint cleared as PR #99).
@@ -23,6 +23,17 @@ Two owner decisions from the same session are applied here:
   failure (plan finding B-1/N-1), which had exhausted its three-cycle budget.
 - **ESC-2 → option A.** An Architect-authored plan/spec change is attributed to the Architect
   **in git**. It is **not** surfaced in the audit export's accepted-change list.
+
+**Revision 3 — owner decisions later the same day.**
+
+- **ESC-3 → option A, both.** One further repair cycle each for the `abort` resolution (plan
+  finding B-1) and for applying `architect_document` (plan finding A5). The fifth review found
+  both mechanisms named correctly but unreachable from the files the plan let a packet write.
+  Revision 3 states the reachable mechanism in D1 constraint 4 and in D6.
+- **D8 added — reviewer independence, the same rule everywhere.** Owner, verbatim: "in the case
+  that user had no access to many models that fit as reviewer they might use the same model for
+  different tasks. we should not enfore different model in that case but instead use a clear
+  context one to make sure it has not prior context" — and then "A, same rule everywhere".
 
 ---
 
@@ -113,6 +124,16 @@ recordContextPack fails
 3. **A waiver must survive restart.** Recording suspension is a runtime switch owned by
    `context-manifest-store.ts` and **re-derived from the durable waiver event before the first
    dispatch** whenever a runtime is constructed. It serves all five call sites and edits none.
+4. **`abort` is terminal in both stores, and the runner reaches the supervisor.** The live
+   `RunSupervisor` exists only in `cli.ts` (the fifth review traced this). So `abort` is made
+   terminal in two steps. First, the durable abort resolution sets the **scheduler** run to
+   `failed`, which the scheduler already declares but never sets; a failed scheduler run never
+   dispatches and refuses `run.resumed`. Second, the runner carries that to the supervisor
+   through a lifecycle hook that `cli.ts` installs, exactly as it already installs the pump
+   result hook: at the moment of abort, on a pump step that reports `failed`, and at startup
+   recovery for a run whose scheduler state is `failed` but whose supervisor state is not. A
+   crash between the two steps therefore cannot redispatch: the scheduler step is first and is
+   durable.
 
 **Explicitly rejected:** silently non-gating recording (reintroduces the silent audit gap);
 purely fail-closed recording (a locked file kills a long build for an audit write).
@@ -185,6 +206,15 @@ Architect trailer through `WorkspaceManager.commitTask`, builds the ChangeSet th
 `IntegrationManager.integrate` (`integration-manager.ts:474`). Applying it costs **no model
 tokens**.
 
+**Reachable wiring (revision 3).** The existing integration driver that `BuildRuntime` calls
+loads a **worker** session and rejects a change set it does not find there
+(`native-build-factory.ts:1075-1093`). A document task has no worker session, and giving it one
+would put it on the accepted-change list that ESC-2 keeps it off. So the document path does
+**not** use that driver. The factory, which already owns the `WorkspaceManager` and the
+`IntegrationManager`, supplies `BuildRuntime` with a separate document applier that commits,
+builds the change set and passes the **change-set object** to `IntegrationManager.integrate`
+directly. The worker-session driver is unchanged.
+
 **Why a kernel-applied task.** Four review rounds established that every commit API in the
 tree needs a task workspace, `createChangeSet` (`change-set.ts:63-100`) needs a task id, a task
 commit and at least one evidence hash, and nothing on the Architect path constructs any of
@@ -202,6 +232,39 @@ path); plans kept only in runner-private state (splits the plan away from git).
 ### D7 — MOVED to P6.6
 
 Coverage review against the original request. See the P6.6 owner amendment, EP33–EP35.
+
+### D8 — Reviewer independence: a distinct model is preferred, a fresh context is required
+
+**Problem.** `RuntimeRouter.selectVerifier` (`runtime-router.ts:174-222`) excludes the
+Architect's model identity and every accepted change author's, and returns `unavailable` when
+nothing else is left. Both the independent verifier (`native-verifier-runtime.ts:244`) and the
+plan critic (`native-plan-critic-runtime.ts:129`) then pause the run for a user selection
+(`build-runtime.ts:1266`, `:1724`). A user who has one suitable model can never pass either
+gate.
+
+**Decision.** The same rule for every reviewer role — independent verifier, plan critic, and
+(in P6.6) the deliverable reviewer and the coverage reviewer:
+
+1. **Prefer a distinct model.** If an eligible candidate exists whose model identity differs
+   from the Architect's and from every change author's, choose it. This is today's rule.
+2. **Otherwise fall back to a fresh context.** Choose an eligible candidate even if it shares a
+   model identity, and run it in a **new session whose event list is empty** when it starts:
+   no messages, tool results or context from any other session. Existing exclusions that are
+   not about model identity — for example a runtime excluded after a provider error — still
+   apply.
+3. **Record which one happened.** The review request records `independence: "distinct_model"`
+   or `"fresh_context"`, durably, and the UI shows it. Legacy events without the field replay as
+   `distinct_model`, because the old rule enforced it.
+4. **Pause only when no eligible candidate exists at all** (no healthy runtime with the required
+   capability), as today.
+
+**Why a fresh context is enough.** The bias the rule guards against is anchoring: a reviewer
+that already holds the author's reasoning tends to confirm it. A model reading the change
+cold, with no prior conversation, does not hold that reasoning. A distinct model adds a second
+kind of independence — different training — which is why it is still preferred.
+
+**Explicitly rejected:** requiring a distinct model always (blocks single-model users);
+silently reusing an existing session (that is the anchoring the rule exists to remove).
 
 ---
 
@@ -235,6 +298,7 @@ Coverage review against the original request. See the P6.6 owner amendment, EP33
 | AC-10 | The Architect admits only MCP tools the mapper marks `readOnly`, as an asserted class. | D3 |
 | AC-17 | An Architect document write lands as a kernel-applied `architect_document` task, committed with Architect attribution in git, and is **not** listed among accepted change sessions. | D6 |
 | AC-18 | Runs created before this change keep current semantics and remain replayable. | compat |
+| AC-24 | Verifier and plan-critic selection prefer a distinct model and otherwise fall back to the same model in a fresh session with an empty event list; the choice is recorded as `distinct_model` or `fresh_context` and shown; the run pauses only when no eligible candidate exists. | D8 |
 
 AC-11..AC-16 and AC-19..AC-23 moved to P6.6 as EP33–EP38.
 
