@@ -475,6 +475,75 @@ export interface NativeIndependentVerifierObservability {
   };
 }
 
+export interface NativePlanCritiqueFinding {
+  findingId: string;
+  severity: "blocking" | "advisory";
+  category:
+    | "ambiguous_criterion"
+    | "untestable_criterion"
+    | "missing_dependency"
+    | "overlapping_scope"
+    | "missing_failure_mode"
+    | "unproven_assumption"
+    | "oversized_task"
+    | "missing_integration_task";
+  taskIds: string[];
+  criterionIds?: Array<{ taskId: string; criterionId: string }>;
+  claim: string;
+  evidence: string[];
+}
+
+export interface NativePlanCritiqueProjection {
+  critiqueId: string;
+  planRevision: number;
+  runtime: NativeVerifierRuntimeBinding;
+  excludedModels: Array<{
+    source: "architect" | "accepted_change_author";
+    runtimeId: string;
+    modelIdentity: string;
+  }>;
+  status: "requested" | "submitted" | "resolved";
+  requestedAt: string;
+  submittedAt?: string;
+  resolvedAt?: string;
+  findings?: NativePlanCritiqueFinding[];
+  blockingFindingIds?: string[];
+  resolution?: {
+    planRevisionAfter: number;
+    resolvedBy: "architect" | "runner";
+    resolutions: Array<{
+      findingId: string;
+      resolution: "plan_reconciled" | "rejected";
+      rationale: string;
+    }>;
+  };
+  supersededByCritiqueId?: string;
+}
+
+export interface NativePlanCritiqueState {
+  policy?: { mode: "risk_based" | "always" | "off" };
+  risk?: {
+    planRevision: number;
+    architectDeclaration: "low" | "high";
+    stricterQualification: boolean;
+    assessment: {
+      risk: "low" | "high";
+      reasons: Array<{
+        code: "architect_declared_high" | "stricter_qualification" | "task_count" | "dependency_fan_in";
+        evidence: string[];
+      }>;
+    };
+    assessedAt: string;
+  };
+  current?: NativePlanCritiqueProjection;
+  history: NativePlanCritiqueProjection[];
+  skipped?: {
+    planRevision: number;
+    reason: "policy_off" | "low_plan_risk" | "critic_failed" | "plan_only";
+    skippedAt: string;
+  };
+}
+
 export interface NativeBuildProjection {
   runId: string;
   status: "running" | "paused" | "completed";
@@ -541,6 +610,12 @@ export interface NativeBuildProjection {
     current?: NativeVerifierReviewProjection;
     history: NativeVerifierReviewProjection[];
   };
+  planRiskDeclaration?: {
+    risk: "low" | "high";
+    rationale?: string;
+    source: "architect" | "legacy_default";
+  };
+  planCritique?: NativePlanCritiqueState;
   projectHandoffHistory?: Array<{
     status: "withdrawn";
     summary: string;

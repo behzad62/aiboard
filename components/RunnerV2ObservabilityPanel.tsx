@@ -26,6 +26,7 @@ import type {
   NativeBuildProjection,
   NativeFinalVerificationObservability,
   NativeIndependentVerifierObservability,
+  NativePlanCritiqueState,
 } from "@/lib/client/runner-v2";
 import { projectNativeAcceptanceContract } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
@@ -160,8 +161,58 @@ export function filterRunnerObservability<T extends SearchableObservability>(
   };
 }
 
+const PLAN_CRITIQUE_SKIP_LABELS = {
+  policy_off: "policy off",
+  low_plan_risk: "low plan risk",
+  critic_failed: "critic failed",
+  plan_only: "plan only",
+} as const;
+
+const ARCHITECT_ACTION_REASON_LABELS = {
+  plan_critique_resolution_required: "Resolving plan critique",
+} as const;
+
+function planCritiqueNeedsResolution(state: NativePlanCritiqueState | undefined): boolean {
+  return state?.current?.status === "submitted"
+    && (state.current.blockingFindingIds?.length ?? 0) > 0;
+}
+
+function planCritiqueSummaryLine(state: NativePlanCritiqueState | undefined): string | undefined {
+  if (!state) return undefined;
+  if (state.skipped) {
+    return `Plan critique: skipped (${PLAN_CRITIQUE_SKIP_LABELS[state.skipped.reason]})`;
+  }
+  const current = state.current;
+  if (!current) return undefined;
+  if (current.status === "requested") return "Plan critique: requested";
+  const findings = current.findings ?? [];
+  const blocking = findings.filter((finding) => finding.severity === "blocking").length;
+  const advisory = findings.filter((finding) => finding.severity === "advisory").length;
+  const counts = `${blocking} blocking, ${advisory} advisory`;
+  if (current.status === "resolved") return `Plan critique: resolved (${counts})`;
+  if (current.status === "submitted") return `Plan critique: submitted (${counts})`;
+  return undefined;
+}
+
 export function runnerBuildControlSummary(projection: NativeBuildProjection | null) {
-  if (!projection) return { guidance: [], integration: [], branch: undefined, revision: undefined };
+  if (!projection) {
+    return {
+      guidance: [],
+      integration: [],
+      branch: undefined,
+      revision: undefined,
+      planCritiqueSummary: undefined,
+      planRiskLabel: undefined,
+      planRiskRationale: undefined,
+      planRiskSource: undefined,
+      planCritiqueMode: undefined,
+      planCritiqueHistoryLabel: undefined,
+      planCritiqueDeclaredLabel: undefined,
+    };
+  }
+  const assessedRisk = projection.planCritique?.risk?.assessment.risk;
+  const declaredRisk = projection.planRiskDeclaration?.risk;
+  const risk = assessedRisk ?? declaredRisk;
   return {
     guidance: Object.values(projection.guidance),
     integration: Object.values(projection.tasks)
@@ -183,6 +234,21 @@ export function runnerBuildControlSummary(projection: NativeBuildProjection | nu
       })),
     branch: projection.projectHandoff?.integrationBranch,
     revision: projection.projectHandoff?.integrationRevision,
+    planCritiqueSummary: planCritiqueSummaryLine(projection.planCritique),
+    planRiskLabel: risk ? `Plan risk: ${risk}` : undefined,
+    planRiskRationale: projection.planRiskDeclaration?.rationale,
+    planRiskSource: projection.planRiskDeclaration
+      ? `Risk source: ${projection.planRiskDeclaration.source}`
+      : undefined,
+    planCritiqueMode: projection.planCritique?.policy
+      ? `Critique mode: ${projection.planCritique.policy.mode}`
+      : undefined,
+    planCritiqueHistoryLabel: projection.planCritique
+      ? `Earlier critiques: ${projection.planCritique.history.length}`
+      : undefined,
+    planCritiqueDeclaredLabel: projection.planCritique?.risk
+      ? `Architect declared: ${projection.planCritique.risk.architectDeclaration}`
+      : undefined,
   };
 }
 
@@ -541,6 +607,9 @@ function lifecycleLabel(projection: NativeBuildProjection | null): string {
   }
   if (projection.status === "completed") return "Build complete";
   if (projection.status === "paused") return "Build paused";
+  if (planCritiqueNeedsResolution(projection.planCritique)) {
+    return ARCHITECT_ACTION_REASON_LABELS.plan_critique_resolution_required;
+  }
 
   const statuses = Object.values(projection.tasks).map((task) => task.status);
   if (statuses.some((status) => status === "integration_resolution")) {
@@ -865,6 +934,16 @@ export function runnerUserFacingObservability(
       key: `task:${review.taskId}`,
       title: taskTitles.get(review.taskId) ?? "A completed task",
       detail: review.summary || "This task needs changes before it can continue.",
+    });
+  }
+  if (planCritiqueNeedsResolution(projection?.planCritique)) {
+    const claims = (projection?.planCritique?.current?.findings ?? [])
+      .filter((finding) => finding.severity === "blocking")
+      .map((finding) => finding.claim);
+    problems.push({
+      key: "plan-critique:blocking",
+      title: "Plan critique found blocking issues",
+      detail: claims.join(" "),
     });
   }
   if (
@@ -1241,7 +1320,7 @@ export function RunnerV2ObservabilityPanel({
           {view.problems.length > 0 ? (
             <ul className="space-y-3">
               {view.problems.map((problem) => (
-                <li key={problem.key} className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
+                <li key={problem.key} data-problem-key={problem.key} className="rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5">
                   <p className="text-xs font-medium leading-snug">{problem.title}</p>
                   <p className="mt-1 text-[0.7rem] leading-relaxed text-muted-foreground">{problem.detail}</p>
                 </li>
@@ -1345,6 +1424,7 @@ export function RunnerV2ObservabilityPanel({
       </div>
 
       <div className="grid gap-3 border-t p-4 lg:grid-cols-2">
+        <PlanCritiqueControlLines control={control} />
         <ObservationList
           icon={<Bot className="h-3.5 w-3.5" />}
           title="Agent sessions"
@@ -1469,7 +1549,85 @@ export function RunnerV2ObservabilityPanel({
         </div>
       )}
       </details>
+      <PlanCritiqueFindings critique={projection?.planCritique} />
     </section>
+  );
+}
+
+function PlanCritiqueControlLines({
+  control,
+}: {
+  control: ReturnType<typeof runnerBuildControlSummary>;
+}) {
+  const lines = [
+    control.planCritiqueSummary,
+    control.planRiskLabel,
+    control.planRiskRationale,
+    control.planRiskSource,
+    control.planCritiqueMode,
+    control.planCritiqueHistoryLabel,
+    control.planCritiqueDeclaredLabel,
+  ].filter((line): line is string => Boolean(line));
+  if (lines.length === 0) return null;
+  return (
+    <div className="space-y-1 lg:col-span-2" data-plan-critique-summary="">
+      {lines.map((line) => (
+        <p key={line} className="text-xs leading-relaxed text-muted-foreground">{line}</p>
+      ))}
+    </div>
+  );
+}
+
+function PlanCritiqueFindings({
+  critique,
+}: {
+  critique: NativePlanCritiqueState | undefined;
+}) {
+  const current = critique?.current;
+  const findings = current?.findings ?? [];
+  if (findings.length === 0) return null;
+  const resolutions = new Map(
+    (current?.resolution?.resolutions ?? []).map((item) => [item.findingId, item]),
+  );
+  return (
+    <details className="border-t">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-xs font-medium outline-none marker:content-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5">
+        <span>Plan critique findings</span>
+        <ChevronDown className="h-4 w-4 text-muted-foreground" />
+      </summary>
+      <div className="space-y-2 border-t px-4 py-3 sm:px-5">
+        <p className="font-mono text-[0.68rem] text-muted-foreground">
+          {current?.critiqueId} · {current?.runtime.runtimeId} · {current?.runtime.sessionId}
+          {current?.excludedModels.length
+            ? ` · ${current.excludedModels.map((model) => model.modelIdentity).join(", ")}`
+            : ""}
+        </p>
+        <ul className="space-y-2">
+          {findings.map((finding) => {
+            const resolution = resolutions.get(finding.findingId);
+            return (
+              <li key={finding.findingId} className="rounded-md border bg-muted/10 px-3 py-2.5">
+                <p className="text-xs font-medium">
+                  {finding.severity} · {finding.category} · {finding.taskIds.join(", ")}
+                </p>
+                <p className="mt-1 text-xs leading-relaxed">{finding.claim}</p>
+                <p className="mt-1 text-[0.7rem] leading-relaxed text-muted-foreground">{finding.evidence.join(" ")}</p>
+                {finding.criterionIds?.map((criterion) => (
+                  <p key={`${criterion.taskId}:${criterion.criterionId}`} className="mt-1 font-mono text-[0.68rem] text-muted-foreground">
+                    {criterion.taskId}:{criterion.criterionId}
+                  </p>
+                ))}
+                {finding.severity === "blocking" && resolution ? (
+                  <p className="mt-1 text-[0.7rem] leading-relaxed">
+                    Architect resolution: {resolution.resolution} - {resolution.rationale}
+                  </p>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </details>
   );
 }
 

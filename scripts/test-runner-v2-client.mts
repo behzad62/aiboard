@@ -24,6 +24,9 @@ import {
   type NativeRunnerConnection,
   type NativeBuildProjection,
   type NativeBuildStepResult,
+  type NativePlanCritiqueFinding,
+  type NativePlanCritiqueProjection,
+  type NativePlanCritiqueState,
 } from "../lib/client/runner-v2";
 import {
   nativeBuildProvisioningRunId,
@@ -386,6 +389,102 @@ assert.equal(audit.runEvents.length, 1);
 assert.equal(audit.acceptanceContract.tasks.task_a.acceptanceCriteria[0].text, "The behavior works.");
 assert.equal(audit.acceptanceContract.tasks.task_a.criterionEvidenceLinks[0].evidenceId, "evidence_behavior");
 assert.equal(audit.acceptanceContract.tasks.task_a.criterionVerdicts[0].verdict, "satisfied");
+const planCritiqueAuditFinding = {
+  findingId: "F-1",
+  severity: "blocking",
+  category: "overlapping_scope",
+  taskIds: ["task-a", "task-b"],
+  claim: "A and B both own src/cache.ts.",
+  evidence: ["A objective mentions src/cache.ts"],
+} satisfies NativePlanCritiqueFinding;
+const planCritiqueAuditProjection = {
+  critiqueId: "critique-1",
+  planRevision: 1,
+  runtime: {
+    runtimeId: "google:verifier",
+    providerId: "google",
+    modelId: "verifier",
+    modelIdentity: "verifier-model",
+    sessionId: "plan-critic:session-1",
+  },
+  excludedModels: [{
+    source: "architect",
+    runtimeId: "openai:architect",
+    modelIdentity: "architect-model",
+  }],
+  status: "resolved",
+  requestedAt: "2026-09-02T00:00:00.000Z",
+  submittedAt: "2026-09-02T00:00:01.000Z",
+  resolvedAt: "2026-09-02T00:00:02.000Z",
+  findings: [planCritiqueAuditFinding],
+  blockingFindingIds: ["F-1"],
+  resolution: {
+    planRevisionAfter: 2,
+    resolvedBy: "architect",
+    resolutions: [{
+      findingId: "F-1",
+      resolution: "plan_reconciled",
+      rationale: "B is folded into A.",
+    }],
+  },
+} satisfies NativePlanCritiqueProjection;
+const planCritiqueAuditState = {
+  policy: { mode: "risk_based" },
+  risk: {
+    planRevision: 1,
+    architectDeclaration: "low",
+    stricterQualification: false,
+    assessment: { risk: "high", reasons: [{ code: "task_count", evidence: ["tasks:5"] }] },
+    assessedAt: "2026-09-02T00:00:00.000Z",
+  },
+  current: planCritiqueAuditProjection,
+  history: [],
+} satisfies NativePlanCritiqueState;
+const critiqueAudit = await getNativeBuildAudit(
+  connection,
+  "run_critique",
+  async () => Response.json({
+    protocolVersion: 2,
+    run: { runId: "run_critique" },
+    build: {
+      runId: "run_critique",
+      status: "running",
+      planRevision: 2,
+      tasks: {},
+      guidance: {},
+      reviews: {},
+      runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+      lastSequence: 4,
+      planRiskDeclaration: {
+        risk: "high",
+        rationale: "Overlapping file ownership.",
+        source: "architect",
+      },
+      planCritique: planCritiqueAuditState,
+    },
+    usage: { effective: { modelCalls: 1 } },
+    observability: { runId: "run_critique", toolCallCount: 0 },
+    contextManifests: [],
+    acceptanceContract: { status: "current", planRevision: 2, tasks: {} },
+    runEvents: [],
+    buildEvents: [
+      { sequence: 1, type: "plan_critique.requested", occurredAt: "2026-09-02T00:00:00.000Z", actor: { role: "runner", id: "build-runtime" }, payload: { critiqueId: "critique-1" } },
+      { sequence: 2, type: "plan_critique.submitted", occurredAt: "2026-09-02T00:00:01.000Z", actor: { role: "verifier", id: "google:verifier" }, payload: { critiqueId: "critique-1" } },
+      { sequence: 3, type: "plan_critique.resolved", occurredAt: "2026-09-02T00:00:02.000Z", actor: { role: "architect", id: "openai:architect" }, payload: { critiqueId: "critique-1" } },
+    ],
+  }),
+  requestController.signal,
+);
+assert.equal(critiqueAudit.build.planCritique?.current?.status, "resolved");
+assert.equal(critiqueAudit.build.planCritique?.current?.findings?.[0]?.claim, "A and B both own src/cache.ts.");
+assert.equal(critiqueAudit.build.planCritique?.current?.findings?.[0]?.severity, "blocking");
+assert.equal(critiqueAudit.build.planCritique?.current?.resolution?.resolvedBy, "architect");
+assert.equal(critiqueAudit.build.planCritique?.policy?.mode, "risk_based");
+assert.equal(critiqueAudit.build.planRiskDeclaration?.source, "architect");
+assert.deepEqual(
+  critiqueAudit.buildEvents.map((event) => event.type),
+  ["plan_critique.requested", "plan_critique.submitted", "plan_critique.resolved"],
+);
 const recoveryRecords = await getNativeProcessRecovery(connection, "run_1", fetchImpl, requestController.signal);
 assert.equal(recoveryRecords[0]?.proposalId, "proposal-1");
 const generatedRecovery = await generateNativeProcessRecovery(

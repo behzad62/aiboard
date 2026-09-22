@@ -205,6 +205,89 @@ test("plan critic candidate runtime IDs must be unique and equal the verifier po
   }
 });
 
+test("restart after plan_critique.submitted resumes at resolution without another critic call", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-plan-critique-restart-submitted-"));
+  const database = join(root, "scheduler.sqlite");
+  const store = new SqliteSchedulerStore(database);
+  const critic = new ScriptedPlanCritic(store, {
+    mode: "risk_based",
+    findings: [blockingFinding()],
+  });
+  try {
+    const runtime = new BuildRuntime(runtimeOptions(store, critic, new ScriptedArchitect(5)));
+    assert.equal((await runtime.step()).action, "plan_required");
+    assert.equal((await runtime.step()).action, "plan_risk_assessed");
+    assert.equal((await runtime.step()).action, "plan_critique_submitted");
+    assert.equal(critic.calls, 1);
+    assert.equal(runtime.projection().planCritique?.current?.status, "submitted");
+    store.close();
+
+    const recoveredStore = new SqliteSchedulerStore(database);
+    const recoveredCritic = new ScriptedPlanCritic(recoveredStore, {
+      mode: "risk_based",
+      findings: [blockingFinding()],
+    });
+    try {
+      const recovered = new BuildRuntime(runtimeOptions(
+        recoveredStore,
+        recoveredCritic,
+        new ScriptedArchitect(5),
+      ));
+      const step = await recovered.step();
+      assert.equal(step.action, "plan_critique_resolution_required");
+      assert.equal(recoveredCritic.calls, 0);
+      assert.equal(recovered.projection().planCritique?.current?.status, "resolved");
+      assert.equal(recovered.projection().planRevision, 2);
+    } finally {
+      recoveredStore.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("restart after plan_critique.requested resumes the same critic session", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-plan-critique-restart-requested-"));
+  const database = join(root, "scheduler.sqlite");
+  const store = new SqliteSchedulerStore(database);
+  const critic = new SessionResumePlanCritic(store);
+  try {
+    const runtime = new BuildRuntime(runtimeOptions(store, critic, new ScriptedArchitect(5)));
+    assert.equal((await runtime.step()).action, "plan_required");
+    assert.equal((await runtime.step()).action, "plan_risk_assessed");
+    assert.equal((await runtime.step()).action, "plan_critic_provider_failed");
+    const requested = runtime.projection().planCritique?.current;
+    assert.equal(requested?.status, "requested");
+    assert.equal(requested?.runtime.sessionId, "plan-critic:s1");
+    assert.equal(requested?.critiqueId, "critique-1");
+    store.close();
+
+    const recoveredStore = new SqliteSchedulerStore(database);
+    const recoveredCritic = new SessionResumePlanCritic(recoveredStore);
+    try {
+      const recovered = new BuildRuntime(runtimeOptions(
+        recoveredStore,
+        recoveredCritic,
+        new ScriptedArchitect(5),
+      ));
+      const step = await recovered.step();
+      assert.equal(step.action, "plan_critique_submitted");
+      assert.equal(recoveredCritic.calls, 1);
+      assert.equal(recoveredCritic.resumedSessionId, "plan-critic:s1");
+      assert.equal(recovered.projection().planCritique?.current?.critiqueId, "critique-1");
+      assert.equal(recovered.projection().planCritique?.current?.runtime.sessionId, "plan-critic:s1");
+      assert.equal(
+        recoveredStore.readRun(RUN_ID).filter((event) => event.type === "plan_critique.requested").length,
+        1,
+      );
+    } finally {
+      recoveredStore.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("plan_only runs skip the critique with reason plan_only", async () => {
   await withRuntime({
     critic: { mode: "risk_based" },
@@ -218,6 +301,28 @@ test("plan_only runs skip the critique with reason plan_only", async () => {
     assert.equal(worker.calls.length, 0);
   });
 });
+
+function runtimeOptions(
+  store: SqliteSchedulerStore,
+  critic: PlanCriticDriver,
+  architect: ScriptedArchitect,
+) {
+  return {
+    runId: RUN_ID,
+    store,
+    workerDriver: new ScriptedWorker(store),
+    architectDriver: architect,
+    integrationDriver: {
+      integrate: async () => ({ status: "integrated" as const, integrationRevision: "unused" }),
+    },
+    independentVerifier: stubVerifier(false),
+    planCritic: critic,
+    runPolicy: "finish" as const,
+    maxConcurrency: 1,
+    workspaceFor: async (task: BuildTask) => `C:/work/${task.id}`,
+    clock: CLOCK,
+  };
+}
 
 async function withRuntime(
   options: {
@@ -432,6 +537,59 @@ class ScriptedPlanCritic implements PlanCriticDriver {
       }],
       occurredAt: CLOCK(),
     });
+  }
+}
+
+class SessionResumePlanCritic implements PlanCriticDriver {
+  calls = 0;
+  resumedSessionId: string | undefined;
+  readonly candidateRuntimeIds = [...CRITIC_RUNTIME_IDS];
+  readonly mode = "risk_based" as const;
+  readonly stricterQualification = false;
+  private readonly authority: SchedulerPlanCritiqueAuthority;
+  constructor(store: SqliteSchedulerStore) {
+    this.authority = new SchedulerPlanCritiqueAuthority(store);
+  }
+  architectDeclaration(): "low" | "high" {
+    return "low";
+  }
+  async critique(input: Parameters<PlanCriticDriver["critique"]>[0]): Promise<PlanCriticResult> {
+    this.calls += 1;
+    const current = input.projection.planCritique?.current;
+    if (current?.status === "requested") {
+      this.resumedSessionId = current.runtime.sessionId;
+      this.authority.submitFindings({
+        runId: input.runId,
+        critiqueId: current.critiqueId,
+        planRevision: input.projection.planRevision,
+        sessionId: current.runtime.sessionId,
+        actor: { role: "verifier", id: current.runtime.runtimeId },
+        findings: [blockingFinding()],
+        occurredAt: CLOCK(),
+      });
+      return { status: "submitted", critiqueId: current.critiqueId };
+    }
+    const critiqueId = `critique-${this.calls}`;
+    const sessionId = `plan-critic:s${this.calls}`;
+    this.authority.requestCritique({
+      runId: input.runId,
+      critiqueId,
+      planRevision: input.projection.planRevision,
+      runtime: {
+        runtimeId: "google:verifier",
+        providerId: "google",
+        modelId: "verifier",
+        modelIdentity: "verifier",
+        sessionId,
+      },
+      excludedModels: [{
+        source: "architect",
+        runtimeId: "openai:architect",
+        modelIdentity: "architect",
+      }],
+      occurredAt: CLOCK(),
+    });
+    return { status: "suspended", reason: "provider_error", runtimeId: "google:verifier" };
   }
 }
 

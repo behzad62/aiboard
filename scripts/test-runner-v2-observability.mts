@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   filterRunnerObservability,
   IndependentVerifierManifest,
+  RunnerV2ObservabilityPanel,
   runnerAcceptanceContractSummary,
   runnerBuildControlSummary,
   runnerEvidenceDiagnosticDetail,
@@ -20,6 +21,9 @@ import type {
   NativeBuildObservability,
   NativeBuildProjection,
   NativeIndependentVerifierObservability,
+  NativePlanCritiqueFinding,
+  NativePlanCritiqueProjection,
+  NativePlanCritiqueState,
 } from "../lib/client/runner-v2";
 
 const activity = nativeBuildActivityEntries("run_1", [
@@ -986,6 +990,386 @@ const filtered = filterRunnerObservability({
 }, "fs.read");
 assert.equal(filtered.tools.length, 1);
 assert.equal(filtered.events.length, 0);
+
+const critiqueFailures: string[] = [];
+function checkCritique(name: string, fn: () => void) {
+  try {
+    fn();
+  } catch (error) {
+    critiqueFailures.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+function criticBinding(sessionId: string) {
+  return {
+    runtimeId: "google:verifier",
+    providerId: "google",
+    modelId: "verifier",
+    modelIdentity: "verifier-model",
+    sessionId,
+  };
+}
+function critiqueFinding(
+  finding: Pick<NativePlanCritiqueFinding, "findingId" | "severity" | "claim"> &
+    Partial<NativePlanCritiqueFinding>,
+): NativePlanCritiqueFinding {
+  return {
+    category: "overlapping_scope",
+    taskIds: finding.severity === "blocking" ? ["task-a", "task-b"] : ["task-e"],
+    evidence: finding.severity === "blocking"
+      ? ["task-a objective owns src/cache.ts", "task-b objective owns src/cache.ts"]
+      : ["task-e criteria never mention empty input"],
+    ...finding,
+  };
+}
+function critiqueProjection(
+  status: NativePlanCritiqueProjection["status"],
+  findings: NativePlanCritiqueFinding[],
+  extras: Partial<NativePlanCritiqueProjection> = {},
+): NativePlanCritiqueProjection {
+  const blockingFindingIds = findings
+    .filter((finding) => finding.severity === "blocking")
+    .map((finding) => finding.findingId);
+  return {
+    critiqueId: "critique-blocking",
+    planRevision: 1,
+    runtime: criticBinding("plan-critic:session-1"),
+    excludedModels: [{
+      source: "architect",
+      runtimeId: "openai:architect",
+      modelIdentity: "architect-model",
+    }],
+    status,
+    requestedAt: "2026-09-02T00:00:00.000Z",
+    ...(status === "requested" ? {} : {
+      submittedAt: "2026-09-02T00:00:01.000Z",
+      findings,
+      blockingFindingIds,
+    }),
+    ...extras,
+  };
+}
+function critiqueState(
+  current: NativePlanCritiqueProjection | undefined,
+  extras: Partial<NativePlanCritiqueState> = {},
+): NativePlanCritiqueState {
+  return {
+    policy: { mode: "risk_based" },
+    risk: {
+      planRevision: 1,
+      architectDeclaration: current?.status === "requested" ? "low" : "high",
+      stricterQualification: false,
+      assessment: {
+        risk: extras.skipped ? "low" : "high",
+        reasons: extras.skipped ? [] : [{ code: "task_count", evidence: ["tasks:5"] }],
+      },
+      assessedAt: "2026-09-02T00:00:00.000Z",
+    },
+    history: [],
+    ...(current ? { current } : {}),
+    ...extras,
+  };
+}
+function critiquePanelProjection(
+  planCritique?: NativePlanCritiqueState,
+  planRiskDeclaration?: NativeBuildProjection["planRiskDeclaration"],
+): NativeBuildProjection {
+  const base = projection as unknown as NativeBuildProjection;
+  return {
+    ...base,
+    status: "running",
+    projectHandoff: undefined,
+    tasks: {
+      T1: { ...base.tasks.T1, status: "planned" },
+    },
+    ...(planCritique ? { planCritique } : {}),
+    ...(planRiskDeclaration ? { planRiskDeclaration } : {}),
+  };
+}
+function renderCritiquePanel(
+  build: NativeBuildProjection,
+  events: NativeBuildObservability["events"] = observability.events as unknown as NativeBuildObservability["events"],
+): string {
+  return renderToStaticMarkup(createElement(RunnerV2ObservabilityPanel, {
+    snapshot: {
+      ...(observability as unknown as NativeBuildObservability),
+      events,
+    },
+    projection: build,
+  }));
+}
+const blockingFinding = critiqueFinding({
+  findingId: "F-1",
+  severity: "blocking",
+  claim: "A and B both own src/cache.ts.",
+  criterionIds: [{ taskId: "task-a", criterionId: "criterion-overlap" }],
+});
+const advisoryFinding = critiqueFinding({
+  findingId: "F-2",
+  severity: "advisory",
+  category: "missing_failure_mode",
+  claim: "E ignores empty input.",
+});
+const secondAdvisoryFinding = critiqueFinding({
+  findingId: "F-3",
+  severity: "advisory",
+  category: "unproven_assumption",
+  claim: "E assumes the cache is warm.",
+});
+const secondBlockingFinding = critiqueFinding({
+  findingId: "F-4",
+  severity: "blocking",
+  category: "missing_dependency",
+  claim: "C never waits for A.",
+  taskIds: ["task-c"],
+  evidence: ["C dependencies are empty"],
+});
+const submittedBlocking = critiqueState(critiqueProjection("submitted", [blockingFinding]));
+const submittedMarkup = renderCritiquePanel(
+  critiquePanelProjection(submittedBlocking, {
+    risk: "high",
+    rationale: "The Architect declared overlapping file ownership.",
+    source: "architect",
+  }),
+  [{
+    sequence: 4,
+    type: "plan_critique.submitted",
+    occurredAt: "2026-09-02T00:00:01.000Z",
+    actor: { role: "verifier", id: "google:verifier" },
+    payload: { critiqueId: "critique-blocking" },
+  }],
+);
+checkCritique("submitted blocking attention title", () => {
+  assert.match(submittedMarkup, /Plan critique found blocking issues/);
+});
+checkCritique("submitted blocking attention key", () => {
+  assert.match(submittedMarkup, /data-problem-key="plan-critique:blocking"/);
+});
+checkCritique("submitted blocking claim in detail", () => {
+  assert.match(submittedMarkup, /A and B both own src\/cache\.ts\./);
+});
+checkCritique("submitted blocking reason label", () => {
+  assert.match(submittedMarkup, /Resolving plan critique/);
+});
+checkCritique("submitted blocking summary", () => {
+  assert.match(submittedMarkup, /Plan critique: submitted \(1 blocking, 0 advisory\)/);
+});
+checkCritique("submitted blocking findings list", () => {
+  assert.match(submittedMarkup, /Plan critique findings/);
+  assert.match(submittedMarkup, /blocking/);
+  assert.match(submittedMarkup, /overlapping_scope/);
+  assert.match(submittedMarkup, /task-a, task-b/);
+  assert.match(submittedMarkup, /task-a objective owns src\/cache\.ts/);
+  assert.match(submittedMarkup, /task-a:criterion-overlap/);
+  assert.match(submittedMarkup, /critique-blocking/);
+  assert.match(submittedMarkup, /plan-critic:session-1/);
+  assert.match(submittedMarkup, /google:verifier/);
+  assert.match(submittedMarkup, /architect-model/);
+});
+checkCritique("submitted blocking has no architect resolution yet", () => {
+  assert.doesNotMatch(submittedMarkup, /Architect resolution/);
+});
+checkCritique("submitted blocking renders risk, declaration, policy, and audit event", () => {
+  assert.match(submittedMarkup, /Plan risk: high/);
+  assert.match(submittedMarkup, /The Architect declared overlapping file ownership\./);
+  assert.match(submittedMarkup, /Risk source: architect/);
+  assert.match(submittedMarkup, /Critique mode: risk_based/);
+  assert.match(submittedMarkup, /Earlier critiques: 0/);
+  assert.match(submittedMarkup, /Architect declared: high/);
+  assert.match(submittedMarkup, /plan_critique\.submitted/);
+});
+
+const skippedState: NativePlanCritiqueState = critiqueState(undefined, {
+  risk: {
+    planRevision: 1,
+    architectDeclaration: "low",
+    stricterQualification: false,
+    assessment: { risk: "low", reasons: [] },
+    assessedAt: "2026-09-02T00:00:00.000Z",
+  },
+  skipped: { planRevision: 1, reason: "low_plan_risk", skippedAt: "2026-09-02T00:00:02.000Z" },
+});
+const skippedMarkup = renderCritiquePanel(critiquePanelProjection(skippedState, {
+  risk: "low",
+  rationale: "The plan is a routine change.",
+  source: "legacy_default",
+}));
+checkCritique("skipped summary", () => {
+  assert.match(skippedMarkup, /Plan critique: skipped \(low plan risk\)/);
+});
+checkCritique("skipped does not show blocking attention or resolution label", () => {
+  assert.doesNotMatch(skippedMarkup, /Plan critique found blocking issues/);
+  assert.doesNotMatch(skippedMarkup, /Resolving plan critique/);
+  assert.doesNotMatch(skippedMarkup, /data-problem-key="plan-critique:blocking"/);
+});
+checkCritique("skipped renders low risk and legacy declaration", () => {
+  assert.match(skippedMarkup, /Plan risk: low/);
+  assert.match(skippedMarkup, /The plan is a routine change\./);
+  assert.match(skippedMarkup, /Risk source: legacy_default/);
+  assert.match(skippedMarkup, /Architect declared: low/);
+  assert.match(skippedMarkup, /Earlier critiques: 0/);
+});
+
+const skippedDespiteRequest = critiqueState(
+  critiqueProjection("requested", []),
+  { skipped: { planRevision: 1, reason: "critic_failed", skippedAt: "2026-09-02T00:00:03.000Z" } },
+);
+const skippedDespiteRequestMarkup = renderCritiquePanel(critiquePanelProjection(skippedDespiteRequest));
+checkCritique("skip wins over a lingering requested critique", () => {
+  assert.match(skippedDespiteRequestMarkup, /Plan critique: skipped \(critic failed\)/);
+  assert.doesNotMatch(skippedDespiteRequestMarkup, /Plan critique: requested/);
+});
+
+const resolvedFindings = [blockingFinding, advisoryFinding];
+const resolvedState = critiqueState(critiqueProjection("resolved", resolvedFindings, {
+  resolvedAt: "2026-09-02T00:00:04.000Z",
+  resolution: {
+    planRevisionAfter: 2,
+    resolvedBy: "architect",
+    resolutions: [
+      { findingId: "F-1", resolution: "plan_reconciled", rationale: "B is folded into A." },
+      { findingId: "F-2", resolution: "rejected", rationale: "Advisory resolution must stay hidden." },
+    ],
+  },
+}), {
+  history: [critiqueProjection("resolved", [], { critiqueId: "critique-superseded", supersededByCritiqueId: "critique-blocking" })],
+});
+const resolvedMarkup = renderCritiquePanel(critiquePanelProjection(resolvedState));
+checkCritique("resolved summary counts", () => {
+  assert.match(resolvedMarkup, /Plan critique: resolved \(1 blocking, 1 advisory\)/);
+});
+checkCritique("resolved blocking resolution is rendered", () => {
+  assert.match(resolvedMarkup, /Architect resolution: plan_reconciled - B is folded into A\./);
+});
+checkCritique("resolved advisory resolution is not rendered", () => {
+  assert.doesNotMatch(resolvedMarkup, /Advisory resolution must stay hidden\./);
+});
+checkCritique("resolved critique is not a blocking attention item", () => {
+  assert.doesNotMatch(resolvedMarkup, /Plan critique found blocking issues/);
+  assert.doesNotMatch(resolvedMarkup, /Resolving plan critique/);
+  assert.doesNotMatch(resolvedMarkup, /data-problem-key="plan-critique:blocking"/);
+});
+checkCritique("resolved history count differs from an empty history", () => {
+  assert.match(resolvedMarkup, /Earlier critiques: 1/);
+});
+
+const advisoryOnlyMarkup = renderCritiquePanel(critiquePanelProjection(
+  critiqueState(critiqueProjection("submitted", [advisoryFinding, secondAdvisoryFinding])),
+));
+checkCritique("advisory-only submitted does not use the blocking attention or resolution label", () => {
+  assert.match(advisoryOnlyMarkup, /Plan critique: submitted \(0 blocking, 2 advisory\)/);
+  assert.doesNotMatch(advisoryOnlyMarkup, /Plan critique found blocking issues/);
+  assert.doesNotMatch(advisoryOnlyMarkup, /Resolving plan critique/);
+  assert.doesNotMatch(advisoryOnlyMarkup, /data-problem-key="plan-critique:blocking"/);
+});
+
+const twoBlockingMarkup = renderCritiquePanel(critiquePanelProjection(
+  critiqueState(critiqueProjection("resolved", [blockingFinding, secondBlockingFinding], {
+    resolution: {
+      planRevisionAfter: 2,
+      resolvedBy: "architect",
+      resolutions: [
+        { findingId: "F-1", resolution: "plan_reconciled", rationale: "B is folded into A." },
+        { findingId: "F-4", resolution: "rejected", rationale: "C already depends on the shared module." },
+      ],
+    },
+  })),
+));
+checkCritique("two blocking and zero advisory renders its own count", () => {
+  assert.match(twoBlockingMarkup, /Plan critique: resolved \(2 blocking, 0 advisory\)/);
+  assert.doesNotMatch(twoBlockingMarkup, /Plan critique: resolved \(0 blocking, 2 advisory\)/);
+  assert.doesNotMatch(twoBlockingMarkup, /Plan critique: resolved \(1 blocking, 1 advisory\)/);
+});
+checkCritique("zero blocking and two advisory renders its own count", () => {
+  assert.match(advisoryOnlyMarkup, /Plan critique: submitted \(0 blocking, 2 advisory\)/);
+  const zeroBlockingResolved = renderCritiquePanel(critiquePanelProjection(
+    critiqueState(critiqueProjection("resolved", [advisoryFinding, secondAdvisoryFinding], {
+      resolution: {
+        planRevisionAfter: 1,
+        resolvedBy: "runner",
+        resolutions: [],
+      },
+    })),
+  ));
+  assert.match(zeroBlockingResolved, /Plan critique: resolved \(0 blocking, 2 advisory\)/);
+  assert.doesNotMatch(zeroBlockingResolved, /Plan critique: resolved \(2 blocking, 0 advisory\)/);
+  assert.doesNotMatch(zeroBlockingResolved, /Plan critique found blocking issues/);
+});
+
+const requestedMarkup = renderCritiquePanel(critiquePanelProjection(
+  critiqueState(critiqueProjection("requested", [])),
+));
+checkCritique("requested summary", () => {
+  assert.match(requestedMarkup, /Plan critique: requested/);
+  assert.doesNotMatch(requestedMarkup, /Plan critique findings/);
+  assert.doesNotMatch(requestedMarkup, /Plan critique found blocking issues/);
+  assert.doesNotMatch(requestedMarkup, /Resolving plan critique/);
+});
+
+const zeroFindingsMarkup = renderCritiquePanel(critiquePanelProjection(
+  critiqueState(critiqueProjection("submitted", [])),
+));
+checkCritique("zero findings renders a count and no findings list or attention", () => {
+  assert.match(zeroFindingsMarkup, /Plan critique: submitted \(0 blocking, 0 advisory\)/);
+  assert.doesNotMatch(zeroFindingsMarkup, /Plan critique findings/);
+  assert.doesNotMatch(zeroFindingsMarkup, /Plan critique found blocking issues/);
+  assert.doesNotMatch(zeroFindingsMarkup, /Resolving plan critique/);
+});
+
+const absentMarkup = renderCritiquePanel(critiquePanelProjection());
+checkCritique("absent plan critique renders without a stale critique line", () => {
+  assert.match(absentMarkup, /Build activity/);
+  assert.match(absentMarkup, /Ready to start/);
+  assert.doesNotMatch(absentMarkup, /Plan critique/);
+  assert.doesNotMatch(absentMarkup, /Plan risk:/);
+  assert.doesNotMatch(absentMarkup, /Critique mode:/);
+  assert.doesNotMatch(absentMarkup, /Earlier critiques:/);
+  assert.doesNotMatch(absentMarkup, /Resolving plan critique/);
+  assert.doesNotMatch(absentMarkup, /Architect resolution/);
+  assert.doesNotMatch(absentMarkup, /data-problem-key="plan-critique:blocking"/);
+});
+
+const declarationOnlyMarkup = renderCritiquePanel(critiquePanelProjection(undefined, {
+  risk: "high",
+  rationale: "The Architect declared high risk.",
+  source: "architect",
+}));
+checkCritique("declaration without an assessed critique still renders plan risk", () => {
+  assert.match(declarationOnlyMarkup, /Plan risk: high/);
+  assert.match(declarationOnlyMarkup, /The Architect declared high risk\./);
+  assert.match(declarationOnlyMarkup, /Risk source: architect/);
+  assert.doesNotMatch(declarationOnlyMarkup, /Plan critique:/);
+});
+
+const assessmentOnlyMarkup = renderCritiquePanel(critiquePanelProjection(
+  critiqueState(critiqueProjection("requested", [])),
+));
+checkCritique("assessed risk renders without a declaration", () => {
+  assert.match(assessmentOnlyMarkup, /Plan risk: high/);
+  assert.doesNotMatch(assessmentOnlyMarkup, /Risk source:/);
+});
+
+const assessmentWinsMarkup = renderCritiquePanel(critiquePanelProjection(
+  critiqueState(undefined, {
+    risk: {
+      planRevision: 1,
+      architectDeclaration: "low",
+      stricterQualification: false,
+      assessment: { risk: "low", reasons: [] },
+      assessedAt: "2026-09-02T00:00:00.000Z",
+    },
+    skipped: { planRevision: 1, reason: "low_plan_risk", skippedAt: "2026-09-02T00:00:02.000Z" },
+  }),
+  { risk: "high", rationale: "Stale declaration.", source: "architect" },
+));
+checkCritique("assessed risk wins over a conflicting declaration", () => {
+  assert.match(assessmentWinsMarkup, /Plan risk: low/);
+  assert.doesNotMatch(assessmentWinsMarkup, /Plan risk: high/);
+});
+
+if (critiqueFailures.length > 0) {
+  console.error(critiqueFailures.join("\n"));
+  throw new Error(`${critiqueFailures.length} plan critique UI assertions failed`);
+}
 
 console.log("PASS Runner V2 observability panel");
 
