@@ -62,6 +62,7 @@ export interface ArchitectToolsOptions {
     reason: ArchitectActionReason;
     sequence: number;
   };
+  planCritiqueResolutionAvailable?: boolean;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
 }
@@ -181,6 +182,78 @@ interface PlanVerifierRepairsInput {
   tasks: VerifierRepairTaskInput[];
 }
 
+interface ResolvePlanCritiqueInput {
+  critiqueId: string;
+  planRevision: number;
+  resolutions: Array<{
+    findingId: string;
+    resolution: "plan_reconciled" | "rejected";
+    rationale: string;
+  }>;
+  planReconciliation?: PlanReconciliation;
+}
+
+export function resolvePlanCritiqueTool(
+  store: SchedulerStore,
+  clock: () => string,
+): NativeTool<ResolvePlanCritiqueInput> {
+  return lifecycleTool({
+    name: "resolve_plan_critique",
+    description: "Resolve every blocking plan-critique finding exactly once: reconcile the plan (one atomic planReconciliation) for accepted findings, reject the rest with evidence-based rationale",
+    schema: objectSchema({
+      critiqueId: { type: "string", minLength: 1 },
+      planRevision: { type: "integer", minimum: 1 },
+      resolutions: {
+        type: "array",
+        items: objectSchema({
+          findingId: { type: "string", minLength: 1 },
+          resolution: { enum: ["plan_reconciled", "rejected"] },
+          rationale: { type: "string", minLength: 1 },
+        }, ["findingId", "resolution", "rationale"]),
+      },
+      planReconciliation: planReconciliationSchema(),
+    }, ["critiqueId", "planRevision", "resolutions"]),
+    validate: validateResolvePlanCritique,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const events = store.readRun(context.runId);
+      const projection = events.length > 0 ? rebuildSchedulerProjection(events) : undefined;
+      const current = projection?.planCritique?.current;
+      const resolutionIds = input.resolutions.map((item) => item.findingId);
+      if (
+        !current ||
+        current.status !== "submitted" ||
+        current.critiqueId !== input.critiqueId ||
+        current.planRevision !== input.planRevision ||
+        !sameStringSet(current.blockingFindingIds ?? [], resolutionIds)
+      ) {
+        return errorOutput(
+          "stale_plan_critique",
+          "Plan critique resolution does not match the current submitted critique.",
+        );
+      }
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "plan_critique.resolved",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `plan-critique:resolve:${input.critiqueId}`,
+        payload: {
+          critiqueId: input.critiqueId,
+          planRevision: input.planRevision,
+          resolutions: input.resolutions.map((item) => ({ ...item })),
+          ...(input.planReconciliation ? { planReconciliation: input.planReconciliation } : {}),
+        },
+      }, {
+        type: "architect_action",
+        action: "plan_critique_resolved",
+        referenceId: input.critiqueId,
+      });
+    },
+  });
+}
+
 export function createArchitectTools(
   options: ArchitectToolsOptions
 ): NativeTool<unknown>[] {
@@ -226,13 +299,16 @@ export function createArchitectTools(
   const verifierRepairPlanning = options.verifierRepairPlanAvailable
     ? [...repairPlanning, planVerifierRepairsTool(options.store, clock)]
     : repairPlanning;
+  const critiqueResolution = options.planCritiqueResolutionAvailable
+    ? [...verifierRepairPlanning, resolvePlanCritiqueTool(options.store, clock)]
+    : verifierRepairPlanning;
   if (options.runPolicy === "plan_only") {
     return options.planOnlyCompletionAvailable
-      ? [...verifierRepairPlanning, completeRunTool(options.store, clock, "plan_only")]
-      : verifierRepairPlanning;
+      ? [...critiqueResolution, completeRunTool(options.store, clock, "plan_only")]
+      : critiqueResolution;
   }
   return [
-    ...verifierRepairPlanning,
+    ...critiqueResolution,
     reconcilePlanTool(options.store, clock),
     reviewTaskTool(options.store, clock, options.evidenceStore),
     requestIntegrationTool(options.store, clock),
@@ -1103,7 +1179,7 @@ function planTasksTool(
 ): NativeTool<PlanTasksInput> {
   return lifecycleTool({
     name: "plan_tasks",
-    description: "Create the Architect-owned task graph; only graph mechanics are validated",
+    description: "Create the Architect-owned task graph; only graph mechanics are validated; declare riskDeclaration low or high with a rationale",
     schema: {
       type: "object",
       properties: {
@@ -1776,6 +1852,47 @@ function validatePlanReconciliation(input: unknown): ValidationResult<PlanReconc
     parsePlanReconciliation,
     "revision, summary, and valid taskUpdates are required"
   );
+}
+
+function validateResolvePlanCritique(input: unknown): ValidationResult<ResolvePlanCritiqueInput> {
+  return validateObject(input, (value) => {
+    if (!nonEmpty(value.critiqueId) || !positiveInteger(value.planRevision) || !Array.isArray(value.resolutions)) {
+      return null;
+    }
+    const resolutions: ResolvePlanCritiqueInput["resolutions"] = [];
+    for (const candidate of value.resolutions) {
+      if (
+        !isRecord(candidate) ||
+        !nonEmpty(candidate.findingId) ||
+        (candidate.resolution !== "plan_reconciled" && candidate.resolution !== "rejected") ||
+        !nonEmpty(candidate.rationale)
+      ) return null;
+      resolutions.push({
+        findingId: candidate.findingId,
+        resolution: candidate.resolution,
+        rationale: candidate.rationale,
+      });
+    }
+    const planReconciliation = value.planReconciliation === undefined
+      ? undefined
+      : parsePlanReconciliation(value.planReconciliation);
+    if (value.planReconciliation !== undefined && !planReconciliation) return null;
+    return {
+      critiqueId: value.critiqueId,
+      planRevision: value.planRevision,
+      resolutions,
+      ...(planReconciliation ? { planReconciliation } : {}),
+    };
+  }, "critiqueId, planRevision, and resolutions are required");
+}
+
+function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const remaining = new Set(left);
+  for (const value of right) {
+    if (!remaining.delete(value)) return false;
+  }
+  return remaining.size === 0;
 }
 
 function validateAcknowledgeUserGuidance(

@@ -703,6 +703,10 @@ export function architectLifecycleEventMatchesReason(
           Array.isArray(event.payload.taskUpdates) &&
           event.payload.taskUpdates.some((update) =>
             isRecord(update) && update.taskId === reason.taskId)));
+    case "plan_critique_resolution_required":
+      return event.actor.role === "architect" &&
+        event.type === "plan_critique.resolved" &&
+        event.payload.critiqueId === reason.critiqueId;
   }
 }
 
@@ -722,6 +726,7 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
     "final_verification.repairs_planned",
     "verifier.repairs_planned",
     "task.revised",
+    "plan_critique.resolved",
   ].includes(event.type) ||
     (event.type === "task.transitioned" &&
       event.actor.role === "architect" && event.payload.status === "integrating");
@@ -818,6 +823,13 @@ function architectActionReasonIsApplicable(
     }
     case "integration_resolution_required":
       return projection.tasks[reason.taskId]?.status === "integration_resolution";
+    case "plan_critique_resolution_required": {
+      const current = projection.planCritique?.current;
+      return current?.status === "submitted" &&
+        current.critiqueId === reason.critiqueId &&
+        current.planRevision === reason.planRevision &&
+        sameValue(current.blockingFindingIds ?? [], reason.blockingFindingIds);
+    }
   }
 }
 

@@ -113,6 +113,7 @@ export type AgentLifecycleSignal =
         | "verification_repairs_planned"
         | "user_guidance_acknowledged"
         | "user_question_requested"
+        | "plan_critique_resolved"
         | "run_completed";
       referenceId?: string;
     };

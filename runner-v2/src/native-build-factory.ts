@@ -29,6 +29,7 @@ import {
   type FinalVerificationCheckDriver,
   type IndependentVerifierDriver,
   type IntegrationRuntimeDriver,
+  type PlanCriticDriver,
 } from "./build-runtime.js";
 import type { AgentSessionProjection } from "./agent-session-store.js";
 import { nativeBuildBudgetEnforceabilityError } from "./budget-enforceability.js";
@@ -75,9 +76,16 @@ import {
 } from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
 import {
+  NativePlanCriticRuntime,
+  type NativePlanCritiqueRequest,
+} from "./native-plan-critic-runtime.js";
+import {
   NativeVerifierRuntime,
   type NativeVerifierInspectionRequest,
 } from "./native-verifier-runtime.js";
+import { SchedulerPlanCritiqueAuthority } from "./plan-critique-authority.js";
+import type { PlanRiskReason } from "./plan-critique-contracts.js";
+import { isFinalVerificationTask } from "./task-contracts.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
 import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
@@ -899,6 +907,11 @@ export class NativeBuildFactory {
       contextManifests,
       recordContextPackText: spec.contextRecording === "full",
     });
+    const verifierWorkspaceProvider = {
+      workspaceKind: "independent-verifier" as const,
+      create: async (targetRevision: string) =>
+        await verifierWorkspace.create(targetRevision),
+    };
     const nativeVerifier = new NativeVerifierRuntime({
       git: gitContext,
       executionGrants,
@@ -909,11 +922,7 @@ export class NativeBuildFactory {
       sessions,
       artifacts: this.artifacts,
       evidenceStore,
-      workspaceManager: {
-        workspaceKind: "independent-verifier",
-        create: async (targetRevision) =>
-          await verifierWorkspace.create(targetRevision),
-      },
+      workspaceManager: verifierWorkspaceProvider,
       budgetLedger,
       ledger,
       modelCostEstimators,
@@ -922,6 +931,53 @@ export class NativeBuildFactory {
       contextManifests,
       recordContextPackText: spec.contextRecording === "full",
     });
+    const planCritic = new NativePlanCriticRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      verifierRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      workspaceManager: verifierWorkspaceProvider,
+      critiqueAuthority: new SchedulerPlanCritiqueAuthority(schedulerStore),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const planCriticDriver: PlanCriticDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      mode: spec.planCritique ?? "risk_based",
+      stricterQualification: spec.alwaysRequireIndependentVerifier,
+      architectDeclaration: (projection) => projection.planRiskDeclaration?.risk ?? "low",
+      critique: async ({ projection, riskReasons, preferredRuntimeId, signal }) => {
+        const result = await planCritic.critique(buildPlanCritiqueRequest({
+          runId: spec.runId,
+          objective: spec.objective,
+          architectRuntimeId: projection.runtime.architect.runtimeId ?? spec.architectRuntimeId,
+          projection,
+          baselineRevision: integrationManager.revision,
+          riskReasons,
+          ...(preferredRuntimeId ? { preferredRuntimeId } : {}),
+          ...(signal ? { signal } : {}),
+          providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+            spec.budgetLimits.maxActiveMs,
+            budgetLedger.snapshot(spec.runId).effective.activeMs,
+            Date.now(),
+          ),
+        }));
+        if (result.status === "submitted") {
+          await verifierWorkspace.cleanup();
+          return { status: "submitted", critiqueId: result.critiqueId };
+        }
+        if (result.status === "unavailable") return { status: "unavailable", reason: result.reason };
+        return { status: "suspended", reason: result.reason, runtimeId: result.runtimeId, ...(result.error ? { error: result.error } : {}) };
+      },
+    };
     const independentVerifier: IndependentVerifierDriver = {
       candidateRuntimeIds: [...spec.verifierRuntimeIds],
       alwaysRequireIndependentVerifier:
@@ -1107,6 +1163,7 @@ export class NativeBuildFactory {
         }
       },
       independentVerifier,
+      planCritic: planCriticDriver,
       repairPlanLimit: spec.repairPlanLimit,
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
@@ -2421,6 +2478,59 @@ export function deriveNativeVerifierRiskInput(input: {
         (session) => session.changeSet?.changedPaths ?? [],
       ))].sort(),
     },
+  };
+}
+
+export function buildPlanCritiqueRequest(input: {
+  runId: string;
+  objective: string;
+  architectRuntimeId: string;
+  projection: SchedulerProjection;
+  baselineRevision: string;
+  riskReasons: readonly PlanRiskReason[];
+  preferredRuntimeId?: string;
+  providerRetryDeadlineMs?: number;
+  signal?: AbortSignal;
+}): NativePlanCritiqueRequest {
+  const guidance = [
+    ...Object.values(input.projection.userGuidance).map((item) => ({
+      id: item.guidanceId,
+      kind: "user_guidance" as const,
+      version: item.version,
+      text: item.text,
+    })),
+    ...Object.values(input.projection.guidance)
+      .filter((item) => item.status === "answered" && item.answer)
+      .map((item) => ({
+        id: item.requestId,
+        kind: "architect_answer" as const,
+        version: item.version,
+        text: item.answer!,
+      })),
+    ...Object.values(input.projection.architectQuestions)
+      .filter((item) => item.status === "answered" && item.answer)
+      .map((item) => ({
+        id: item.questionId,
+        kind: "architect_answer" as const,
+        version: item.version,
+        text: item.answer!,
+      })),
+  ].sort((left, right) => left.id.localeCompare(right.id));
+  return {
+    runId: input.runId,
+    objective: input.objective,
+    planRevision: input.projection.planRevision,
+    baselineRevision: input.baselineRevision,
+    architectRuntimeId: input.architectRuntimeId,
+    tasks: Object.values(input.projection.tasks)
+      .filter((task) => task.status !== "cancelled" && !isFinalVerificationTask(task)),
+    riskReasons: [...input.riskReasons],
+    guidance,
+    ...(input.preferredRuntimeId ? { preferredRuntimeId: input.preferredRuntimeId } : {}),
+    ...(input.providerRetryDeadlineMs !== undefined
+      ? { providerRetryDeadlineMs: input.providerRetryDeadlineMs }
+      : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
   };
 }
 

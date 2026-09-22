@@ -145,8 +145,10 @@ test("NativeBuildFactory executes all four bound categories from clean integrati
 
     writeFileSync(join(project, "uncommitted-user-note.txt"), "must remain untouched\n");
     const actions: string[] = [];
-    for (let index = 0; index < 6; index += 1) actions.push((await handle.runtime.step()).action ?? "");
+    for (let index = 0; index < 8; index += 1) actions.push((await handle.runtime.step()).action ?? "");
     assert.deepEqual(actions, [
+      "plan_risk_assessed",
+      "plan_critique_skipped",
       "final_verification_check_completed",
       "final_verification_check_completed",
       "final_verification_check_completed",

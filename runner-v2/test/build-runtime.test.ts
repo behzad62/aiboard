@@ -520,7 +520,7 @@ test("Architect prose or no-op return cannot fabricate scheduler progress", asyn
     await assert.rejects(() => runtime.step(), /without a typed action/i);
     assert.deepEqual(
       store.readRun("run_noop").map((event) => event.type),
-      ["run.initialized", "run.policy_configured", "repair.policy_configured"]
+      ["run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured"]
     );
   } finally {
     store.close();
@@ -554,7 +554,7 @@ test("fresh native Builds expose an empty projection and obey durable user pause
     assert.equal(resumed.pauseReason, undefined);
     assert.deepEqual(
       runtime.events().map((event) => event.type),
-      ["run.initialized", "run.policy_configured", "repair.policy_configured", "run.paused", "run.resumed"]
+      ["run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured", "run.paused", "run.resumed"]
     );
   } finally {
     store.close();

@@ -1,17 +1,25 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
+import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
 import type { AgentSessionProjection } from "../src/agent-session-store.js";
 import {
   buildNativeVerifierInspectionRequest,
+  buildPlanCritiqueRequest,
   deriveNativeVerifierRiskInput,
 } from "../src/native-build-factory.js";
+import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import { assessBuildRisk } from "../src/risk-policy.js";
 import type {
   SchedulerEvent,
   SchedulerProjection,
 } from "../src/scheduler-store.js";
 import type { ToolLedgerEvent } from "../src/tool-ledger.js";
+import { captureGitBaseline, NativeBuildFactory } from "./support/git-fixture.js";
 
 const REVISION = "a".repeat(40);
 const HASH = "b".repeat(64);
@@ -116,6 +124,139 @@ test("factory derives conservative risk and complete verifier context from durab
   assert.equal(request.finalVerification.generationId, "final-generation");
   assert.equal(request.finalVerification.green, true);
   assert.deepEqual(request.riskReasons, risk.assessment.reasons);
+});
+
+test("buildPlanCritiqueRequest maps live ordinary tasks and verifier-shaped guidance", () => {
+  const projection = verifierProjection();
+  const request = buildPlanCritiqueRequest({
+    runId: "run-factory-verifier",
+    objective: "Build the requested application robustly.",
+    architectRuntimeId: "openai:architect",
+    projection,
+    baselineRevision: REVISION,
+    riskReasons: [{ code: "task_count", evidence: ["tasks:5"] }],
+    preferredRuntimeId: "fallback:verifier",
+    providerRetryDeadlineMs: 42_000,
+  });
+  assert.equal(request.planRevision, 1);
+  assert.equal(request.baselineRevision, REVISION);
+  assert.equal(request.architectRuntimeId, "openai:architect");
+  assert.deepEqual(request.tasks.map((task) => task.id), ["task-api"]);
+  assert.equal(request.tasks.some((task) => task.id === "task-cancelled" || task.kind === "final_verification"), false);
+  assert.deepEqual(request.guidance.map((guidance) => [
+    guidance.id,
+    guidance.kind,
+    guidance.text,
+  ]), [
+    ["architect-question", "architect_answer", "Use the approved data model."],
+    ["user-guidance", "user_guidance", "Preserve backward compatibility."],
+    ["worker-guidance", "architect_answer", "Keep the API stable."],
+  ]);
+  assert.equal(request.preferredRuntimeId, "fallback:verifier");
+  assert.equal(request.providerRetryDeadlineMs, 42_000);
+  assert.deepEqual(request.riskReasons, [{ code: "task_count", evidence: ["tasks:5"] }]);
+});
+
+test("a submitted critique leaves no verifier-workspaces/<run> directory", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-plan-critique-factory-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(project, "README.md"), "fixture\n");
+  const runId = "run_critique_cleanup";
+  const architectTurns: ModelTurn[] = [{
+    blocks: [{
+      type: "tool_call",
+      callId: "plan",
+      name: "plan_tasks",
+      arguments: {
+        revision: 1,
+        tasks: [{
+          id: "A",
+          objective: "Implement A",
+          dependencies: [],
+          requiredCapabilities: ["code"],
+          acceptanceCriteria: [{ id: "done", text: "A works." }],
+        }],
+        riskDeclaration: { risk: "low", rationale: "routine" },
+      },
+    }],
+    stopReason: "tool_calls",
+  }, {
+    blocks: [{ type: "text", text: "Plan submitted." }],
+    stopReason: "end_turn",
+  }];
+  const criticTurns: ModelTurn[] = [{
+    blocks: [{
+      type: "tool_call",
+      callId: "critique",
+      name: "submit_plan_critique",
+      arguments: { findings: [] },
+    }],
+    stopReason: "tool_calls",
+  }, {
+    blocks: [{ type: "text", text: "Critique submitted." }],
+    stopReason: "end_turn",
+  }];
+  const architectModel = new ScriptedFactoryModel(architectTurns);
+  const criticModel = new ScriptedFactoryModel(criticTurns);
+  let factory: NativeBuildFactory | undefined;
+  let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId,
+    });
+    factory = new NativeBuildFactory({
+      projectRoot: project,
+      stateDirectory: state,
+      providerConfigs: {
+        load: () => [
+          factoryProvider("openai:architect"),
+          factoryProvider("google:verifier"),
+        ],
+        save: () => undefined,
+        close: () => undefined,
+      },
+      baselineFor: () => baseline.revision,
+      providerModelFactory: (config) =>
+        config.runtimeId === "openai:architect" ? architectModel : criticModel,
+    });
+    handle = await factory.create(await factory.prepareSpec({
+      version: 2,
+      runId,
+      projectId: "fixture-project",
+      objective: "Build the requested application.",
+      architectRuntimeId: "openai:architect",
+      workerRuntimeIds: ["openai:architect"],
+      verifierRuntimeIds: ["google:verifier"],
+      alwaysRequireIndependentVerifier: false,
+      maxConcurrency: 1,
+      permissionProfile: "full",
+      runPolicy: "finish",
+      planCritique: "always",
+      budgetLimits: {},
+      createdAt: "2026-09-02T00:00:00.000Z",
+      idempotencyKey: "critique-cleanup",
+    }));
+    const actions: string[] = [];
+    for (let index = 0; index < 8; index += 1) {
+      const step = await handle.runtime.step();
+      actions.push(step.action ?? step.status);
+      if (step.action === "plan_critique_resolved_by_runner" || step.status === "paused") break;
+    }
+    assert.equal(actions.includes("plan_critique_submitted"), true, actions.join(","));
+    assert.equal(actions.includes("plan_critique_resolved_by_runner"), true, actions.join(","));
+    const workspace = independentVerifierWorkspaceDir(state, runId);
+    assert.equal(existsSync(workspace), false, workspace);
+    assert.equal(existsSync(`${workspace}.metadata.json`), false);
+  } finally {
+    await handle?.close();
+    await factory?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("factory includes the current Architect risk declaration in kernel qualification", () => {
@@ -336,4 +477,46 @@ function verifierSessions(): AgentSessionProjection[] {
       lastSequence: 1,
     },
   ];
+}
+
+function independentVerifierWorkspaceDir(stateDirectory: string, runId: string): string {
+  const readable =
+    runId
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 12) || "run";
+  return join(
+    stateDirectory,
+    "verifier-workspaces",
+    `${readable}-${createHash("sha256").update(runId).digest("hex").slice(0, 10)}`,
+  );
+}
+
+function factoryProvider(runtimeId: string): RunnerProviderConfig {
+  const [providerId, modelId] = runtimeId.split(":");
+  return {
+    runtimeId,
+    providerId: providerId ?? "fixture",
+    modelId: modelId ?? "model",
+    transport: "openai-compatible",
+    baseUrl: "http://127.0.0.1:9",
+    secret: "unused",
+    capabilities: ["code"],
+    priority: runtimeId.includes("architect") ? 1 : 2,
+  };
+}
+
+class ScriptedFactoryModel implements AgentModel {
+  constructor(private readonly turns: Array<ModelTurn | Error>) {}
+
+  async complete(_request: AgentModelRequest): Promise<ModelTurn> {
+    const turn = this.turns.shift();
+    if (!turn) throw new Error("script exhausted");
+    if (turn instanceof Error) throw turn;
+    return {
+      ...turn,
+      usage: turn.usage ?? { inputTokens: 8, outputTokens: 4 },
+    };
+  }
 }

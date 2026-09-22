@@ -325,7 +325,13 @@ export type NativeArchitectActionReason =
       }>;
     }
   | { type: "task_failure_resolution_required"; taskId: string; attempt: number; failureReason: string }
-  | { type: "integration_resolution_required"; taskId: string };
+  | { type: "integration_resolution_required"; taskId: string }
+  | {
+      type: "plan_critique_resolution_required";
+      critiqueId: string;
+      planRevision: number;
+      blockingFindingIds: string[];
+    };
 
 export interface NativeArchitectQuestionProjection {
   questionId: string;
