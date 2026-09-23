@@ -2,9 +2,12 @@
 
 ## Current revision — 2026-09-22 owner amendment, revision 2
 
-**PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED**
+**PLAN BLOCKED — cross-program update not yet re-reviewed.** On 2026-09-23 the owner replaced
+the agent-capability program's `architect_document` task kind with an Architect documentation
+folder (its D6 revision 4). P6.6 text that named the task kind was updated: section 3, T1, T4,
+T7 (export boundary) and the amendment's OA-8. Unblock: one scoped re-review of those edits.
 
-The third independent review (`amendment-review-r3.md`, at `702e06cd`) returned PLAN COVERAGE
+Previously: **PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED** — the third independent review (`amendment-review-r3.md`, at `702e06cd`) returned PLAN COVERAGE
 VERIFIED with no finding. Readiness does not authorize execution: T1 still requires the
 accepted agent-capability program (OA-8) and an owner instruction to start.
 

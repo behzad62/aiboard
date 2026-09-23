@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 3 |
-| PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`, revision 7 |
+| SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 4 |
+| PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`, revision 8 |
 | Moved scope | D4, D5, D7 → P6.6 owner amendment `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md` |
 | Base revision | `6c166f97` on `main` |
 | Planning branch | `docs/agent-capability-and-change-critique` |
-| Program state | **PLANNING — revision 7. PLAN BLOCKED on independent re-review of revision 7.** |
+| Program state | **PLANNING — revision 8. PLAN BLOCKED on independent re-review of revision 8.** |
 | Execution | **NOT STARTED.** No implementation worker has been launched. |
 | Last updated | 2026-09-22 |
 
@@ -31,7 +31,9 @@
 | Revision 7 | SOURCE revision 3 (D1 constraint 4, D6 reachable wiring, D8/AC-24); plan: B2 abort via scheduler `failed` + `cli.ts` hook; A5 via its own `documentApplier` port in `native-build-factory.ts`; new packet R1 |
 | Re-review of revision 7 | INSUFFICIENT (`evidence/plan-review-r6.md`): **B-1 `abort` REPAIRED**; graph, lanes and §5.2 clean; **A5 NOT FIXED** (new defect: `commitTask(taskId)` looks up workspace id `taskId`, not the `<taskId>:document` workspace the applier created — ESC-3's final cycle is spent); **R1-1** (`parseVerifierReviewRequest` in `verifier-contracts.ts` rejects the same-model fallback; cycle 1 of 3) |
 | R1-1 repair | `verifier-contracts.ts` added to R1; both identity rejections accept the selected runtime only for `fresh_context` |
-| **ESC-4** | **A5 — owner decision needed** (budget exhausted) |
+| ESC-4 | owner discussion 2026-09-23: A5's task kind replaced — the Architect maintains `docs/project/**` plus marked `AGENTS.md`/`CLAUDE.md` sections, committed on the integration branch; completion check on `STATE.md` (owner: "A ofcourse") |
+| Revision 8 | SOURCE revision 4 (D6 rewritten, AC-7/AC-17 rewritten, AC-25 added, OQ-2 closed); I2 removed; A4 `write_project_doc`; A5 `commitProjectDocuments` + worker refusal + completion check |
+| **Independent re-review of revision 8** | **OUTSTANDING — blocks PLAN READY** |
 
 ---
 
@@ -65,7 +67,6 @@ All `PLANNED`. Each `Depends on` copies the plan's §4 edge list.
 
 | Packet | Lane | Depends on |
 |---|---|---|
-| I2 | A | — (evidence only; may run beside A0) |
 | A0 | B | — (gates every source packet) |
 | A1 | A | A0 |
 | A2 | A | A1 |
@@ -73,7 +74,7 @@ All `PLANNED`. Each `Depends on` copies the plan's §4 edge list.
 | B1 | B | A0 |
 | B2 | B | B1 |
 | A1b | B | A1, B2 |
-| A4 | B | I2, A3, A1b |
+| A4 | B | A3, A1b |
 | A5 | B | A4 |
 | R1 | B | A3, A5 |
 | D1g | controller | R1 |
@@ -99,8 +100,8 @@ Empty.
 | BL-6 | — | CLOSED — review of revision 6 performed (`plan-review-r5.md`) | controller | — |
 | ESC-3 | — | **DECIDED:** option A for both — one final cycle each for B-1 `abort` and A5 | owner | applied in revision 7 |
 | BL-7 | — | CLOSED — revision 7 re-reviewed (`plan-review-r6.md`) | controller | — |
-| **ESC-4** | A5, A5's dependents R1 and D1g, PLAN READY | A5's commit step addresses the wrong workspace; the reviewer's own fix is to commit the `TaskWorkspace` object via `commitWorkspace` (`workspace-manager.ts:136`); ESC-3's last cycle is spent | owner | decide: one more cycle, or another option |
-| **BL-8** | PLAN READY | R1-1 repair not re-reviewed | controller | re-review with the ESC-4 outcome |
+| ESC-4 | — | A5's commit step addresses the wrong workspace; the reviewer's own fix is to commit the `TaskWorkspace` object via `commitWorkspace` (`workspace-manager.ts:136`); ESC-3's last cycle is spent | owner | **DECIDED:** mechanism replaced (SOURCE D6 revision 4) |
+| **BL-8** | PLAN READY | revision 8 (R1-1, A4, A5, AC-25) not re-reviewed | controller | dispatch one scoped re-review |
 
 ---
 
@@ -127,13 +128,14 @@ Empty.
 | PD-12 | B-1 uses the existing `paused` outcome, never a re-raise | round 3: a re-raise skips `recordOutcome`, so the next tick redispatches the task into the same error. |
 | PD-14 | The suspension registry belongs to B1 and is re-derived before the first dispatch | round 4: it was described in B2 but contracted to no packet, and a restart could redispatch before a waiver took effect. |
 | PD-15 | `abort` uses `RunSupervisor.fail` | round 4: `abort` was unspecified against a `running` task. **Refined by PD-20.** |
-| PD-16 | Architect document writes are a kernel-applied `architect_document` task | round 4: every commit API needs a task workspace, `createChangeSet` needs a task id, commit and evidence, and nothing on the Architect path built them. A real task supplies all three at zero model cost and stays out of `acceptedChangeSessions`, matching ESC-2. |
+| PD-16 | Architect document writes are a kernel-applied `architect_document` task | round 4: every commit API needs a task workspace, `createChangeSet` needs a task id, commit and evidence, and nothing on the Architect path built them. A real task supplies all three at zero model cost and stays out of `acceptedChangeSessions`, matching ESC-2. **SUPERSEDED by PD-23.** |
 | PD-17 | The Architect gets no filesystem mutation tool | writing into `projectRoot` bypasses isolation and the P6 handoff. |
 | PD-18 | The plan critic stays execution-free | P6.6 forbids execution during planning; the change-review stage needing it moved to P6.6. |
 | PD-19 | D4, D5, D7 moved to P6.6 | owner decision. P6.6 already owns coverage review (T3) and deliverable review (T6), and forbids a second competing authority. |
 | PD-20 | `abort` sets the scheduler run `failed` first, then reaches `RunSupervisor.fail` through an `onBuildFailed` hook that `cli.ts` installs | round 5: the live supervisor exists only in `cli.ts`. Scheduler-first makes the crash window safe. |
-| PD-21 | `architect_document` integrates through its own `documentApplier` port, never the worker `integrationDriver` | round 5: that driver requires a worker session, and a worker session would put the document on `acceptedChangeSessions`. |
+| PD-21 | `architect_document` integrates through its own `documentApplier` port, never the worker `integrationDriver` | round 5: that driver requires a worker session, and a worker session would put the document on `acceptedChangeSessions`. **SUPERSEDED by PD-23.** |
 | PD-22 | Reviewer independence: distinct model preferred, fresh context fallback, recorded | owner decision D8, "same rule everywhere". P6.6 applies the same rule to its deliverable and coverage reviewers. |
+| PD-23 | The Architect maintains `docs/project/**` plus marked `AGENTS.md`/`CLAUDE.md` sections; the runner commits them on the integration branch outside the task graph; a new run cannot complete without a fresh `STATE.md` | owner redesign 2026-09-22/23 (ESC-4): any AI tool can pick the project up; handoff's clean-worktree rule keeps writes off the user's folder until handoff; PD-17 still holds — no general filesystem mutation tool |
 
 ---
 

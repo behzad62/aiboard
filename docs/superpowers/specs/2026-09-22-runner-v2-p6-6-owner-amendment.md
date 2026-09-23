@@ -223,9 +223,11 @@ execution during planning. The OA-5 answer path is not planning state.
 
 ## OA-8 — Ordering
 
-P6.6 now depends on the agent-capability program as well as P6.5. That program adds a task kind,
-`architect_document` (runner-applied, no acceptance criteria, no worker, zero model calls), which
-P6.6's task contracts and admission must recognise and exempt. Campaign order:
+P6.6 now depends on the agent-capability program as well as P6.5. That program (SOURCE D6 revision 4) gives the
+Architect a project documentation folder, `docs/project/**`, committed by the runner outside the
+task graph, with a completion check on `docs/project/STATE.md`. It adds **no** task kind. P6.6's
+readiness conditions must keep that check, and its generated exports must not overwrite the
+Architect's files there. Campaign order:
 **P6.5 → agent-capability program → P6.6 → P7.** OA-4's high tier and OA-5's command use depend on
 that program's reader execution; OA-3's model exclusion and OA-6's accounting depend on P6.5 APIs
 now merged at `6c166f97`.

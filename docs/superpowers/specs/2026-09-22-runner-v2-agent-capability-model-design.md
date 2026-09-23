@@ -1,6 +1,6 @@
 # Runner V2 — Agent capability model (design)
 
-**Status:** APPROVED SOURCE, **revision 3** (2026-09-22). Owner-approved. SOURCE for
+**Status:** APPROVED SOURCE, **revision 4** (2026-09-23). Owner-approved. SOURCE for
 `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`.
 
 **Base revision:** `6c166f97` on `main` (P6.5 merged as PR #98; lint cleared as PR #99).
@@ -30,6 +30,15 @@ Two owner decisions from the same session are applied here:
   finding B-1) and for applying `architect_document` (plan finding A5). The fifth review found
   both mechanisms named correctly but unreachable from the files the plan let a packet write.
   Revision 3 states the reachable mechanism in D1 constraint 4 and in D6.
+- **Revision 4 (2026-09-23) — D6 redesigned by the owner (closes ESC-4).** The sixth review
+  found the `architect_document` task still unreachable, with its last repair cycle spent. The
+  owner replaced the mechanism rather than repairing it: the Architect gets real write access to
+  one project documentation folder, `docs/project/**`, plus a marked section of `AGENTS.md` and
+  `CLAUDE.md`; there is no new task kind. Owner, verbatim: "we could simple give hte architect
+  the full access to the docs folder and cut the crap. with correct instructions how to
+  use/update the ddocuments in agents.md file then every AI harness tool can properly work on the
+  projects" — and, on a completion check: "A ofcourse. the whole point of p6.6 is forgetting
+  things and missing things."
 - **D8 added — reviewer independence, the same rule everywhere.** Owner, verbatim: "in the case
   that user had no access to many models that fit as reviewer they might use the same model for
   different tasks. we should not enfore different model in that case but instead use a clear
@@ -146,7 +155,7 @@ asserted at registration across **every broker the role uses**, failing closed.
 | Role | Read project | Run commands | Author project code | Write plans/specs | Lifecycle authority |
 |---|---|---|---|---|---|
 | Worker | yes | yes | yes | yes | none |
-| Architect | yes | **yes (new), in a disposable copy** | no | **yes (new), via D6 only** | plan, review, integrate, complete |
+| Architect | yes | **yes (new), in a disposable copy** | no | **yes (new): `docs/project/**` and the marked `AGENTS.md`/`CLAUDE.md` sections, via D6** | plan, review, integrate, complete |
 | Independent verifier | yes | **yes (new), in its own workspace** | no | no | typed verdict only |
 | Plan critic | yes | **no** | no | no | typed findings only |
 
@@ -193,41 +202,48 @@ Change critique. See the P6.6 owner amendment, requirements EP36–EP38.
 
 Risk-gated review depth. See the P6.6 owner amendment, requirement EP38.
 
-### D6 — Architect plan/spec writes are attributed in git (ESC-2 → option A)
+### D6 — The Architect maintains the project documentation folder (revision 4)
 
-**Decision.** The Architect writes plans and specs through a single lifecycle tool,
-`write_plan_document(path, content, summary)`, admitted only for paths on the investigated
-allow-list. It does **not** receive filesystem mutation tools.
+**Goal.** Any AI tool — this runner, Claude Code, Codex, Cursor, anything that reads
+`AGENTS.md` — can pick up a project and find its spec, plan, decisions and state. Today a
+runner Build keeps those only in its private database, so a different tool starts blind.
 
-**Mechanism.** The write becomes a kernel-applied task of a new kind, `architect_document`.
-The runner — not a model — creates the task workspace, writes the file, commits it with an
-Architect trailer through `WorkspaceManager.commitTask`, builds the ChangeSet through
-`createChangeSet` with the file's content hash as its evidence, and integrates it through
-`IntegrationManager.integrate` (`integration-manager.ts:474`). Applying it costs **no model
-tokens**.
+**Decision.**
 
-**Reachable wiring (revision 3).** The existing integration driver that `BuildRuntime` calls
-loads a **worker** session and rejects a change set it does not find there
-(`native-build-factory.ts:1075-1093`). A document task has no worker session, and giving it one
-would put it on the accepted-change list that ESC-2 keeps it off. So the document path does
-**not** use that driver. The factory, which already owns the `WorkspaceManager` and the
-`IntegrationManager`, supplies `BuildRuntime` with a separate document applier that commits,
-builds the change set and passes the **change-set object** to `IntegrationManager.integrate`
-directly. The worker-session driver is unchanged.
+1. **One folder.** The Architect has real write access to `docs/project/**`, through one
+   lifecycle tool, `write_project_doc(path, content, summary)`. Nothing outside that folder,
+   except (2). The runner enforces the path: `..`, absolute paths, links and anything outside
+   the folder are refused, in the tool **and** at the durable append boundary.
+2. **The entry point.** The same tool may write the Architect's **marked section** of
+   `AGENTS.md` (created if absent) and a one-line marked pointer in `CLAUDE.md` to `AGENTS.md`.
+   The runner splices only between its markers; text outside the markers is never changed. The
+   section says what the folder holds, how to read it first, and how to update it.
+3. **Default layout**, shipped as a template the Architect fills and keeps current:
+   `docs/project/README.md` (how the system works, rules for any agent), `STATE.md` (where
+   things stand, next action), `specs/`, `plans/`, `decisions.md`, `evidence/`.
+4. **Where the write lands.** The runner commits the file **on its integration branch**, with an
+   Architect author and trailer, not into the user's working folder. Two reasons, both checked in
+   the code: automatic handoff requires a clean project worktree and index
+   (`integration-manager.ts:603-611`), so writing into the project during a run would break it;
+   and documents should travel with the code they describe. The documents reach the project at
+   handoff, together with that code. At the next build the Architect reads them from the project.
+   No task, change set or worker session is created; applying a write costs no model call.
+5. **One owner.** Workers do not write `docs/project/**`. A worker change set that touches it is
+   refused at integration through the existing conflict path, naming the paths.
+6. **The database stays the truth for gates.** A document saying "tests passed" approves
+   nothing; acceptance still needs recorded evidence. Documents guide models; they cannot fake a
+   result.
+7. **Completion check (hard).** A new run cannot complete until the Architect has written
+   `docs/project/STATE.md` **after** the run's latest integrated change. Runs created before this
+   change are exempt.
 
-**Why a kernel-applied task.** Four review rounds established that every commit API in the
-tree needs a task workspace, `createChangeSet` (`change-set.ts:63-100`) needs a task id, a task
-commit and at least one evidence hash, and nothing on the Architect path constructs any of
-them. A real task supplies all three and reuses isolation, commit, integration and handoff
-unchanged. Writing into `projectRoot` instead would bypass isolation and the P6 handoff.
+**Why the old limit does not apply here.** The Architect must not author project code because it
+also reviews code. Documentation is not code under review. The isolation reason is met by (4).
 
-**Consistent with ESC-2.** `acceptedChangeSessions` (`native-build-factory.ts:2725-2743`) keeps
-only worker sessions with a submitted ChangeSet. A kernel-applied task has no worker session,
-so it does not appear there — exactly the owner's choice, with no change to that filter. Git
-shows who wrote the plan.
-
-**Explicitly rejected:** Architect filesystem mutation tools (no isolation, no attribution
-path); plans kept only in runner-private state (splits the plan away from git).
+**Explicitly rejected:** the `architect_document` task kind (revisions 2–3: unreachable twice,
+and heavy for a document write); writing into the user's working folder during a run (breaks
+handoff); runner-generated exports as the only documentation (an Architect that forgets to
+document is exactly what P6.6 exists to prevent — the completion check covers it).
 
 ### D7 — MOVED to P6.6
 
@@ -274,10 +290,9 @@ silently reusing an existing session (that is the anchoring the rule exists to r
    reading nor by a clean-room test run. That is P7.
 2. **The Architect cannot repair runner-private state, and D1 does not grant it.** "Solve it"
    is realistically *retry after a transient cause passes*, *waive with a reason*, or *stop*.
-3. **`architect_document` is a new task kind**, not a small edit. The owner was told ESC-2
-   option A was a small change; the review rounds showed a commit path is unavoidable, and the
-   kernel-applied task is the cheapest one that preserves isolation. It costs no tokens to
-   apply, but it is real scheduler work.
+3. **Documents reach the user's working folder at handoff, not live.** During a run they live
+   on the runner's integration branch, beside the code they describe. A run that is never handed
+   off delivers neither its code nor its documents.
 
 ---
 
@@ -291,12 +306,13 @@ silently reusing an existing session (that is the anchoring the rule exists to r
 | AC-4 | The Architect resolves it with exactly one of `retry`, `proceed_without_manifest` (rationale required), `abort`; each durable, attributed and restart-safe. | D1 |
 | AC-5 | Each role's tool surface is an explicit allow-list, asserted across every broker, failing closed. | D2 |
 | AC-6 | The Architect can run commands in a disposable copy, subject to the run permission profile. | D2 |
-| AC-7 | Architect document writes are refused outside the investigated plan/spec allow-list. | D2, D6 |
+| AC-7 | Architect document writes are refused outside `docs/project/**` and the marked `AGENTS.md`/`CLAUDE.md` sections, in the tool and at the durable append boundary. | D2, D6 |
 | AC-8 | Verifier command execution is confined to its own workspace; the plan critic has none; the user's project is never mutated by a reader. | D2 |
 | AC-9a | Verifier and critic cannot commit, integrate, complete, alter the plan or review tasks. | D2 |
 | AC-9b | The Architect retains `review_task`, `request_integration` and `complete_run`. | D2 |
 | AC-10 | The Architect admits only MCP tools the mapper marks `readOnly`, as an asserted class. | D3 |
-| AC-17 | An Architect document write lands as a kernel-applied `architect_document` task, committed with Architect attribution in git, and is **not** listed among accepted change sessions. | D6 |
+| AC-17 | An Architect document write is committed on the integration branch with Architect attribution, with no task, change set, worker session or model call; the `AGENTS.md`/`CLAUDE.md` splice changes only the marked section; a worker change touching `docs/project/**` is refused at integration. | D6 |
+| AC-25 | A new run cannot complete until `docs/project/STATE.md` was written after its latest integrated change; legacy runs are exempt. | D6 |
 | AC-18 | Runs created before this change keep current semantics and remain replayable. | compat |
 | AC-24 | Verifier and plan-critic selection prefer a distinct model and otherwise fall back to the same model in a fresh session with an empty event list; the choice is recorded as `distinct_model` or `fresh_context` and shown; the run pauses only when no eligible candidate exists. | D8 |
 
@@ -306,7 +322,7 @@ AC-11..AC-16 and AC-19..AC-23 moved to P6.6 as EP33–EP38.
 
 ## 5. Open questions
 
-- **OQ-2** — which paths form the Architect's document allow-list. Investigated by plan packet
-  I2 against `tsconfig` includes, `next.config` and the test globs.
+- **OQ-2 — CLOSED by D6 revision 4.** The allow-list is `docs/project/**` plus the marked
+  sections; no investigation is needed.
 
 OQ-1, OQ-3 and OQ-4 moved to P6.6 with the decisions that raised them.
