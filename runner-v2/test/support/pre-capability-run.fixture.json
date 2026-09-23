@@ -1,0 +1,1843 @@
+{
+  "capturedAt": "2026-09-23T00:00:00.000Z",
+  "baseRevision": "6c166f97",
+  "generator": {
+    "path": "C:/Users/b_a_s/AppData/Local/Temp/p6-5/a0/capture.mts",
+    "sha256": "90139f483269b8ca3e65cda9e7fb216d0acdcd79935a5e635b1fd5123d9f0dad"
+  },
+  "schedulerEvents": [
+    {
+      "eventId": "sched_13bdc9a8-6581-4881-8046-2b4122cb2817",
+      "runId": "run-pre-capability",
+      "sequence": 1,
+      "type": "run.initialized",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "run-initialized",
+      "payload": {
+        "objective": "Add a session check on the authentication path."
+      }
+    },
+    {
+      "eventId": "sched_ded445ad-9530-43bf-81e3-482c84c5204f",
+      "runId": "run-pre-capability",
+      "sequence": 2,
+      "type": "run.policy_configured",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "run-policy-configured",
+      "payload": {
+        "runPolicy": "finish"
+      }
+    },
+    {
+      "eventId": "sched_58d1c607-3843-4914-ac8e-f9f85650e219",
+      "runId": "run-pre-capability",
+      "sequence": 3,
+      "type": "verifier.policy_configured",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "verifier-policy-configured",
+      "payload": {
+        "mode": "risk_based",
+        "candidateRuntimeIds": [
+          "google:verifier"
+        ],
+        "alwaysRequireIndependentVerifier": false,
+        "twoPass": true
+      }
+    },
+    {
+      "eventId": "sched_9917c9a4-031b-48a2-8ee1-6ed2338b6fdb",
+      "runId": "run-pre-capability",
+      "sequence": 4,
+      "type": "repair.policy_configured",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "repair-policy",
+      "payload": {
+        "repairPlanLimit": 3
+      }
+    },
+    {
+      "eventId": "sched_a6e69240-9071-487e-932c-474cea4a17a4",
+      "runId": "run-pre-capability",
+      "sequence": 5,
+      "type": "plan_critique.policy_configured",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "plan-critique-policy",
+      "payload": {
+        "mode": "off"
+      }
+    },
+    {
+      "eventId": "sched_0e03ba9b-6d7f-40c7-90a1-be482e6f6808",
+      "runId": "run-pre-capability",
+      "sequence": 6,
+      "type": "plan.created",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "openai:architect"
+      },
+      "idempotencyKey": "plan:1",
+      "payload": {
+        "revision": 1,
+        "tasks": [
+          {
+            "id": "task_feature",
+            "objective": "Implement the authentication session check.",
+            "dependencies": [],
+            "requiredCapabilities": [
+              "code"
+            ],
+            "acceptanceCriteria": [
+              {
+                "id": "behavior",
+                "text": "The feature matches the requested behavior."
+              }
+            ],
+            "acceptanceCriteriaVersion": 1,
+            "status": "planned",
+            "attempt": 0
+          }
+        ]
+      }
+    },
+    {
+      "eventId": "sched_ef904d18-27e5-4a43-951a-4731f3004a6f",
+      "runId": "run-pre-capability",
+      "sequence": 7,
+      "type": "task.transitioned",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "scheduler"
+      },
+      "idempotencyKey": "task:task_feature:attempt:1:assigned",
+      "payload": {
+        "taskId": "task_feature",
+        "status": "assigned",
+        "patch": {
+          "attempt": 1,
+          "assignedWorkerId": "worker_task_feature_1",
+          "workspacePath": "C:/work/task_feature"
+        }
+      }
+    },
+    {
+      "eventId": "sched_20177342-3679-48f4-8221-44e55a054296",
+      "runId": "run-pre-capability",
+      "sequence": 8,
+      "type": "task.transitioned",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "scheduler"
+      },
+      "idempotencyKey": "task:task_feature:attempt:1:running",
+      "payload": {
+        "taskId": "task_feature",
+        "status": "running",
+        "patch": {
+          "workspacePath": "C:/work/task_feature"
+        }
+      }
+    },
+    {
+      "eventId": "sched_24504aef-4b00-406e-a8f5-2d7d84888349",
+      "runId": "run-pre-capability",
+      "sequence": 9,
+      "type": "task.transitioned",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "scheduler"
+      },
+      "idempotencyKey": "task:task_feature:attempt:1:submitted",
+      "payload": {
+        "taskId": "task_feature",
+        "status": "submitted",
+        "patch": {
+          "changeSetId": "changeset_feature",
+          "criterionEvidenceLinks": [
+            {
+              "criterionId": "behavior",
+              "evidenceId": "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487",
+              "artifactHashes": [
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              ],
+              "taskId": "task_feature",
+              "attempt": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "eventId": "sched_c83b8be6-e235-49c2-a859-392e41f433fe",
+      "runId": "run-pre-capability",
+      "sequence": 10,
+      "type": "review.decided",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "openai:architect"
+      },
+      "idempotencyKey": "review:task_feature:attempt:1:changeset:changeset_feature",
+      "payload": {
+        "taskId": "task_feature",
+        "decision": "approved",
+        "summary": "Task intent is satisfied.",
+        "evidenceArtifactHashes": [
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        "criterionVerdicts": [
+          {
+            "criterionId": "behavior",
+            "verdict": "satisfied",
+            "rationale": "The worker evidence supports this criterion.",
+            "evidenceIds": [
+              "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487"
+            ],
+            "artifactHashes": [
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "eventId": "sched_d70bb831-8af3-4c18-ac4e-bef8f68bc01e",
+      "runId": "run-pre-capability",
+      "sequence": 11,
+      "type": "task.transitioned",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "openai:architect"
+      },
+      "idempotencyKey": "integration-request:task_feature",
+      "payload": {
+        "taskId": "task_feature",
+        "status": "integrating"
+      }
+    },
+    {
+      "eventId": "sched_3b962f41-a13c-4b4f-bc9c-06dce18e2c30",
+      "runId": "run-pre-capability",
+      "sequence": 12,
+      "type": "task.transitioned",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "integration-manager"
+      },
+      "idempotencyKey": "integration:changeset_feature:integrated",
+      "payload": {
+        "taskId": "task_feature",
+        "status": "integrated",
+        "patch": {
+          "integrationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "eventId": "sched_644b227e-d085-45a9-b038-e2299fe56d25",
+      "runId": "run-pre-capability",
+      "sequence": 13,
+      "type": "final_verification.generation_created",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-plan:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payload": {
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planVersion": 1,
+        "plan": {
+          "checks": [
+            {
+              "category": "build",
+              "status": "not_applicable",
+              "rationale": "No build fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No build fixture is configured."
+              }
+            },
+            {
+              "category": "tests",
+              "status": "not_applicable",
+              "rationale": "No tests fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No tests fixture is configured."
+              }
+            },
+            {
+              "category": "runtime_smoke",
+              "status": "not_applicable",
+              "rationale": "No runtime_smoke fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No runtime_smoke fixture is configured."
+              }
+            },
+            {
+              "category": "browser",
+              "status": "not_applicable",
+              "rationale": "No browser fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No browser fixture is configured."
+              }
+            }
+          ]
+        },
+        "executionProfile": {
+          "version": 1,
+          "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "inspectedPaths": [
+            "package.json"
+          ],
+          "detectedSignals": [],
+          "commands": {}
+        }
+      }
+    },
+    {
+      "eventId": "sched_ce110801-31e9-4920-92ce-98f3f11f4f97",
+      "runId": "run-pre-capability",
+      "sequence": 14,
+      "type": "final_verification.check_completed",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-generation-e33cdf9c7f7120b9:check:build",
+      "payload": {
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt": 1,
+        "workspacePath": "C:/verification/pre-capability",
+        "startedAt": "2026-09-23T00:00:00.000Z",
+        "finishedAt": "2026-09-23T00:00:00.000Z",
+        "result": {
+          "category": "build",
+          "status": "not_applicable",
+          "rationale": "No build fixture is configured.",
+          "repositoryInspection": {
+            "paths": [
+              "package.json"
+            ],
+            "summary": "No build fixture is configured."
+          },
+          "green": true,
+          "evidenceIds": [],
+          "facts": [],
+          "issues": []
+        }
+      }
+    },
+    {
+      "eventId": "sched_14671a89-06cb-48a8-911a-880a983c149c",
+      "runId": "run-pre-capability",
+      "sequence": 15,
+      "type": "final_verification.check_completed",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-generation-e33cdf9c7f7120b9:check:tests",
+      "payload": {
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt": 1,
+        "workspacePath": "C:/verification/pre-capability",
+        "startedAt": "2026-09-23T00:00:00.000Z",
+        "finishedAt": "2026-09-23T00:00:00.000Z",
+        "result": {
+          "category": "tests",
+          "status": "not_applicable",
+          "rationale": "No tests fixture is configured.",
+          "repositoryInspection": {
+            "paths": [
+              "package.json"
+            ],
+            "summary": "No tests fixture is configured."
+          },
+          "green": true,
+          "evidenceIds": [],
+          "facts": [],
+          "issues": []
+        }
+      }
+    },
+    {
+      "eventId": "sched_1f2504e2-02a9-4355-ab9b-544b16024c8b",
+      "runId": "run-pre-capability",
+      "sequence": 16,
+      "type": "final_verification.check_completed",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-generation-e33cdf9c7f7120b9:check:runtime_smoke",
+      "payload": {
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt": 1,
+        "workspacePath": "C:/verification/pre-capability",
+        "startedAt": "2026-09-23T00:00:00.000Z",
+        "finishedAt": "2026-09-23T00:00:00.000Z",
+        "result": {
+          "category": "runtime_smoke",
+          "status": "not_applicable",
+          "rationale": "No runtime_smoke fixture is configured.",
+          "repositoryInspection": {
+            "paths": [
+              "package.json"
+            ],
+            "summary": "No runtime_smoke fixture is configured."
+          },
+          "green": true,
+          "evidenceIds": [],
+          "facts": [],
+          "issues": []
+        }
+      }
+    },
+    {
+      "eventId": "sched_d6f2cfbe-7239-478b-b3d3-9ff90f6ec5ee",
+      "runId": "run-pre-capability",
+      "sequence": 17,
+      "type": "final_verification.check_completed",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-generation-e33cdf9c7f7120b9:check:browser",
+      "payload": {
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt": 1,
+        "workspacePath": "C:/verification/pre-capability",
+        "startedAt": "2026-09-23T00:00:00.000Z",
+        "finishedAt": "2026-09-23T00:00:00.000Z",
+        "result": {
+          "category": "browser",
+          "status": "not_applicable",
+          "rationale": "No browser fixture is configured.",
+          "repositoryInspection": {
+            "paths": [
+              "package.json"
+            ],
+            "summary": "No browser fixture is configured."
+          },
+          "green": true,
+          "evidenceIds": [],
+          "facts": [],
+          "issues": []
+        }
+      }
+    },
+    {
+      "eventId": "sched_4fc11917-8fe2-4808-94cf-d72a0efc18fe",
+      "runId": "run-pre-capability",
+      "sequence": 18,
+      "type": "final_verification.submitted",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-generation-e33cdf9c7f7120b9:submission",
+      "payload": {
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "submissionId": "final-verification-submission:final-verification-generation-e33cdf9c7f7120b9",
+        "attempt": 1,
+        "submissionResult": {
+          "kind": "final_verification_submission",
+          "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+          "runId": "run-pre-capability",
+          "taskId": "final-verification-e33cdf9c7f7120b9",
+          "attempt": 1,
+          "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "plan": {
+            "checks": [
+              {
+                "category": "build",
+                "status": "not_applicable",
+                "rationale": "No build fixture is configured.",
+                "repositoryInspection": {
+                  "paths": [
+                    "package.json"
+                  ],
+                  "summary": "No build fixture is configured."
+                }
+              },
+              {
+                "category": "tests",
+                "status": "not_applicable",
+                "rationale": "No tests fixture is configured.",
+                "repositoryInspection": {
+                  "paths": [
+                    "package.json"
+                  ],
+                  "summary": "No tests fixture is configured."
+                }
+              },
+              {
+                "category": "runtime_smoke",
+                "status": "not_applicable",
+                "rationale": "No runtime_smoke fixture is configured.",
+                "repositoryInspection": {
+                  "paths": [
+                    "package.json"
+                  ],
+                  "summary": "No runtime_smoke fixture is configured."
+                }
+              },
+              {
+                "category": "browser",
+                "status": "not_applicable",
+                "rationale": "No browser fixture is configured.",
+                "repositoryInspection": {
+                  "paths": [
+                    "package.json"
+                  ],
+                  "summary": "No browser fixture is configured."
+                }
+              }
+            ]
+          },
+          "executionProfile": {
+            "version": 1,
+            "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "inspectedPaths": [
+              "package.json"
+            ],
+            "detectedSignals": [],
+            "commands": {}
+          },
+          "checks": [
+            {
+              "category": "build",
+              "status": "not_applicable",
+              "green": true,
+              "rationale": "No build fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No build fixture is configured."
+              },
+              "evidenceIds": [],
+              "facts": []
+            },
+            {
+              "category": "tests",
+              "status": "not_applicable",
+              "green": true,
+              "rationale": "No tests fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No tests fixture is configured."
+              },
+              "evidenceIds": [],
+              "facts": []
+            },
+            {
+              "category": "runtime_smoke",
+              "status": "not_applicable",
+              "green": true,
+              "rationale": "No runtime_smoke fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No runtime_smoke fixture is configured."
+              },
+              "evidenceIds": [],
+              "facts": []
+            },
+            {
+              "category": "browser",
+              "status": "not_applicable",
+              "green": true,
+              "rationale": "No browser fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No browser fixture is configured."
+              },
+              "evidenceIds": [],
+              "facts": []
+            }
+          ],
+          "evidenceIds": [],
+          "submittedAt": "2026-09-23T00:00:00.000Z",
+          "green": true
+        }
+      }
+    },
+    {
+      "eventId": "sched_6dba4757-936a-412b-99ec-a10a2f3272e4",
+      "runId": "run-pre-capability",
+      "sequence": 19,
+      "type": "final_verification.cleanup_started",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-generation-e33cdf9c7f7120b9:cleanup:1:started",
+      "payload": {
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "sched_8986ae73-7fce-4e65-a1c4-cb7cb5695398",
+      "runId": "run-pre-capability",
+      "sequence": 20,
+      "type": "final_verification.cleanup_succeeded",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-generation-e33cdf9c7f7120b9:cleanup:1:succeeded",
+      "payload": {
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "sched_6c31bcca-01d2-4920-8f78-13eec9f2d364",
+      "runId": "run-pre-capability",
+      "sequence": 21,
+      "type": "final_verification.review_requested",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "final-verification-generation-e33cdf9c7f7120b9:review-request",
+      "payload": {
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "submissionId": "final-verification-submission:final-verification-generation-e33cdf9c7f7120b9",
+        "reviewId": "final-verification-review:final-verification-generation-e33cdf9c7f7120b9",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "sched_eb90b438-112d-4596-b7e0-085653bc110d",
+      "runId": "run-pre-capability",
+      "sequence": 22,
+      "type": "final_verification.review_decided",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "architect",
+        "id": "openai:architect"
+      },
+      "idempotencyKey": "final-verification-review:final-verification-generation-e33cdf9c7f7120b9",
+      "payload": {
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "submissionId": "final-verification-submission:final-verification-generation-e33cdf9c7f7120b9",
+        "attempt": 1,
+        "decision": "approved",
+        "summary": "Not-applicable checks match the repository and the integration is approved.",
+        "architectRisk": "high",
+        "architectRiskRationale": "The change touches an authentication path.",
+        "categoryReviews": [
+          {
+            "category": "build",
+            "verdict": "approved",
+            "rationale": "build is approved.",
+            "evidenceIds": []
+          },
+          {
+            "category": "tests",
+            "verdict": "approved",
+            "rationale": "tests is approved.",
+            "evidenceIds": []
+          },
+          {
+            "category": "runtime_smoke",
+            "verdict": "approved",
+            "rationale": "runtime_smoke is approved.",
+            "evidenceIds": []
+          },
+          {
+            "category": "browser",
+            "verdict": "approved",
+            "rationale": "browser is approved.",
+            "evidenceIds": []
+          }
+        ],
+        "reviewId": "final-verification-review:final-verification-generation-e33cdf9c7f7120b9"
+      }
+    },
+    {
+      "eventId": "sched_4f2a5528-ecdd-4956-8357-9e47bdd075ce",
+      "runId": "run-pre-capability",
+      "sequence": 23,
+      "type": "build.risk_assessed",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "build-runtime"
+      },
+      "idempotencyKey": "build-risk:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payload": {
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "input": {
+          "architectDeclaration": "low",
+          "stricterQualification": false,
+          "kernelFacts": {
+            "destructiveEffects": false,
+            "credentialEffects": false,
+            "externalWriteEffects": false,
+            "integrationConflict": false,
+            "changedPaths": [
+              "src/auth/session.ts"
+            ]
+          }
+        },
+        "assessment": {
+          "risk": "high",
+          "reasons": [
+            {
+              "code": "security_auth_crypto_path",
+              "evidence": [
+                "src/auth/session.ts"
+              ]
+            }
+          ],
+          "normalizedChangedPaths": [
+            "src/auth/session.ts"
+          ]
+        }
+      }
+    },
+    {
+      "eventId": "sched_eecbf312-609d-4d0b-b55a-fe04202244aa",
+      "runId": "run-pre-capability",
+      "sequence": 24,
+      "type": "verifier.review_requested",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "runner",
+        "id": "native-verifier-runtime"
+      },
+      "idempotencyKey": "verifier:review:verifier-review:ea09e64211114e7c077f42e642f5c7ae2ba05a8d6e627a754d277bfbb917cb3a",
+      "payload": {
+        "reviewId": "verifier-review:ea09e64211114e7c077f42e642f5c7ae2ba05a8d6e627a754d277bfbb917cb3a",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "finalVerificationGenerationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "runtime": {
+          "runtimeId": "google:verifier",
+          "providerId": "google",
+          "modelId": "verifier-model",
+          "modelIdentity": "verifier-model",
+          "sessionId": "verifier:run-pre-capability:1646b40743505ef7e0576c7d"
+        },
+        "excludedModels": [
+          {
+            "source": "architect",
+            "runtimeId": "openai:architect",
+            "modelIdentity": "architect-model"
+          }
+        ],
+        "criteria": [
+          {
+            "taskId": "task_feature",
+            "criterionId": "behavior"
+          }
+        ],
+        "twoPass": true,
+        "baselineRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "eventId": "sched_d3e235e6-7744-4106-95be-6c00ba5c839f",
+      "runId": "run-pre-capability",
+      "sequence": 25,
+      "type": "verifier.expectations_recorded",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "verifier",
+        "id": "google:verifier"
+      },
+      "idempotencyKey": "verifier:expectations:verifier-review:ea09e64211114e7c077f42e642f5c7ae2ba05a8d6e627a754d277bfbb917cb3a",
+      "payload": {
+        "reviewId": "verifier-review:ea09e64211114e7c077f42e642f5c7ae2ba05a8d6e627a754d277bfbb917cb3a",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "baselineRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sessionId": "verifier:run-pre-capability:1c9da69a50f1c280295af5cb",
+        "expectations": [
+          {
+            "taskId": "task_feature",
+            "criterionId": "behavior",
+            "expectedBehaviors": [
+              "The feature matches the requested behavior."
+            ],
+            "edgeCases": [
+              "empty input"
+            ],
+            "regressionSurfaces": [
+              "src/auth/session.ts"
+            ],
+            "requiredTests": [
+              "feature behavior"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "eventId": "sched_91411d75-bcac-4def-989e-c886c369e409",
+      "runId": "run-pre-capability",
+      "sequence": 26,
+      "type": "verifier.verdict_submitted",
+      "occurredAt": "2026-09-23T00:00:00.000Z",
+      "actor": {
+        "role": "verifier",
+        "id": "google:verifier"
+      },
+      "idempotencyKey": "verifier:verdict:verifier-review:ea09e64211114e7c077f42e642f5c7ae2ba05a8d6e627a754d277bfbb917cb3a",
+      "payload": {
+        "reviewId": "verifier-review:ea09e64211114e7c077f42e642f5c7ae2ba05a8d6e627a754d277bfbb917cb3a",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sessionId": "verifier:run-pre-capability:1646b40743505ef7e0576c7d",
+        "criterionVerdicts": [
+          {
+            "taskId": "task_feature",
+            "criterionId": "behavior",
+            "verdict": "satisfied",
+            "rationale": "The integrated feature matches the recorded expectations.",
+            "evidenceIds": [
+              "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "schedulerProjection": {
+    "runId": "run-pre-capability",
+    "initialObjective": "Add a session check on the authentication path.",
+    "status": "running",
+    "acceptanceContractStatus": "current",
+    "acceptanceUpgradeRequiredEventRecorded": false,
+    "planRevision": 1,
+    "tasks": {
+      "task_feature": {
+        "id": "task_feature",
+        "objective": "Implement the authentication session check.",
+        "dependencies": [],
+        "requiredCapabilities": [
+          "code"
+        ],
+        "acceptanceCriteria": [
+          {
+            "id": "behavior",
+            "text": "The feature matches the requested behavior."
+          }
+        ],
+        "acceptanceCriteriaVersion": 1,
+        "status": "integrated",
+        "attempt": 1,
+        "assignedWorkerId": "worker_task_feature_1",
+        "workspacePath": "C:/work/task_feature",
+        "changeSetId": "changeset_feature",
+        "criterionEvidenceLinks": [
+          {
+            "criterionId": "behavior",
+            "evidenceId": "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487",
+            "artifactHashes": [
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            ],
+            "taskId": "task_feature",
+            "attempt": 1
+          }
+        ],
+        "integrationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "final-verification-e33cdf9c7f7120b9": {
+        "id": "final-verification-e33cdf9c7f7120b9",
+        "kind": "final_verification",
+        "objective": "Verify the canonical integrated revision.",
+        "dependencies": [],
+        "status": "planned",
+        "requiredCapabilities": [
+          "verification"
+        ],
+        "attempt": 0,
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planVersion": 1,
+        "verificationPlan": {
+          "checks": [
+            {
+              "category": "build",
+              "status": "not_applicable",
+              "rationale": "No build fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No build fixture is configured."
+              }
+            },
+            {
+              "category": "tests",
+              "status": "not_applicable",
+              "rationale": "No tests fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No tests fixture is configured."
+              }
+            },
+            {
+              "category": "runtime_smoke",
+              "status": "not_applicable",
+              "rationale": "No runtime_smoke fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No runtime_smoke fixture is configured."
+              }
+            },
+            {
+              "category": "browser",
+              "status": "not_applicable",
+              "rationale": "No browser fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No browser fixture is configured."
+              }
+            }
+          ]
+        },
+        "verificationSubmissionId": "final-verification-submission:final-verification-generation-e33cdf9c7f7120b9",
+        "verificationReviewId": "final-verification-review:final-verification-generation-e33cdf9c7f7120b9"
+      }
+    },
+    "guidance": {},
+    "userGuidance": {},
+    "userGuidanceVersion": 0,
+    "architectQuestions": {},
+    "architectQuestionVersion": 0,
+    "reviews": {
+      "task_feature": {
+        "taskId": "task_feature",
+        "attempt": 1,
+        "acceptanceCriteriaVersion": 1,
+        "status": "approved",
+        "summary": "Task intent is satisfied.",
+        "evidenceArtifactHashes": [
+          "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        ],
+        "criterionEvidenceLinks": [
+          {
+            "criterionId": "behavior",
+            "evidenceId": "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487",
+            "artifactHashes": [
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            ],
+            "taskId": "task_feature",
+            "attempt": 1
+          }
+        ],
+        "criterionVerdicts": [
+          {
+            "criterionId": "behavior",
+            "verdict": "satisfied",
+            "rationale": "The worker evidence supports this criterion.",
+            "evidenceIds": [
+              "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487"
+            ],
+            "artifactHashes": [
+              "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            ]
+          }
+        ]
+      }
+    },
+    "submissionHistory": {
+      "task_feature": [
+        {
+          "taskId": "task_feature",
+          "attempt": 1,
+          "acceptanceCriteriaVersion": 1,
+          "changeSetId": "changeset_feature",
+          "criterionEvidenceLinks": [
+            {
+              "criterionId": "behavior",
+              "evidenceId": "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487",
+              "artifactHashes": [
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              ],
+              "taskId": "task_feature",
+              "attempt": 1
+            }
+          ]
+        }
+      ]
+    },
+    "reviewHistory": {
+      "task_feature": [
+        {
+          "taskId": "task_feature",
+          "attempt": 1,
+          "acceptanceCriteriaVersion": 1,
+          "status": "approved",
+          "summary": "Task intent is satisfied.",
+          "evidenceArtifactHashes": [
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ],
+          "criterionEvidenceLinks": [
+            {
+              "criterionId": "behavior",
+              "evidenceId": "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487",
+              "artifactHashes": [
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              ],
+              "taskId": "task_feature",
+              "attempt": 1
+            }
+          ],
+          "criterionVerdicts": [
+            {
+              "criterionId": "behavior",
+              "verdict": "satisfied",
+              "rationale": "The worker evidence supports this criterion.",
+              "evidenceIds": [
+                "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487"
+              ],
+              "artifactHashes": [
+                "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "runtime": {
+      "providerHealth": {},
+      "workerAssignments": {},
+      "architect": {}
+    },
+    "lastSequence": 26,
+    "runPolicy": "finish",
+    "verifierPolicy": {
+      "mode": "risk_based",
+      "candidateRuntimeIds": [
+        "google:verifier"
+      ],
+      "alwaysRequireIndependentVerifier": false,
+      "twoPass": true
+    },
+    "repairCycles": {
+      "limit": 3,
+      "used": 0,
+      "extensions": 0
+    },
+    "planCritique": {
+      "policy": {
+        "mode": "off"
+      },
+      "history": []
+    },
+    "planRiskDeclaration": {
+      "risk": "low",
+      "source": "legacy_default"
+    },
+    "lastArchitectActionEvent": {
+      "sequence": 22,
+      "type": "final_verification.review_decided",
+      "actor": {
+        "role": "architect",
+        "id": "openai:architect"
+      },
+      "payload": {
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "submissionId": "final-verification-submission:final-verification-generation-e33cdf9c7f7120b9",
+        "attempt": 1,
+        "decision": "approved",
+        "summary": "Not-applicable checks match the repository and the integration is approved.",
+        "architectRisk": "high",
+        "architectRiskRationale": "The change touches an authentication path.",
+        "categoryReviews": [
+          {
+            "category": "build",
+            "verdict": "approved",
+            "rationale": "build is approved.",
+            "evidenceIds": []
+          },
+          {
+            "category": "tests",
+            "verdict": "approved",
+            "rationale": "tests is approved.",
+            "evidenceIds": []
+          },
+          {
+            "category": "runtime_smoke",
+            "verdict": "approved",
+            "rationale": "runtime_smoke is approved.",
+            "evidenceIds": []
+          },
+          {
+            "category": "browser",
+            "verdict": "approved",
+            "rationale": "browser is approved.",
+            "evidenceIds": []
+          }
+        ],
+        "reviewId": "final-verification-review:final-verification-generation-e33cdf9c7f7120b9"
+      }
+    },
+    "integrationRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "finalVerification": {
+      "current": {
+        "taskId": "final-verification-e33cdf9c7f7120b9",
+        "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "planVersion": 1,
+        "plan": {
+          "checks": [
+            {
+              "category": "build",
+              "status": "not_applicable",
+              "rationale": "No build fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No build fixture is configured."
+              }
+            },
+            {
+              "category": "tests",
+              "status": "not_applicable",
+              "rationale": "No tests fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No tests fixture is configured."
+              }
+            },
+            {
+              "category": "runtime_smoke",
+              "status": "not_applicable",
+              "rationale": "No runtime_smoke fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No runtime_smoke fixture is configured."
+              }
+            },
+            {
+              "category": "browser",
+              "status": "not_applicable",
+              "rationale": "No browser fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No browser fixture is configured."
+              }
+            }
+          ]
+        },
+        "executionProfile": {
+          "version": 1,
+          "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "inspectedPaths": [
+            "package.json"
+          ],
+          "detectedSignals": [],
+          "commands": {}
+        },
+        "state": "current",
+        "completedChecks": [
+          {
+            "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+            "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attempt": 1,
+            "workspacePath": "C:/verification/pre-capability",
+            "startedAt": "2026-09-23T00:00:00.000Z",
+            "finishedAt": "2026-09-23T00:00:00.000Z",
+            "category": "build",
+            "status": "not_applicable",
+            "green": true,
+            "rationale": "No build fixture is configured.",
+            "repositoryInspection": {
+              "paths": [
+                "package.json"
+              ],
+              "summary": "No build fixture is configured."
+            },
+            "evidenceIds": [],
+            "facts": [],
+            "issues": []
+          },
+          {
+            "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+            "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attempt": 1,
+            "workspacePath": "C:/verification/pre-capability",
+            "startedAt": "2026-09-23T00:00:00.000Z",
+            "finishedAt": "2026-09-23T00:00:00.000Z",
+            "category": "tests",
+            "status": "not_applicable",
+            "green": true,
+            "rationale": "No tests fixture is configured.",
+            "repositoryInspection": {
+              "paths": [
+                "package.json"
+              ],
+              "summary": "No tests fixture is configured."
+            },
+            "evidenceIds": [],
+            "facts": [],
+            "issues": []
+          },
+          {
+            "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+            "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attempt": 1,
+            "workspacePath": "C:/verification/pre-capability",
+            "startedAt": "2026-09-23T00:00:00.000Z",
+            "finishedAt": "2026-09-23T00:00:00.000Z",
+            "category": "runtime_smoke",
+            "status": "not_applicable",
+            "green": true,
+            "rationale": "No runtime_smoke fixture is configured.",
+            "repositoryInspection": {
+              "paths": [
+                "package.json"
+              ],
+              "summary": "No runtime_smoke fixture is configured."
+            },
+            "evidenceIds": [],
+            "facts": [],
+            "issues": []
+          },
+          {
+            "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+            "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "attempt": 1,
+            "workspacePath": "C:/verification/pre-capability",
+            "startedAt": "2026-09-23T00:00:00.000Z",
+            "finishedAt": "2026-09-23T00:00:00.000Z",
+            "category": "browser",
+            "status": "not_applicable",
+            "green": true,
+            "rationale": "No browser fixture is configured.",
+            "repositoryInspection": {
+              "paths": [
+                "package.json"
+              ],
+              "summary": "No browser fixture is configured."
+            },
+            "evidenceIds": [],
+            "facts": [],
+            "issues": []
+          }
+        ],
+        "submission": {
+          "submissionId": "final-verification-submission:final-verification-generation-e33cdf9c7f7120b9",
+          "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+          "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "attempt": 1
+        },
+        "submissionResult": {
+          "kind": "final_verification_submission",
+          "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+          "runId": "run-pre-capability",
+          "taskId": "final-verification-e33cdf9c7f7120b9",
+          "attempt": 1,
+          "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "plan": {
+            "checks": [
+              {
+                "category": "build",
+                "status": "not_applicable",
+                "rationale": "No build fixture is configured.",
+                "repositoryInspection": {
+                  "paths": [
+                    "package.json"
+                  ],
+                  "summary": "No build fixture is configured."
+                }
+              },
+              {
+                "category": "tests",
+                "status": "not_applicable",
+                "rationale": "No tests fixture is configured.",
+                "repositoryInspection": {
+                  "paths": [
+                    "package.json"
+                  ],
+                  "summary": "No tests fixture is configured."
+                }
+              },
+              {
+                "category": "runtime_smoke",
+                "status": "not_applicable",
+                "rationale": "No runtime_smoke fixture is configured.",
+                "repositoryInspection": {
+                  "paths": [
+                    "package.json"
+                  ],
+                  "summary": "No runtime_smoke fixture is configured."
+                }
+              },
+              {
+                "category": "browser",
+                "status": "not_applicable",
+                "rationale": "No browser fixture is configured.",
+                "repositoryInspection": {
+                  "paths": [
+                    "package.json"
+                  ],
+                  "summary": "No browser fixture is configured."
+                }
+              }
+            ]
+          },
+          "executionProfile": {
+            "version": 1,
+            "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "inspectedPaths": [
+              "package.json"
+            ],
+            "detectedSignals": [],
+            "commands": {}
+          },
+          "checks": [
+            {
+              "category": "build",
+              "status": "not_applicable",
+              "green": true,
+              "rationale": "No build fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No build fixture is configured."
+              },
+              "evidenceIds": [],
+              "facts": []
+            },
+            {
+              "category": "tests",
+              "status": "not_applicable",
+              "green": true,
+              "rationale": "No tests fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No tests fixture is configured."
+              },
+              "evidenceIds": [],
+              "facts": []
+            },
+            {
+              "category": "runtime_smoke",
+              "status": "not_applicable",
+              "green": true,
+              "rationale": "No runtime_smoke fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No runtime_smoke fixture is configured."
+              },
+              "evidenceIds": [],
+              "facts": []
+            },
+            {
+              "category": "browser",
+              "status": "not_applicable",
+              "green": true,
+              "rationale": "No browser fixture is configured.",
+              "repositoryInspection": {
+                "paths": [
+                  "package.json"
+                ],
+                "summary": "No browser fixture is configured."
+              },
+              "evidenceIds": [],
+              "facts": []
+            }
+          ],
+          "evidenceIds": [],
+          "submittedAt": "2026-09-23T00:00:00.000Z",
+          "green": true
+        },
+        "cleanup": {
+          "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+          "taskId": "final-verification-e33cdf9c7f7120b9",
+          "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "attempt": 1,
+          "status": "succeeded",
+          "startedAt": "2026-09-23T00:00:00.000Z",
+          "finishedAt": "2026-09-23T00:00:00.000Z"
+        },
+        "review": {
+          "reviewId": "final-verification-review:final-verification-generation-e33cdf9c7f7120b9",
+          "submissionId": "final-verification-submission:final-verification-generation-e33cdf9c7f7120b9",
+          "generationId": "final-verification-generation-e33cdf9c7f7120b9",
+          "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "attempt": 1,
+          "status": "approved",
+          "decision": {
+            "decision": "approved",
+            "summary": "Not-applicable checks match the repository and the integration is approved.",
+            "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "architectRisk": {
+              "risk": "high",
+              "rationale": "The change touches an authentication path.",
+              "source": "architect"
+            },
+            "categoryReviews": [
+              {
+                "category": "build",
+                "verdict": "approved",
+                "rationale": "build is approved.",
+                "evidenceIds": []
+              },
+              {
+                "category": "tests",
+                "verdict": "approved",
+                "rationale": "tests is approved.",
+                "evidenceIds": []
+              },
+              {
+                "category": "runtime_smoke",
+                "verdict": "approved",
+                "rationale": "runtime_smoke is approved.",
+                "evidenceIds": []
+              },
+              {
+                "category": "browser",
+                "verdict": "approved",
+                "rationale": "browser is approved.",
+                "evidenceIds": []
+              }
+            ],
+            "failedCategories": []
+          }
+        }
+      },
+      "history": []
+    },
+    "buildRisk": {
+      "current": {
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "input": {
+          "architectDeclaration": "low",
+          "stricterQualification": false,
+          "kernelFacts": {
+            "destructiveEffects": false,
+            "credentialEffects": false,
+            "externalWriteEffects": false,
+            "integrationConflict": false,
+            "changedPaths": [
+              "src/auth/session.ts"
+            ]
+          }
+        },
+        "assessment": {
+          "risk": "high",
+          "reasons": [
+            {
+              "code": "security_auth_crypto_path",
+              "evidence": [
+                "src/auth/session.ts"
+              ]
+            }
+          ],
+          "normalizedChangedPaths": [
+            "src/auth/session.ts"
+          ]
+        },
+        "state": "current",
+        "assessedAt": "2026-09-23T00:00:00.000Z"
+      },
+      "history": []
+    },
+    "verifier": {
+      "current": {
+        "reviewId": "verifier-review:ea09e64211114e7c077f42e642f5c7ae2ba05a8d6e627a754d277bfbb917cb3a",
+        "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "finalVerificationGenerationId": "final-verification-generation-e33cdf9c7f7120b9",
+        "runtime": {
+          "runtimeId": "google:verifier",
+          "providerId": "google",
+          "modelId": "verifier-model",
+          "modelIdentity": "verifier-model",
+          "sessionId": "verifier:run-pre-capability:1646b40743505ef7e0576c7d"
+        },
+        "excludedModels": [
+          {
+            "source": "architect",
+            "runtimeId": "openai:architect",
+            "modelIdentity": "architect-model"
+          }
+        ],
+        "criteria": [
+          {
+            "taskId": "task_feature",
+            "criterionId": "behavior"
+          }
+        ],
+        "status": "submitted",
+        "state": "current",
+        "requestedAt": "2026-09-23T00:00:00.000Z",
+        "twoPass": true,
+        "baselineRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "expectations": [
+          {
+            "taskId": "task_feature",
+            "criterionId": "behavior",
+            "expectedBehaviors": [
+              "The feature matches the requested behavior."
+            ],
+            "edgeCases": [
+              "empty input"
+            ],
+            "regressionSurfaces": [
+              "src/auth/session.ts"
+            ],
+            "requiredTests": [
+              "feature behavior"
+            ]
+          }
+        ],
+        "expectationsSessionId": "verifier:run-pre-capability:1c9da69a50f1c280295af5cb",
+        "verdict": {
+          "reviewId": "verifier-review:ea09e64211114e7c077f42e642f5c7ae2ba05a8d6e627a754d277bfbb917cb3a",
+          "targetRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "sessionId": "verifier:run-pre-capability:1646b40743505ef7e0576c7d",
+          "satisfied": true,
+          "criterionVerdicts": [
+            {
+              "taskId": "task_feature",
+              "criterionId": "behavior",
+              "verdict": "satisfied",
+              "rationale": "The integrated feature matches the recorded expectations.",
+              "evidenceIds": [
+                "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487"
+              ]
+            }
+          ],
+          "submittedAt": "2026-09-23T00:00:00.000Z"
+        }
+      },
+      "history": []
+    }
+  },
+  "evidenceRecords": [
+    {
+      "id": "evidence_bb1f08a0038baa05b2aab21558c05882d3131e97779d1285a975353e635e6487",
+      "runId": "run-pre-capability",
+      "taskId": "task_feature",
+      "actor": {
+        "role": "worker",
+        "id": "worker_task_feature_1"
+      },
+      "status": "observed",
+      "fact": {
+        "kind": "browser_screenshot",
+        "label": "task_feature evidence",
+        "capturedAt": "2026-09-23T00:00:00.000Z",
+        "screenshotArtifactHash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "mediaType": "image/png",
+        "byteLength": 16
+      },
+      "createdAt": "2026-09-23T00:00:00.000Z",
+      "idempotencyKey": "evidence:task_feature",
+      "attempt": 1
+    }
+  ],
+  "contextManifests": [
+    {
+      "manifestId": "106d079344cf6f1c2e2949e943752053a251db04f203e2859293701f2451bcd6",
+      "payloadJson": "{\"manifestId\":\"106d079344cf6f1c2e2949e943752053a251db04f203e2859293701f2451bcd6\",\"runId\":\"run-pre-capability\",\"sessionId\":\"verifier:run-pre-capability:1646b40743505ef7e0576c7d\",\"actor\":{\"role\":\"verifier\",\"id\":\"google:verifier\"},\"role\":\"verifier\",\"purpose\":\"verifier:verdict\",\"repositoryRevision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"limits\":{\"maxBytes\":524288,\"maxEstimatedTokens\":131072},\"packDigest\":\"76bf1b0da03facdd26b2db2508ba3eb6624cfc63c8ae862b29e9b84cd9ac71cd\",\"byteLength\":5020,\"estimatedTokens\":1255,\"sections\":[{\"id\":\"kernel-invariants\",\"kind\":\"system\",\"required\":true,\"priority\":1000,\"byteLength\":418,\"digest\":\"46ed8a28a091b72dd490da3fd7feadbe51b2cc66e246bf40bba83503fa9bc59e\"},{\"id\":\"verifier-authority\",\"kind\":\"system\",\"required\":true,\"priority\":1000,\"byteLength\":649,\"digest\":\"515a99dee7619bc4cf25ad586f38ced7450c3424cca523b29aa4c0dfa63b3949\"},{\"id\":\"verifier-adversarial-stance\",\"kind\":\"system\",\"required\":true,\"priority\":1000,\"byteLength\":603,\"digest\":\"252cf0cd5bbe4ef79c5ef8c1272c9fc7cac21eceed01ee7af9a4246b7ae449f9\"},{\"id\":\"build-objective\",\"kind\":\"user-intent\",\"required\":true,\"priority\":1000,\"byteLength\":79,\"digest\":\"500e7d2273afce5474adfbcbd8572f40672bff50a8b3c5d3c26ec70dbdf826e4\"},{\"id\":\"integration-revision\",\"kind\":\"revision\",\"required\":true,\"priority\":1000,\"byteLength\":74,\"digest\":\"e33cdf9c7f7120b98e8c78408953e07f2ecd183006b5606df349b4c212acf43e\"},{\"id\":\"build-criteria\",\"kind\":\"criteria\",\"required\":true,\"priority\":1000,\"byteLength\":242,\"digest\":\"6946f8e1e9c5098aea67020460c7ae3b977c883a58680f43f992e0f81ce51a3f\"},{\"id\":\"recorded-expectations\",\"kind\":\"expectations\",\"required\":true,\"priority\":1000,\"byteLength\":360,\"digest\":\"3e9e796c787d1a0c2db8c2c0988c0ff43dd175434f106ef58ee59eaeee55ac07\"},{\"id\":\"accepted-reviews\",\"kind\":\"reviews\",\"required\":true,\"priority\":1000,\"byteLength\":692,\"digest\":\"6126307518b666a0f8a5416e2096b5f52a8afc481bd09d590b67d8fd1c9f29af\"},{\"id\":\"durable-guidance\",\"kind\":\"guidance\",\"required\":true,\"priority\":1000,\"byteLength\":32,\"digest\":\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\"},{\"id\":\"accepted-change-history\",\"kind\":\"changes\",\"required\":true,\"priority\":1000,\"byteLength\":38,\"digest\":\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\"},{\"id\":\"final-verification\",\"kind\":\"final-verification\",\"required\":true,\"priority\":1000,\"byteLength\":1685,\"digest\":\"29ef93d1141534957ab39533b99cb326230f77d921703b73cd1e9c9b74faf065\"},{\"id\":\"risk-reasons\",\"kind\":\"risk\",\"required\":true,\"priority\":1000,\"byteLength\":126,\"digest\":\"3d4b30c789ed2e868a60266b0102e044d4bc0a0d6ff00b0921a37b8991ec7ac4\"}],\"omissions\":[],\"recordedAt\":\"2026-09-23T00:00:00.000Z\"}",
+      "manifest": {
+        "manifestId": "106d079344cf6f1c2e2949e943752053a251db04f203e2859293701f2451bcd6",
+        "runId": "run-pre-capability",
+        "sessionId": "verifier:run-pre-capability:1646b40743505ef7e0576c7d",
+        "actor": {
+          "role": "verifier",
+          "id": "google:verifier"
+        },
+        "role": "verifier",
+        "purpose": "verifier:verdict",
+        "repositoryRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "limits": {
+          "maxBytes": 524288,
+          "maxEstimatedTokens": 131072
+        },
+        "packDigest": "76bf1b0da03facdd26b2db2508ba3eb6624cfc63c8ae862b29e9b84cd9ac71cd",
+        "byteLength": 5020,
+        "estimatedTokens": 1255,
+        "sections": [
+          {
+            "id": "kernel-invariants",
+            "kind": "system",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 418,
+            "digest": "46ed8a28a091b72dd490da3fd7feadbe51b2cc66e246bf40bba83503fa9bc59e"
+          },
+          {
+            "id": "verifier-authority",
+            "kind": "system",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 649,
+            "digest": "515a99dee7619bc4cf25ad586f38ced7450c3424cca523b29aa4c0dfa63b3949"
+          },
+          {
+            "id": "verifier-adversarial-stance",
+            "kind": "system",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 603,
+            "digest": "252cf0cd5bbe4ef79c5ef8c1272c9fc7cac21eceed01ee7af9a4246b7ae449f9"
+          },
+          {
+            "id": "build-objective",
+            "kind": "user-intent",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 79,
+            "digest": "500e7d2273afce5474adfbcbd8572f40672bff50a8b3c5d3c26ec70dbdf826e4"
+          },
+          {
+            "id": "integration-revision",
+            "kind": "revision",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 74,
+            "digest": "e33cdf9c7f7120b98e8c78408953e07f2ecd183006b5606df349b4c212acf43e"
+          },
+          {
+            "id": "build-criteria",
+            "kind": "criteria",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 242,
+            "digest": "6946f8e1e9c5098aea67020460c7ae3b977c883a58680f43f992e0f81ce51a3f"
+          },
+          {
+            "id": "recorded-expectations",
+            "kind": "expectations",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 360,
+            "digest": "3e9e796c787d1a0c2db8c2c0988c0ff43dd175434f106ef58ee59eaeee55ac07"
+          },
+          {
+            "id": "accepted-reviews",
+            "kind": "reviews",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 692,
+            "digest": "6126307518b666a0f8a5416e2096b5f52a8afc481bd09d590b67d8fd1c9f29af"
+          },
+          {
+            "id": "durable-guidance",
+            "kind": "guidance",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 32,
+            "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          {
+            "id": "accepted-change-history",
+            "kind": "changes",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 38,
+            "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          {
+            "id": "final-verification",
+            "kind": "final-verification",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 1685,
+            "digest": "29ef93d1141534957ab39533b99cb326230f77d921703b73cd1e9c9b74faf065"
+          },
+          {
+            "id": "risk-reasons",
+            "kind": "risk",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 126,
+            "digest": "3d4b30c789ed2e868a60266b0102e044d4bc0a0d6ff00b0921a37b8991ec7ac4"
+          }
+        ],
+        "omissions": [],
+        "recordedAt": "2026-09-23T00:00:00.000Z"
+      }
+    },
+    {
+      "manifestId": "40dcac9d26606162f5c2726286084901c6945913ada0b626c252a1ae38c7efa9",
+      "payloadJson": "{\"manifestId\":\"40dcac9d26606162f5c2726286084901c6945913ada0b626c252a1ae38c7efa9\",\"runId\":\"run-pre-capability\",\"sessionId\":\"verifier:run-pre-capability:1c9da69a50f1c280295af5cb\",\"actor\":{\"role\":\"verifier\",\"id\":\"google:verifier\"},\"role\":\"verifier\",\"purpose\":\"verifier:expectations\",\"repositoryRevision\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"limits\":{\"maxBytes\":524288,\"maxEstimatedTokens\":131072},\"packDigest\":\"10ab37bd9e23ecfd4771cac4f05f6ce95eb3861a438e2c42be281aa60dd7fef1\",\"byteLength\":1942,\"estimatedTokens\":486,\"sections\":[{\"id\":\"kernel-invariants\",\"kind\":\"system\",\"required\":true,\"priority\":1000,\"byteLength\":418,\"digest\":\"46ed8a28a091b72dd490da3fd7feadbe51b2cc66e246bf40bba83503fa9bc59e\"},{\"id\":\"verifier-authority\",\"kind\":\"system\",\"required\":true,\"priority\":1000,\"byteLength\":649,\"digest\":\"515a99dee7619bc4cf25ad586f38ced7450c3424cca523b29aa4c0dfa63b3949\"},{\"id\":\"expectations-stage\",\"kind\":\"system\",\"required\":true,\"priority\":1000,\"byteLength\":311,\"digest\":\"927b6553fd358f64d42acdeec8d1bf58d5aa0abdba12ef5677576c3e34ea49af\"},{\"id\":\"build-objective\",\"kind\":\"user-intent\",\"required\":true,\"priority\":1000,\"byteLength\":79,\"digest\":\"500e7d2273afce5474adfbcbd8572f40672bff50a8b3c5d3c26ec70dbdf826e4\"},{\"id\":\"baseline-revision\",\"kind\":\"revision\",\"required\":true,\"priority\":1000,\"byteLength\":71,\"digest\":\"e33cdf9c7f7120b98e8c78408953e07f2ecd183006b5606df349b4c212acf43e\"},{\"id\":\"build-criteria\",\"kind\":\"criteria\",\"required\":true,\"priority\":1000,\"byteLength\":242,\"digest\":\"6946f8e1e9c5098aea67020460c7ae3b977c883a58680f43f992e0f81ce51a3f\"},{\"id\":\"durable-guidance\",\"kind\":\"guidance\",\"required\":true,\"priority\":1000,\"byteLength\":32,\"digest\":\"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945\"},{\"id\":\"risk-reasons\",\"kind\":\"risk\",\"required\":true,\"priority\":1000,\"byteLength\":126,\"digest\":\"3d4b30c789ed2e868a60266b0102e044d4bc0a0d6ff00b0921a37b8991ec7ac4\"}],\"omissions\":[],\"recordedAt\":\"2026-09-23T00:00:00.000Z\"}",
+      "manifest": {
+        "manifestId": "40dcac9d26606162f5c2726286084901c6945913ada0b626c252a1ae38c7efa9",
+        "runId": "run-pre-capability",
+        "sessionId": "verifier:run-pre-capability:1c9da69a50f1c280295af5cb",
+        "actor": {
+          "role": "verifier",
+          "id": "google:verifier"
+        },
+        "role": "verifier",
+        "purpose": "verifier:expectations",
+        "repositoryRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "limits": {
+          "maxBytes": 524288,
+          "maxEstimatedTokens": 131072
+        },
+        "packDigest": "10ab37bd9e23ecfd4771cac4f05f6ce95eb3861a438e2c42be281aa60dd7fef1",
+        "byteLength": 1942,
+        "estimatedTokens": 486,
+        "sections": [
+          {
+            "id": "kernel-invariants",
+            "kind": "system",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 418,
+            "digest": "46ed8a28a091b72dd490da3fd7feadbe51b2cc66e246bf40bba83503fa9bc59e"
+          },
+          {
+            "id": "verifier-authority",
+            "kind": "system",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 649,
+            "digest": "515a99dee7619bc4cf25ad586f38ced7450c3424cca523b29aa4c0dfa63b3949"
+          },
+          {
+            "id": "expectations-stage",
+            "kind": "system",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 311,
+            "digest": "927b6553fd358f64d42acdeec8d1bf58d5aa0abdba12ef5677576c3e34ea49af"
+          },
+          {
+            "id": "build-objective",
+            "kind": "user-intent",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 79,
+            "digest": "500e7d2273afce5474adfbcbd8572f40672bff50a8b3c5d3c26ec70dbdf826e4"
+          },
+          {
+            "id": "baseline-revision",
+            "kind": "revision",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 71,
+            "digest": "e33cdf9c7f7120b98e8c78408953e07f2ecd183006b5606df349b4c212acf43e"
+          },
+          {
+            "id": "build-criteria",
+            "kind": "criteria",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 242,
+            "digest": "6946f8e1e9c5098aea67020460c7ae3b977c883a58680f43f992e0f81ce51a3f"
+          },
+          {
+            "id": "durable-guidance",
+            "kind": "guidance",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 32,
+            "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+          },
+          {
+            "id": "risk-reasons",
+            "kind": "risk",
+            "required": true,
+            "priority": 1000,
+            "byteLength": 126,
+            "digest": "3d4b30c789ed2e868a60266b0102e044d4bc0a0d6ff00b0921a37b8991ec7ac4"
+          }
+        ],
+        "omissions": [],
+        "recordedAt": "2026-09-23T00:00:00.000Z"
+      }
+    }
+  ]
+}

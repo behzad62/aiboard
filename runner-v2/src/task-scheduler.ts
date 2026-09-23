@@ -1,3 +1,4 @@
+import { ContextManifestRecordingError } from "./context-manifest-store.js";
 import type {
   SchedulerProjection,
   SchedulerStore,
@@ -224,18 +225,54 @@ export class TaskScheduler {
         if (assignment.signal?.aborted) return;
         this.recordOutcome(task.id, task.attempt, assignment.workerId, outcome);
       })
-      .catch((error: unknown) =>
-        assignment.signal?.aborted
-          ? undefined
-          : this.recordOutcome(task.id, task.attempt, assignment.workerId, {
-              type: "failed",
-              reason: error instanceof Error ? error.message : String(error),
-            })
-      )
+      .catch((error: unknown) => {
+        if (assignment.signal?.aborted) return undefined;
+        if (error instanceof ContextManifestRecordingError) {
+          try {
+            this.appendContextRecordingFailure(task, error);
+          } catch {
+            throw error;
+          }
+          this.recordOutcome(task.id, task.attempt, assignment.workerId, {
+            type: "paused",
+            reason: "context_recording_failed",
+          });
+          return undefined;
+        }
+        this.recordOutcome(task.id, task.attempt, assignment.workerId, {
+          type: "failed",
+          reason: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      })
       .finally(() => {
         this.active.delete(task.id);
       });
     this.active.set(task.id, operation);
+  }
+
+  private appendContextRecordingFailure(
+    task: BuildTask,
+    error: ContextManifestRecordingError,
+  ): void {
+    const projection = this.projection();
+    const current = projection.tasks[task.id] ?? task;
+    const revision = current.workspaceBaselineRevision ?? projection.integrationRevision;
+    this.store.append({
+      runId: this.runId,
+      type: "context_manifest.recording_failed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "scheduler" },
+      idempotencyKey: `context-recording-failed:${task.id}:${task.attempt}:${projection.lastSequence}`,
+      payload: {
+        purpose: error.purpose,
+        attempts: error.attempts,
+        reason: error.message,
+        taskId: task.id,
+        attempt: task.attempt,
+        ...(revision ? { revision } : {}),
+      },
+    });
   }
 
   private recordOutcome(

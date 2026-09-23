@@ -1,6 +1,7 @@
 import type { BuildTask } from "./task-contracts.js";
 import { isFinalVerificationTask } from "./task-contracts.js";
 import type {
+  ReviewerIndependence,
   VerifierExcludedModel,
   VerifierRuntimeBinding,
 } from "./verifier-contracts.js";
@@ -99,6 +100,8 @@ export interface PlanCritiqueProjection {
   planRevision: number;
   runtime: VerifierRuntimeBinding;
   excludedModels: VerifierExcludedModel[];
+  /** Absent on legacy critiques. Those replay as distinct_model. */
+  independence?: ReviewerIndependence;
   status: "requested" | "submitted" | "resolved";
   requestedAt: string;
   submittedAt?: string;

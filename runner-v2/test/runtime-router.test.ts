@@ -206,8 +206,11 @@ test("verifier selection excludes Architect and accepted-author model identities
   });
   assert.equal(selected.status, "assigned");
   assert.equal(selected.runtime?.runtimeId, "google:gemini-code");
+  if (selected.status === "assigned") {
+    assert.equal(selected.independence, "distinct_model");
+  }
 
-  assert.deepEqual(router.selectVerifier({
+  const sharedIdentity = router.selectVerifier({
     requiredCapabilities: ["code"],
     candidateRuntimeIds: [
       "openrouter:openai/gpt-code",
@@ -215,6 +218,74 @@ test("verifier selection excludes Architect and accepted-author model identities
     ],
     architectRuntimeId: "openai:gpt-code",
     acceptedChangeAuthorRuntimeIds: ["anthropic:claude-code"],
+  });
+  assert.equal(sharedIdentity.status, "assigned");
+  if (sharedIdentity.status === "assigned") {
+    assert.equal(sharedIdentity.runtime.runtimeId, "bedrock:anthropic/claude-code");
+    assert.equal(sharedIdentity.independence, "fresh_context");
+  }
+});
+
+test("verifier selection prefers a distinct model, falls back to fresh context, and stays unavailable when every candidate is excluded", () => {
+  const health = new ProviderHealthRegistry({ clock: () => 1_000 });
+  const router = new RuntimeRouter({
+    candidates: [
+      ...runtimes,
+      {
+        runtimeId: "google:gemini-code",
+        providerId: "google",
+        modelId: "gemini-code",
+        capabilities: ["code"],
+        priority: 4,
+      },
+    ],
+    health,
+  });
+  const distinct = router.selectVerifier({
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: ["openai:gpt-code", "google:gemini-code"],
+    architectRuntimeId: "openai:gpt-code",
+    acceptedChangeAuthorRuntimeIds: [],
+  });
+  assert.equal(distinct.status, "assigned");
+  if (distinct.status === "assigned") {
+    assert.equal(distinct.runtime.runtimeId, "google:gemini-code");
+    assert.equal(distinct.independence, "distinct_model");
+  }
+
+  const onlyArchitect = router.selectVerifier({
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: ["openai:gpt-code"],
+    architectRuntimeId: "openai:gpt-code",
+    acceptedChangeAuthorRuntimeIds: [],
+  });
+  assert.equal(onlyArchitect.status, "assigned");
+  if (onlyArchitect.status === "assigned") {
+    assert.equal(onlyArchitect.runtime.runtimeId, "openai:gpt-code");
+    assert.equal(onlyArchitect.independence, "fresh_context");
+  }
+
+  assert.deepEqual(router.selectVerifier({
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: ["google:gemini-code"],
+    architectRuntimeId: "openai:gpt-code",
+    acceptedChangeAuthorRuntimeIds: [],
+    excludedRuntimeIds: new Set(["google:gemini-code"]),
+  }), {
+    status: "unavailable",
+    reason: "no_independent_healthy_capability_match",
+    requiredCapabilities: ["code"],
+  });
+
+  health.recordFailure("google", {
+    kind: "provider_unavailable",
+    message: "provider down",
+  });
+  assert.deepEqual(router.selectVerifier({
+    requiredCapabilities: ["code"],
+    candidateRuntimeIds: ["google:gemini-code"],
+    architectRuntimeId: "openai:gpt-code",
+    acceptedChangeAuthorRuntimeIds: [],
   }), {
     status: "unavailable",
     reason: "no_independent_healthy_capability_match",

@@ -1,4 +1,8 @@
-import type { BuildRuntime, BuildStepResult } from "./build-runtime.js";
+import {
+  buildStepResultForProjection,
+  type BuildRuntime,
+  type BuildStepResult,
+} from "./build-runtime.js";
 import type {
   BuildObservabilitySnapshot,
   BuildTranscriptPage,
@@ -93,6 +97,7 @@ export interface NativeBuildManagerOptions {
   onRecoverySpecError?(runId: string, error: unknown): void;
   shouldAutoRun?(runId: string): boolean;
   onPumpResult?(runId: string, result: BuildStepResult): void;
+  onBuildFailed?(runId: string, reason: string): void;
   onPumpError?(runId: string, error: unknown): void;
   runArtifactCompaction?(operation: () => Promise<void>): Promise<void>;
   prepareArtifactCleanup?(): Promise<void>;
@@ -216,6 +221,13 @@ export class NativeBuildManager implements BuildControlPlane {
           this.options.onPumpError?.(spec.runId, error);
         }
         const status = handle.runtime.projection().status;
+        if (status === "failed" && !quiesceFailed.has(spec.runId)) {
+          this.options.onBuildFailed?.(
+            spec.runId,
+            handle.runtime.projection().failureReason ?? "context_recording_aborted",
+          );
+          continue;
+        }
         if (status === "completed" && !quiesceFailed.has(spec.runId)) {
           settled.push([spec.runId, handle]);
         }
@@ -347,8 +359,11 @@ export class NativeBuildManager implements BuildControlPlane {
     const handle = this.requireMutable(runId);
     if (this.pumps.has(runId)) return;
     const projection = handle.runtime.projection();
+    const unresolvedContextRecording = projection.status === "paused" &&
+      projection.pauseReason?.reason === "context_recording_failed";
     if (
       projection.status !== "running" &&
+      !unresolvedContextRecording &&
       projection.projectHandoff?.status !== "requested" &&
       !(projection.status === "completed" && !this.settledRuns.has(runId))
     ) return;
@@ -694,12 +709,43 @@ export class NativeBuildManager implements BuildControlPlane {
     let compaction: Promise<void> | undefined;
     try {
       let result = await handle.runtime.runUntilBlocked();
-      while (
-        result.status === "progressed" &&
-        handle.runtime.projection().status === "running"
-      ) {
-        await eventLoopYield();
-        result = await handle.runtime.runUntilBlocked();
+      for (;;) {
+        if (
+          result.status === "paused" &&
+          result.action === "context_recording_failed"
+        ) {
+          const decision = await handle.runtime.resolveContextRecordingFailure();
+          const projection = handle.runtime.projection();
+          if (decision === "aborted" || projection.status === "failed") {
+            this.options.onBuildFailed?.(
+              runId,
+              projection.failureReason ?? "context_recording_aborted",
+            );
+            result = { status: "failed", action: "context_recording_aborted" };
+            break;
+          }
+          if (decision === "resumed" && projection.status === "running") {
+            await eventLoopYield();
+            result = await handle.runtime.runUntilBlocked();
+            continue;
+          }
+          if (
+            projection.status !== "paused" ||
+            projection.pauseReason?.reason !== "context_recording_failed"
+          ) {
+            result = buildStepResultForProjection(projection);
+          }
+          break;
+        }
+        if (
+          result.status === "progressed" &&
+          handle.runtime.projection().status === "running"
+        ) {
+          await eventLoopYield();
+          result = await handle.runtime.runUntilBlocked();
+          continue;
+        }
+        break;
       }
       if (result.status === "idle") {
         const projection = handle.runtime.projection();

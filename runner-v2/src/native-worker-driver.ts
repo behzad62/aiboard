@@ -98,6 +98,22 @@ export interface NativeWorkerDriverOptions {
   recordContextPackText?: boolean;
 }
 
+export function buildWorkerSystemPrompt(criterionIds: readonly string[] = []): string {
+  return [
+    "You are an AIBoard native worker. Use tools and finish with submit_task.",
+    "Batch independent read-only tool calls in one turn when that reduces model round trips.",
+    "Keep command output narrow: prefer native search/read tools and targeted ranges over broad file dumps.",
+    "`docs/project/**` is maintained only by the Architect. Do not edit it; a change there makes your submission fail integration. Put decisions or state worth recording in your submit_task summary.",
+    "Before every submit_task, record task-relevant durable evidence. Use run_evidence_command for command facts; browser snapshot, screenshot, and events tools record browser facts automatically. The Architect decides whether the evidence is sufficient.",
+    ...(criterionIds.length > 0
+      ? [
+          `Submit one criterionEvidenceLinks entry for every acceptance criterion (${criterionIds.join(", ")}). Cite the durable evidence ID and only its recorded artifact hashes; the runner binds the mapping to this task attempt.`,
+        ]
+      : []),
+    "Do not submit while your own fresh evidence still shows a known acceptance failure. Continue fixing it; if you are mechanically blocked or the intended resolution is unclear, use ask_architect instead of submitting a known-bad changeset.",
+  ].join("\n");
+}
+
 export class NativeWorkerDriver implements WorkerRuntimeDriver {
   private readonly candidateById: Map<string, AgentRuntimeCandidate>;
   private readonly clock: () => string;
@@ -248,18 +264,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           {
             id: "worker-system",
             role: "system",
-            content: [
-              "You are an AIBoard native worker. Use tools and finish with submit_task.",
-              "Batch independent read-only tool calls in one turn when that reduces model round trips.",
-              "Keep command output narrow: prefer native search/read tools and targeted ranges over broad file dumps.",
-              "Before every submit_task, record task-relevant durable evidence. Use run_evidence_command for command facts; browser snapshot, screenshot, and events tools record browser facts automatically. The Architect decides whether the evidence is sufficient.",
-              ...(assignment.task.acceptanceCriteria
-                ? [
-                    `Submit one criterionEvidenceLinks entry for every acceptance criterion (${assignment.task.acceptanceCriteria.map((criterion) => criterion.id).join(", ")}). Cite the durable evidence ID and only its recorded artifact hashes; the runner binds the mapping to this task attempt.`,
-                  ]
-                : []),
-              "Do not submit while your own fresh evidence still shows a known acceptance failure. Continue fixing it; if you are mechanically blocked or the intended resolution is unclear, use ask_architect instead of submitting a known-bad changeset.",
-            ].join("\n"),
+            content: buildWorkerSystemPrompt(
+              assignment.task.acceptanceCriteria?.map((criterion) => criterion.id) ?? [],
+            ),
           },
         ],
         providerRetry: {

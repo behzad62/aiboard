@@ -1,5 +1,6 @@
 import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
 import { createHash } from "node:crypto";
+import { PROJECT_DOC_MAX_BYTES, validateProjectDocPath } from "./project-docs.js";
 
 import {
   isFinalVerificationTask,
@@ -68,6 +69,7 @@ import {
   cloneVerifierReview,
   expectedVerifierCriteria,
   parseExcludedModels,
+  parseReviewerIndependence,
   parseRuntimeBinding,
   parseVerifierExpectations,
   parseVerifierReviewRequest,
@@ -168,7 +170,13 @@ export type SchedulerEventType =
   | "plan_critique.requested"
   | "plan_critique.submitted"
   | "plan_critique.resolved"
-  | "plan_critique.skipped";
+  | "plan_critique.skipped"
+  | "context_manifest.recording_failed"
+  | "context_manifest.recording_resolved"
+  | "project_doc.requested"
+  | "project_doc.committed"
+  | "project_doc.abandoned"
+  | "project_docs.policy_configured";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -269,6 +277,43 @@ export interface RuntimeProjection {
 export type ProjectHandoffChoice =
   | "keep_integration_branch"
   | "apply_to_project";
+
+export interface ProjectDocRequestProjection {
+  requestId: string;
+  path: string;
+  contentArtifactHash: string;
+  contentBytes: number;
+  summary: string;
+  sequence: number;
+}
+
+export interface ProjectDocAbandonmentProjection {
+  requestId: string;
+  path: string;
+  reason: string;
+  sequence: number;
+}
+
+/** Pending Architect document requests and commits on the integration branch. */
+export interface ProjectDocsProjection {
+  pending: ProjectDocRequestProjection[];
+  committed?: ProjectDocCommitProjection[];
+  /** Document-only commits ahead of the canonical integration revision. */
+  documentTip?: string;
+  abandoned?: ProjectDocAbandonmentProjection[];
+}
+
+export interface ProjectDocCommitProjection {
+  requestId: string;
+  path: string;
+  commit: string;
+  parent: string;
+  head: string;
+  readme: boolean;
+  agentsMarkedSection: boolean;
+  claudePointer: boolean;
+  sequence: number;
+}
 
 export interface ProjectHandoffProjection {
   status: "requested" | "selected";
@@ -448,6 +493,69 @@ export interface VerifierSelectionProjection {
 export const DEFAULT_REPAIR_PLAN_LIMIT = 3;
 export const MAX_REPAIR_CYCLE_EXTENSION = 10;
 
+/** Retry resolution events allowed for one run before the reducer refuses another retry. */
+export const CONTEXT_RECORDING_RETRY_LIMIT = 3;
+
+export type ContextRecordingResolutionKind =
+  | "retry"
+  | "proceed_without_manifest"
+  | "abort";
+
+export interface ContextRecordingNoteProjection {
+  sequence: number;
+  purpose: string;
+  attempts: number;
+  reason: string;
+  taskId?: string;
+  attempt?: number;
+  revision?: string;
+  resolution?: {
+    sequence: number;
+    resolution: ContextRecordingResolutionKind;
+    rationale?: string;
+    actor: SchedulerActor;
+  };
+}
+
+export interface ContextRecordingProjection {
+  notes: ContextRecordingNoteProjection[];
+  waiver?: {
+    sequence: number;
+    rationale: string;
+  };
+}
+
+export function latestUnresolvedContextRecordingNote(
+  projection: SchedulerProjection,
+): ContextRecordingNoteProjection | undefined {
+  const notes = projection.contextRecording?.notes ?? [];
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index];
+    if (note && !note.resolution) return note;
+  }
+  return undefined;
+}
+
+/** Retry resolutions still allowed for this run. Matches the reducer budget. */
+export function contextRecordingRetriesRemaining(projection: SchedulerProjection): number {
+  const used = new Set(
+    (projection.contextRecording?.notes ?? []).flatMap((note) =>
+      note.resolution?.resolution === "retry" ? [note.resolution.sequence] : [],
+    ),
+  ).size;
+  return Math.max(0, CONTEXT_RECORDING_RETRY_LIMIT - used);
+}
+
+function rejectCompletionWhileContextRecordingUnresolved(
+  projection: SchedulerProjection,
+): void {
+  if (latestUnresolvedContextRecordingNote(projection)) {
+    throw new Error(
+      "Context recording failure must be resolved before completion or handoff.",
+    );
+  }
+}
+
 export interface RepairCyclesProjection {
   limit: number;
   used: number;
@@ -472,6 +580,9 @@ export interface SchedulerProjection {
    * stopped state without recreating mutable scheduler authority.
    */
   status: "running" | "paused" | "completed" | "failed" | "stopped";
+  /** Set when an abort resolution fails the scheduler run. */
+  failureReason?: string;
+  contextRecording?: ContextRecordingProjection;
   /**
    * Legacy plans remain readable, but an active plan without criteria must
    * pass through one append-only Architect upgrade before it can proceed.
@@ -514,6 +625,11 @@ export interface SchedulerProjection {
   planCritique?: PlanCritiqueState;
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
+  projectDocs?: ProjectDocsProjection;
+  /** Set when this run was stamped `project_docs.policy_configured`. Legacy runs omit it. */
+  projectDocsPolicyVersion?: number;
+  /** Sequence of the latest integration that advanced the canonical revision. */
+  latestIntegratedTaskSequence?: number;
   lastArchitectActionEvent?: {
     sequence: number;
     type: SchedulerEventType;
@@ -607,6 +723,8 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "final_verification.cleanup_started" ||
     event.type === "final_verification.cleanup_succeeded" ||
     event.type === "final_verification.cleanup_failed" ||
+    (event.type === "project_doc.committed" && event.actor.role === "runner") ||
+    (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     (event.type === "plan.created" && current.planRevision === 0) ||
     (event.type === "task.transitioned" &&
       (taskStatus === "integrated" || taskStatus === "integration_resolution"));
@@ -634,7 +752,9 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "provider.health_changed" ||
     event.type === "architect.runtime_assigned" ||
     event.type === "architect.handoff_required" ||
-    event.type === "architect.handoff_selected";
+    event.type === "architect.handoff_selected" ||
+    (event.type === "project_doc.committed" && event.actor.role === "runner") ||
+    (event.type === "project_doc.abandoned" && event.actor.role === "runner");
   if (!allowed) {
     throw new Error(
       `Blocking Architect question ${current.blockingArchitectQuestionId} must be answered before ${event.type} may advance the run.`
@@ -710,6 +830,10 @@ export function architectLifecycleEventMatchesReason(
       return event.actor.role === "architect" &&
         event.type === "plan_critique.resolved" &&
         event.payload.critiqueId === reason.critiqueId;
+    case "context_recording_decision_required":
+      return event.type === "context_manifest.recording_resolved" &&
+        (event.actor.role === "architect" || event.actor.role === "user") &&
+        event.payload.noteSequence === reason.noteSequence;
   }
 }
 
@@ -730,6 +854,7 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
     "verifier.repairs_planned",
     "task.revised",
     "plan_critique.resolved",
+    "context_manifest.recording_resolved",
   ].includes(event.type) ||
     (event.type === "task.transitioned" &&
       event.actor.role === "architect" && event.payload.status === "integrating");
@@ -833,6 +958,10 @@ function architectActionReasonIsApplicable(
         current.planRevision === reason.planRevision &&
         sameValue(current.blockingFindingIds ?? [], reason.blockingFindingIds);
     }
+    case "context_recording_decision_required":
+      return projection.status === "paused" &&
+        projection.pauseReason?.reason === "context_recording_failed" &&
+        latestUnresolvedContextRecordingNote(projection)?.sequence === reason.noteSequence;
   }
 }
 
@@ -850,6 +979,7 @@ export function buildCompletionReadiness(
 ): BuildCompletionReadiness {
   const issues: string[] = [];
   if (projection.runPolicy === "plan_only") {
+    issues.push(...projectDocumentationReadiness(projection));
     if (projection.planRevision <= 0) issues.push("Plan-only completion requires a valid plan.");
     return { ready: issues.length === 0, issues };
   }
@@ -868,12 +998,13 @@ export function buildCompletionReadiness(
   const current = projection.finalVerification?.current;
   if (!current || current.state !== "current") {
     issues.push("A current final-verification generation is required.");
+    issues.push(...projectDocumentationReadiness(projection));
     return { ready: false, issues };
   }
   if (projection.finalVerification?.history.some((generation) => generation.state === "current")) {
     issues.push("Final-verification history contains a second current generation.");
   }
-  if (current.targetRevision !== integrationRevision) {
+  if (!revisionMatchesIntegrationOrDocumentTip(projection, current.targetRevision)) {
     issues.push("Current final-verification target does not match the canonical integration revision.");
   }
   const task = projection.tasks[current.taskId];
@@ -1034,6 +1165,7 @@ export function buildCompletionReadiness(
       }
     }
   }
+  issues.push(...projectDocumentationReadiness(projection));
   return { ready: issues.length === 0, issues };
 }
 
@@ -1042,6 +1174,53 @@ export function assertBuildCompletionReady(projection: SchedulerProjection): voi
   if (!readiness.ready) {
     throw new Error(`Build completion is not ready: ${readiness.issues.join(" ")}`);
   }
+}
+
+function revisionMatchesIntegrationOrDocumentTip(
+  projection: SchedulerProjection,
+  revision: string,
+): boolean {
+  return revision === projection.integrationRevision ||
+    (projection.projectDocs?.documentTip !== undefined &&
+      revision === projection.projectDocs.documentTip);
+}
+
+function projectDocumentationReadiness(projection: SchedulerProjection): string[] {
+  if (projection.projectDocsPolicyVersion !== 1) return [];
+  const issues: string[] = [];
+  const stateCommit = latestProjectStateCommit(projection);
+  if (!stateCommit) {
+    issues.push("docs/project/STATE.md has not been committed.");
+    return issues;
+  }
+  if (
+    projection.runPolicy !== "plan_only" &&
+    projection.latestIntegratedTaskSequence !== undefined &&
+    stateCommit.sequence <= projection.latestIntegratedTaskSequence
+  ) {
+    issues.push("docs/project/STATE.md is older than the latest integrated change.");
+  }
+  if (!stateCommit.readme) {
+    issues.push("Project documentation entry point is missing docs/project/README.md.");
+  }
+  if (!stateCommit.agentsMarkedSection) {
+    issues.push("Project documentation entry point is missing the marked AGENTS.md section.");
+  }
+  if (!stateCommit.claudePointer) {
+    issues.push("Project documentation entry point is missing the marked CLAUDE.md pointer.");
+  }
+  return issues;
+}
+
+function latestProjectStateCommit(
+  projection: SchedulerProjection,
+): ProjectDocCommitProjection | undefined {
+  let latest: ProjectDocCommitProjection | undefined;
+  for (const commit of projection.projectDocs?.committed ?? []) {
+    if (commit.path !== "docs/project/STATE.md") continue;
+    if (!latest || commit.sequence > latest.sequence) latest = commit;
+  }
+  return latest;
 }
 
 export function rebuildSchedulerProjection(
@@ -1576,6 +1755,18 @@ export function reduceSchedulerEvent(
         runPolicy: requiredRunPolicy(event.payload),
       };
     }
+    if (event.type === "project_docs.policy_configured") {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure project document policy.");
+      }
+      if (event.payload.version !== 1) {
+        throw new Error("Project document policy version is invalid.");
+      }
+      return {
+        ...emptySchedulerProjection(event),
+        projectDocsPolicyVersion: 1,
+      };
+    }
     if (event.type !== "plan.created") {
       throw new Error(
         `Scheduler run ${event.runId} must begin with run.initialized, run.policy_configured, or plan.created.`
@@ -1655,6 +1846,9 @@ export function reduceSchedulerEvent(
     ...(current.repairCycles
       ? { repairCycles: cloneRepairCyclesProjection(current.repairCycles) }
       : {}),
+    ...(current.contextRecording
+      ? { contextRecording: cloneContextRecording(current.contextRecording) }
+      : {}),
     ...(current.projectHandoff
       ? {
           projectHandoff: {
@@ -1671,6 +1865,11 @@ export function reduceSchedulerEvent(
           })),
         }
       : {}),
+    ...(current.projectDocs
+      ? {
+          projectDocs: cloneProjectDocs(current.projectDocs),
+        }
+      : {}),
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
@@ -1678,6 +1877,16 @@ export function reduceSchedulerEvent(
     },
     lastSequence: event.sequence,
   };
+  if (
+    current.status === "failed" &&
+    (
+      event.type === "run.resumed" ||
+      event.type === "task.transitioned" ||
+      event.type === "worker.runtime_assigned"
+    )
+  ) {
+    throw new Error("A failed Build cannot be resumed or dispatched.");
+  }
   switch (event.type) {
     case "process.recovery_updated": {
       if (["completed", "failed", "stopped"].includes(current.status)) {
@@ -1695,8 +1904,23 @@ export function reduceSchedulerEvent(
       }
       break;
     }
-    case "run.initialized":
+    case "run.initialized": {
+      if (event.actor.role !== "runner" && event.actor.role !== "user") {
+        throw new Error("Only the runner or user may initialize a scheduler run.");
+      }
+      // The new-run document stamp is sequence 1. run.initialized follows it once.
+      if (
+        current.projectDocsPolicyVersion === 1 &&
+        current.lastSequence === 1 &&
+        current.planRevision === 0 &&
+        current.runPolicy === undefined
+      ) {
+        const initialObjective = event.payload.objective;
+        if (typeof initialObjective === "string") next.initialObjective = initialObjective;
+        break;
+      }
       throw new Error("A scheduler run cannot be initialized twice.");
+    }
     case "run.policy_configured": {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may configure a scheduler run policy.");
@@ -2186,7 +2410,17 @@ export function reduceSchedulerEvent(
       if (status === "integrated") {
         const integrationRevision = next.tasks[taskId].integrationRevision;
         if (integrationRevision) {
+          const before = next.integrationRevision;
           advanceIntegrationRevision(next, integrationRevision);
+          if (next.integrationRevision !== before) {
+            if (next.projectDocs?.documentTip) {
+              const { documentTip: _tip, ...remaining } = next.projectDocs;
+              next.projectDocs = remaining;
+            }
+            if (next.projectDocsPolicyVersion === 1) {
+              next.latestIntegratedTaskSequence = event.sequence;
+            }
+          }
         }
       }
       break;
@@ -2700,10 +2934,17 @@ export function reduceSchedulerEvent(
       break;
     case "run.resumed":
       if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents resume.");
+      if (
+        current.pauseReason?.reason === "context_recording_failed" &&
+        latestUnresolvedContextRecordingNote(current)
+      ) {
+        throw new Error("Context recording failure must be resolved before the run can resume.");
+      }
       next.status = "running";
       delete next.pauseReason;
       break;
     case "run.completed":
+      rejectCompletionWhileContextRecordingUnresolved(current);
       if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents completion.");
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may complete a scheduler run.");
@@ -2724,6 +2965,7 @@ export function reduceSchedulerEvent(
       delete next.pauseReason;
       break;
     case "project.handoff_requested": {
+      rejectCompletionWhileContextRecordingUnresolved(current);
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may request final project handoff.");
       }
@@ -2734,6 +2976,7 @@ export function reduceSchedulerEvent(
         if (current.planRevision <= 0) {
           throw new Error("Plan-only final project handoff requires a valid plan.");
         }
+        assertBuildCompletionReady(current);
       } else {
         assertBuildCompletionReady(current);
       }
@@ -2747,6 +2990,7 @@ export function reduceSchedulerEvent(
       break;
     }
     case "project.handoff_selected": {
+      rejectCompletionWhileContextRecordingUnresolved(current);
       if (event.actor.role !== "user" && event.actor.role !== "runner") {
         throw new Error("Final project handoff selection requires the user or runner.");
       }
@@ -2776,7 +3020,7 @@ export function reduceSchedulerEvent(
       );
       if (
         current.runPolicy !== "plan_only" &&
-        selectedIntegrationRevision !== current.integrationRevision
+        !revisionMatchesIntegrationOrDocumentTip(current, selectedIntegrationRevision)
       ) {
         throw new Error(
           "Final project handoff selection does not match the verified integration revision.",
@@ -2954,6 +3198,42 @@ export function reduceSchedulerEvent(
     }
     case "plan_critique.resolved": {
       applyPlanCritiqueResolved(next, event);
+      break;
+    }
+    case "context_manifest.recording_failed": {
+      applyContextRecordingFailed(next, event);
+      break;
+    }
+    case "context_manifest.recording_resolved": {
+      applyContextRecordingResolved(next, event);
+      break;
+    }
+    case "project_doc.requested": {
+      applyProjectDocRequested(next, event);
+      break;
+    }
+    case "project_doc.committed": {
+      applyProjectDocCommitted(next, event);
+      break;
+    }
+    case "project_doc.abandoned": {
+      applyProjectDocAbandoned(next, event);
+      break;
+    }
+    case "project_docs.policy_configured": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure project document policy.");
+      }
+      if (event.payload.version !== 1) {
+        throw new Error("Project document policy version is invalid.");
+      }
+      if (
+        next.projectDocsPolicyVersion !== undefined &&
+        next.projectDocsPolicyVersion !== 1
+      ) {
+        throw new Error("Project document policy is already configured differently.");
+      }
+      next.projectDocsPolicyVersion = 1;
       break;
     }
   }
@@ -4620,7 +4900,11 @@ function applyPlanCritiqueRequested(
   }
   const runtime = parseRuntimeBinding(event.payload.runtime);
   const excludedModels = parseExcludedModels(event.payload.excludedModels);
-  if (excludedModels.some((excluded) => excluded.modelIdentity === runtime.modelIdentity)) {
+  const independence = parseReviewerIndependence(event.payload.independence);
+  if (
+    independence !== "fresh_context" &&
+    excludedModels.some((excluded) => excluded.modelIdentity === runtime.modelIdentity)
+  ) {
     throw new Error("Plan critic model is not independent from the Architect.");
   }
   const critiqueId = requiredString(event.payload, "critiqueId");
@@ -4643,6 +4927,7 @@ function applyPlanCritiqueRequested(
     planRevision,
     runtime,
     excludedModels,
+    ...(event.payload.independence === undefined ? {} : { independence }),
     status: "requested",
     requestedAt: event.occurredAt,
   };
@@ -5439,6 +5724,333 @@ function acceptanceContractStatusForTasks(
   ).length > 0
     ? "acceptance_contract_upgrade_required"
     : "current";
+}
+
+function cloneContextRecording(
+  state: ContextRecordingProjection,
+): ContextRecordingProjection {
+  return {
+    notes: state.notes.map((note) => ({
+      ...note,
+      ...(note.resolution
+        ? { resolution: { ...note.resolution, actor: { ...note.resolution.actor } } }
+        : {}),
+    })),
+    ...(state.waiver ? { waiver: { ...state.waiver } } : {}),
+  };
+}
+
+function applyContextRecordingFailed(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may record a context-manifest failure.");
+  }
+  const purpose = requiredString(event.payload, "purpose");
+  const attempts = requiredPositiveInteger(event.payload, "attempts");
+  const reason = requiredString(event.payload, "reason");
+  const taskId = optionalContextText(event.payload, "taskId");
+  const attempt = optionalContextAttempt(event.payload, "attempt");
+  const revision = optionalContextText(event.payload, "revision");
+  const notes = projection.contextRecording?.notes ?? [];
+  projection.contextRecording = {
+    ...(projection.contextRecording?.waiver
+      ? { waiver: { ...projection.contextRecording.waiver } }
+      : {}),
+    notes: [
+      ...notes,
+      {
+        sequence: event.sequence,
+        purpose,
+        attempts,
+        reason,
+        ...(taskId ? { taskId } : {}),
+        ...(attempt !== undefined ? { attempt } : {}),
+        ...(revision ? { revision } : {}),
+      },
+    ],
+  };
+}
+
+const PROJECT_DOC_ARTIFACT_HASH = /^[a-f0-9]{64}$/;
+
+function applyProjectDocRequested(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "architect") {
+    throw new Error("Only the Architect may request a project document write.");
+  }
+  const path = requiredString(event.payload, "path");
+  const checked = validateProjectDocPath(path);
+  if (!checked.ok) {
+    throw new Error(`Project document path is refused: ${checked.reason}.`);
+  }
+  const requestId = requiredString(event.payload, "requestId");
+  const contentArtifactHash = requiredString(event.payload, "contentArtifactHash");
+  if (!PROJECT_DOC_ARTIFACT_HASH.test(contentArtifactHash)) {
+    throw new Error("Project document content hash is invalid.");
+  }
+  const summary = requiredString(event.payload, "summary");
+  if (summary.trim().length === 0) {
+    throw new Error("Project document summary is required.");
+  }
+  const contentBytes = event.payload.contentBytes;
+  if (!Number.isSafeInteger(contentBytes) || (contentBytes as number) < 0) {
+    throw new Error("Project document content size is invalid.");
+  }
+  if ((contentBytes as number) > PROJECT_DOC_MAX_BYTES) {
+    throw new Error(`Project document content exceeds ${PROJECT_DOC_MAX_BYTES} bytes.`);
+  }
+  const pending = projection.projectDocs?.pending ?? [];
+  if (pending.some((request) => request.requestId === requestId)) {
+    throw new Error(`Project document request ${requestId} is already recorded.`);
+  }
+  projection.projectDocs = {
+    pending: [
+      ...pending,
+      {
+        requestId,
+        path: checked.path,
+        contentArtifactHash,
+        contentBytes: contentBytes as number,
+        summary,
+        sequence: event.sequence,
+      },
+    ],
+    ...carriedProjectDocs(projection.projectDocs),
+  };
+}
+
+function applyProjectDocCommitted(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may commit a project document.");
+  }
+  const requestId = requiredString(event.payload, "requestId");
+  const path = requiredString(event.payload, "path");
+  const checked = validateProjectDocPath(path);
+  if (!checked.ok) {
+    throw new Error(`Project document path is refused: ${checked.reason}.`);
+  }
+  const pending = projection.projectDocs?.pending ?? [];
+  const request = pending.find((item) => item.requestId === requestId);
+  if (!request) {
+    throw new Error(`Project document request ${requestId} is not pending.`);
+  }
+  if (request.path !== checked.path) {
+    throw new Error(`Project document commit path does not match request ${requestId}.`);
+  }
+  const committed = projection.projectDocs?.committed ?? [];
+  if (committed.some((item) => item.requestId === requestId)) {
+    throw new Error(`Project document request ${requestId} is already committed.`);
+  }
+  const record: ProjectDocCommitProjection = {
+    requestId,
+    path: checked.path,
+    commit: requiredString(event.payload, "commit"),
+    parent: requiredString(event.payload, "parent"),
+    head: requiredString(event.payload, "head"),
+    readme: requiredBoolean(event.payload, "readme"),
+    agentsMarkedSection: requiredBoolean(event.payload, "agentsMarkedSection"),
+    claudePointer: requiredBoolean(event.payload, "claudePointer"),
+    sequence: event.sequence,
+  };
+  const canonical = projection.integrationRevision;
+  const currentTip = projection.projectDocs?.documentTip;
+  const continuesDocuments =
+    (typeof canonical === "string" && record.parent === canonical) ||
+    (typeof currentTip === "string" && record.parent === currentTip);
+  projection.projectDocs = {
+    pending: pending.filter((item) => item.requestId !== requestId),
+    committed: [...committed, record],
+    ...(continuesDocuments
+      ? { documentTip: record.commit }
+      : currentTip
+        ? { documentTip: currentTip }
+        : {}),
+    ...(projection.projectDocs?.abandoned
+      ? { abandoned: projection.projectDocs.abandoned.map((item) => ({ ...item })) }
+      : {}),
+  };
+}
+
+function applyProjectDocAbandoned(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may abandon a project document request.");
+  }
+  const requestId = requiredString(event.payload, "requestId");
+  const path = requiredString(event.payload, "path");
+  const checked = validateProjectDocPath(path);
+  if (!checked.ok) {
+    throw new Error(`Project document path is refused: ${checked.reason}.`);
+  }
+  const reason = requiredString(event.payload, "reason");
+  if (!reason.trim()) {
+    throw new Error("Project document abandonment reason is required.");
+  }
+  const pending = projection.projectDocs?.pending ?? [];
+  const request = pending.find((item) => item.requestId === requestId);
+  if (!request) {
+    throw new Error(`Project document request ${requestId} is not pending.`);
+  }
+  if (request.path !== checked.path) {
+    throw new Error(`Project document abandonment path does not match request ${requestId}.`);
+  }
+  const abandoned = projection.projectDocs?.abandoned ?? [];
+  if (abandoned.some((item) => item.requestId === requestId)) {
+    throw new Error(`Project document request ${requestId} is already abandoned.`);
+  }
+  projection.projectDocs = {
+    pending: pending.filter((item) => item.requestId !== requestId),
+    ...carriedProjectDocs(projection.projectDocs),
+    abandoned: [
+      ...abandoned.map((item) => ({ ...item })),
+      {
+        requestId,
+        path: checked.path,
+        reason,
+        sequence: event.sequence,
+      },
+    ],
+  };
+}
+
+function cloneProjectDocs(docs: ProjectDocsProjection): ProjectDocsProjection {
+  return {
+    pending: docs.pending.map((request) => ({ ...request })),
+    ...carriedProjectDocs(docs),
+  };
+}
+
+function carriedProjectDocs(
+  docs: ProjectDocsProjection | undefined,
+): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned"> {
+  if (!docs) return {};
+  return {
+    ...(docs.committed
+      ? { committed: docs.committed.map((commit) => ({ ...commit })) }
+      : {}),
+    ...(docs.documentTip ? { documentTip: docs.documentTip } : {}),
+    ...(docs.abandoned
+      ? { abandoned: docs.abandoned.map((item) => ({ ...item })) }
+      : {}),
+  };
+}
+
+function requiredBoolean(payload: Record<string, unknown>, key: string): boolean {
+  const value = payload[key];
+  if (typeof value !== "boolean") {
+    throw new Error(`Project document commit ${key} must be a boolean.`);
+  }
+  return value;
+}
+
+function applyContextRecordingResolved(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  const resolution = event.payload.resolution;
+  if (
+    resolution !== "retry" &&
+    resolution !== "proceed_without_manifest" &&
+    resolution !== "abort"
+  ) {
+    throw new Error("Context recording resolution is invalid.");
+  }
+  if (resolution === "retry") {
+    if (event.actor.role !== "architect" && event.actor.role !== "user") {
+      throw new Error("Only the Architect or the user may retry context recording.");
+    }
+  } else if (event.actor.role !== "architect") {
+    throw new Error("Only the Architect may resolve context recording.");
+  }
+  if (projection.status !== "paused" || projection.pauseReason?.reason !== "context_recording_failed") {
+    throw new Error("Context recording can only be resolved while that failure pauses the run.");
+  }
+  const noteSequence = requiredPositiveInteger(event.payload, "noteSequence");
+  const notes = projection.contextRecording?.notes ?? [];
+  const named = notes.find((item) => item.sequence === noteSequence);
+  if (!named) throw new Error(`Context recording note ${noteSequence} does not exist.`);
+  if (named.resolution) {
+    throw new Error(`Context recording note ${noteSequence} is already resolved.`);
+  }
+  const latestUnresolved = [...notes].reverse().find((item) => !item.resolution);
+  if (!latestUnresolved || noteSequence !== latestUnresolved.sequence) {
+    throw new Error(
+      `Context recording resolution must name the latest unresolved note ${latestUnresolved?.sequence ?? "none"}.`,
+    );
+  }
+  const rationale = event.payload.rationale;
+  if (rationale !== undefined && (typeof rationale !== "string" || !rationale.trim())) {
+    throw new Error("Context recording rationale must be non-empty.");
+  }
+  if (
+    resolution === "proceed_without_manifest" &&
+    (typeof rationale !== "string" || !rationale.trim())
+  ) {
+    throw new Error("proceed_without_manifest requires a non-empty rationale.");
+  }
+  if (resolution === "retry" && contextRecordingRetriesRemaining(projection) === 0) {
+    throw new Error(
+      `Context recording retry budget of ${CONTEXT_RECORDING_RETRY_LIMIT} is exhausted.`,
+    );
+  }
+  const sharedResolution: {
+    sequence: number;
+    resolution: ContextRecordingResolutionKind;
+    rationale?: string;
+  } = {
+    sequence: event.sequence,
+    resolution,
+    ...(typeof rationale === "string" ? { rationale } : {}),
+  };
+  projection.contextRecording = {
+    ...(projection.contextRecording?.waiver
+      ? { waiver: { ...projection.contextRecording.waiver } }
+      : {}),
+    notes: notes.map((item) =>
+      item.resolution || item.sequence > noteSequence
+        ? item
+        : {
+            ...item,
+            resolution: {
+              ...sharedResolution,
+              actor: { ...event.actor },
+            },
+          },
+    ),
+    ...(resolution === "proceed_without_manifest"
+      ? { waiver: { sequence: event.sequence, rationale: (rationale as string).trim() } }
+      : {}),
+  };
+  if (resolution === "abort") {
+    projection.status = "failed";
+    projection.failureReason = "context_recording_aborted";
+    delete projection.pauseReason;
+  }
+}
+
+function optionalContextText(
+  payload: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  if (!Object.hasOwn(payload, key) || payload[key] === undefined) return undefined;
+  return requiredString(payload, key);
+}
+
+function optionalContextAttempt(
+  payload: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  if (!Object.hasOwn(payload, key) || payload[key] === undefined) return undefined;
+  return requiredPositiveInteger(payload, key);
 }
 
 function cloneRepairCyclesProjection(

@@ -816,7 +816,7 @@ export class ControlServer {
 
   private syncBuildLifecycle(
     runId: string,
-    status: "progressed" | "paused" | "completed" | "idle" | "blocked",
+    status: "progressed" | "paused" | "completed" | "idle" | "blocked" | "failed",
     completedProjection?: SchedulerProjection,
   ): void {
     let run;

@@ -12,6 +12,7 @@ import {
   generateNativeProcessRecovery,
   decideNativeProcessRecovery,
   executeNativeProcessRecovery,
+  contextRecordingView,
   projectNativeAcceptanceContract,
   resolveNativeBuildRunId,
   getNativeRunnerHealth,
@@ -35,6 +36,35 @@ import {
   nativeProviderProtocol,
   selectNativeBuildRuntimes,
 } from "../lib/client/native-build-engine";
+
+assert.deepEqual(contextRecordingView({
+  contextRecording: {
+    notes: [{
+      sequence: 1,
+      purpose: "architect:plan_required",
+      attempts: 3,
+      reason: "disk full",
+      resolution: {
+        sequence: 2,
+        resolution: "proceed_without_manifest",
+        rationale: "Waived.",
+      },
+    }],
+    waiver: { sequence: 2, rationale: "Waived." },
+  },
+}), {
+  purpose: "architect:plan_required",
+  attempts: 3,
+  reason: "disk full",
+  resolution: "proceed_without_manifest",
+  rationale: "Waived.",
+  suspended: true,
+});
+assert.equal(contextRecordingView({
+  contextRecording: {
+    notes: [{ sequence: 1, purpose: "worker:task", attempts: 3, reason: "locked" }],
+  },
+})?.suspended, false);
 
 assert.equal(
   nativeBuildProvisioningRunId("native-reserved-by-browser"),
@@ -476,6 +506,12 @@ const critiqueAudit = await getNativeBuildAudit(
   requestController.signal,
 );
 assert.equal(critiqueAudit.build.planCritique?.current?.status, "resolved");
+assert.equal(critiqueAudit.build.planCritique?.current?.independence, undefined);
+const freshCritique = {
+  ...planCritiqueAuditProjection,
+  independence: "fresh_context" as const,
+};
+assert.equal(freshCritique.independence, "fresh_context");
 assert.equal(critiqueAudit.build.planCritique?.current?.findings?.[0]?.claim, "A and B both own src/cache.ts.");
 assert.equal(critiqueAudit.build.planCritique?.current?.findings?.[0]?.severity, "blocking");
 assert.equal(critiqueAudit.build.planCritique?.current?.resolution?.resolvedBy, "architect");

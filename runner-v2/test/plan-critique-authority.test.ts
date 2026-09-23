@@ -224,6 +224,7 @@ test("requestCritique appends plan_critique.requested and returns the durable pr
     assert.equal(projection.status, "requested");
     assert.equal(projection.runtime.sessionId, "plan-critic:s1");
     assert.deepEqual(projection.excludedModels, architectExclusion());
+    assert.equal(Object.hasOwn(projection, "independence"), false);
     assert.equal(authority.currentCritique(RUN_ID)?.critiqueId, "critique-1");
   });
 });

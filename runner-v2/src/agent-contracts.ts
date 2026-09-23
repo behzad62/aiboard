@@ -118,6 +118,7 @@ export type AgentLifecycleSignal =
         | "user_guidance_acknowledged"
         | "user_question_requested"
         | "plan_critique_resolved"
+        | "context_recording_resolved"
         | "run_completed";
       referenceId?: string;
     };

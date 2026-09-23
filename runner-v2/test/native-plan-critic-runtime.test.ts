@@ -10,6 +10,7 @@ import type {
   ModelTurn,
   ToolExecutionContext,
 } from "../src/agent-contracts.js";
+import { PLAN_CRITIC_INVARIANTS, buildPlanCritiqueContext } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { NativePlanCriticRuntime } from "../src/native-plan-critic-runtime.js";
 import { createSubmitPlanCritiqueTool } from "../src/plan-critique-tools.js";
@@ -70,6 +71,24 @@ const DEFAULT_VERIFIER_RUNTIME_IDS = [
   "fallback:verifier",
 ] as const;
 
+test("plan critic context does not repeat critic invariants", () => {
+  const pack = buildPlanCritiqueContext({
+    limits: { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 },
+    objective: "Build it",
+    planRevision: 1,
+    baselineRevision: BASELINE_REVISION,
+    tasks: [],
+    riskReasons: [],
+    guidance: [],
+  });
+  assert.equal(pack.sections.some((section) => section.id === "critic-authority"), false);
+  assert.equal(pack.text.includes(PLAN_CRITIC_INVARIANTS), false);
+  assert.doesNotMatch(pack.text, /is integration explicitly owned by a task/);
+  assert.match(PLAN_CRITIC_INVARIANTS, /wiring that connects separately built parts/);
+  assert.match(PLAN_CRITIC_INVARIANTS, /Merging branches is the runner's job, not a task/);
+  assert.doesNotMatch(PLAN_CRITIC_INVARIANTS, /is integration explicitly owned by a task/);
+});
+
 test("critic receives the task graph at the baseline revision with read-only tools plus submit_plan_critique", async () => {
   const fixture = createFixture("context", [{
     blocks: [{ type: "text", text: "Inspection complete." }],
@@ -117,7 +136,22 @@ test("critic receives the task graph at the baseline revision with read-only too
     assert.equal(submit.effect, "none");
     assert.equal(submit.lifecycle, true);
 
+    const system = request.messages.find((message) => message.role === "system");
+    assert.equal(system?.content, PLAN_CRITIC_INVARIANTS);
+    assert.match(
+      String(system?.content),
+      /is the wiring that connects separately built parts \(registration, entry points, configuration\) owned by some task\?/,
+    );
+    assert.match(String(system?.content), /Merging branches is the runner's job, not a task/);
+    assert.doesNotMatch(String(system?.content), /is integration explicitly owned by a task/);
+    assert.equal(
+      JSON.stringify(request.messages).split("You are an independent AIBoard plan critic").length - 1,
+      1,
+    );
     const context = userContext(request);
+    assert.equal(context.includes(PLAN_CRITIC_INVARIANTS), false);
+    assert.doesNotMatch(context, /critic-authority/);
+    assert.doesNotMatch(context, /is integration explicitly owned by a task/);
     for (const required of [
       "task_ui",
       "The UI matches the request.",
@@ -156,18 +190,50 @@ test("critic submits typed findings once and the result is durable", async () =>
   }
 });
 
-test("critic is unavailable when every candidate shares the Architect model identity", async () => {
-  const fixture = createFixture("unavailable-identity", [{
-    blocks: [{ type: "text", text: "should not run" }],
+test("fresh-context plan critic request omits architect and worker session text", async () => {
+  const sentinel = "R1_FRESH_CONTEXT_SENTINEL";
+  const runId = "run_fresh_context_critic";
+  const fixture = createFixture("fresh-sentinel", [{
+    blocks: [{ type: "text", text: "Fresh inspection complete." }],
+    stopReason: "end_turn",
+  }], {
+    verifierRuntimeIds: ["openai:architect"],
+  });
+  try {
+    await seedForeignSession(fixture.sessions, `architect:${runId}`, runId, "architect", sentinel);
+    await seedForeignSession(fixture.sessions, `worker:${runId}`, runId, "worker", sentinel);
+    const result = await fixture.runtime.critique(critiqueRequest(runId));
+    assert.equal(result.status, "suspended");
+    if (result.status === "suspended") {
+      assert.equal(result.runtimeId, "openai:architect");
+      assert.notEqual(result.sessionId, `architect:${runId}`);
+      assert.notEqual(result.sessionId, `worker:${runId}`);
+    }
+    const request = fixture.model.requests[0];
+    assert.ok(request);
+    assert.equal(JSON.stringify(request).includes(sentinel), false);
+    assert.equal(request.sessionId.startsWith("plan-critic:"), true);
+    assert.equal(fixture.authority.requests[0]?.independence, "fresh_context");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("critic falls back to a fresh context when every candidate shares the Architect model identity", async () => {
+  const fixture = createFixture("fresh-identity", [{
+    blocks: [{ type: "text", text: "Fresh inspection complete." }],
     stopReason: "end_turn",
   }], {
     verifierRuntimeIds: ["openai:architect", "clone:architect"],
   });
   try {
-    const result = await fixture.runtime.critique(critiqueRequest("run_unavailable"));
-    assert.equal(result.status, "unavailable");
-    assert.equal(result.reason, "no_independent_healthy_capability_match");
-    assert.equal(fixture.model.requests.length, 0);
+    const result = await fixture.runtime.critique(critiqueRequest("run_fresh_identity"));
+    assert.equal(result.status, "suspended");
+    if (result.status === "suspended") {
+      assert.equal(result.runtimeId, "openai:architect");
+    }
+    assert.equal(fixture.authority.requests[0]?.independence, "fresh_context");
+    assert.equal(fixture.model.requests.length, 1);
   } finally {
     fixture.close();
   }
@@ -240,43 +306,51 @@ test("critic selects an independent runtime rather than the Architect", async ()
   }
 });
 
-test("critic rejects a candidate that shares the Architect runtime id", async () => {
-  const fixture = createFixture("reject-runtime-id", [{
-    blocks: [{ type: "text", text: "should not run" }],
+test("critic uses a fresh context when the only candidate is the Architect runtime", async () => {
+  const fixture = createFixture("fresh-runtime-id", [{
+    blocks: [{ type: "text", text: "Fresh inspection complete." }],
     stopReason: "end_turn",
   }], {
     verifierRuntimeIds: ["openai:architect"],
   });
   try {
-    const result = await fixture.runtime.critique(critiqueRequest("run_reject_runtime"));
-    assert.equal(result.status, "unavailable");
-    assert.equal(result.reason, "no_independent_healthy_capability_match");
-    assert.equal(fixture.model.requests.length, 0);
+    const result = await fixture.runtime.critique(critiqueRequest("run_fresh_runtime"));
+    assert.equal(result.status, "suspended");
+    if (result.status === "suspended") {
+      assert.equal(result.runtimeId, "openai:architect");
+    }
+    assert.equal(fixture.authority.requests[0]?.independence, "fresh_context");
+    assert.deepEqual(
+      fixture.authority.requests[0]?.excludedModels.map((model) => model.modelIdentity),
+      ["architect"],
+    );
   } finally {
     fixture.close();
   }
 });
 
-test("critic rejects a candidate that shares the Architect canonical model identity", async () => {
-  const fixture = createFixture("reject-canonical", [{
-    blocks: [{ type: "text", text: "should not run" }],
+test("critic uses a fresh context when the only candidate shares the Architect canonical model identity", async () => {
+  const fixture = createFixture("fresh-canonical", [{
+    blocks: [{ type: "text", text: "Fresh inspection complete." }],
     stopReason: "end_turn",
   }], {
     verifierRuntimeIds: ["clone:architect"],
   });
   try {
-    const result = await fixture.runtime.critique(critiqueRequest("run_reject_canonical"));
-    assert.equal(result.status, "unavailable");
-    assert.equal(result.reason, "no_independent_healthy_capability_match");
-    assert.equal(fixture.model.requests.length, 0);
+    const result = await fixture.runtime.critique(critiqueRequest("run_fresh_canonical"));
+    assert.equal(result.status, "suspended");
+    if (result.status === "suspended") {
+      assert.equal(result.runtimeId, "clone:architect");
+    }
+    assert.equal(fixture.authority.requests[0]?.independence, "fresh_context");
   } finally {
     fixture.close();
   }
 });
 
-test("critic rejects a candidate with the same provider and model pair as the Architect", async () => {
-  const fixture = createFixture("reject-provider-model", [{
-    blocks: [{ type: "text", text: "should not run" }],
+test("critic uses a fresh context when the only candidate has the Architect provider and model pair", async () => {
+  const fixture = createFixture("fresh-provider-model", [{
+    blocks: [{ type: "text", text: "Fresh inspection complete." }],
     stopReason: "end_turn",
   }], {
     candidates: [
@@ -292,10 +366,12 @@ test("critic rejects a candidate with the same provider and model pair as the Ar
     verifierRuntimeIds: ["openai:shadow-architect"],
   });
   try {
-    const result = await fixture.runtime.critique(critiqueRequest("run_reject_pair"));
-    assert.equal(result.status, "unavailable");
-    assert.equal(result.reason, "no_independent_healthy_capability_match");
-    assert.equal(fixture.model.requests.length, 0);
+    const result = await fixture.runtime.critique(critiqueRequest("run_fresh_pair"));
+    assert.equal(result.status, "suspended");
+    if (result.status === "suspended") {
+      assert.equal(result.runtimeId, "openai:shadow-architect");
+    }
+    assert.equal(fixture.authority.requests[0]?.independence, "fresh_context");
   } finally {
     fixture.close();
   }
@@ -378,7 +454,7 @@ test("every plan critique records one context manifest bound to the baseline rev
     assert.equal(manifest.sessionId, result.sessionId);
     assert.equal(manifest.repositoryRevision, BASELINE_REVISION);
     assert.equal(manifest.sections.some((section) => section.id === "task-graph"), true);
-    assert.equal(manifest.sections.some((section) => section.id === "critic-authority"), true);
+    assert.equal(manifest.sections.some((section) => section.id === "critic-authority"), false);
   } finally {
     fixture.close();
   }
@@ -805,6 +881,26 @@ function submitTurn(finding?: typeof BLOCKING_FINDING | typeof ADVISORY_FINDING)
   };
 }
 
+async function seedForeignSession(
+  sessions: SqliteAgentSessionStore,
+  sessionId: string,
+  runId: string,
+  role: "architect" | "worker",
+  sentinel: string,
+): Promise<void> {
+  await sessions.create({
+    sessionId,
+    runId,
+    actor: { role, id: "openai:architect" },
+    occurredAt: "2026-09-02T00:00:00.000Z",
+  });
+  await sessions.checkpoint(sessionId, {
+    messages: [{ id: `${role}-sentinel`, role: "user", content: sentinel }],
+    turns: 1,
+    seenCallIds: [],
+  }, "2026-09-02T00:00:00.000Z");
+}
+
 function createFixture(
   name: string,
   turns: ModelTurn[],
@@ -912,6 +1008,7 @@ class FakePlanCritiqueAuthority implements PlanCritiqueAuthority {
       planRevision: input.planRevision,
       runtime: { ...input.runtime },
       excludedModels: input.excludedModels.map((model) => ({ ...model })),
+      ...(input.independence ? { independence: input.independence } : {}),
       status: "requested",
       requestedAt: input.occurredAt,
     };

@@ -6,13 +6,15 @@ import type {
   AgentMessage,
   AgentModel,
   NativeTool,
-  ToolDefinition,
+  ToolCallBlock,
+  ToolExecutionContext,
+  ToolResult,
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
 import {
   buildVerifierContext,
   buildVerifierExpectationsContext,
-  VERIFIER_AUTHORITY_INVARIANTS,
+  verifierSystemPrompt,
 } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
@@ -31,7 +33,10 @@ import {
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
+import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { SqlitePermissionStore } from "./permission-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import type { FinalVerificationCheckResult } from "./final-verification-runtime.js";
 import { createGitTools } from "./git-tools.js";
@@ -46,11 +51,25 @@ import type {
   RuntimeRouter,
 } from "./runtime-router.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
+import {
+  assertRoleToolSurface,
+  staticToolAdmitted,
+  type RoleCapabilityBroker,
+  type RoleCapabilityRole,
+} from "./role-capabilities.js";
 import { ToolBroker } from "./tool-broker.js";
+import {
+  AgentProtocolError,
+  type AgentToolRuntime,
+} from "./tool-registry.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { VerificationWorkspace } from "./verification-workspace.js";
 import {
+  assertFreshContextRequest,
+  assertFreshContextSessionStarted,
   canonicalModelIdentity,
+  recordedReviewerIndependence,
+  type ReviewerIndependence,
   type VerifierExcludedModel,
   type VerifierReviewProjection,
   type VerifierVerdictProjection,
@@ -189,6 +208,9 @@ export interface NativeVerifierRuntimeOptions {
   recordContextPackText?: boolean;
   maxTurns?: number;
   clock?: () => string;
+  permissionProfile?: PermissionProfile;
+  permissions?: SqlitePermissionStore;
+  execution?: OneShotCommandExecutor;
 }
 
 export class NativeVerifierRuntime {
@@ -324,6 +346,7 @@ export class NativeVerifierRuntime {
             sessionId,
           },
           excludedModels,
+          independence: selection.independence,
           criteria: request.criteria.map((item) => ({
             taskId: item.taskId,
             criterionId: item.criterion.id,
@@ -342,6 +365,7 @@ export class NativeVerifierRuntime {
         candidate,
         sessionId,
         excludedModels,
+        independence: selection.independence,
       });
     }
     if (
@@ -354,6 +378,7 @@ export class NativeVerifierRuntime {
         candidate,
         model,
         review: durableReview,
+        independence: selection.independence,
       });
       if (passOne) return passOne;
       durableReview = this.options.verdictAuthority?.currentReview(request.runId);
@@ -392,12 +417,7 @@ export class NativeVerifierRuntime {
     const systemMessage: AgentMessage = {
       id: "verifier-system",
       role: "system",
-      content: durableReview
-        ? [
-            VERIFIER_AUTHORITY_INVARIANTS,
-            "Inspect the exact revision, then finish by calling submit_verifier_verdict exactly once with every protected task/criterion pair, a satisfied or unsatisfied verdict, a non-empty rationale, and durable evidence IDs. The kernel derives the overall result.",
-          ].join("\n")
-        : VERIFIER_AUTHORITY_INVARIANTS,
+      content: verifierSystemPrompt(durableReview ? "verdict" : "inspection"),
     };
     const contextMessage: AgentMessage = {
       id: `verifier-context:${context.digest}`,
@@ -406,14 +426,27 @@ export class NativeVerifierRuntime {
     };
     let messages: AgentMessage[] = [systemMessage, contextMessage];
     const sessionEvents = this.options.sessions.events(sessionId);
+    const freshStart = sessionEvents.length === 0;
+    if (freshStart) {
+      assertFreshContextRequest({
+        independence: selection.independence,
+        priorEventCount: sessionEvents.length,
+        messages,
+        packMessageIds: [systemMessage.id, contextMessage.id],
+      });
+    }
     let recoveredCompleted = false;
-    if (sessionEvents.length === 0) {
+    if (freshStart) {
       await this.options.sessions.create({
         sessionId,
         runId: request.runId,
         actor: { role: "verifier", id: candidate.runtimeId },
         occurredAt: this.clock(),
       });
+      assertFreshContextSessionStarted(
+        selection.independence,
+        this.options.sessions.events(sessionId),
+      );
     } else {
       const recovered = await this.options.sessions.load(sessionId);
       if (
@@ -421,7 +454,11 @@ export class NativeVerifierRuntime {
         recovered.actor.id !== candidate.runtimeId ||
         recovered.runId !== request.runId
       ) {
-        throw new Error("Recovered verifier session identity does not match the request.");
+        throw new Error(
+          selection.independence === "fresh_context"
+            ? "A fresh-context reviewer cannot resume or reuse another session."
+            : "Recovered verifier session identity does not match the request.",
+        );
       }
       if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
       recoveredCompleted = recovered.status === "completed";
@@ -455,13 +492,17 @@ export class NativeVerifierRuntime {
       );
     }
 
-    const broker = createInspectionTools({
+    const broker = createVerifierReviewBroker({
       git: this.options.git, executionGrants: this.options.executionGrants,
       workspacePath: workspace.path,
+      projectRoot: workspace.repositoryRoot,
+      permissionProfile: this.options.permissionProfile ?? "guarded",
       artifacts: this.options.artifacts,
       evidenceStore: this.options.evidenceStore,
       runId: request.runId,
       clock: this.clock,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      ...(this.options.execution ? { execution: this.options.execution } : {}),
       ...(durableReview && this.options.verdictAuthority
         ? {
             lifecycleTool: createSubmitVerifierVerdictTool({
@@ -616,8 +657,10 @@ export class NativeVerifierRuntime {
     candidate: AgentRuntimeCandidate;
     model: AgentModel;
     review: VerifierReviewProjection;
+    independence: ReviewerIndependence;
   }): Promise<NativeVerifierInspectionResult | undefined> {
     const { request, candidate, model, review } = input;
+    const independence = input.independence ?? recordedReviewerIndependence(review);
     const baselineRevision = request.baselineRevision;
     if (!baselineRevision) {
       throw new Error("Two-pass verifier inspection requires a baseline revision.");
@@ -665,11 +708,7 @@ export class NativeVerifierRuntime {
     const systemMessage: AgentMessage = {
       id: "verifier-expectations-system",
       role: "system",
-      content: [
-        "You are inspecting the BASELINE revision: the repository as it was before this build's changes.",
-        "No diff, review, or verification result is available yet.",
-        "Derive expectations from the criteria and the existing code and tests, then call record_verification_expectations exactly once.",
-      ].join("\n"),
+      content: verifierSystemPrompt("expectations"),
     };
     const contextMessage: AgentMessage = {
       id: `verifier-context:${context.digest}`,
@@ -678,13 +717,26 @@ export class NativeVerifierRuntime {
     };
     let messages: AgentMessage[] = [systemMessage, contextMessage];
     const sessionEvents = this.options.sessions.events(sessionId);
-    if (sessionEvents.length === 0) {
+    const freshStart = sessionEvents.length === 0;
+    if (freshStart) {
+      assertFreshContextRequest({
+        independence,
+        priorEventCount: sessionEvents.length,
+        messages,
+        packMessageIds: [systemMessage.id, contextMessage.id],
+      });
+    }
+    if (freshStart) {
       await this.options.sessions.create({
         sessionId,
         runId: request.runId,
         actor: { role: "verifier", id: candidate.runtimeId },
         occurredAt: this.clock(),
       });
+      assertFreshContextSessionStarted(
+        independence,
+        this.options.sessions.events(sessionId),
+      );
     } else {
       const recovered = await this.options.sessions.load(sessionId);
       if (
@@ -692,7 +744,11 @@ export class NativeVerifierRuntime {
         recovered.actor.id !== candidate.runtimeId ||
         recovered.runId !== request.runId
       ) {
-        throw new Error("Recovered verifier expectations session identity does not match the request.");
+        throw new Error(
+          independence === "fresh_context"
+            ? "A fresh-context reviewer cannot resume or reuse another session."
+            : "Recovered verifier expectations session identity does not match the request.",
+        );
       }
       if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
       if (!messages.some((message) => message.id === contextMessage.id)) {
@@ -703,7 +759,7 @@ export class NativeVerifierRuntime {
     if (!authority) {
       throw new Error("Two-pass verification requires a verdict authority.");
     }
-    const broker = createInspectionTools({
+    const broker = createVerifierExpectationsBroker({
       git: this.options.git,
       executionGrants: this.options.executionGrants,
       workspacePath: baseline.path,
@@ -843,7 +899,7 @@ export function verifierModelAttribution(
 
 const REVISION_REACHING_GIT_TOOLS = ["git.diff", "git.log", "git.show"] as const;
 
-export function createInspectionTools(input: {
+export interface InspectionToolsInput {
   git?: RunGitExecutionContext;
   executionGrants?: ExecutionGrantAuthority;
   workspacePath: string;
@@ -854,7 +910,94 @@ export function createInspectionTools(input: {
   ledger?: ToolInvocationLedger;
   lifecycleTool?: NativeTool<unknown>;
   excludeToolNames?: readonly string[];
-}): ToolBroker {
+  capabilityRole: RoleCapabilityRole;
+  capabilityBroker: RoleCapabilityBroker;
+  probeTools?: readonly NativeTool<unknown>[];
+  projectRoot?: string;
+  permissionProfile?: PermissionProfile;
+  permissions?: SqlitePermissionStore;
+  execution?: OneShotCommandExecutor;
+  /** Test double. Production uses `run_evidence_command` from `createEvidenceTools`. */
+  commandTool?: NativeTool<unknown>;
+}
+
+/** Correct wiring returns the verification workspace. `projectRoot` is the prove-red target. */
+export function verifierCommandWorkspacePath(workspacePath: string, projectRoot: string): string {
+  void projectRoot;
+  return workspacePath;
+}
+
+export function createVerifierCommandBroker(
+  input: Omit<InspectionToolsInput, "capabilityRole" | "capabilityBroker">,
+): ToolBroker {
+  const workspacePath = verifierCommandWorkspacePath(
+    input.workspacePath,
+    input.projectRoot ?? input.workspacePath,
+  );
+  const broker = new ToolBroker({
+    ...(input.git ? { git: input.git } : {}),
+    ...(input.executionGrants ? { executionGrants: input.executionGrants } : {}),
+    permissionProfile: input.permissionProfile ?? "guarded",
+    workspacePath,
+    artifacts: input.artifacts,
+    clock: input.clock,
+    ...(input.ledger ? { ledger: input.ledger } : {}),
+    ...(input.permissions
+      ? { approve: (approval) => input.permissions!.requestTool(approval) }
+      : {}),
+  });
+  const tool = input.commandTool ?? evidenceCommandTool(input.evidenceStore
+    ? createEvidenceTools({
+        ...(input.git ? { git: input.git } : {}),
+        store: input.evidenceStore,
+        artifacts: input.artifacts,
+        taskId: "verifier",
+        clock: input.clock,
+        ...(input.execution ? { execution: input.execution } : {}),
+      })
+    : []);
+  if (tool.definition.name !== "run_evidence_command") {
+    throw new Error("Verifier command broker only registers run_evidence_command.");
+  }
+  broker.register(tool);
+  return broker;
+}
+
+export function createVerifierReviewBroker(
+  input: Omit<InspectionToolsInput, "capabilityRole" | "capabilityBroker">,
+): AgentToolRuntime {
+  const broker = createInspectionTools({
+    ...input,
+    capabilityRole: "verifier",
+    capabilityBroker: "inspection",
+  });
+  const command = createVerifierCommandBroker(input);
+  const composed = new LayeredToolRuntime(broker, command);
+  assertRoleToolSurface(
+    "verifier",
+    "inspection",
+    composed.definitions().map((definition) => definition.name),
+  );
+  return composed;
+}
+
+export function createVerifierExpectationsBroker(
+  input: Omit<InspectionToolsInput, "capabilityRole" | "capabilityBroker">,
+): ToolBroker {
+  const broker = createInspectionTools({
+    ...input,
+    capabilityRole: "verifier",
+    capabilityBroker: "expectations",
+  });
+  assertRoleToolSurface(
+    "verifier",
+    "expectations",
+    broker.definitions().map((definition) => definition.name),
+  );
+  return broker;
+}
+
+export function createInspectionTools(input: InspectionToolsInput): ToolBroker {
   const broker = new ToolBroker({
     git: input.git, executionGrants: input.executionGrants,
     permissionProfile: "guarded",
@@ -879,32 +1022,75 @@ export function createInspectionTools(input: {
           artifacts: input.artifacts,
           taskId: "verifier",
           clock: input.clock,
-        }).filter((tool) => tool.definition.name === "inspect_evidence")
+        })
       : []),
-  ].filter(
-    (tool) =>
-      tool.definition.readOnly &&
-      tool.definition.effect === "none" &&
-      tool.definition.lifecycle !== true &&
-      !excludedToolNames.has(tool.definition.name)
-  );
+  ];
   for (const tool of tools) {
-    assertReadOnlyInspectionDefinition(tool.definition);
-    broker.register(tool);
+    if (tool.definition.name === "run_evidence_command") continue;
+    if (excludedToolNames.has(tool.definition.name)) continue;
+    if (staticToolAdmitted(input.capabilityRole, input.capabilityBroker, tool.definition.name)) {
+      broker.register(tool);
+    }
   }
   if (input.lifecycleTool) broker.register(input.lifecycleTool);
+  for (const tool of input.probeTools ?? []) broker.register(tool);
   return broker;
 }
 
-function assertReadOnlyInspectionDefinition(definition: ToolDefinition): void {
-  if (
-    !definition.readOnly ||
-    definition.effect !== "none" ||
-    definition.lifecycle === true
-  ) {
-    throw new Error(
-      `Verifier inspection tool ${definition.name} exceeds read-only authority.`
-    );
+function evidenceCommandTool(tools: readonly NativeTool<unknown>[]): NativeTool<unknown> {
+  const tool = tools.find((candidate) => candidate.definition.name === "run_evidence_command");
+  if (!tool) throw new Error("Evidence tools did not include run_evidence_command.");
+  return tool;
+}
+
+class LayeredToolRuntime implements AgentToolRuntime {
+  private readonly owner = new Map<string, AgentToolRuntime>();
+
+  constructor(...layers: AgentToolRuntime[]) {
+    for (const layer of layers) {
+      for (const definition of layer.definitions()) {
+        if (this.owner.has(definition.name)) {
+          throw new Error(`Duplicate layered tool ${definition.name}.`);
+        }
+        this.owner.set(definition.name, layer);
+      }
+    }
+  }
+
+  definitions() {
+    return [...this.owner.entries()]
+      .map(([name, owner]) => owner.definitions().find((item) => item.name === name)!)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return this.owner.get(name)?.isLifecycleTool(name) ?? false;
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.owner.get(name)?.isReadOnlyTool(name) ?? false;
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    const current = new Set<string>();
+    for (const call of calls) {
+      if (!call.callId || seen.has(call.callId) || current.has(call.callId)) {
+        throw new AgentProtocolError("duplicate_call_id", `Tool call ID ${call.callId} was already used.`);
+      }
+      current.add(call.callId);
+    }
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    const owner = this.owner.get(call.name);
+    if (owner) return await owner.invoke(call, context);
+    return {
+      callId: call.callId,
+      toolName: call.name,
+      content: [{ type: "text", text: `Tool ${call.name} is not registered.` }],
+      isError: true,
+      error: { code: "unknown_tool", message: `Tool ${call.name} is not registered.` },
+    };
   }
 }
 
@@ -1032,6 +1218,7 @@ function assertBoundVerifierReview(input: {
   candidate: AgentRuntimeCandidate;
   sessionId: string;
   excludedModels: readonly VerifierExcludedModel[];
+  independence: ReviewerIndependence;
 }): void {
   const expectedCriteria = input.request.criteria
     .map((item) => ({
@@ -1062,7 +1249,8 @@ function assertBoundVerifierReview(input: {
     (input.request.baselineRevision ?? undefined) !== input.review.baselineRevision ||
     JSON.stringify(actualCriteria) !== JSON.stringify(expectedCriteria) ||
     JSON.stringify(input.review.excludedModels) !==
-      JSON.stringify(input.excludedModels)
+      JSON.stringify(input.excludedModels) ||
+    input.review.independence !== input.independence
   ) {
     throw new Error(
       "Durable verifier review conflicts with its kernel-selected revision, identity, or criteria.",

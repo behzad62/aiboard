@@ -20,13 +20,14 @@ import {
   Wrench,
 } from "lucide-react";
 
-import type {
-  NativeBuildEvidenceFact,
-  NativeBuildObservability,
-  NativeBuildProjection,
-  NativeFinalVerificationObservability,
-  NativeIndependentVerifierObservability,
-  NativePlanCritiqueState,
+import {
+  contextRecordingView,
+  type NativeBuildEvidenceFact,
+  type NativeBuildObservability,
+  type NativeBuildProjection,
+  type NativeFinalVerificationObservability,
+  type NativeIndependentVerifierObservability,
+  type NativePlanCritiqueState,
 } from "@/lib/client/runner-v2";
 import { projectNativeAcceptanceContract } from "@/lib/client/runner-v2";
 import { formatTokenCount } from "@/lib/client/token-usage";
@@ -184,13 +185,16 @@ function planCritiqueSummaryLine(state: NativePlanCritiqueState | undefined): st
   }
   const current = state.current;
   if (!current) return undefined;
-  if (current.status === "requested") return "Plan critique: requested";
+  const freshContext = current.independence === "fresh_context"
+    ? " · same model, fresh context"
+    : "";
+  if (current.status === "requested") return `Plan critique: requested${freshContext}`;
   const findings = current.findings ?? [];
   const blocking = findings.filter((finding) => finding.severity === "blocking").length;
   const advisory = findings.filter((finding) => finding.severity === "advisory").length;
   const counts = `${blocking} blocking, ${advisory} advisory`;
-  if (current.status === "resolved") return `Plan critique: resolved (${counts})`;
-  if (current.status === "submitted") return `Plan critique: submitted (${counts})`;
+  if (current.status === "resolved") return `Plan critique: resolved (${counts})${freshContext}`;
+  if (current.status === "submitted") return `Plan critique: submitted (${counts})${freshContext}`;
   return undefined;
 }
 
@@ -583,6 +587,25 @@ export function runnerEvidenceDiagnosticDetail(fact: NativeBuildEvidenceFact): s
   }
 }
 
+export function ContextRecordingLines({
+  projection,
+}: {
+  projection: NativeBuildProjection | null;
+}) {
+  const recording = contextRecordingView(projection);
+  if (!recording) return null;
+  return (
+    <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+      <p>Context manifest: {recording.purpose}</p>
+      <p>Attempts: {recording.attempts}</p>
+      <p>Reason: {recording.reason}</p>
+      {recording.resolution ? <p>Resolution: {recording.resolution}</p> : null}
+      {recording.rationale ? <p>Rationale: {recording.rationale}</p> : null}
+      {recording.suspended ? <p>Recording suspended</p> : null}
+    </div>
+  );
+}
+
 function lifecycleLabel(projection: NativeBuildProjection | null): string {
   if (!projection) return "Waiting for build activity";
   if (projection.repairCycles?.pause) {
@@ -605,6 +628,10 @@ function lifecycleLabel(projection: NativeBuildProjection | null): string {
       ? "Changes applied to your project"
       : "Decision received";
   }
+  if (projection.pauseReason?.reason === "context_recording_failed") {
+    return "Context recording needs a decision";
+  }
+  if (projection.failureReason === "context_recording_aborted") return "Build failed";
   if (projection.status === "completed") return "Build complete";
   if (projection.status === "paused") return "Build paused";
   if (planCritiqueNeedsResolution(projection.planCritique)) {
@@ -1187,6 +1214,7 @@ export function RunnerV2ObservabilityPanel({
           <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2.5">
             <p className="text-[0.68rem] font-medium uppercase tracking-wide text-primary">Current status</p>
             <p className="mt-1 text-sm font-semibold leading-snug">{view.lifecycle}</p>
+            <ContextRecordingLines projection={projection ?? null} />
             <p className="mt-1 text-xs text-muted-foreground">
               {view.progress.completed} of {view.progress.total} task{view.progress.total === 1 ? "" : "s"} complete
             </p>
@@ -1601,6 +1629,7 @@ function PlanCritiqueFindings({
           {current?.excludedModels.length
             ? ` · ${current.excludedModels.map((model) => model.modelIdentity).join(", ")}`
             : ""}
+          {current?.independence === "fresh_context" ? " · same model, fresh context" : ""}
         </p>
         <ul className="space-y-2">
           {findings.map((finding) => {
@@ -1788,6 +1817,11 @@ export function IndependentVerifierManifest({
                     ? "Runner will bind a distinct verifier to the exact integrated revision."
                     : "The current low-risk revision does not require an independent verdict."}
             </p>
+            {review?.independence === "fresh_context" ? (
+              <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
+                same model, fresh context
+              </p>
+            ) : null}
             {review?.expectations && review.expectations.length > 0 ? (
               <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
                 Expectations recorded ({review.expectations.length} criteria)

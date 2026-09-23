@@ -5,7 +5,6 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ControlServer } from "./control-server.js";
 import { ArtifactStore } from "./artifact-store.js";
-import type { BuildStepResult } from "./build-runtime.js";
 import { EncryptedProviderConfigStore } from "./encrypted-provider-config-store.js";
 import { createExecutionHost } from "./execution-host.js";
 import { createRunnerInternalExecutionContext } from "./runner-internal-execution-context.js";
@@ -19,8 +18,12 @@ import {
 } from "./native-build-factory.js";
 import {
   NativeBuildManager,
-  type HistoricalTerminalState,
 } from "./native-build-manager.js";
+import {
+  failBuildIfActive,
+  isTerminalRunState,
+  syncAutonomousBuildLifecycle,
+} from "./cli-lifecycle.js";
 import {
   createLiveMcpStatusRegistry,
   type McpServerSpec,
@@ -35,7 +38,6 @@ import {
 } from "./runner-capabilities-config.js";
 import { RunSupervisor } from "./run-supervisor.js";
 import { RUNNER_BUILTIN_TOOL_NAMES } from "./runner-extension.js";
-import type { RunState } from "./contracts.js";
 import {
   closeRunnerResources,
   reconcileRunnerStartup,
@@ -44,9 +46,6 @@ import {
 } from "./runner-resource-cleanup.js";
 import { SqliteBuildSpecStore } from "./sqlite-build-spec-store.js";
 import { SqliteEventStore } from "./sqlite-event-store.js";
-import {
-  type SchedulerProjection,
-} from "./scheduler-store.js";
 
 const PROTOCOL_VERSION = 2;
 
@@ -187,6 +186,7 @@ async function main(): Promise<void> {
         recordRuntimeRecoveryFailure(supervisor, runId, error);
       },
       shouldAutoRun: (runId) => supervisor.getRun(runId).state === "running",
+      onBuildFailed: (runId, reason) => failBuildIfActive(supervisor, runId, reason),
       onPumpResult: (runId, result) =>
         syncAutonomousBuildLifecycle(
           supervisor,
@@ -295,35 +295,6 @@ async function main(): Promise<void> {
     );
     process.exitCode = 1;
   }
-}
-
-function syncAutonomousBuildLifecycle(
-  supervisor: RunSupervisor,
-  runId: string,
-  result: BuildStepResult,
-  build: SchedulerProjection,
-): void {
-  const run = supervisor.getRun(runId);
-  if (
-    result.status === "completed" &&
-    run.state === "running"
-  ) {
-    supervisor.completeBuild(
-      runId,
-      `autonomous-build-completed:${run.lastSequence}`,
-      build,
-    );
-  } else if (result.status === "paused" && run.state === "running") {
-    supervisor.pause(
-      runId,
-      `autonomous-build-paused:${run.lastSequence}`,
-      result.action ?? "native-build"
-    );
-  }
-}
-
-function isTerminalRunState(state: RunState): state is HistoricalTerminalState {
-  return state === "stopped" || state === "completed" || state === "failed";
 }
 
 async function validateActiveRecoveryCapabilityContracts(
