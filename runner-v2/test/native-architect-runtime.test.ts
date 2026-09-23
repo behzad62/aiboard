@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
+import type { AgentModel, AgentModelRequest, ModelTurn, ToolResult } from "../src/agent-contracts.js";
 import { ProviderTransportError } from "../src/account-runner-model.js";
 import { buildArchitectContext } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
@@ -15,9 +15,9 @@ import { BuildRuntime } from "../src/build-runtime.js";
 import { assessPlanRisk } from "../src/plan-critique-contracts.js";
 import { LanguageProviderRouter } from "../src/language-provider-router.js";
 import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
-import { PlanOnlyInspectionRuntime, architectInspectionWorkspace, architectModelAttribution, loadArchitectReviewSubmission, prioritizedArchitectCapabilities } from "../src/native-architect-runtime.js";
+import { PlanOnlyInspectionRuntime, architectInspectionWorkspace, architectModelAttribution, loadArchitectReviewSubmission, prioritizedArchitectCapabilities, type ArchitectCommandWorkspaceProvider } from "../src/native-architect-runtime.js";
 import { roleToolSurface } from "../src/role-capabilities.js";
-import { NativeArchitectRuntime } from "./support/git-fixture.js";
+import { NativeArchitectRuntime, fixtureGitContext } from "./support/git-fixture.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { createMcpTools, type McpManager } from "../src/mcp-tools.js";
@@ -31,6 +31,7 @@ import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import type { OneShotCommandExecutor } from "../src/one-shot-command-executor.js";
 import { ToolRegistry } from "../src/tool-registry.js";
 
 class ScriptedModel implements AgentModel {
@@ -1413,6 +1414,283 @@ function seedSubmittedCritique(store: SqliteSchedulerStore, runId: string): void
       }],
     },
   });
+}
+
+const LAZY_COMMAND_REVISION = "a".repeat(40);
+
+test("an Architect turn with no command creates no disposable copy", async () => {
+  const seen = { creates: 0, cleanups: 0 };
+  await driveArchitectCommandTurn({
+    label: "lazy-none",
+    turns: [{ blocks: [], stopReason: "cancelled" }],
+    workspace: countingWorkspace(seen, async () => ({ path: "unused-copy" })),
+    assertTurn: (model) => {
+      assert.equal(
+        model.requests[0]?.tools.some((tool) => tool.name === "run_evidence_command"),
+        true,
+      );
+      assert.equal(seen.creates, 0);
+      assert.equal(seen.cleanups, 0);
+    },
+  });
+});
+
+test("an Architect turn with two commands creates one disposable copy and cleans it once", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-lazy-two-"));
+  const copy = join(root, "copy");
+  const seen = { creates: 0, cleanups: 0 };
+  const directories: string[] = [];
+  const execution = recordingExecutor(directories);
+  try {
+    await driveArchitectCommandTurn({
+      label: "lazy-two",
+      root,
+      turns: [{
+        blocks: [architectCommandCall("cmd-1"), architectCommandCall("cmd-2")],
+        stopReason: "tool_calls",
+      }, {
+        blocks: [],
+        stopReason: "cancelled",
+      }],
+      permissionProfile: "full",
+      execution,
+      workspace: countingWorkspace(seen, async (revision) => {
+        assert.equal(revision, LAZY_COMMAND_REVISION);
+        mkdirSync(copy);
+        return { path: copy };
+      }),
+      assertTurn: (model) => {
+        assert.equal(seen.creates, 1);
+        assert.equal(seen.cleanups, 1);
+        assert.equal(directories.length, 2);
+        assert.equal(realpathSync(directories[0]!), realpathSync(copy));
+        assert.equal(realpathSync(directories[1]!), realpathSync(copy));
+        assert.equal(existsSync(join(copy, "cmd-1.txt")), true);
+        assert.equal(existsSync(join(copy, "cmd-2.txt")), true);
+        assert.equal(existsSync(join(root, "project", "cmd-1.txt")), false);
+        assert.equal(existsSync(join(root, "project", "cmd-2.txt")), false);
+        const results = toolResults(model, 1);
+        assert.equal(results.length, 2);
+        for (const result of results) assert.equal(result.isError, false, JSON.stringify(result));
+      },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed Architect command copy is returned to the Architect and is not the project", async () => {
+  const seen = { creates: 0, cleanups: 0 };
+  const directories: string[] = [];
+  await driveArchitectCommandTurn({
+    label: "lazy-fail",
+    turns: [{
+      blocks: [architectCommandCall("cmd-1"), architectCommandCall("cmd-2")],
+      stopReason: "tool_calls",
+    }, {
+      blocks: [],
+      stopReason: "cancelled",
+    }],
+    permissionProfile: "full",
+    execution: recordingExecutor(directories),
+    workspace: countingWorkspace(seen, async () => {
+      throw new Error("worktree failed");
+    }),
+    assertTurn: (model) => {
+      assert.equal(seen.creates, 1);
+      assert.equal(seen.cleanups, 0);
+      assert.deepEqual(directories, []);
+      const results = toolResults(model, 1);
+      assert.equal(results.length, 2);
+      for (const result of results) {
+        assert.equal(result.isError, true, JSON.stringify(result));
+        assert.equal(result.error?.code, "command_workspace_unavailable");
+        assert.match(result.error?.message ?? "", /worktree failed/);
+      }
+    },
+  });
+});
+
+function architectCommandCall(callId: string): ModelTurn["blocks"][number] {
+  return {
+    type: "tool_call",
+    callId,
+    name: "run_evidence_command",
+    arguments: {
+      label: callId,
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      cwd: ".",
+    },
+  };
+}
+
+function recordingExecutor(directories: string[]): OneShotCommandExecutor {
+  return {
+    async execute(request) {
+      directories.push(request.workingDirectory);
+      writeFileSync(join(request.workingDirectory, `${request.context.callId}.txt`), "ran\n");
+      return {
+        process: {
+          logicalProcessId: request.context.callId,
+          outcome: "exited",
+          exitCode: 0,
+          finishedAt: "2026-09-23T00:00:00.000Z",
+          output: [
+            { stream: "stdout", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+            { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+          ],
+          cleanup: { state: "not_required" },
+        },
+        enforcement: "unconfined_explicit_full",
+        disclosure: "unconfined_explicit_full",
+      };
+    },
+  };
+}
+
+function countingWorkspace(
+  seen: { creates: number; cleanups: number },
+  create: ArchitectCommandWorkspaceProvider["create"],
+): ArchitectCommandWorkspaceProvider {
+  return {
+    workspaceKind: "independent-verifier",
+    create: async (revision) => {
+      seen.creates += 1;
+      return await create(revision);
+    },
+    cleanup: async () => {
+      seen.cleanups += 1;
+    },
+  };
+}
+
+function toolResults(model: ScriptedModel, requestIndex: number): ToolResult[] {
+  return (model.requests[requestIndex]?.messages ?? []).flatMap((message) =>
+    message.role === "tool" && typeof message.content !== "string" && !Array.isArray(message.content)
+      ? [message.content]
+      : [],
+  );
+}
+
+async function driveArchitectCommandTurn(input: {
+  label: string;
+  turns: Array<ModelTurn | Error>;
+  workspace: ArchitectCommandWorkspaceProvider;
+  assertTurn: (model: ScriptedModel) => void;
+  root?: string;
+  permissionProfile?: "full";
+  execution?: OneShotCommandExecutor;
+}): Promise<void> {
+  const root = input.root ?? mkdtempSync(join(tmpdir(), `aiboard-architect-${input.label}-`));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  const runId = `run-${input.label}`;
+  const objective = "Build the feature.";
+  const ownsRoot = input.root === undefined;
+  try {
+    scheduler.append({
+      runId,
+      type: "run.initialized",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "init",
+      payload: { objective },
+    });
+    scheduler.append({
+      runId,
+      type: "plan.created",
+      occurredAt: "2026-09-23T00:00:01.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "plan",
+      payload: { revision: 1, tasks: [{
+        id: "task-a",
+        objective: "Implement A",
+        dependencies: [],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "A is implemented." }],
+        acceptanceCriteriaVersion: 1,
+        status: "planned",
+        attempt: 0,
+      }] },
+    });
+    scheduler.append({
+      runId,
+      type: "user.guidance_submitted",
+      occurredAt: "2026-09-23T00:00:02.000Z",
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "guidance",
+      payload: {
+        guidanceId: "guidance-1",
+        text: "Keep the public API stable.",
+        version: 1,
+        interruptionProtocolVersion: 1,
+      },
+    });
+    scheduler.append({
+      runId,
+      type: "integration.revision_advanced",
+      occurredAt: "2026-09-23T00:00:03.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "integration",
+      payload: { integrationRevision: LAZY_COMMAND_REVISION },
+    });
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "test:architect",
+      providerId: "test",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const model = new ScriptedModel(input.turns);
+    const architect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, model]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: `project-${input.label}`,
+      projectRoot: project,
+      objective,
+      commandWorkspace: input.workspace,
+      ...(input.permissionProfile ? { permissionProfile: input.permissionProfile } : {}),
+      ...(input.execution
+        ? { execution: input.execution, git: fixtureGitContext(input.permissionProfile ?? "full", input.execution) }
+        : {}),
+    });
+    await architect.run({
+      runId,
+      reason: { type: "user_guidance_required", guidanceId: "guidance-1", version: 1 },
+      projection: rebuildSchedulerProjection(scheduler.readRun(runId)),
+      tools: new ToolRegistry(),
+      context: {
+        runId,
+        sessionId: `architect:${runId}`,
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    input.assertTurn(model);
+  } finally {
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    if (ownsRoot) rmSync(root, { recursive: true, force: true });
+  }
 }
 
 function skillMetadata(name: string): SkillMetadata {

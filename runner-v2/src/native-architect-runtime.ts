@@ -82,9 +82,11 @@ import {
   assembleContextWithExtensions,
   registerExtensionCapabilities,
 } from "./extension-runtime.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import {
   AgentProtocolError,
+  ToolRegistry,
   type AgentToolRuntime,
 } from "./tool-registry.js";
 import type {
@@ -129,6 +131,15 @@ export interface NativeArchitectRuntimeOptions {
   providerRetryRuntime?: RunnerProviderRetryRuntime;
   contextManifests?: ContextManifestStore;
   recordContextPackText?: boolean;
+  /** Disposable copy for `run_evidence_command`. Absent means the tool is absent. */
+  commandWorkspace?: ArchitectCommandWorkspaceProvider;
+  execution?: OneShotCommandExecutor;
+}
+
+export interface ArchitectCommandWorkspaceProvider {
+  readonly workspaceKind: "independent-verifier";
+  create(targetRevision: string): Promise<{ readonly path: string }>;
+  cleanup(): Promise<void>;
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
@@ -138,6 +149,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
   };
   private readonly clock: () => string;
   private readonly candidateById: Map<string, AgentRuntimeCandidate>;
+  private architectCommandCopyOpen = false;
 
   constructor(private readonly options: NativeArchitectRuntimeOptions) {
     this.clock = options.clock ?? (() => new Date().toISOString());
@@ -203,6 +215,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         role: "system",
         content: [
           "You are the AIBoard Architect. Use one native lifecycle tool for the requested decision.",
+          "You may run commands only in the disposable copy created for this turn, never in the user's project.",
           "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
           "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.",
           "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
@@ -252,6 +265,8 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         messages.push(reminder);
       }
     }
+    const commandRevision = this.architectCommandRevision(projection.integrationRevision);
+    try {
     const extras = createArchitectInspectionBroker({
       git: this.options.git,
       executionGrants: this.options.executionGrants,
@@ -281,7 +296,24 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     }
     const inspectionTools = this.options.runPolicy === "plan_only"
       ? new PlanOnlyInspectionRuntime(extras)
-      : extras;
+      : commandRevision
+        ? composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
+            () => this.openArchitectCommandCopy(commandRevision),
+            {
+              projectRoot: this.options.projectRoot,
+              permissionProfile: this.options.permissionProfile ?? "project",
+              artifacts: this.options.artifacts,
+              evidenceStore: this.options.evidenceStore,
+              clock: this.clock,
+              ...(this.options.git ? { git: this.options.git } : {}),
+              ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
+              ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+              ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+              ...(this.options.execution ? { execution: this.options.execution } : {}),
+              ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
+            },
+          ))
+        : extras;
     const layeredTools = new LayeredToolRuntime(request.tools, inspectionTools);
     const tools = this.options.budgetLedger
       ? new BudgetedToolRuntime({
@@ -382,6 +414,38 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       idempotencyKey: `architect-pause:${projection.lastSequence}`,
       payload: { reason },
     });
+    } finally {
+      await this.closeArchitectCommandCopy();
+    }
+  }
+
+  /** Lists the command tool without creating a worktree. Creation waits for the first call. */
+  private architectCommandRevision(revision: string | undefined): string | undefined {
+    const provider = this.options.commandWorkspace;
+    if (!provider || this.options.runPolicy === "plan_only") return undefined;
+    if (provider.workspaceKind !== "independent-verifier") {
+      throw new Error("Architect command workspace must be an independent verifier workspace.");
+    }
+    if (!revision || !/^[a-f0-9]{40,64}$/.test(revision)) return undefined;
+    return revision;
+  }
+
+  private async openArchitectCommandCopy(revision: string): Promise<string> {
+    const provider = this.options.commandWorkspace;
+    if (!provider) throw new Error("Architect command workspace is unavailable.");
+    if (provider.workspaceKind !== "independent-verifier") {
+      throw new Error("Architect command workspace must be an independent verifier workspace.");
+    }
+    const workspace = await provider.create(revision);
+    if (!workspace?.path) throw new Error("Architect command copy was not created.");
+    this.architectCommandCopyOpen = true;
+    return workspace.path;
+  }
+
+  private async closeArchitectCommandCopy(): Promise<void> {
+    if (!this.architectCommandCopyOpen) return;
+    this.architectCommandCopyOpen = false;
+    await this.options.commandWorkspace?.cleanup();
   }
 
   private ensureInitialized(runId: string): void {
@@ -695,6 +759,148 @@ export interface ArchitectInspectionBrokerInput {
   probeTools?: readonly NativeTool<unknown>[];
 }
 
+/** Correct wiring returns the disposable copy. `projectRoot` is the prove-red target. */
+export function architectCommandWorkspacePath(disposablePath: string, projectRoot: string): string {
+  void projectRoot;
+  return disposablePath;
+}
+
+export interface ArchitectCommandBrokerInput {
+  disposablePath: string;
+  projectRoot: string;
+  permissionProfile: PermissionProfile;
+  artifacts: ArtifactStore;
+  evidenceStore: EvidenceStore;
+  clock: () => string;
+  git?: RunGitExecutionContext;
+  executionGrants?: ExecutionGrantAuthority;
+  ledger?: ToolInvocationLedger;
+  permissions?: SqlitePermissionStore;
+  execution?: OneShotCommandExecutor;
+  allowedCommands?: readonly string[];
+  /** Test double. Production uses `run_evidence_command` from `createEvidenceTools`. */
+  commandTool?: NativeTool<unknown>;
+}
+
+export function createArchitectCommandBroker(input: ArchitectCommandBrokerInput): ToolBroker {
+  const workspacePath = architectCommandWorkspacePath(input.disposablePath, input.projectRoot);
+  const broker = new ToolBroker({
+    ...(input.git ? { git: input.git } : {}),
+    ...(input.executionGrants ? { executionGrants: input.executionGrants } : {}),
+    permissionProfile: input.permissionProfile,
+    workspacePath,
+    artifacts: input.artifacts,
+    clock: input.clock,
+    ...(input.ledger ? { ledger: input.ledger } : {}),
+    ...(input.permissions
+      ? { approve: (approval) => input.permissions!.requestTool(approval) }
+      : {}),
+  });
+  const tool = input.commandTool ?? evidenceCommandTool(createEvidenceTools({
+    ...(input.git ? { git: input.git } : {}),
+    store: input.evidenceStore,
+    artifacts: input.artifacts,
+    taskId: "architect",
+    clock: input.clock,
+    ...(input.execution ? { execution: input.execution } : {}),
+    ...(input.allowedCommands ? { allowedCommands: input.allowedCommands } : {}),
+  }));
+  if (tool.definition.name !== "run_evidence_command") {
+    throw new Error("Architect command broker only registers run_evidence_command.");
+  }
+  if (!staticToolAdmitted("architect", "inspection", tool.definition.name)) {
+    throw new Error("Architect command tool is not on the inspection allow-list.");
+  }
+  broker.register(tool);
+  return broker;
+}
+
+/** Lists `run_evidence_command` immediately and creates the disposable copy on first execute. */
+class LazyArchitectCommandRuntime implements AgentToolRuntime {
+  private opening: Promise<ToolBroker> | undefined;
+  private readonly listing = new ToolRegistry();
+  private readonly input: Omit<ArchitectCommandBrokerInput, "disposablePath">;
+
+  constructor(
+    private readonly openCopy: () => Promise<string>,
+    input: Omit<ArchitectCommandBrokerInput, "disposablePath">,
+  ) {
+    const tool = input.commandTool ?? evidenceCommandTool(createEvidenceTools({
+      ...(input.git ? { git: input.git } : {}),
+      store: input.evidenceStore,
+      artifacts: input.artifacts,
+      taskId: "architect",
+      clock: input.clock,
+      ...(input.execution ? { execution: input.execution } : {}),
+      ...(input.allowedCommands ? { allowedCommands: input.allowedCommands } : {}),
+    }));
+    this.input = { ...input, commandTool: tool };
+    this.listing.register(tool);
+  }
+
+  definitions() {
+    return this.listing.definitions();
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return this.listing.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.listing.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.listing.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    let broker: ToolBroker;
+    try {
+      broker = await this.ensureBroker();
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Architect command copy could not be created.";
+      return {
+        callId: call.callId,
+        toolName: call.name,
+        content: [{ type: "text", text: message }],
+        isError: true,
+        error: { code: "command_workspace_unavailable", message },
+      };
+    }
+    return await broker.invoke(call, context);
+  }
+
+  private ensureBroker(): Promise<ToolBroker> {
+    this.opening ??= this.openCopy().then((disposablePath) =>
+      createArchitectCommandBroker({ ...this.input, disposablePath }),
+    );
+    return this.opening;
+  }
+}
+
+export function composeArchitectInspection(
+  reads: AgentToolRuntime,
+  command: AgentToolRuntime,
+): AgentToolRuntime {
+  const composed = new LayeredToolRuntime(reads, command);
+  assertArchitectInspectionMcpClass(composed.definitions());
+  assertRoleToolSurface(
+    "architect",
+    "inspection",
+    composed.definitions().map((definition) => definition.name),
+  );
+  return composed;
+}
+
+function evidenceCommandTool(tools: readonly NativeTool<unknown>[]): NativeTool<unknown> {
+  const tool = tools.find((candidate) => candidate.definition.name === "run_evidence_command");
+  if (!tool) throw new Error("Evidence tools did not include run_evidence_command.");
+  return tool;
+}
+
 export function createArchitectInspectionBroker(input: ArchitectInspectionBrokerInput): ToolBroker {
   const broker = new ToolBroker({
     git: input.git,
@@ -761,6 +967,7 @@ export function createArchitectInspectionBroker(input: ArchitectInspectionBroker
 
 function registerAdmitted(broker: ToolBroker, tools: readonly NativeTool<unknown>[]): void {
   for (const tool of tools) {
+    if (tool.definition.name === "run_evidence_command") continue;
     if (staticToolAdmitted("architect", "inspection", tool.definition.name)) broker.register(tool);
   }
 }

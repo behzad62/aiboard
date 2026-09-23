@@ -645,9 +645,24 @@ export class NativeBuildFactory {
       integrationManager,
       kind: "independent-verifier",
     });
+    const architectCommandWorkspace = new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      integrationManager,
+      kind: "independent-verifier",
+      workspaceSuffix: "architect-commands",
+    });
     constructionResources.add(
       "independent_verifier_workspace",
-      () => verifierWorkspace.cleanup(),
+      async () => {
+        try {
+          await verifierWorkspace.cleanup();
+        } finally {
+          await architectCommandWorkspace.cleanup();
+        }
+      },
     );
     await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_workspace");
     initializationStage = "independent_verifier_baseline_workspace";
@@ -923,6 +938,12 @@ export class NativeBuildFactory {
       ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
       contextManifests,
       recordContextPackText: spec.contextRecording === "full",
+      commandWorkspace: {
+        workspaceKind: "independent-verifier" as const,
+        create: (targetRevision: string) => architectCommandWorkspace.create(targetRevision),
+        cleanup: () => architectCommandWorkspace.cleanup(),
+      },
+      execution: commandExecution,
     });
     const verifierWorkspaceProvider = {
       workspaceKind: "independent-verifier" as const,
@@ -946,6 +967,9 @@ export class NativeBuildFactory {
       ledger,
       modelCostEstimators,
       modelCostBases,
+      permissionProfile: spec.permissionProfile,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      execution: commandExecution,
       verdictAuthority: new SchedulerVerifierVerdictAuthority(schedulerStore),
       contextManifests,
       recordContextPackText: spec.contextRecording === "full",

@@ -4,7 +4,9 @@ import type { ToolEffect } from "./agent-contracts.js";
  * Explicit per-role tool allow-lists. A1 records the static surfaces and
  * admits against them. Server-named MCP tools are not static entries;
  * `mcpPolicy` admits that dynamic group. A2 limits the Architect to the
- * read-only MCP class.
+ * read-only MCP class. A3 adds `run_evidence_command` for the Architect
+ * inspection surface and the verifier verdict surface. The Architect tool is
+ * optional: it is registered only when a disposable copy exists.
  */
 export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker";
 
@@ -91,7 +93,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "repo.map",
     "research.fetch",
     "search_session_history",
-  ], ARCHITECT_INSPECTION_BROWSER_TOOLS),
+  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, "run_evidence_command"]),
   "architect:planOnly": surface("architect", "planOnly", "read-only-class", [
     "artifact.read",
     "code.definition",
@@ -128,6 +130,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.show",
     "git.status",
     "inspect_evidence",
+    "run_evidence_command",
   ], ["submit_verifier_verdict"]),
   "verifier:expectations": surface("verifier", "expectations", "none", [
     "artifact.read",

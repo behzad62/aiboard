@@ -1,17 +1,23 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
 
-import type { AgentModel, NativeTool } from "../src/agent-contracts.js";
+import type { AgentModel, NativeTool, ToolCallBlock, ToolExecutionContext } from "../src/agent-contracts.js";
+import { VERIFIER_AUTHORITY_INVARIANTS } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { BrowserBackend } from "../src/browser-tools.js";
 import type { EvidenceStore } from "../src/evidence-store.js";
 import type { ManagedProcessService } from "../src/managed-process.js";
 import type { McpManager } from "../src/mcp-tools.js";
 import type { SqlitePermissionStore } from "../src/permission-store.js";
+import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
+import { ToolBroker } from "../src/tool-broker.js";
 import {
+  composeArchitectInspection,
+  createArchitectCommandBroker,
   createArchitectInspectionBroker,
   PlanOnlyInspectionRuntime,
 } from "../src/native-architect-runtime.js";
@@ -51,6 +57,8 @@ import {
 import type { VerifierVerdictAuthority } from "../src/verifier-verdict-authority.js";
 import { runWorkerTask } from "../src/worker-runtime.js";
 import type { TaskWorkspace, WorkspaceManager } from "../src/workspace-manager.js";
+import { captureGitBaseline, VerificationWorkspaceManager } from "./support/git-fixture.js";
+import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
 
 const ARCHITECT_INSPECTION_REQUIRED = [
   "archive_project_memory",
@@ -117,6 +125,7 @@ const ARCHITECT_INSPECTION_FULL = [
   "repo.manifest",
   "repo.map",
   "research.fetch",
+  "run_evidence_command",
   "search_session_history",
 ] as const;
 
@@ -188,6 +197,7 @@ const VERIFIER_INSPECTION_REQUIRED = [
   "git.show",
   "git.status",
   "inspect_evidence",
+  "run_evidence_command",
 ] as const;
 
 const VERIFIER_INSPECTION_FULL = [
@@ -445,7 +455,11 @@ test("constructed brokers match the derived surfaces and an unlisted probe fails
     const inspection = createArchitectInspectionBroker(base);
     assert.deepEqual(names(inspection), [...ARCHITECT_INSPECTION_REQUIRED]);
     const withBrowser = createArchitectInspectionBroker({ ...base, browserBackend: browserStub() });
-    assert.deepEqual(names(withBrowser), [...ARCHITECT_INSPECTION_FULL]);
+    assert.deepEqual(
+      names(withBrowser),
+      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command"),
+    );
+    assert.equal(names(withBrowser).includes("run_evidence_command"), false);
     assert.deepEqual(
       names(new PlanOnlyInspectionRuntime(withBrowser)),
       [...ARCHITECT_PLAN_ONLY_FULL],
@@ -679,8 +693,318 @@ test("verifier and critic brokers stay MCP-free when a manager is configured, an
   }
 });
 
+test("plan critic, plan-only, and verifier expectations have no command tool", () => {
+  assert.equal(roleAllowList("plan-critic", "inspection").includes("run_evidence_command"), false);
+  assert.equal(staticToolAdmitted("plan-critic", "inspection", "run_evidence_command"), false);
+  assert.equal(roleAllowList("architect", "planOnly").includes("run_evidence_command"), false);
+  assert.equal(staticToolAdmitted("architect", "planOnly", "run_evidence_command"), false);
+  assert.equal(roleAllowList("verifier", "expectations").includes("run_evidence_command"), false);
+  assert.equal(staticToolAdmitted("verifier", "expectations", "run_evidence_command"), false);
+  assert.equal(staticToolAdmitted("architect", "inspection", "run_evidence_command"), true);
+  assert.equal(staticToolAdmitted("verifier", "inspection", "run_evidence_command"), true);
+});
+
+test("verifier authority prompt allows workspace commands and keeps authorship prohibitions", () => {
+  assert.equal(
+    VERIFIER_AUTHORITY_INVARIANTS.includes(
+      "You have no authority to edit files, create commits, integrate changes, alter the plan, review worker tasks, or complete the run.",
+    ),
+    true,
+  );
+  assert.equal(
+    VERIFIER_AUTHORITY_INVARIANTS.includes(
+      "You may run commands in your own verification workspace. Provider prose and this inspection transcript never complete work.",
+    ),
+    true,
+  );
+  assert.equal(VERIFIER_AUTHORITY_INVARIANTS.includes("read-only inspection tools"), false);
+});
+
+test("AC-6 architect command runs in a disposable copy and the project stays byte-identical", async (t) => {
+  const fixture = await readerCopyFixture("ac6");
+  const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.state, "evidence.sqlite"));
+  const execution = createTestOneShotCommandExecutor(t, { artifacts });
+  try {
+    const before = fileHashes(fixture.project);
+    const reads = createArchitectInspectionBroker({
+      ...architectInput(fixture.project, artifacts),
+      evidenceStore: evidence,
+      permissionProfile: "full",
+    });
+    const surface = composeArchitectInspection(reads, createArchitectCommandBroker({
+      disposablePath: fixture.workspace.path,
+      projectRoot: fixture.project,
+      permissionProfile: "full",
+      artifacts,
+      evidenceStore: evidence,
+      clock: () => "2026-09-23T00:00:00.000Z",
+      execution,
+    }));
+    assert.equal(names(surface).includes("run_evidence_command"), true);
+    assert.equal(names(reads).includes("run_evidence_command"), false);
+    assert.equal(names(new PlanOnlyInspectionRuntime(surface)).includes("run_evidence_command"), false);
+    const read = await surface.invoke({
+      type: "tool_call",
+      callId: "read-project",
+      name: "fs.read",
+      arguments: { path: "only-in-project.txt" },
+    }, toolContext(fixture.workspace.path, "architect"));
+    assert.equal(read.isError, false, JSON.stringify(read));
+    assert.match(JSON.stringify(read.content), /only-in-project/);
+    const ran = await surface.invoke(
+      commandCall("architect-command", "require('node:fs').writeFileSync('reader-wrote.txt','ran\\n')"),
+      toolContext(fixture.project, "architect"),
+    );
+    assert.equal(ran.isError, false, JSON.stringify(ran));
+    assert.deepEqual(fileHashes(fixture.project), before);
+    assert.equal(existsSync(join(fixture.project, "reader-wrote.txt")), false);
+    assert.equal(readFileSync(join(fixture.workspace.path, "reader-wrote.txt"), "utf8"), "ran\n");
+    await fixture.manager.cleanup();
+    assert.equal(existsSync(fixture.workspace.path), false);
+  } finally {
+    evidence.close();
+    await fixture.manager.cleanup().catch(() => undefined);
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("AC-8 verifier command stays in its workspace and confinement does not depend on containedDirectory", async (t) => {
+  const fixture = await readerCopyFixture("ac8");
+  const artifacts = new ArtifactStore(join(fixture.state, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(fixture.state, "evidence.sqlite"));
+  const execution = createTestOneShotCommandExecutor(t, { artifacts });
+  try {
+    const before = fileHashes(fixture.project);
+    const verdict = createVerifierReviewBroker({
+      ...inspectionInput(fixture.workspace.path, artifacts),
+      evidenceStore: evidence,
+      projectRoot: fixture.project,
+      permissionProfile: "full",
+      execution,
+    });
+    assert.equal(names(verdict).includes("run_evidence_command"), true);
+    const expectations = createVerifierExpectationsBroker({
+      ...inspectionInput(fixture.workspace.path, artifacts),
+      evidenceStore: evidence,
+      excludeToolNames: ["git.diff", "git.log", "git.show"],
+      lifecycleTool: createRecordVerificationExpectationsTool({
+        authority: {} as VerifierVerdictAuthority,
+        runId: "run",
+        reviewId: "review",
+        targetRevision: "a".repeat(40),
+        baselineRevision: "b".repeat(40),
+        runtimeId: "verifier",
+        sessionId: "session",
+        criteria: [],
+      }),
+    });
+    assert.equal(names(expectations).includes("run_evidence_command"), false);
+    const ran = await verdict.invoke(
+      commandCall("verifier-command", "require('node:fs').writeFileSync('reader-wrote.txt','ran\\n')"),
+      toolContext(fixture.project, "verifier"),
+    );
+    assert.equal(ran.isError, false, JSON.stringify(ran));
+    assert.deepEqual(fileHashes(fixture.project), before);
+    assert.equal(readFileSync(join(fixture.workspace.path, "reader-wrote.txt"), "utf8"), "ran\n");
+
+    const doubled = createVerifierReviewBroker({
+      ...inspectionInput(fixture.workspace.path, artifacts),
+      evidenceStore: evidence,
+      projectRoot: fixture.project,
+      permissionProfile: "full",
+      commandTool: uncontainedCommandDouble("double-wrote.txt"),
+    });
+    const confined = await doubled.invoke(
+      commandCall("verifier-double", "ignored"),
+      toolContext(fixture.project, "verifier"),
+    );
+    assert.equal(confined.isError, false, JSON.stringify(confined));
+    assert.equal(existsSync(join(fixture.workspace.path, "double-wrote.txt")), true);
+    assert.equal(existsSync(join(fixture.project, "double-wrote.txt")), false);
+    assert.deepEqual(fileHashes(fixture.project), before);
+
+    const escape = new ToolBroker({
+      permissionProfile: "full",
+      workspacePath: fixture.project,
+      artifacts,
+    });
+    escape.register(uncontainedCommandDouble("double-wrote.txt"));
+    const escaped = await escape.invoke(
+      commandCall("verifier-escape", "ignored"),
+      toolContext(fixture.workspace.path, "verifier"),
+    );
+    assert.equal(escaped.isError, false, JSON.stringify(escaped));
+    assert.equal(existsSync(join(fixture.project, "double-wrote.txt")), true);
+    rmSync(join(fixture.project, "double-wrote.txt"));
+    assert.deepEqual(fileHashes(fixture.project), before);
+
+    await fixture.manager.cleanup();
+    assert.equal(existsSync(fixture.workspace.path), false);
+  } finally {
+    evidence.close();
+    await fixture.manager.cleanup().catch(() => undefined);
+    rmSync(fixture.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("architect and verifier commands require approval unless the profile is full", async () => {
+  const root = mkdtempSync(join(tmpdir(), "a3-approval-"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
+  try {
+    for (const profile of ["guarded", "project", "full"] as const) {
+      for (const role of ["architect", "verifier"] as const) {
+        const project = join(root, `${role}-${profile}-project`);
+        const copy = join(root, `${role}-${profile}-copy`);
+        mkdirSync(project);
+        mkdirSync(copy);
+        writeFileSync(join(project, "keep.txt"), "project\n");
+        const approvals: string[] = [];
+        const permissions = {
+          requestTool: async (request: { toolName: string }) => {
+            approvals.push(request.toolName);
+            return true;
+          },
+        } as unknown as SqlitePermissionStore;
+        const runtime = role === "architect"
+          ? composeArchitectInspection(
+              createArchitectInspectionBroker({
+                ...architectInput(project, artifacts),
+                evidenceStore: evidence,
+                permissionProfile: profile,
+                permissions,
+              }),
+              createArchitectCommandBroker({
+                disposablePath: copy,
+                projectRoot: project,
+                permissionProfile: profile,
+                artifacts,
+                evidenceStore: evidence,
+                clock: () => "2026-09-23T00:00:00.000Z",
+                permissions,
+                commandTool: uncontainedCommandDouble("approved.txt"),
+              }),
+            )
+          : createVerifierReviewBroker({
+              ...inspectionInput(copy, artifacts),
+              evidenceStore: evidence,
+              projectRoot: project,
+              permissionProfile: profile,
+              permissions,
+              commandTool: uncontainedCommandDouble("approved.txt"),
+            });
+        const before = fileHashes(project);
+        const result = await runtime.invoke(
+          commandCall(`${role}-${profile}`, "unused"),
+          toolContext(project, role),
+        );
+        assert.equal(result.isError, false, `${role} ${profile} ${JSON.stringify(result)}`);
+        assert.deepEqual(approvals, profile === "full" ? [] : ["run_evidence_command"]);
+        assert.equal(existsSync(join(copy, "approved.txt")), true);
+        assert.deepEqual(fileHashes(project), before);
+      }
+    }
+  } finally {
+    evidence.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
 function names(runtime: { definitions(): readonly { name: string }[] }): string[] {
   return runtime.definitions().map((definition) => definition.name).sort((left, right) => left.localeCompare(right));
+}
+
+function fileHashes(root: string): Array<[string, string]> {
+  const rows: Array<[string, string]> = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir).sort()) {
+      if (name === ".git") continue;
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else {
+        rows.push([
+          relative(root, path).replaceAll("\\", "/"),
+          createHash("sha256").update(readFileSync(path)).digest("hex"),
+        ]);
+      }
+    }
+  };
+  walk(root);
+  return rows;
+}
+
+function commandCall(callId: string, script: string): ToolCallBlock {
+  return {
+    type: "tool_call",
+    callId,
+    name: "run_evidence_command",
+    arguments: {
+      label: callId,
+      command: process.execPath,
+      args: ["-e", script],
+      cwd: ".",
+    },
+  };
+}
+
+function toolContext(workspacePath: string, role: "architect" | "verifier"): ToolExecutionContext {
+  return {
+    runId: "run",
+    sessionId: `${role}:run`,
+    actor: { role, id: role },
+    workspacePath,
+  };
+}
+
+function uncontainedCommandDouble(fileName: string): NativeTool<unknown> {
+  return {
+    definition: {
+      name: "run_evidence_command",
+      description: "Containment is a no-op. The broker workspace is the execution root.",
+      inputSchema: { type: "object", additionalProperties: true },
+      readOnly: false,
+      effect: "external",
+    },
+    validate: (input) => ({ ok: true, value: input }),
+    assessAccess: () => ({ capability: "evidence.command", external: true }),
+    execute: async (_input, context) => {
+      const root = context.workspacePath;
+      if (!root) throw new Error("Command double requires the broker workspace.");
+      writeFileSync(join(root, fileName), "ran\n");
+      return { content: [{ type: "text", text: root }], isError: false };
+    },
+  };
+}
+
+async function readerCopyFixture(name: string): Promise<{
+  root: string;
+  project: string;
+  state: string;
+  manager: VerificationWorkspaceManager;
+  workspace: { path: string };
+}> {
+  const root = mkdtempSync(join(tmpdir(), `a3-${name}-`));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "README.md"), "project\n");
+  const baseline = await captureGitBaseline({
+    projectPath: project,
+    stateDirectory: state,
+    runId: name,
+  });
+  const manager = new VerificationWorkspaceManager({
+    repositoryRoot: project,
+    stateDirectory: state,
+    runId: name,
+    kind: "independent-verifier",
+    workspaceSuffix: name,
+  });
+  const workspace = await manager.create(baseline.revision);
+  writeFileSync(join(project, "only-in-project.txt"), "only-in-project\n");
+  return { root, project, state, manager, workspace };
 }
 
 function probeTool(
