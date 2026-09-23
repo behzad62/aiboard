@@ -1,0 +1,234 @@
+TASK — Produce a Complete, Resumable, Evidence-Gated Execution Plan
+
+OBJECTIVE
+Convert the entire approved source plan into an implementation plan that AI agents can deliver completely, resume after context loss, and execute without redundant work. Optimize for verified delivery of the agreed outcomes—not activity, agent count, selected green tests, or convincing completion reports.
+
+MODE: PLANNING ONLY
+Inspect the source and repository and write planning artifacts. Do not implement code, run implementation tests, start migrations, or launch execution workers. A read-only planning reviewer is permitted. The execution rules below describe later work; include them in the generated plan. Planning readiness does not authorize execution.
+
+PARAMETERS — resolve from supplied context and repository where unambiguous
+- SOURCE: <approved plan path(s), including every approved amendment>
+- PLAN_DIR: <planning directory; reuse existing project conventions>
+- PROJECT_RULES: <applicable repository instructions and execution policies>
+- MAX_WORKERS: 4 concurrent implementation workers maximum; use fewer when appropriate.
+- REPAIR_BUDGET: 3 evidence-backed repair cycles per tracked blocking issue, across sessions and replacement agents, unless project policy specifies otherwise.
+- HOST_CAPABILITIES: discover actual support for independent reviewers, worktrees, task claims, state gates, and launch chips. Never invent capability or claim enforcement that does not exist.
+
+SOURCE defines required scope and outcomes; PROJECT_RULES constrain execution. Explicit source/project validation mandates override this prompt's validation defaults. Record genuine conflicts and their required resolution; do not silently choose a rule that weakens an approved obligation. Respect higher-priority instructions and safety boundaries.
+
+==================================================
+1. PRESERVE THE ENTIRE SOURCE AND DEFINE ACCEPTANCE
+==================================================
+
+Read all of SOURCE and its approved amendments. Record source identity using paths and revisions or content hashes. Inspect the repository to establish current reality, not to redefine required scope. Distinguish observed facts, assumptions, and unresolved questions.
+
+Build a requirement ledger with stable IDs. Preserve mandatory, conditional, compatibility, operational, security, and non-functional obligations. Each requirement records:
+- Source reference, purpose, and observable required outcome.
+- Exactly one accountable owning phase; implementing packets and dependencies.
+- Concrete acceptance conditions, the gate responsible for each condition, and the evidence needed to verify it.
+- Applicability, current acceptance status, and evidence references through the authoritative state records.
+
+A packet is an independently reviewable task. Several packets may contribute to one requirement, but final acceptance ownership must be unambiguous. Assign cross-cutting and program-wide criteria explicitly; never leave them implied.
+
+Maintain traceability in both directions: every applicable source obligation has an owner and acceptance route; every packet supports a source obligation or necessary enabling work. Do not add unrelated improvements.
+
+Do not silently omit requirements, substitute implementation activity for outcomes, or shrink the completion denominator. A conditional requirement remains visible with its condition and supporting applicability evidence. Removing or weakening an agreed obligation requires an authorized amendment and recorded impact—not an agent's decision to mark it out of scope.
+
+Existing implementation may satisfy a requirement only after inspecting its actual behavior and valid evidence. Do not rebuild working features merely to manufacture task activity.
+
+==================================================
+2. WRITE CLEAR PHASES AND PACKET CONTRACTS
+==================================================
+
+A phase is an acceptance boundary, not automatically a serial scheduling barrier.
+
+For each phase define: ID, purpose, requirement IDs, scope and exclusions, entry conditions, contributing packets, exit criteria, required combined validation, and what its exit gate unlocks.
+
+For each packet define:
+- ID, owning phase, requirement IDs, and the user/system outcome it establishes.
+- Exact scope, explicit exclusions, writable and forbidden surfaces.
+- Dependencies, required base, and input/output contracts.
+- Concrete repository-grounded implementation steps.
+- Observable acceptance criteria and Definition of Done.
+- Targeted and affected-scope validation, with the reason for that scope.
+- Relevant red proof, negative tests, or controlled fault injection where applicable.
+- Required evidence, independent review criteria, integration checks, and applicable cleanup/recovery/rollback.
+
+Include tests, configuration, and documentation with the behavior they support. Avoid vague conditions such as “handle edge cases” and “add appropriate tests.” Size packets for meaningful independent acceptance without oversized tasks or trivial fragmentation.
+
+Where the source requires runtime, end-to-end, migration, compatibility, performance, resource-use, or failure-recovery outcomes, specify evidence that measures those outcomes. Unit tests and implementation inspection are not automatic substitutes.
+
+Resolve repository questions through bounded inspection. Put material empirical unknowns into bounded investigation packets with a question, deliverable, decision criterion, and dependent work they unlock. Record resulting decisions and update affected contracts before releasing those dependents. Do not disguise guesses as established facts or leave material acceptance thresholds silently unspecified.
+
+==================================================
+3. MAKE PLANNING AND EXECUTION RESUMABLE
+==================================================
+
+The repository is the memory; chat is not. Every continuation-critical fact must be durable or reachable through a stable reference. Reuse suitable existing structures; otherwise use:
+- PLAN.md: source identity, ledger, phase/packet contracts, dependency graph, ownership, shared rules, and decisions.
+- STATE.md or STATE.json: controller-owned planning progress, assignment registry, integration queue, blockers, next eligible actions, and links to detailed records.
+- lane-<X>-state.md: single-writer lane progress, packet status, branch/worktree/base, review and evidence references, and next action.
+- evidence/<packet>.md: authoritative acceptance results, review findings and disposition, validation records, and referenced logs/artifacts.
+
+Each fact has one authoritative location. Reference it rather than copying it into multiple reports. Keep derived summaries identifiable as summaries.
+
+Write the skeleton and ledger first, then develop the plan incrementally. Checkpoint covered source sections, completed planning sections, and outstanding work so a replacement planner can continue from STATE as the entry point.
+
+During execution, checkpoint meaningful transitions: assignment, completed validation batch, review disposition, integration, blocker, and handoff. Do not generate reports after every command or preserve entire agent conversations as evidence.
+
+On startup or resume:
+1. Read STATE, the relevant lane/packet contract, source requirements, and shared constraints.
+2. Inspect actual branches, worktrees, revisions, relevant processes, and PRs where applicable.
+3. Reconcile recorded state with actual code, command outcomes, and evidence; correct discrepancies.
+4. Confirm exclusive ownership, then continue the next eligible unfinished action.
+
+A checkpoint does not prove an interrupted command succeeded. A new session does not justify repeating completed work. Load relevant context through the index rather than rereading all logs and every accepted packet.
+
+==================================================
+4. DERIVE SAFE PARALLELISM FROM DEPENDENCIES
+==================================================
+
+Build an acyclic packet dependency graph. Derive up to MAX_WORKERS independent lanes; do not invent parallelism to fill seats. A lane may contain packets from several phases, and a phase may span lanes.
+
+Define exclusive write ownership, forbidden paths, packet order, and required runtime isolation for each lane. Concurrent implementation streams require separate branches/worktrees and isolated mutable test resources where applicable. Different files do not prove behavioral independence; inspect callers, shared contracts, generated outputs, and runtime resources.
+
+Identify and serialize overlapping surfaces such as migrations, lockfiles, shared configuration, interfaces, generated registries, ratchets, and shared planning state. Assign each to one owner. Establish shared contracts before dependent implementation begins.
+
+Designate one controller/integrator. It owns shared assignments, integration order, and acceptance state; workers own only their assigned surfaces and lane reports.
+
+Assignment must be exclusive, not merely checked. Use supported atomic claims, or have the single controller serialize assignments. Record the worker/session, lane, base, and ownership state. Checking worktrees or PRs alone is not a lock. Before reassigning a stale claim, verify the previous writer has stopped or been prevented from writing.
+
+A packet becomes eligible when its actual dependencies, ownership, and resource conditions are satisfied—not when an unrelated phase finishes. Record cross-boundary validation for each integration. Preserve unrelated user changes and protected artifacts; do not use destructive cleanup to manufacture a clean baseline.
+
+==================================================
+5. EXECUTE WITH IMPACT-BASED VALIDATION
+==================================================
+
+For later execution, use this loop:
+PREPARE scope, dependencies, ownership, and relevant baseline
+→ establish the required failing case or negative proof where applicable
+→ IMPLEMENT one coherent packet
+→ run targeted and affected-scope checks
+→ submit actual changes and evidence for independent review
+→ repair within scope; rerun failed and newly affected checks
+→ integrate; validate affected boundaries
+→ ACCEPT only after every mandatory packet gate passes.
+
+Choose checks by behavioral impact, not just edited filenames. Consider regressions, callers/consumers, shared contracts, configuration, schema/migrations, runtime behavior, security/isolation, compatibility, and relevant non-functional invariants. Record a concise scope rationale.
+
+Run the exact failing checks first, then affected behavior and integration checks. Expand to relevant subsystem suites when warranted. Uncertain impact calls for dependency inspection and justified expansion—not automatic execution of every test.
+
+Reserve the full project suite for the final integrated candidate unless SOURCE or PROJECT_RULES explicitly require it earlier. Do not run it after every packet, fix, review, merge, or context reset.
+
+Every mandatory packet criterion must pass before packet acceptance. Criteria explicitly assigned to the final program gate remain pending there; they must neither disappear nor trigger premature whole-project validation for every packet.
+
+Identify inherited failures using baseline evidence. They are not automatically caused by the current packet, but neither are they automatic exemptions from mandatory gates. Apply existing authorized policy and report the exact disposition; never silently waive failures or unexplained skips.
+
+==================================================
+6. PROVE THE REQUIREMENT; REUSE VALID EVIDENCE
+==================================================
+
+Derive acceptance checks from source requirements, not merely from whatever the worker built.
+
+For changed behavior, require meaningful red-to-green proof where applicable. For a guard around already-correct behavior, use controlled fault injection when necessary to show it detects its intended defect. A relevant failing test followed by a passing implementation is sufficient; do not add another synthetic mutation that proves the same thing without additional value.
+
+A negative proof must fail for the intended reason at the relevant boundary, not because the harness broke or an unrelated earlier layer rejected the input. Where red proof is inapplicable, document the reason and an appropriate alternative verification for review.
+
+Inject faults only in isolated, disposable environments or fixtures. Never mutate production, protected evidence, or unrelated user data. Remove injected faults and retain regression tests/guards.
+
+Each evidence record identifies:
+- Requirement and acceptance condition.
+- Tested revision and relevant uncommitted-diff identity.
+- Command or verification method, environment, and relevant inputs.
+- Actual outcome, exit status, selected/pass/fail/skip counts where applicable.
+- Inspectable logs/artifacts and review disposition.
+
+Zero relevant assertions, zero selected tests, unexplained skips, stale results, and prose-only claims do not prove acceptance. Keep records concise without discarding what verification requires.
+
+Reuse accepted evidence when its relevant code, dependencies, configuration, and environment remain unaffected. Record why it still applies. An unrelated commit or documentation-only change does not by itself invalidate behavioral evidence.
+
+When changes invalidate evidence, reopen affected checks, requirements, and dependents—not unrelated accepted work. Integration conflicts or semantic changes require impact reassessment; a clean merge alone does not prove compatibility.
+
+==================================================
+7. REVIEW AND ENFORCE ACCEPTANCE WITHOUT REPEATED AUDITS
+==================================================
+
+Before PLAN READY, obtain one independent planning coverage review from a fresh-context reviewer reading the original SOURCE and amendments—not just the generated ledger. Verify coverage, acceptance routes, dependencies, ownership, and executable task contracts. Repair gaps and re-review only corrections and affected coverage.
+
+During execution, a worker submits for review and never self-accepts. Use one independent review per coherent packet by default, covering source obligations, actual changes and surrounding behavior, evidence reliability, missing behavior/regressions, and scope compliance.
+
+Additional specialist review requires a distinct risk, unresolved disagreement, or explicit requirement. Do not stack repetitive spec, quality, adversarial, and controller audits of unchanged work. Reviewers rerun checks to resolve concrete concerns, not automatically to repeat worker commands.
+
+Review fixes receive targeted re-review and failed/affected checks. Preserve unrelated accepted findings and evidence. At phase boundaries reconcile owned requirements and combined behavior using accepted packet evidence, not another full task audit.
+
+Use truthful states such as PLANNED, READY, RUNNING, IN_REVIEW, READY_TO_INTEGRATE, BLOCKED, and ACCEPTED. The controller accepts a packet only when:
+- Every mandatory packet acceptance criterion has valid evidence.
+- Independent review has no unresolved mandatory finding.
+- Required integration and affected-boundary checks passed.
+- Authoritative state and evidence records reflect these facts.
+
+A phase is accepted only when its mandatory requirements and exit conditions are verified. Packet acceptance alone does not imply phase or program acceptance.
+
+Where the existing harness supports it, enforce these gates in state transitions. Otherwise label them procedural. Do not build a new harness as unrelated work or claim mechanical enforcement from written instructions.
+
+Self-review is not independent review. If a required independent reviewer is unavailable, keep that gate outstanding and report the actual blocker; do not fabricate a reviewer or accept the work anyway.
+
+==================================================
+8. CONTROL REPAIRS AND ESCALATE ONLY REAL BLOCKERS
+==================================================
+
+Resolve routine technical failures autonomously. Track blocking issues with stable IDs, evidence, attempted hypotheses, outcomes, and remaining REPAIR_BUDGET.
+
+A repair cycle is a substantive attempted correction followed by relevant validation—not every diagnostic command. Count cycles across sessions and agents; related symptoms of one root cause share the issue record. Do not reset budgets by renaming a failure or repeat an unsuccessful approach without new evidence.
+
+Escalate only for a genuine authority decision, unsafe/destructive action, unresolved requirement conflict, owner-dependent external blocker, proposed weakening of controls, or exhausted repair budget. Do not waste attempts on an already-proven external blocker.
+
+State the blocked acceptance condition, evidence, attempted resolutions, and exact decision or action needed. Continue independent eligible work; a blocked lane does not automatically block the whole program.
+
+Record unrelated findings separately. Interrupt active work only when a newly discovered critical issue or genuine acceptance dependency makes it necessary. Do not quietly expand the approved scope.
+
+==================================================
+9. RECONCILE THE ORIGINAL SOURCE AND CLOSE THE PROGRAM
+==================================================
+
+Before the expensive final suite, assign an independent source-to-delivery reconciliation. Read the original SOURCE and approved amendments against the integrated implementation—not merely a completed checklist or worker summary.
+
+Confirm that every applicable mandatory obligation has valid evidence or an explicitly scheduled final-gate check. Inspect cross-packet interactions and end-to-end outcomes. Reuse accepted task reviews; do not re-audit unchanged implementation from scratch. Repair omissions with targeted validation before running the final suite.
+
+Then execute all remaining required final checks, including the full suite, on the final integrated candidate. Record the tested revision/state, outcomes, and evidence index.
+
+If final validation finds defects, diagnose and repair with targeted checks, review the corrections, batch compatible repairs, then repeat the required final gate. Earlier results invalidated by corrections do not certify the new executable state. Reuse unaffected evidence only under the policy above and any explicit project mandates.
+
+Program completion requires every applicable mandatory requirement and final gate verified, all required integrations accepted, no unresolved mandatory finding, and durable final state/evidence. “100% complete” means those agreed obligations are verified—not that every possible defect has been disproved.
+
+==================================================
+10. REQUIRED OUTPUT AND LAUNCH CONTRACTS
+==================================================
+
+Write the artifacts under PLAN_DIR, then return a short summary. Include:
+- Source identity, requirement ledger, and source → requirement → packet → evidence traceability.
+- Phase specifications, packet contracts, dependency graph, lane roster, ownership map, and serialized surfaces.
+- Durable state/index files, evidence templates, resume procedure, and next eligible packet per lane.
+- Validation, evidence-reuse, review, integration, repair, and final-acceptance policies.
+- Independent planning-review findings and dispositions; genuine unresolved decisions or blockers.
+- Launch cards for each lane and the controller/integrator; a resume-planning card when needed.
+
+Each launch card references the relevant state, source requirements, packet contracts, shared rules, required base/worktree setup, ownership claim, writable/forbidden surfaces, validation/evidence destinations, and resume procedure. Do not paste the entire plan into every card.
+
+Worker standing order: continue through eligible assigned packets without routine approval stops; submit for independent review and integration; never bypass dependencies, ownership, or acceptance gates. Persist a precise handoff when blocked or ending a session.
+
+Create native launch chips only when the host genuinely supports creating them without starting execution. Otherwise provide copy-ready cards.
+
+Use these verdicts accurately:
+
+PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED
+or
+PLAN BLOCKED — <specific outstanding condition; responsible owner; unblock action>
+
+PHASE <ID> VERIFIED COMPLETE — EXIT GATE SATISFIED
+or
+PHASE <ID> INCOMPLETE/BLOCKED — <remaining criteria or specific blocker>
+
+PLAN VERIFIED COMPLETE — ALL APPLICABLE MANDATORY REQUIREMENTS AND FINAL GATES PASSED
+
+A commit, PR, worker summary, or selected green tests never substitute for verified delivery. Report partial progress truthfully; never turn a pending requirement, review, integration, or final gate into a completion claim.

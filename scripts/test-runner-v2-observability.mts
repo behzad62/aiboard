@@ -4,6 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  ContextRecordingLines,
   filterRunnerObservability,
   IndependentVerifierManifest,
   RunnerV2ObservabilityPanel,
@@ -707,6 +708,24 @@ const expectationsMarkup = renderToStaticMarkup(
     projection: projectionWithoutHandoff as unknown as NativeBuildProjection,
   }),
 );
+const freshContextMarkup = renderToStaticMarkup(
+  createElement(IndependentVerifierManifest, {
+    verifier: {
+      ...verifierSnapshot.independentVerifier,
+      review: {
+        ...verifierSnapshot.independentVerifier.review,
+        current: {
+          ...verifierSnapshot.independentVerifier.review.current,
+          independence: "fresh_context",
+        },
+      },
+    } as unknown as NativeIndependentVerifierObservability,
+    projection: projectionWithoutHandoff as unknown as NativeBuildProjection,
+  }),
+);
+assert.match(freshContextMarkup, /same model, fresh context/);
+assert.doesNotMatch(expectationsMarkup, /same model, fresh context/);
+
 assert.match(expectationsMarkup, /Expectations recorded \(1 criteria\)/);
 assert.match(expectationsMarkup, /src\/auth\/session\.ts:40-55/);
 assert.match(expectationsMarkup, /<ol/);
@@ -1181,6 +1200,17 @@ checkCritique("submitted blocking claim in detail", () => {
 checkCritique("submitted blocking reason label", () => {
   assert.match(submittedMarkup, /Resolving plan critique/);
 });
+const freshCritiqueMarkup = renderCritiquePanel(
+  critiquePanelProjection(critiqueState(critiqueProjection("submitted", [blockingFinding], {
+    independence: "fresh_context",
+  }))),
+);
+checkCritique("fresh-context plan critique label", () => {
+  assert.match(freshCritiqueMarkup, /same model, fresh context/);
+});
+checkCritique("distinct plan critique has no fresh-context label", () => {
+  assert.doesNotMatch(submittedMarkup, /same model, fresh context/);
+});
 checkCritique("submitted blocking summary", () => {
   assert.match(submittedMarkup, /Plan critique: submitted \(1 blocking, 0 advisory\)/);
 });
@@ -1401,6 +1431,42 @@ if (critiqueFailures.length > 0) {
   console.error(critiqueFailures.join("\n"));
   throw new Error(`${critiqueFailures.length} plan critique UI assertions failed`);
 }
+
+const recordingProjection: NativeBuildProjection = {
+  ...critiquePanelProjection(),
+  status: "paused",
+  pauseReason: { reason: "context_recording_failed" },
+  projectHandoff: undefined,
+  repairCycles: undefined,
+  verifierSelection: undefined,
+  acceptanceContractStatus: undefined,
+  contextRecording: {
+    notes: [{
+      sequence: 4,
+      purpose: "worker:task",
+      attempts: 3,
+      reason: "Context manifest recording failed after 3 attempts.",
+      resolution: {
+        sequence: 5,
+        resolution: "proceed_without_manifest" as const,
+        rationale: "The manifest is optional here.",
+      },
+    }],
+    waiver: { sequence: 5, rationale: "The manifest is optional here." },
+  },
+};
+const recordingMarkup = renderCritiquePanel(recordingProjection);
+assert.match(recordingMarkup, /Context manifest: worker:task/);
+assert.match(recordingMarkup, /Attempts: 3/);
+assert.match(recordingMarkup, /Reason: Context manifest recording failed after 3 attempts\./);
+assert.match(recordingMarkup, /Resolution: proceed_without_manifest/);
+assert.match(recordingMarkup, /Rationale: The manifest is optional here\./);
+assert.match(recordingMarkup, /Recording suspended/);
+assert.match(recordingMarkup, /Context recording needs a decision/);
+const recordingLines = renderToStaticMarkup(createElement(ContextRecordingLines, {
+  projection: recordingProjection,
+}));
+assert.match(recordingLines, /Recording suspended/);
 
 console.log("PASS Runner V2 observability panel");
 

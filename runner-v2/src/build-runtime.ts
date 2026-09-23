@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
+
 import type {
   AgentToolRuntime,
 } from "./tool-registry.js";
-import type { ToolExecutionContext } from "./agent-contracts.js";
-import { createArchitectTools } from "./architect-tools.js";
+import type { NativeTool, ToolExecutionContext } from "./agent-contracts.js";
+import { createArchitectTools, type ArchitectToolsOptions } from "./architect-tools.js";
+import { ARCHITECT_LIFECYCLE_TOOLS } from "./role-capabilities.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
   BuildRiskAssessmentProjection,
@@ -13,14 +16,26 @@ import type {
   SchedulerStore,
 } from "./scheduler-store.js";
 import {
+  clearContextRecordingSuspension,
+  ContextManifestRecordingError,
+  suspendContextRecording,
+} from "./context-manifest-store.js";
+import {
   architectLifecycleEventMatchesReason,
+  contextRecordingRetriesRemaining,
   DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
+  latestUnresolvedContextRecordingNote,
   rebuildSchedulerProjection,
   repairCyclesExhausted,
 } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type {
+  DocumentTipRelation,
+  ProjectDocCommitRequest,
+  ProjectDocCommitResult,
+} from "./project-docs.js";
 import type {
   FinalVerificationCategory,
   FinalVerificationPlan,
@@ -196,6 +211,8 @@ export interface BuildRuntimeOptions {
   providerRetryDeadlineMs?: () => number | undefined;
   evidenceStore?: EvidenceStore;
   artifacts?: ArtifactStore;
+  /** Commits Architect project documents on the integration branch. */
+  projectDocs?: ProjectDocsPort;
   finalVerificationDriver?: FinalVerificationCheckDriver;
   finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
@@ -203,11 +220,39 @@ export interface BuildRuntimeOptions {
   independentVerifier?: IndependentVerifierDriver;
   planCritic?: PlanCriticDriver;
   repairPlanLimit?: number;
+  /** Test probe applied to lifecycle tools immediately before the allow-list assert. */
+  architectLifecycleProbe?: (
+    tools: readonly NativeTool<unknown>[],
+  ) => readonly NativeTool<unknown>[];
+}
+
+export interface ProjectDocsPort {
+  commit(input: ProjectDocCommitRequest): Promise<ProjectDocCommitResult>;
+  relateRevision(input: { revision: string; tip: string }): Promise<DocumentTipRelation>;
 }
 
 export interface BuildStepResult {
-  status: "progressed" | "paused" | "completed" | "idle" | "blocked";
+  status: "progressed" | "paused" | "completed" | "idle" | "blocked" | "failed";
   action?: string;
+}
+
+/** Mechanical step shape of a projection after a context-recording decision turn. */
+export function buildStepResultForProjection(
+  projection: SchedulerProjection,
+): BuildStepResult {
+  if (projection.status === "completed") return { status: "completed" };
+  if (projection.status === "failed") {
+    return {
+      status: "failed",
+      action: projection.failureReason ?? "context_recording_aborted",
+    };
+  }
+  if (projection.status === "paused" || projection.status === "stopped") {
+    return projection.pauseReason?.reason
+      ? { status: "paused", action: projection.pauseReason.reason }
+      : { status: "paused" };
+  }
+  return { status: "progressed" };
 }
 
 export class BuildRuntime {
@@ -226,6 +271,7 @@ export class BuildRuntime {
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
   private readonly evidenceStore?: EvidenceStore;
   private readonly artifacts?: ArtifactStore;
+  private readonly projectDocs?: ProjectDocsPort;
   private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
   private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
@@ -233,8 +279,14 @@ export class BuildRuntime {
   private readonly independentVerifier?: IndependentVerifierDriver;
   private readonly planCritic?: PlanCriticDriver;
   private readonly repairPlanLimit: number;
+  private readonly architectLifecycleProbe?: BuildRuntimeOptions["architectLifecycleProbe"];
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
+  private recordingFailureContext: {
+    taskId?: string;
+    attempt?: number;
+    revision?: string;
+  } = {};
 
   constructor(options: BuildRuntimeOptions) {
     this.id = options.runId;
@@ -251,6 +303,7 @@ export class BuildRuntime {
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
     this.evidenceStore = options.evidenceStore;
     this.artifacts = options.artifacts;
+    this.projectDocs = options.projectDocs;
     this.finalVerificationDriver = options.finalVerificationDriver;
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
@@ -258,6 +311,7 @@ export class BuildRuntime {
     this.independentVerifier = options.independentVerifier;
     this.planCritic = options.planCritic;
     this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
+    this.architectLifecycleProbe = options.architectLifecycleProbe;
     if (
       this.independentVerifier &&
       (
@@ -298,11 +352,13 @@ export class BuildRuntime {
         );
       }
     }
+    this.configureProjectDocsPolicy();
     this.initializeRun();
     this.configureRunPolicy();
     this.configureVerifierPolicy();
     this.configureRepairPolicy();
     this.configurePlanCritiquePolicy();
+    this.rederiveContextRecordingSuspension();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
       store: options.store,
@@ -364,6 +420,9 @@ export class BuildRuntime {
     if (projection.status === "completed") {
       throw new Error("A completed Build cannot be resumed.");
     }
+    if (projection.status === "failed") {
+      throw new Error("A failed Build cannot be resumed.");
+    }
     if (!renewBudgetWindow && projection.status !== "paused") {
       throw new Error("A benchmark continuation requires a paused Build.");
     }
@@ -390,6 +449,24 @@ export class BuildRuntime {
       this.runPolicy === "budgeted"
     ) {
       this.renewBudgetWindow?.(`budget-window:${idempotencyKey}`, occurredAt);
+    }
+    const unresolvedRecording = projection.status === "paused" &&
+      projection.pauseReason?.reason === "context_recording_failed"
+      ? latestUnresolvedContextRecordingNote(projection)
+      : undefined;
+    if (unresolvedRecording) {
+      this.store.append({
+        runId: this.runId,
+        type: "context_manifest.recording_resolved",
+        occurredAt,
+        actor: { role: "user", id: "local-user" },
+        idempotencyKey: `context-recording-resolved:user:${unresolvedRecording.sequence}`,
+        payload: {
+          noteSequence: unresolvedRecording.sequence,
+          resolution: "retry",
+          rationale: "User resumed the run.",
+        },
+      });
     }
     this.store.append({
       runId: this.runId,
@@ -574,7 +651,22 @@ export class BuildRuntime {
   }
 
   private async stepOnce(): Promise<BuildStepResult> {
-    const events = this.store.readRun(this.runId);
+    try {
+      return await this.dispatchStep();
+    } catch (error) {
+      if (!(error instanceof ContextManifestRecordingError)) throw error;
+      try {
+        this.recordContextRecordingFailure(error);
+      } catch {
+        throw error;
+      }
+      return { status: "paused", action: "context_recording_failed" };
+    }
+  }
+
+  private async dispatchStep(): Promise<BuildStepResult> {
+    this.recordingFailureContext = {};
+    let events = this.store.readRun(this.runId);
     if (events.length === 0) {
       await this.runArchitect({ type: "plan_required" }, emptyProjection(this.runId));
       return this.afterArchitect("plan_required");
@@ -582,7 +674,17 @@ export class BuildRuntime {
 
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
-    if (projection.status === "paused") return { status: "paused" };
+    if (projection.status === "failed") {
+      return { status: "failed", action: "context_recording_aborted" };
+    }
+    if (projection.status === "paused") {
+      return { status: "paused", action: projection.pauseReason?.reason };
+    }
+    await this.recoverPendingProjectDocs();
+    events = this.store.readRun(this.runId);
+    projection = events.length === 0
+      ? emptyProjection(this.runId)
+      : rebuildSchedulerProjection(events);
     const pendingInterruption = Object.values(projection.userGuidance)
       .filter((guidance) => guidance.interruptionStatus !== "completed")
       .sort((left, right) => left.version - right.version)[0];
@@ -708,6 +810,25 @@ export class BuildRuntime {
         taskId: integrating.id,
         changeSetId: integrating.changeSetId,
       });
+      let integrationRevision = result.integrationRevision;
+      if (result.status === "integrated") {
+        const tip = projection.projectDocs?.documentTip;
+        if (tip) {
+          if (!this.projectDocs) {
+            throw new Error("Document tip classification requires the project document port.");
+          }
+          const relation = await this.projectDocs.relateRevision({
+            revision: result.integrationRevision,
+            tip,
+          });
+          if (relation === "equal_to_tip" || relation === "ancestor") {
+            if (!projection.integrationRevision) {
+              throw new Error("Document tip has no canonical integration revision.");
+            }
+            integrationRevision = projection.integrationRevision;
+          }
+        }
+      }
       this.store.append({
         runId: this.runId,
         type: "task.transitioned",
@@ -721,7 +842,7 @@ export class BuildRuntime {
               ? "integrated"
               : "integration_resolution",
           patch: {
-            integrationRevision: result.integrationRevision,
+            integrationRevision,
             ...(result.status === "conflict"
               ? { conflictPaths: result.conflictPaths }
               : {}),
@@ -838,7 +959,12 @@ export class BuildRuntime {
     await this.scheduler.awaitIdle();
     const afterWorkers = this.projection();
     if (afterWorkers.status === "paused") {
-      return { status: "paused", action: "worker_paused" };
+      return {
+        status: "paused",
+        action: afterWorkers.pauseReason?.reason === "context_recording_failed"
+          ? "context_recording_failed"
+          : "worker_paused",
+      };
     }
     if (afterWorkers.status === "completed") {
       return { status: "completed", action: "worker_completed" };
@@ -1215,6 +1341,9 @@ export class BuildRuntime {
       return this.afterArchitect("verifier_repair_plan_required");
     }
 
+    this.recordingFailureContext = {
+      ...(targetRevision ? { revision: targetRevision } : {}),
+    };
     const result = await driver.verify({
       runId: this.runId,
       projection,
@@ -1375,7 +1504,8 @@ export class BuildRuntime {
 
   private initializeRun(): void {
     const events = this.store.readRun(this.runId);
-    if (events.length > 0) {
+    const durable = events.filter((event) => event.type !== "project_docs.policy_configured");
+    if (durable.length > 0) {
       const durableObjective = rebuildSchedulerProjection(events).initialObjective;
       if (
         durableObjective !== undefined &&
@@ -1402,18 +1532,276 @@ export class BuildRuntime {
     });
   }
 
+  private configureProjectDocsPolicy(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.length > 0) return;
+    this.store.append({
+      runId: this.runId,
+      type: "project_docs.policy_configured",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "project-docs-policy",
+      payload: { version: 1 },
+    });
+  }
+
+  private bindProjectDocCommit(
+    tools: readonly NativeTool<unknown>[],
+  ): NativeTool<unknown>[] {
+    if (!this.projectDocs) return [...tools];
+    return tools.map((tool) => {
+      if (tool.definition.name !== "write_project_doc") return tool;
+      return {
+        definition: tool.definition,
+        validate: (input: unknown) => tool.validate(input),
+        ...(tool.assessAccess
+          ? { assessAccess: (input: unknown, context: ToolExecutionContext) => tool.assessAccess!(input, context) }
+          : {}),
+        execute: async (input: unknown, context: ToolExecutionContext) => {
+          const output = await tool.execute(input, context);
+          if (output.isError) return output;
+          await this.commitRequestedProjectDoc(input);
+          return output;
+        },
+      };
+    });
+  }
+
+  private async commitRequestedProjectDoc(input: unknown): Promise<void> {
+    if (!this.projectDocs) return;
+    if (!isProjectDocToolInput(input)) {
+      throw new Error("Project document commit input is invalid.");
+    }
+    const events = this.store.readRun(this.runId);
+    const requested = [...events].reverse().find((event) =>
+      event.type === "project_doc.requested" && event.payload.path === input.path
+    );
+    const requestId = requested?.payload.requestId;
+    if (!requested || typeof requestId !== "string") {
+      throw new Error("Project document request was not recorded.");
+    }
+    if (events.some((event) =>
+      event.type === "project_doc.committed" && event.payload.requestId === requestId
+    )) {
+      return;
+    }
+    const result = await this.projectDocs.commit({
+      writes: [{ path: input.path, content: input.content }],
+      summary: input.summary,
+      runId: this.runId,
+      requestId,
+    });
+    this.appendProjectDocCommitted(requestId, input.path, result);
+  }
+
+  private async recoverPendingProjectDocs(): Promise<void> {
+    if (!this.projectDocs || !this.artifacts) return;
+    const events = this.store.readRun(this.runId);
+    const settled = new Set(
+      events.flatMap((event) =>
+        (event.type === "project_doc.committed" || event.type === "project_doc.abandoned") &&
+        typeof event.payload.requestId === "string"
+          ? [event.payload.requestId]
+          : []
+      ),
+    );
+    const pending = events.filter((event) =>
+      event.type === "project_doc.requested" &&
+      typeof event.payload.requestId === "string" &&
+      !settled.has(event.payload.requestId)
+    );
+    for (const event of pending) {
+      const requestId = event.payload.requestId;
+      const path = event.payload.path;
+      const summary = event.payload.summary;
+      const hash = event.payload.contentArtifactHash;
+      if (
+        typeof requestId !== "string" ||
+        typeof path !== "string" ||
+        typeof summary !== "string" ||
+        typeof hash !== "string"
+      ) {
+        throw new Error("Project document request is incomplete.");
+      }
+      if (projectDocSummaryRejected(summary)) {
+        this.recordAbandonedProjectDoc(requestId, path);
+        continue;
+      }
+      const bytes = await this.artifacts.get(hash);
+      if (createHash("sha256").update(bytes).digest("hex") !== hash) {
+        throw new Error(`Project document artifact ${hash} does not match its request.`);
+      }
+      try {
+        const result = await this.projectDocs.commit({
+          writes: [{ path, content: bytes.toString("utf8") }],
+          summary,
+          runId: this.runId,
+          requestId,
+        });
+        this.appendProjectDocCommitted(requestId, path, result);
+      } catch (error) {
+        if (error instanceof Error && error.message === "Project document summary is invalid.") {
+          this.recordAbandonedProjectDoc(requestId, path);
+          continue;
+        }
+        throw error;
+      }
+    }
+  }
+
+  private recordAbandonedProjectDoc(requestId: string, path: string): void {
+    this.store.append({
+      runId: this.runId,
+      type: "project_doc.abandoned",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `project-doc-abandoned:${requestId}`,
+      payload: {
+        requestId,
+        path,
+        reason: "Project document summary is invalid.",
+      },
+    });
+  }
+
+  private appendProjectDocCommitted(
+    requestId: string,
+    path: string,
+    result: ProjectDocCommitResult,
+  ): void {
+    this.store.append({
+      runId: this.runId,
+      type: "project_doc.committed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `project-doc-committed:${requestId}`,
+      payload: {
+        requestId,
+        path,
+        commit: result.commit,
+        parent: result.parent,
+        head: result.head,
+        readme: result.entryPoint.readme,
+        agentsMarkedSection: result.entryPoint.agentsMarkedSection,
+        claudePointer: result.entryPoint.claudePointer,
+      },
+    });
+  }
+
   private ensureInitialized(): void {
     this.initializeRun();
+  }
+
+  private rederiveContextRecordingSuspension(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.length === 0) return;
+    const waiver = rebuildSchedulerProjection(events).contextRecording?.waiver;
+    if (waiver) suspendContextRecording(this.runId, waiver.rationale);
+  }
+
+  async resolveContextRecordingFailure(): Promise<"resumed" | "aborted" | "unresolved"> {
+    const projection = this.projection();
+    if (projection.status === "failed") return "aborted";
+    const note = latestUnresolvedContextRecordingNote(projection);
+    if (
+      projection.status !== "paused" ||
+      projection.pauseReason?.reason !== "context_recording_failed" ||
+      !note
+    ) {
+      return "unresolved";
+    }
+    suspendContextRecording(this.runId, "context_recording_decision_turn");
+    try {
+      await this.runArchitect({
+        type: "context_recording_decision_required",
+        purpose: note.purpose,
+        attempts: note.attempts,
+        reason: note.reason,
+        noteSequence: note.sequence,
+        ...(note.taskId ? { taskId: note.taskId } : {}),
+        ...(note.attempt !== undefined ? { attempt: note.attempt } : {}),
+        ...(note.revision ? { revision: note.revision } : {}),
+        retriesRemaining: contextRecordingRetriesRemaining(projection),
+      }, projection);
+    } catch (error) {
+      if (!(error instanceof ContextManifestRecordingError)) throw error;
+      if (this.projection().status === "failed") return "aborted";
+      if (latestUnresolvedContextRecordingNote(this.projection())) return "unresolved";
+    } finally {
+      if (!this.projection().contextRecording?.waiver) {
+        clearContextRecordingSuspension(this.runId);
+      }
+    }
+    return this.finishContextRecordingResolution();
+  }
+
+  private finishContextRecordingResolution(): "resumed" | "aborted" | "unresolved" {
+    const projection = this.projection();
+    if (projection.status === "failed") return "aborted";
+    const note = projection.contextRecording?.notes.at(-1);
+    const resolution = note?.resolution;
+    if (!resolution) return "unresolved";
+    if (resolution.resolution === "abort") return "aborted";
+    if (projection.status === "running") return "resumed";
+    if (resolution.resolution === "proceed_without_manifest") {
+      suspendContextRecording(this.runId, resolution.rationale ?? projection.contextRecording?.waiver?.rationale ?? "");
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "run.resumed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `context-recording-resumed:${note?.sequence ?? projection.lastSequence}`,
+      payload: {},
+    });
+    return "resumed";
+  }
+
+  private recordContextRecordingFailure(error: ContextManifestRecordingError): void {
+    const projection = this.projection();
+    const details = this.recordingFailureContext;
+    this.store.append({
+      runId: this.runId,
+      type: "context_manifest.recording_failed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `context-recording-failed:${error.purpose}:${projection.lastSequence}`,
+      payload: {
+        purpose: error.purpose,
+        attempts: error.attempts,
+        reason: error.message,
+        ...(details.taskId ? { taskId: details.taskId } : {}),
+        ...(details.attempt !== undefined ? { attempt: details.attempt } : {}),
+        ...(details.revision ? { revision: details.revision } : {}),
+      },
+    });
+    const noted = this.projection();
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `context-recording-paused:${noted.lastSequence}`,
+      payload: {
+        reason: "context_recording_failed",
+        ...(details.taskId ? { taskId: details.taskId } : {}),
+      },
+    });
   }
 
   private async runArchitect(
     reason: ArchitectActionReason,
     projection: SchedulerProjection
   ): Promise<void> {
+    this.recordingFailureContext = {
+      ...("taskId" in reason && reason.taskId ? { taskId: reason.taskId } : {}),
+      ...("attempt" in reason && typeof reason.attempt === "number" ? { attempt: reason.attempt } : {}),
+      ...(projection.integrationRevision ? { revision: projection.integrationRevision } : {}),
+    };
     const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
     const providerRetryDeadlineMs = this.providerRetryDeadlineMs?.();
     const tools = new ToolRegistry();
-    for (const tool of createArchitectTools({
+    const created = this.bindProjectDocCommit(createArchitectTools({
       store: this.store,
       clock: this.clock,
       runPolicy: this.runPolicy,
@@ -1442,7 +1830,18 @@ export class BuildRuntime {
         ? { discardFinalVerificationProfile: this.discardFinalVerificationProfile }
         : {}),
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
-    })) {
+      ...(this.artifacts ? { artifacts: this.artifacts } : {}),
+    }));
+    const registered = this.architectLifecycleProbe
+      ? this.architectLifecycleProbe(created)
+      : created;
+    assertArchitectLifecycleRegistration(
+      registered.map((tool) => tool.definition.name),
+      this.runPolicy !== "plan_only" && reason.type !== "context_recording_decision_required",
+      this.store,
+      this.clock,
+    );
+    for (const tool of registered) {
       tools.register(tool);
     }
     await this.architectDriver.run({
@@ -1702,6 +2101,9 @@ export class BuildRuntime {
       }
       return this.afterArchitect("plan_critique_resolution_required");
     }
+    this.recordingFailureContext = {
+      ...(projection.integrationRevision ? { revision: projection.integrationRevision } : {}),
+    };
     const result = await driver.critique({
       runId: this.runId,
       projection,
@@ -1804,3 +2206,206 @@ function boundedCleanupError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return redactSensitiveText(message, 4_096) || "Final verification cleanup failed.";
 }
+
+function projectDocSummaryRejected(summary: string): boolean {
+  return !summary.trim() || summary.includes("\n") || summary.includes("\0");
+}
+
+function isProjectDocToolInput(input: unknown): input is {
+  path: string;
+  content: string;
+  summary: string;
+} {
+  if (typeof input !== "object" || input === null) return false;
+  const value = input as Record<string, unknown>;
+  return typeof value.path === "string" &&
+    typeof value.content === "string" &&
+    typeof value.summary === "string";
+}
+
+/**
+ * Exact sorted names `createArchitectTools` can register from an Architect turn.
+ * One turn registers a subset: reason gates and `plan_only` omit tools. A4 may
+ * move this list into role-capabilities. It is not a broker.
+ */
+export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
+  "acknowledge_user_guidance",
+  "answer_guidance",
+  "ask_user",
+  "complete_run",
+  "plan_final_verification",
+  "plan_tasks",
+  "plan_verification_repairs",
+  "plan_verifier_repairs",
+  "reconcile_plan",
+  "request_integration",
+  "resolve_context_recording",
+  "resolve_plan_critique",
+  "review_final_verification",
+  "review_task",
+  "revise_task",
+  "upgrade_acceptance_contract",
+  "write_project_doc",
+]);
+
+const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store" | "clock">[] = [
+  {
+    runPolicy: "finish",
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    runPolicy: "budgeted",
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    runPolicy: "plan_only",
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    runPolicy: "plan_only",
+    planOnlyCompletionAvailable: true,
+    architectAction: {
+      reason: { type: "completion_decision_required", runPolicy: "plan_only" },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    architectAction: {
+      reason: {
+        type: "context_recording_decision_required",
+        purpose: "record",
+        attempts: 1,
+        reason: "failed",
+        noteSequence: 1,
+      },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    architectAction: {
+      reason: { type: "user_guidance_required", guidanceId: "guidance", version: 1 },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    finalVerificationPlanAvailable: true,
+    architectAction: {
+      reason: { type: "final_verification_plan_required", integrationRevision: "rev" },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    finalVerificationReviewAvailable: true,
+    architectAction: {
+      reason: {
+        type: "final_verification_review_required",
+        taskId: "task",
+        generationId: "generation",
+        submissionId: "submission",
+        targetRevision: "rev",
+      },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    finalVerificationRepairPlanAvailable: true,
+    architectAction: {
+      reason: {
+        type: "final_verification_repair_plan_required",
+        finalVerificationTaskId: "task",
+        generationId: "generation",
+        targetRevision: "rev",
+        source: { type: "semantic_review", submissionId: "submission", reviewId: "review" },
+        failedCategories: [],
+        evidenceIds: [],
+      },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    verifierRepairPlanAvailable: true,
+    architectAction: {
+      reason: {
+        type: "verifier_repair_plan_required",
+        reviewId: "review",
+        targetRevision: "rev",
+        unsatisfiedCriteria: [],
+      },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    planCritiqueResolutionAvailable: true,
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+];
+
+/** Names produced by calling `createArchitectTools` across every registration shape. */
+export function architectLifecycleUniverseNames(
+  store: SchedulerStore,
+  clock: () => string,
+): readonly string[] {
+  const names = new Set<string>();
+  for (const options of ARCHITECT_LIFECYCLE_UNIVERSE) {
+    for (const tool of createArchitectTools({
+      store,
+      clock,
+      ...options,
+      artifacts: ARCHITECT_LIFECYCLE_UNIVERSE_ARTIFACTS,
+    })) {
+      names.add(tool.definition.name);
+    }
+  }
+  return Object.freeze([...names].sort(compareToolNames));
+}
+
+function assertArchitectLifecycleRegistration(
+  registeredNames: readonly string[],
+  requireLifecycleTools: boolean,
+  store: SchedulerStore,
+  clock: () => string,
+): void {
+  const universe = architectLifecycleUniverseNames(store, clock);
+  const surface = ARCHITECT_LIFECYCLE_SURFACE;
+  if (!sortedNamesEqual(universe, surface)) {
+    const allowed = new Set<string>(surface);
+    const extra = universe.find((name) => !allowed.has(name));
+    if (extra) {
+      throw new Error(`Architect lifecycle registered tool ${extra} is not on the allow-list.`);
+    }
+    const present = new Set<string>(universe);
+    const missing = surface.find((name) => !present.has(name));
+    throw new Error(`Architect lifecycle surface omitted ${missing ?? "a required tool"}.`);
+  }
+  if (requireLifecycleTools) {
+    for (const name of ARCHITECT_LIFECYCLE_TOOLS) {
+      if (!registeredNames.includes(name)) {
+        throw new Error(`Architect lifecycle required tool ${name} is missing.`);
+      }
+    }
+  }
+  const allowed = new Set<string>(surface);
+  for (const name of registeredNames) {
+    if (!allowed.has(name)) {
+      throw new Error(`Architect lifecycle registered tool ${name} is not on the allow-list.`);
+    }
+  }
+}
+
+function sortedNamesEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+function compareToolNames(left: string, right: string): number {
+  return left.localeCompare(right);
+}
+
+/** Present only so universe derivation lists write_project_doc. Never executed. */
+const ARCHITECT_LIFECYCLE_UNIVERSE_ARTIFACTS = {} as ArtifactStore;

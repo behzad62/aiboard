@@ -28,6 +28,10 @@ import {
   type McpTransportFactory,
 } from "../src/mcp-tools.js";
 import {
+  assertArchitectInspectionMcpClass,
+  mcpToolAdmitted,
+} from "../src/role-capabilities.js";
+import {
   emptyRunnerCapabilitiesConfig,
   type RunnerCapabilitiesConfig,
 } from "../src/runner-capabilities-config.js";
@@ -1635,6 +1639,50 @@ async function fixtureMcpCall(manager: McpManager, run: ExecutionHostRunBinding,
   try { return await entry.client.call(name, arguments_, { ...binding, workspacePath: workspace, executionGrant: grant }); }
   finally { await run.executionGrants.revoke(grant, "completed"); }
 }
+
+test("mapper read-only class admits only readOnlyHint true and destructiveHint false", () => {
+  const root = mkdtempSync(join(tmpdir(), "a2-mcp-mapper-class-"));
+  try {
+    const artifacts = new ArtifactStore(join(root, "artifacts"));
+    const entry = (
+      name: string,
+      annotations: { readonly readOnlyHint?: boolean; readonly destructiveHint?: boolean },
+    ) => ({
+      client: {
+        spec: { name: "docs", command: "unused" },
+        call: async () => ({ structuredContent: { ok: true } }),
+        access: () => ({ capability: `mcp.docs.${name}` }),
+      },
+      tool: { name, annotations },
+    });
+    const manager = {
+      toolEntries: () => [
+        entry("hint_only", { readOnlyHint: true }),
+        entry("read_only", { readOnlyHint: true, destructiveHint: false }),
+        entry("destructive", { readOnlyHint: true, destructiveHint: true }),
+      ],
+    } as unknown as McpManager;
+    const tools = createMcpTools(manager, artifacts);
+    const byName = new Map(tools.map((tool) => [tool.definition.name, tool.definition]));
+    assert.equal(byName.get("mcp.docs.hint_only")?.readOnly, false);
+    assert.equal(byName.get("mcp.docs.read_only")?.readOnly, true);
+    assert.equal(byName.get("mcp.docs.destructive")?.readOnly, false);
+    for (const tool of tools) assert.equal(tool.definition.effect, "external");
+    assert.deepEqual(
+      tools.filter((tool) => mcpToolAdmitted("read-only-class", tool.definition)).map((tool) => tool.definition.name),
+      ["mcp.docs.read_only"],
+    );
+    assert.doesNotThrow(() => assertArchitectInspectionMcpClass(
+      tools.filter((tool) => mcpToolAdmitted("read-only-class", tool.definition)).map((tool) => tool.definition),
+    ));
+    assert.throws(
+      () => assertArchitectInspectionMcpClass(tools.map((tool) => tool.definition)),
+      /Architect inspection tool mcp\.docs\.hint_only has external effect outside the read-only MCP class\./,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function syntheticMcpOptions(name: string, command: string, tools: readonly McpDiscoveryTool[]) {
   const server = { name, command }; const configDigest = mcpConfigurationDigest(server); const executableDigest = "a".repeat(64);

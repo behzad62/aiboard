@@ -8,6 +8,7 @@ import type {
   PlanCritiqueProjection,
 } from "./plan-critique-contracts.js";
 import type {
+  ReviewerIndependence,
   VerifierExcludedModel,
   VerifierRuntimeBinding,
 } from "./verifier-contracts.js";
@@ -18,6 +19,7 @@ export interface RequestPlanCritiqueInput {
   planRevision: number;
   runtime: VerifierRuntimeBinding;
   excludedModels: VerifierExcludedModel[];
+  independence?: ReviewerIndependence;
   occurredAt: string;
 }
 
@@ -60,6 +62,7 @@ export class SchedulerPlanCritiqueAuthority implements PlanCritiqueAuthority {
         planRevision: input.planRevision,
         runtime: { ...input.runtime },
         excludedModels: input.excludedModels.map((model) => ({ ...model })),
+        ...(input.independence ? { independence: input.independence } : {}),
         ...(supersedesCritiqueId ? { supersedesCritiqueId } : {}),
       },
     });

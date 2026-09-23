@@ -9,10 +9,18 @@ import { DatabaseSync } from "node:sqlite";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { ContextAssembler } from "../src/context-assembler.js";
 import {
+  CONTEXT_MANIFEST_RECORD_BACKOFF_MS,
+  CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS,
   ContextManifestParseError,
+  ContextManifestRecordingError,
+  clearContextRecordingSuspension,
   contextManifestId,
+  isContextRecordingSuspended,
   recordContextPack,
+  suspendContextRecording,
+  toContextManifest,
   type ContextManifestInput,
+  type ContextManifestStore,
 } from "../src/context-manifest-store.js";
 import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 
@@ -294,5 +302,185 @@ test("recordContextPack is a no-op without a store and records full text only wh
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function sleepSpy(): { sleep: (milliseconds: number) => Promise<void>; delays: number[] } {
+  const delays: number[] = [];
+  return {
+    delays,
+    async sleep(milliseconds: number) {
+      delays.push(milliseconds);
+    },
+  };
+}
+
+function stubManifestStore(
+  record: (input: ContextManifestInput, call: number) => ReturnType<ContextManifestStore["record"]>,
+): { store: ContextManifestStore; calls: () => number } {
+  let calls = 0;
+  return {
+    calls: () => calls,
+    store: {
+      record(input) {
+        calls += 1;
+        return record(input, calls);
+      },
+      get: () => undefined,
+      listRun: () => [],
+      close() {},
+    },
+  };
+}
+
+test("stub store failing N-1 times then succeeding records exactly once", async () => {
+  const input = manifestInput({ runId: "run_b1_retry_success", sessionId: "worker:retry:1" });
+  let recorded = 0;
+  const stub = stubManifestStore((manifestInputRecorded, call) => {
+    if (call < CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS) {
+      throw new Error(`sqlite locked ${call}`);
+    }
+    recorded += 1;
+    return toContextManifest(manifestInputRecorded);
+  });
+  const spy = sleepSpy();
+  const result = await recordContextPack({ ...input, store: stub.store, sleep: spy.sleep });
+  assert.equal(recorded, 1);
+  assert.equal(stub.calls(), CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS);
+  assert.equal(result?.manifestId, contextManifestId(input));
+  assert.equal(result?.runId, input.runId);
+  assert.equal(result?.purpose, input.purpose);
+  assert.equal(spy.delays.length, CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS - 1);
+  assert.deepEqual(spy.delays, [...CONTEXT_MANIFEST_RECORD_BACKOFF_MS]);
+});
+
+test("permanently failing store throws ContextManifestRecordingError after exactly the bound", async () => {
+  const failuresBeforeSuccess = 10;
+  assert.ok(
+    CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS < failuresBeforeSuccess,
+    "the finite stub must still be failing when the bound is reached",
+  );
+  const input = manifestInput({ runId: "run_b1_retry_exhausted", sessionId: "worker:exhausted:1" });
+  const causes: Error[] = [];
+  const stub = stubManifestStore((manifestInputRecorded, call) => {
+    const cause = new Error(`sqlite locked ${call}`);
+    causes.push(cause);
+    if (call <= failuresBeforeSuccess) throw cause;
+    return toContextManifest(manifestInputRecorded);
+  });
+  const spy = sleepSpy();
+  await assert.rejects(
+    () => recordContextPack({ ...input, store: stub.store, sleep: spy.sleep }),
+    (error: unknown) => {
+      assert.ok(error instanceof ContextManifestRecordingError);
+      assert.equal(error.name, "ContextManifestRecordingError");
+      assert.equal(error.runId, input.runId);
+      assert.equal(error.sessionId, input.sessionId);
+      assert.equal(error.purpose, input.purpose);
+      assert.equal(error.attempts, CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS);
+      assert.equal(error.cause, causes[CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS - 1]);
+      assert.notEqual(error.cause, causes[0]);
+      assert.equal(stub.calls(), CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS);
+      assert.equal(spy.delays.length, CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS - 1);
+      assert.deepEqual(spy.delays, [...CONTEXT_MANIFEST_RECORD_BACKOFF_MS]);
+      return true;
+    },
+  );
+});
+
+test("permanently failing artifacts.put throws ContextManifestRecordingError", async () => {
+  const input = manifestInput({ runId: "run_b1_artifact_exhausted", sessionId: "worker:artifact:1" });
+  let storeCalls = 0;
+  const store = stubManifestStore(() => {
+    storeCalls += 1;
+    throw new Error("store should not be called");
+  }).store;
+  const causes: Error[] = [];
+  let putCalls = 0;
+  const artifacts = {
+    async put() {
+      putCalls += 1;
+      const cause = new Error(`antivirus handle ${putCalls}`);
+      causes.push(cause);
+      throw cause;
+    },
+  } as unknown as ArtifactStore;
+  const spy = sleepSpy();
+  await assert.rejects(
+    () => recordContextPack({
+      ...input,
+      store,
+      artifacts,
+      recordPackText: true,
+      sleep: spy.sleep,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof ContextManifestRecordingError);
+      assert.equal(error.runId, input.runId);
+      assert.equal(error.sessionId, input.sessionId);
+      assert.equal(error.purpose, input.purpose);
+      assert.equal(error.attempts, CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS);
+      assert.equal(error.cause, causes[CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS - 1]);
+      assert.equal(putCalls, CONTEXT_MANIFEST_RECORD_MAX_ATTEMPTS);
+      assert.equal(storeCalls, 0);
+      assert.deepEqual(spy.delays, [...CONTEXT_MANIFEST_RECORD_BACKOFF_MS]);
+      return true;
+    },
+  );
+});
+
+test("suspended run returns undefined, zero store calls, zero artifact calls, and clearing resumes recording", async () => {
+  const suspendedRunId = "run_b1_suspended";
+  const otherRunId = "run_b1_not_suspended";
+  clearContextRecordingSuspension(suspendedRunId);
+  clearContextRecordingSuspension(otherRunId);
+  let storeCalls = 0;
+  let artifactCalls = 0;
+  const stub = stubManifestStore((input) => {
+    storeCalls += 1;
+    return toContextManifest(input);
+  });
+  const artifacts = {
+    async put() {
+      artifactCalls += 1;
+      return { hash: "a".repeat(64) };
+    },
+  } as unknown as ArtifactStore;
+  try {
+    suspendContextRecording(suspendedRunId, "proceed_without_manifest");
+    assert.equal(isContextRecordingSuspended(suspendedRunId), true);
+    assert.equal(isContextRecordingSuspended(otherRunId), false);
+    const suspended = await recordContextPack({
+      ...manifestInput({ runId: suspendedRunId, sessionId: "worker:suspended:1" }),
+      store: stub.store,
+      artifacts,
+      recordPackText: true,
+    });
+    assert.equal(suspended, undefined);
+    assert.equal(storeCalls, 0);
+    assert.equal(artifactCalls, 0);
+    const other = await recordContextPack({
+      ...manifestInput({ runId: otherRunId, sessionId: "worker:other:1" }),
+      store: stub.store,
+      artifacts,
+      recordPackText: true,
+    });
+    assert.equal(other?.runId, otherRunId);
+    assert.equal(storeCalls, 1);
+    assert.equal(artifactCalls, 1);
+    clearContextRecordingSuspension(suspendedRunId);
+    assert.equal(isContextRecordingSuspended(suspendedRunId), false);
+    const resumed = await recordContextPack({
+      ...manifestInput({ runId: suspendedRunId, sessionId: "worker:resumed:1" }),
+      store: stub.store,
+      artifacts,
+      recordPackText: true,
+    });
+    assert.equal(resumed?.runId, suspendedRunId);
+    assert.equal(storeCalls, 2);
+    assert.equal(artifactCalls, 2);
+  } finally {
+    clearContextRecordingSuspension(suspendedRunId);
+    clearContextRecordingSuspension(otherRunId);
   }
 });

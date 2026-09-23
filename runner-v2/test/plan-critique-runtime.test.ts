@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { ToolCallBlock } from "../src/agent-contracts.js";
+import { ContextManifestRecordingError } from "../src/context-manifest-store.js";
 import {
   BuildRuntime,
   type ArchitectActionReason,
@@ -74,6 +75,58 @@ test("high plan risk runs the critic once and auto-resolves an advisory-only cri
     assert.equal(worker.calls.length > 0, true);
     assert.equal(worker.calls.every((call) => call.sequence > resolvedEvent.sequence), true);
   });
+});
+
+test("plan critic context recording failure pauses before any worker", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-plan-critique-recording-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const worker = new ScriptedWorker(store);
+  const failure = new ContextManifestRecordingError({
+    runId: RUN_ID,
+    sessionId: "critic:session",
+    purpose: "critic:plan_critique",
+    attempts: 3,
+  }, new Error("sqlite locked"));
+  const critic: PlanCriticDriver = {
+    candidateRuntimeIds: [...CRITIC_RUNTIME_IDS],
+    mode: "risk_based",
+    stricterQualification: false,
+    architectDeclaration: () => "low",
+    critique: async () => {
+      throw failure;
+    },
+  };
+  try {
+    const runtime = new BuildRuntime({
+      runId: RUN_ID,
+      store,
+      workerDriver: worker,
+      architectDriver: new ScriptedArchitect(5),
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+      },
+      independentVerifier: stubVerifier(false),
+      planCritic: critic,
+      runPolicy: "finish",
+      maxConcurrency: 1,
+      workspaceFor: async (task) => `C:/work/${task.id}`,
+      clock: CLOCK,
+    });
+    assert.equal((await runtime.step()).action, "plan_required");
+    assert.equal((await runtime.step()).action, "plan_risk_assessed");
+    const paused = await runtime.step();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.action, "context_recording_failed");
+    const notes = store.readRun(RUN_ID).filter((event) => event.type === "context_manifest.recording_failed");
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]?.payload.purpose, "critic:plan_critique");
+    assert.equal(notes[0]?.payload.attempts, 3);
+    assert.equal(notes[0]?.payload.reason, failure.message);
+    assert.equal(worker.calls.length, 0);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("blocking findings route to exactly one Architect resolution before any worker", async () => {

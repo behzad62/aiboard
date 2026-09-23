@@ -4,6 +4,7 @@ import {
 } from "./scheduler-store.js";
 import {
   cloneVerifierReview,
+  type ReviewerIndependence,
   type VerifierCriterionReference,
   type VerifierCriterionVerdict,
   type VerifierExcludedModel,
@@ -21,6 +22,7 @@ export interface RequestVerifierReviewInput {
   finalVerificationGenerationId: string;
   runtime: VerifierRuntimeBinding;
   excludedModels: VerifierExcludedModel[];
+  independence?: ReviewerIndependence;
   criteria: VerifierCriterionReference[];
   twoPass?: boolean;
   baselineRevision?: string;
@@ -80,6 +82,7 @@ implements VerifierVerdictAuthority {
         finalVerificationGenerationId: input.finalVerificationGenerationId,
         runtime: { ...input.runtime },
         excludedModels: input.excludedModels.map((model) => ({ ...model })),
+        ...(input.independence ? { independence: input.independence } : {}),
         criteria: input.criteria.map((criterion) => ({ ...criterion })),
         ...(input.twoPass === true ? { twoPass: true } : {}),
         ...(input.baselineRevision ? { baselineRevision: input.baselineRevision } : {}),

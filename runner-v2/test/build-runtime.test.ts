@@ -4,14 +4,42 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { buildArchitectContext } from "../src/agent-prompts.js";
 import type { ToolCallBlock } from "../src/agent-contracts.js";
+import { ArtifactStore } from "../src/artifact-store.js";
 import {
   BuildRuntime,
   type ArchitectActionRequest,
   type ArchitectRuntimeDriver,
   type IntegrationRuntimeDriver,
+  type ProjectDocsPort,
 } from "../src/build-runtime.js";
+import {
+  clearContextRecordingSuspension,
+  ContextManifestRecordingError,
+  isContextRecordingSuspended,
+  recordContextPack,
+  toContextManifest,
+  type ContextManifest,
+  type ContextManifestInput,
+  type ContextManifestStore,
+} from "../src/context-manifest-store.js";
+import {
+  CLAUDE_POINTER_LINE,
+  DEFAULT_AGENTS_SECTION_BODY,
+  DEFAULT_README_TEMPLATE,
+  DEFAULT_STATE_TEMPLATE,
+  agentsMarkedSectionSatisfies,
+  claudePointerSatisfies,
+  spliceMarkedArchitectSection,
+} from "../src/project-docs.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
+import {
+  buildCompletionReadiness,
+  CONTEXT_RECORDING_RETRY_LIMIT,
+  latestUnresolvedContextRecordingNote,
+  rebuildSchedulerProjection,
+} from "../src/scheduler-store.js";
 import { RuntimeRouter } from "../src/runtime-router.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -25,6 +53,44 @@ import {
   acceptFinalVerificationProfile,
   emptyFinalVerificationProfile,
 } from "./support/final-verification-profile.js";
+import {
+  createFixture,
+  event as verifierEvent,
+  REVISION,
+  RUN_ID,
+} from "./support/verifier-run-fixture.js";
+
+function planOnlyDocumentPort(): ProjectDocsPort {
+  const tree = new Map<string, string>();
+  let head = "baseline_revision";
+  let commitCount = 0;
+  return {
+    commit: async (input) => {
+      const parent = head;
+      for (const write of input.writes) {
+        if (write.path === "AGENTS.md" || write.path === "CLAUDE.md") {
+          tree.set(write.path, spliceMarkedArchitectSection(tree.get(write.path) ?? "", write.content));
+        } else {
+          tree.set(write.path, write.content);
+        }
+      }
+      commitCount += 1;
+      const commit = `doc-${commitCount}`;
+      head = commit;
+      return {
+        commit,
+        parent,
+        head,
+        entryPoint: {
+          readme: tree.has("docs/project/README.md"),
+          agentsMarkedSection: agentsMarkedSectionSatisfies(tree.get("AGENTS.md") ?? ""),
+          claudePointer: claudePointerSatisfies(tree.get("CLAUDE.md") ?? ""),
+        },
+      };
+    },
+    relateRevision: async () => "strict_descendant",
+  };
+}
 
 test("build runtime plans final verification after ordinary integration across restarts", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-"));
@@ -236,6 +302,7 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
                 "plan_tasks",
                 "revise_task",
                 "upgrade_acceptance_contract",
+                "write_project_doc",
               ]
             );
             for (const name of [
@@ -287,6 +354,7 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
               "plan_tasks",
               "revise_task",
               "upgrade_acceptance_contract",
+              "write_project_doc",
             ]
           );
           for (const name of ["review_task", "request_integration"]) {
@@ -309,6 +377,26 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
             });
             return;
           }
+          await invoke("write_project_doc", {
+            path: "docs/project/README.md",
+            content: DEFAULT_README_TEMPLATE,
+            summary: "Write the project README",
+          });
+          await invoke("write_project_doc", {
+            path: "AGENTS.md",
+            content: DEFAULT_AGENTS_SECTION_BODY,
+            summary: "Write the AGENTS.md documentation section",
+          });
+          await invoke("write_project_doc", {
+            path: "CLAUDE.md",
+            content: CLAUDE_POINTER_LINE,
+            summary: "Write the CLAUDE.md documentation pointer",
+          });
+          await invoke("write_project_doc", {
+            path: "docs/project/STATE.md",
+            content: DEFAULT_STATE_TEMPLATE,
+            summary: "Write the project state",
+          });
           await invoke("complete_run", {
             summary: "The implementation plan is ready for handoff.",
           });
@@ -329,6 +417,8 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
         return "C:/forbidden-workspace";
       },
       clock: () => "2026-07-13T00:00:00.000Z",
+      artifacts: new ArtifactStore(join(root, "artifacts")),
+      projectDocs: planOnlyDocumentPort(),
     });
 
     assert.equal((await runtime.step()).action, "plan_required");
@@ -361,6 +451,14 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
       "handoff:plan-only:keep"
     );
     assert.equal(selected.status, "completed");
+    const types = runtime.events().map((event) => event.type);
+    const stateCommit = [...runtime.events()].reverse().find((event) =>
+      event.type === "project_doc.committed" && event.payload.path === "docs/project/STATE.md"
+    );
+    assert.equal(stateCommit?.payload.readme, true);
+    assert.equal(stateCommit?.payload.agentsMarkedSection, true);
+    assert.equal(stateCommit?.payload.claudePointer, true);
+    assert.ok(types.indexOf("project_doc.committed") < types.indexOf("project.handoff_requested"));
   } finally {
     TaskScheduler.prototype.tick = originalTick;
     store.close();
@@ -520,7 +618,7 @@ test("Architect prose or no-op return cannot fabricate scheduler progress", asyn
     await assert.rejects(() => runtime.step(), /without a typed action/i);
     assert.deepEqual(
       store.readRun("run_noop").map((event) => event.type),
-      ["run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured"]
+      ["project_docs.policy_configured", "run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured"]
     );
   } finally {
     store.close();
@@ -554,7 +652,7 @@ test("fresh native Builds expose an empty projection and obey durable user pause
     assert.equal(resumed.pauseReason, undefined);
     assert.deepEqual(
       runtime.events().map((event) => event.type),
-      ["run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured", "run.paused", "run.resumed"]
+      ["project_docs.policy_configured", "run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured", "run.paused", "run.resumed"]
     );
   } finally {
     store.close();
@@ -1203,6 +1301,1012 @@ class ScriptedArchitect implements ArchitectRuntimeDriver {
     const result = await request.tools.invoke(call, request.context);
     assert.equal(result.isError, false, result.error?.message ?? "Architect tool failed");
   }
+}
+
+test("architect context recording failure pauses with one note and no worker dispatch", async () => {
+  const { root, store, workerCalls, architectCalls } = recordingHarness("run_architect_recording");
+  const failure = contextRecordingFailure("run_architect_recording", "architect:plan_required");
+  try {
+    const runtime = openRecordingRuntime(store, "run_architect_recording", {
+      architect: async () => {
+        architectCalls.count += 1;
+        throw failure;
+      },
+      worker: async () => {
+        workerCalls.count += 1;
+        return { type: "paused", reason: "unused" };
+      },
+    });
+    const paused = await runtime.step();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.action, "context_recording_failed");
+    const notes = store.readRun("run_architect_recording").filter((event) => event.type === "context_manifest.recording_failed");
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]?.payload.purpose, "architect:plan_required");
+    assert.equal(notes[0]?.payload.attempts, 3);
+    assert.equal(notes[0]?.payload.reason, failure.message);
+    assert.equal(architectCalls.count, 1);
+    assert.equal(workerCalls.count, 0);
+    assert.equal(runtime.projection().pauseReason?.reason, "context_recording_failed");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a completion-ready finish run refuses complete_run until the context recording note is resolved", async () => {
+  const fixture = createFixture("recording-completion");
+  const failure = new ContextManifestRecordingError({
+    runId: RUN_ID,
+    sessionId: "architect:completion",
+    purpose: "architect:completion_decision_required",
+    attempts: 3,
+  }, new Error("disk full"));
+  const docHash = "a".repeat(64);
+  const docCommit = "b".repeat(40);
+  fixture.store.append(verifierEvent(
+    "project_docs.policy_configured",
+    "project-docs-policy",
+    { version: 1 },
+  ));
+  fixture.store.append(verifierEvent(
+    "project_doc.requested",
+    "project-doc:state",
+    {
+      requestId: "project-doc:state",
+      path: "docs/project/STATE.md",
+      contentArtifactHash: docHash,
+      contentBytes: 24,
+      summary: "Record the run state.",
+    },
+    { role: "architect", id: "architect_1" },
+  ));
+  fixture.store.append(verifierEvent(
+    "project_doc.committed",
+    "project-doc-committed:project-doc:state",
+    {
+      requestId: "project-doc:state",
+      path: "docs/project/STATE.md",
+      commit: docCommit,
+      parent: REVISION,
+      head: docCommit,
+      readme: true,
+      agentsMarkedSection: true,
+      claudePointer: true,
+    },
+  ));
+  let completionCalls = 0;
+  try {
+    const runtime = new BuildRuntime({
+      runId: RUN_ID,
+      runPolicy: "finish",
+      store: fixture.store,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: {
+        run: async (request) => {
+          if (request.reason.type === "completion_decision_required") {
+            completionCalls += 1;
+            if (completionCalls === 1) throw failure;
+            const completed = await request.tools.invoke({
+              type: "tool_call",
+              callId: "complete-after-recording-retry",
+              name: "complete_run",
+              arguments: { summary: "All intended work is accepted." },
+            }, request.context);
+            assert.equal(completed.isError, false, completed.error?.message ?? "complete_run failed after retry");
+            return;
+          }
+          assert.equal(request.reason.type, "context_recording_decision_required");
+          const refused = await request.tools.invoke({
+            type: "tool_call",
+            callId: "complete-during-recording",
+            name: "complete_run",
+            arguments: { summary: "All intended work is accepted." },
+          }, request.context);
+          const during = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+          const unresolved = latestUnresolvedContextRecordingNote(during);
+          assert.deepEqual(
+            {
+              handoff: during.projectHandoff?.status,
+              pause: during.pauseReason?.reason,
+              unresolved: unresolved?.sequence,
+            },
+            {
+              handoff: undefined,
+              pause: "context_recording_failed",
+              unresolved: during.contextRecording?.notes.at(-1)?.sequence,
+            },
+          );
+          assert.equal(refused.isError, true);
+          assert.equal(refused.error?.code, "unknown_tool");
+          const resolved = await request.tools.invoke({
+            type: "tool_call",
+            callId: "retry-recording",
+            name: "resolve_context_recording",
+            arguments: { resolution: "retry", rationale: "Retry the manifest." },
+          }, request.context);
+          assert.equal(resolved.isError, false, resolved.error?.message ?? "retry failed");
+        },
+      },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: REVISION }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-09-23T00:00:00.000Z",
+    });
+    const ready = buildCompletionReadiness(runtime.projection());
+    assert.equal(ready.ready, true, ready.issues.join(" "));
+    assert.equal(runtime.projection().projectDocsPolicyVersion, 1);
+    const committed = runtime.projection().projectDocs?.committed ?? [];
+    assert.equal(
+      committed.some((commit) =>
+        commit.path === "docs/project/STATE.md" &&
+        commit.readme &&
+        commit.agentsMarkedSection &&
+        commit.claudePointer
+      ),
+      true,
+    );
+    const paused = await runtime.step();
+    assert.deepEqual(paused, { status: "paused", action: "context_recording_failed" });
+    const decision = await runtime.resolveContextRecordingFailure();
+    assert.equal(decision, "resumed");
+    assert.equal(runtime.projection().status, "running");
+    assert.equal(latestUnresolvedContextRecordingNote(runtime.projection()), undefined);
+    const handedOff = await runtime.step();
+    assert.equal(handedOff.status, "paused");
+    assert.equal(runtime.projection().projectHandoff?.status, "requested");
+    assert.equal(completionCalls, 2);
+  } finally {
+    clearContextRecordingSuspension(RUN_ID);
+    fixture.close();
+  }
+});
+
+test("user resume of an unresolved context recording note is one retry resolution", async () => {
+  const { root, store } = recordingHarness("run_user_recording");
+  try {
+    const runtime = openRecordingRuntime(store, "run_user_recording", {
+      architect: async () => undefined,
+      worker: async () => ({ type: "paused", reason: "unused" }),
+    });
+    const noted = appendRecordingPause(store, "run_user_recording");
+    const resumed = runtime.resume("user-resume-recording");
+    assert.equal(resumed.status, "running");
+    const resolution = store.readRun("run_user_recording").find((event) => event.type === "context_manifest.recording_resolved");
+    assert.equal(resolution?.actor.role, "user");
+    assert.deepEqual(resolution?.payload, {
+      noteSequence: noted.sequence,
+      resolution: "retry",
+      rationale: "User resumed the run.",
+    });
+    assert.equal(
+      store.readRun("run_user_recording").filter((event) => event.type === "run.resumed").length,
+      1,
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("each context recording resolution is applied by the decision turn", async () => {
+  for (const resolution of ["retry", "proceed_without_manifest", "abort"] as const) {
+    const runId = `run_decision_${resolution}`;
+    const { root, store } = recordingHarness(runId);
+    try {
+      const decided = await decideRecording(
+        store,
+        runId,
+        resolution,
+        resolution === "proceed_without_manifest" ? "The manifest is optional for this run." : "Chosen.",
+      );
+      if (resolution === "abort") {
+        assert.equal(decided.decision, "aborted");
+        assert.equal(decided.runtime.projection().status, "failed");
+        assert.equal(decided.runtime.projection().failureReason, "context_recording_aborted");
+        assert.throws(() => decided.runtime.resume("resume-after-abort"), /A failed Build cannot be resumed\./);
+      } else {
+        assert.equal(decided.decision, "resumed");
+        assert.equal(decided.runtime.projection().status, "running");
+      }
+      if (resolution === "proceed_without_manifest") {
+        assert.equal(isContextRecordingSuspended(runId), true);
+        assert.equal(
+          decided.runtime.projection().contextRecording?.waiver?.rationale,
+          "The manifest is optional for this run.",
+        );
+      }
+      const resolved = store.readRun(runId).filter((event) => event.type === "context_manifest.recording_resolved");
+      assert.equal(resolved.length, 1);
+      assert.equal(resolved[0]?.actor.role, "architect");
+      assert.equal(resolved[0]?.payload.resolution, resolution);
+    } finally {
+      clearContextRecordingSuspension(runId);
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("restart before a context recording decision does not dispatch", async () => {
+  const { root, store, architectCalls, workerCalls } = recordingHarness("run_restart_paused");
+  try {
+    openRecordingRuntime(store, "run_restart_paused", {
+      architect: async () => {
+        architectCalls.count += 1;
+      },
+      worker: async () => {
+        workerCalls.count += 1;
+        return { type: "paused", reason: "unused" };
+      },
+    });
+    appendRecordingPause(store, "run_restart_paused");
+    const recovered = openRecordingRuntime(store, "run_restart_paused", {
+      architect: async () => {
+        architectCalls.count += 1;
+      },
+      worker: async () => {
+        workerCalls.count += 1;
+        return { type: "paused", reason: "unused" };
+      },
+    });
+    const stepped = await recovered.step();
+    assert.deepEqual(stepped, { status: "paused", action: "context_recording_failed" });
+    assert.equal(architectCalls.count, 0, "no dispatch before the decision turn");
+    assert.equal(workerCalls.count, 0, "no dispatch before the decision turn");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("restart after a context recording waiver re-derives suspension before dispatch", async () => {
+  const runId = "run_restart_waiver";
+  const records: ContextManifest[] = [];
+  const { root, store, workerCalls } = recordingHarness(runId);
+  try {
+    openRecordingRuntime(store, runId, {
+      architect: async () => undefined,
+      worker: async () => ({ type: "paused", reason: "unused" }),
+    });
+    store.append({
+      runId,
+      type: "plan.created",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "plan:1",
+      payload: {
+        revision: 1,
+        tasks: [{
+          id: "task_a",
+          objective: "Implement A",
+          dependencies: [],
+          acceptanceCriteria: [{ id: "ready", text: "Task A is complete." }],
+          acceptanceCriteriaVersion: 1,
+          status: "planned",
+          requiredCapabilities: [],
+          attempt: 0,
+        }],
+      },
+    });
+    const noted = appendRecordingPause(store, runId);
+    store.append({
+      runId,
+      type: "context_manifest.recording_resolved",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: `context-recording-resolved:${noted.sequence}`,
+      payload: {
+        noteSequence: noted.sequence,
+        resolution: "proceed_without_manifest",
+        rationale: "Waive the manifest.",
+      },
+    });
+    store.append({
+      runId,
+      type: "run.resumed",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `context-recording-resumed:${noted.sequence}`,
+      payload: {},
+    });
+    clearContextRecordingSuspension(runId);
+    const recovered = openRecordingRuntime(store, runId, {
+      architect: async () => undefined,
+      worker: async (assignment) => {
+        workerCalls.count += 1;
+        await recordContextPack({
+          store: {
+            record(input: ContextManifestInput) {
+              const manifest = toContextManifest(input);
+              records.push(manifest);
+              return manifest;
+            },
+            get: () => undefined,
+            listRun: () => records,
+            close() {},
+          },
+          runId: assignment.runId,
+          sessionId: "worker:task_a:1",
+          actor: { role: "worker", id: "worker_a" },
+          role: "worker",
+          purpose: "worker:task",
+          taskId: assignment.task.id,
+          attempt: assignment.attempt,
+          repositoryRevision: "baseline-1",
+          limits: { maxBytes: 1024, maxEstimatedTokens: 128 },
+          pack: {
+            text: "pack",
+            sections: [],
+            omissions: [],
+            byteLength: 4,
+            estimatedTokens: 1,
+            digest: "d".repeat(64),
+          },
+          recordedAt: "2026-09-23T00:00:00.000Z",
+        });
+        return { type: "paused", reason: "observed" };
+      },
+    });
+    assert.equal(isContextRecordingSuspended(runId), true);
+    assert.equal(rebuildSchedulerProjection(store.readRun(runId)).contextRecording?.waiver?.rationale, "Waive the manifest.");
+    await recovered.step();
+    assert.equal(workerCalls.count, 1);
+    assert.equal(records.length, 0, "a re-derived waiver records nothing");
+  } finally {
+    clearContextRecordingSuspension(runId);
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("two concurrent worker recording failures are covered by one Architect retry and both tasks redispatch", async () => {
+  const runId = "run_two_worker_retry";
+  const { root, store, calls } = concurrentRecordingHarness(runId);
+  try {
+    const runtime = openConcurrentRecordingRuntime(store, runId, calls, "retry", "Retry both workers.");
+    const paused = await runtime.step();
+    assert.deepEqual(paused, { status: "paused", action: "context_recording_failed" });
+    const openNotes = runtime.projection().contextRecording?.notes ?? [];
+    assert.equal(openNotes.length, 2);
+    assert.equal(openNotes.every((note) => note.resolution === undefined), true);
+    assert.deepEqual(openNotes.map((note) => note.taskId), ["task_a", "task_b"]);
+    assert.equal(calls.length, 2);
+    const decision = await runtime.resolveContextRecordingFailure();
+    assert.equal(decision, "resumed");
+    assert.equal(runtime.projection().status, "running");
+    const notes = runtime.projection().contextRecording?.notes ?? [];
+    assert.equal(retryResolutionEventCount(notes), 1, "budget used = 1");
+    assert.equal(notes.length, 2);
+    assert.deepEqual(notes[0]?.resolution, notes[1]?.resolution);
+    assert.equal(notes[0]?.resolution?.resolution, "retry");
+    assert.equal(notes[0]?.resolution?.actor.role, "architect");
+    const resolutions = store.readRun(runId).filter((event) => event.type === "context_manifest.recording_resolved");
+    assert.equal(resolutions.length, 1);
+    assert.equal(resolutions[0]?.payload.noteSequence, openNotes[1]?.sequence);
+    await runtime.step();
+    assert.equal(calls.filter((taskId) => taskId === "task_a").length, 2);
+    assert.equal(calls.filter((taskId) => taskId === "task_b").length, 2);
+  } finally {
+    clearContextRecordingSuspension(runId);
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("two concurrent worker recording failures are covered by a waiver or an abort", async () => {
+  const waiverRunId = "run_two_worker_waiver";
+  const waiver = concurrentRecordingHarness(waiverRunId);
+  try {
+    const runtime = openConcurrentRecordingRuntime(
+      waiver.store,
+      waiverRunId,
+      waiver.calls,
+      "proceed_without_manifest",
+      "The manifest is optional for this run.",
+    );
+    const paused = await runtime.step();
+    assert.deepEqual(paused, { status: "paused", action: "context_recording_failed" });
+    assert.equal((runtime.projection().contextRecording?.notes ?? []).length, 2);
+    const decision = await runtime.resolveContextRecordingFailure();
+    assert.equal(decision, "resumed");
+    assert.equal(runtime.projection().status, "running");
+    assert.equal(isContextRecordingSuspended(waiverRunId), true);
+    const notes = runtime.projection().contextRecording?.notes ?? [];
+    assert.equal(notes.length, 2);
+    assert.deepEqual(notes[0]?.resolution, notes[1]?.resolution);
+    assert.equal(notes[0]?.resolution?.resolution, "proceed_without_manifest");
+    assert.equal(
+      runtime.projection().contextRecording?.waiver?.rationale,
+      "The manifest is optional for this run.",
+    );
+  } finally {
+    clearContextRecordingSuspension(waiverRunId);
+    waiver.store.close();
+    rmSync(waiver.root, { recursive: true, force: true });
+  }
+
+  const abortRunId = "run_two_worker_abort";
+  const abort = concurrentRecordingHarness(abortRunId);
+  try {
+    const runtime = openConcurrentRecordingRuntime(
+      abort.store,
+      abortRunId,
+      abort.calls,
+      "abort",
+      "Stop the build.",
+    );
+    const paused = await runtime.step();
+    assert.deepEqual(paused, { status: "paused", action: "context_recording_failed" });
+    assert.equal(abort.calls.length, 2);
+    const decision = await runtime.resolveContextRecordingFailure();
+    assert.equal(decision, "aborted");
+    const notes = runtime.projection().contextRecording?.notes ?? [];
+    assert.equal(notes.length, 2);
+    assert.deepEqual(notes[0]?.resolution, notes[1]?.resolution);
+    assert.equal(notes[0]?.resolution?.resolution, "abort");
+    assert.equal(runtime.projection().status, "failed");
+    assert.equal(runtime.projection().failureReason, "context_recording_aborted");
+    const stepped = await runtime.step();
+    assert.deepEqual(stepped, { status: "failed", action: "context_recording_aborted" });
+    assert.equal(abort.calls.length, 2, "nothing dispatches after abort");
+  } finally {
+    clearContextRecordingSuspension(abortRunId);
+    abort.store.close();
+    rmSync(abort.root, { recursive: true, force: true });
+  }
+});
+
+test("a failing manifest store still reaches the context recording decision", async () => {
+  for (const resolution of ["retry", "proceed_without_manifest", "abort"] as const) {
+    const runId = `run_failing_store_${resolution}`;
+    const { root, store } = recordingHarness(runId);
+    const calls = { count: 0 };
+    const manifests = failingManifestStore(calls);
+    let reached = false;
+    try {
+      const runtime = openFailingStoreRuntime(store, runId, manifests, resolution, () => {
+        reached = true;
+      });
+      const paused = await runtime.step();
+      assert.deepEqual(paused, { status: "paused", action: "context_recording_failed" });
+      assert.equal((runtime.projection().contextRecording?.notes ?? []).length, 1);
+      const recordsBeforeDecision = calls.count;
+      assert.ok(recordsBeforeDecision >= 1);
+      const decision = await runtime.resolveContextRecordingFailure();
+      const expected = resolution === "abort" ? "aborted" : "resumed";
+      assert.equal(reached ? decision : "unresolved", expected);
+      assert.equal(reached, true, "Architect resolve_context_recording was reached");
+      assert.equal(calls.count, recordsBeforeDecision, "decision turn does not record a context pack");
+      if (resolution === "retry") {
+        assert.equal(isContextRecordingSuspended(runId), false);
+        const again = await runtime.step();
+        assert.deepEqual(again, { status: "paused", action: "context_recording_failed" });
+        const notes = runtime.projection().contextRecording?.notes ?? [];
+        assert.equal(notes.length, 2, "retry then failure appends a new note");
+        assert.equal(notes[0]?.resolution?.resolution, "retry");
+        assert.equal(notes[1]?.resolution, undefined);
+      } else if (resolution === "proceed_without_manifest") {
+        assert.equal(isContextRecordingSuspended(runId), true);
+        assert.equal(
+          runtime.projection().contextRecording?.waiver?.rationale,
+          "The manifest is optional for this run.",
+        );
+      } else {
+        assert.equal(runtime.projection().status, "failed");
+        assert.equal(runtime.projection().failureReason, "context_recording_aborted");
+        assert.equal(isContextRecordingSuspended(runId), false);
+      }
+    } finally {
+      clearContextRecordingSuspension(runId);
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a user resume with two unresolved context recording notes records one retry covering both", () => {
+  const runId = "run_user_two_notes";
+  const { root, store } = recordingHarness(runId);
+  try {
+    const runtime = openRecordingRuntime(store, runId, {
+      architect: async () => undefined,
+      worker: async () => ({ type: "paused", reason: "unused" }),
+    });
+    const first = store.append(recordingPauseEvent(runId, 1));
+    store.append(recordingPausedEvent(runId, 1));
+    const second = store.append(recordingPauseEvent(runId, 2));
+    store.append(recordingPausedEvent(runId, 2));
+    const resumed = runtime.resume("user-resume-two-notes");
+    assert.equal(resumed.status, "running");
+    const resolutions = store.readRun(runId).filter((event) => event.type === "context_manifest.recording_resolved");
+    assert.equal(resolutions.length, 1);
+    assert.equal(resolutions[0]?.actor.role, "user");
+    assert.equal(resolutions[0]?.payload.noteSequence, second.sequence);
+    assert.equal(resolutions[0]?.payload.resolution, "retry");
+    assert.equal(resolutions[0]?.payload.rationale, "User resumed the run.");
+    const notes = resumed.contextRecording?.notes ?? [];
+    assert.equal(notes.length, 2);
+    assert.equal(notes[0]?.sequence, first.sequence);
+    assert.deepEqual(notes[0]?.resolution, notes[1]?.resolution);
+    assert.equal(notes[0]?.resolution?.resolution, "retry");
+    assert.equal(notes[0]?.resolution?.actor.role, "user");
+    assert.equal(notes[0]?.resolution?.sequence, resolutions[0]?.sequence);
+    assert.equal(retryResolutionEventCount(notes), 1);
+    assert.equal(store.readRun(runId).filter((event) => event.type === "run.resumed").length, 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the context recording decision turn registers only resolve_context_recording and ask_user", async () => {
+  const runId = "run_recording_decision_tools";
+  const { root, store } = recordingHarness(runId);
+  let decision = 0;
+  try {
+    const runtime = openRecordingRuntime(store, runId, {
+      architect: async (request) => {
+        if (request.reason.type === "plan_required") {
+          throw contextRecordingFailure(runId, "architect:plan_required");
+        }
+        assert.equal(request.reason.type, "context_recording_decision_required");
+        if (request.reason.type !== "context_recording_decision_required") return;
+        decision += 1;
+        assert.deepEqual(
+          request.tools.definitions().map((tool) => tool.name).sort(),
+          ["ask_user", "resolve_context_recording"],
+        );
+        assert.equal(
+          request.reason.retriesRemaining,
+          decision === 1 ? CONTEXT_RECORDING_RETRY_LIMIT : CONTEXT_RECORDING_RETRY_LIMIT - 1,
+        );
+        const resolution = decision === 1 ? "retry" : "abort";
+        const result = await request.tools.invoke({
+          type: "tool_call",
+          callId: `resolve-${decision}`,
+          name: "resolve_context_recording",
+          arguments: {
+            resolution,
+            rationale: decision === 1 ? "Retry the manifest." : "Stop the run.",
+          },
+        }, request.context);
+        assert.equal(result.isError, false, result.error?.message ?? "resolution failed");
+      },
+      worker: async () => ({ type: "paused", reason: "unused" }),
+    });
+    assert.equal((await runtime.step()).action, "context_recording_failed");
+    assert.equal(await runtime.resolveContextRecordingFailure(), "resumed");
+    assert.equal((await runtime.step()).action, "context_recording_failed");
+    assert.equal(await runtime.resolveContextRecordingFailure(), "aborted");
+    assert.equal(decision, 2);
+  } finally {
+    clearContextRecordingSuspension(runId);
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery abandons a recorded multiline project-doc summary and continues", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-doc-recovery-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const commits: string[] = [];
+  const runId = "run_doc_recovery";
+  try {
+    const badBody = Buffer.from("stale state\n");
+    const goodBody = Buffer.from("readme body\n");
+    const bad = await artifacts.put(badBody, "text/markdown", "docs/project/STATE.md");
+    const good = await artifacts.put(goodBody, "text/markdown", "docs/project/README.md");
+    const options = {
+      runId,
+      store,
+      artifacts,
+      workerDriver: { run: async () => ({ type: "paused" as const, reason: "unused" }) },
+      architectDriver: {
+        run: async (request: ArchitectActionRequest) => {
+          assert.equal(request.reason.type, "plan_required");
+          const result = await request.tools.invoke({
+            type: "tool_call",
+            callId: "plan-after-recovery",
+            name: "plan_tasks",
+            arguments: {
+              revision: 1,
+              tasks: [{
+                id: "task_a",
+                objective: "Draft the public API",
+                dependencies: [],
+                requiredCapabilities: ["code"],
+                acceptanceCriteria: [{ id: "api", text: "The public API is drafted." }],
+              }],
+            },
+          }, request.context);
+          assert.equal(result.isError, false, result.error?.message ?? "plan failed");
+        },
+      },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated" as const, integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-09-23T00:00:00.000Z",
+      projectDocs: {
+        commit: async (input: { summary: string; writes: readonly { path: string }[] }) => {
+          commits.push(input.summary);
+          if (!input.summary.trim() || input.summary.includes("\n") || input.summary.includes("\0")) {
+            throw new Error("Project document summary is invalid.");
+          }
+          return {
+            commit: "c".repeat(40),
+            parent: "p".repeat(40),
+            head: "c".repeat(40),
+            entryPoint: {
+              readme: input.writes.some((write) => write.path === "docs/project/README.md"),
+              agentsMarkedSection: false,
+              claudePointer: false,
+            },
+          };
+        },
+        relateRevision: async () => "strict_descendant" as const,
+      },
+    };
+    const runtime = new BuildRuntime(options);
+    store.append({
+      runId,
+      type: "project_doc.requested",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "bad-state",
+      payload: {
+        requestId: "bad-state",
+        path: "docs/project/STATE.md",
+        contentArtifactHash: bad.hash,
+        contentBytes: badBody.byteLength,
+        summary: "line one\nline two",
+      },
+    });
+    store.append({
+      runId,
+      type: "project_doc.requested",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "good-readme",
+      payload: {
+        requestId: "good-readme",
+        path: "docs/project/README.md",
+        contentArtifactHash: good.hash,
+        contentBytes: goodBody.byteLength,
+        summary: "Record the readme",
+      },
+    });
+    const stepped = await runtime.step();
+    assert.equal(stepped.action, "plan_required");
+    assert.deepEqual(commits, ["Record the readme"]);
+    const abandoned = store.readRun(runId).filter((event) => event.type === "project_doc.abandoned");
+    assert.equal(abandoned.length, 1);
+    assert.equal(abandoned[0]?.payload.requestId, "bad-state");
+    assert.equal(abandoned[0]?.payload.reason, "Project document summary is invalid.");
+    const projection = runtime.projection();
+    assert.equal(
+      projection.projectDocs?.pending?.some((request) => request.requestId === "bad-state"),
+      false,
+    );
+    assert.equal(projection.projectDocs?.abandoned?.[0]?.path, "docs/project/STATE.md");
+    const pack = buildArchitectContext({
+      limits: { maxBytes: 64 * 1024, maxEstimatedTokens: 16 * 1024 },
+      objective: "Document the project.",
+      reason: { type: "plan_required" },
+      projection,
+      instructions: [],
+      skills: [],
+      memories: [],
+      evidence: [],
+      recentHistory: [],
+    });
+    assert.match(pack.text, /docs\/project\/STATE.md sequence=\d+ Project document summary is invalid\./);
+    const restarted = new BuildRuntime(options);
+    await restarted.step();
+    assert.deepEqual(commits, ["Record the readme"]);
+    assert.equal(
+      store.readRun(runId).filter((event) => event.type === "project_doc.abandoned").length,
+      1,
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function recordingHarness(runId: string) {
+  const root = mkdtempSync(join(tmpdir(), `aiboard-${runId}-`));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  return {
+    root,
+    store,
+    architectCalls: { count: 0 },
+    workerCalls: { count: 0 },
+  };
+}
+
+function openRecordingRuntime(
+  store: SqliteSchedulerStore,
+  runId: string,
+  drivers: {
+    architect: ArchitectRuntimeDriver["run"];
+    worker: WorkerRuntimeDriver["run"];
+  },
+): BuildRuntime {
+  return new BuildRuntime({
+    runId,
+    store,
+    architectDriver: { run: drivers.architect },
+    workerDriver: { run: drivers.worker },
+    integrationDriver: {
+      integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+    },
+    maxConcurrency: 1,
+    workspaceFor: async () => "C:/work/task_a",
+    clock: () => "2026-09-23T00:00:00.000Z",
+  });
+}
+
+function concurrentRecordingHarness(runId: string) {
+  return { ...recordingHarness(runId), calls: [] as string[] };
+}
+
+function retryResolutionEventCount(
+  notes: ReadonlyArray<{ resolution?: { sequence: number; resolution: string } }>,
+): number {
+  return new Set(
+    notes.flatMap((note) =>
+      note.resolution?.resolution === "retry" ? [note.resolution.sequence] : [],
+    ),
+  ).size;
+}
+
+function openConcurrentRecordingRuntime(
+  store: SqliteSchedulerStore,
+  runId: string,
+  calls: string[],
+  resolution: "retry" | "proceed_without_manifest" | "abort",
+  rationale: string,
+): BuildRuntime {
+  const runtime = new BuildRuntime({
+    runId,
+    store,
+    architectDriver: {
+      run: async (request) => {
+        assert.equal(request.reason.type, "context_recording_decision_required");
+        if (request.reason.type !== "context_recording_decision_required") return;
+        const unresolved = (request.projection.contextRecording?.notes ?? []).filter((note) => !note.resolution);
+        assert.equal(request.reason.noteSequence, unresolved.at(-1)?.sequence);
+        const result = await request.tools.invoke({
+          type: "tool_call",
+          callId: "resolve-recording",
+          name: "resolve_context_recording",
+          arguments: { resolution, rationale },
+        }, request.context);
+        assert.equal(result.isError, false, result.error?.message ?? "resolution failed");
+      },
+    },
+    workerDriver: {
+      run: async (assignment) => {
+        calls.push(assignment.task.id);
+        if (calls.filter((taskId) => taskId === assignment.task.id).length === 1) {
+          throw contextRecordingFailure(runId, "worker:task");
+        }
+        return { type: "paused", reason: "redispatched" };
+      },
+    },
+    integrationDriver: {
+      integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+    },
+    maxConcurrency: 2,
+    workspaceFor: async (task) => `C:/work/${task.id}`,
+    clock: () => "2026-09-23T00:00:00.000Z",
+  });
+  store.append({
+    runId,
+    type: "plan.created",
+    occurredAt: "2026-09-23T00:00:00.000Z",
+    actor: { role: "architect", id: "architect_1" },
+    idempotencyKey: "plan:1",
+    payload: {
+      revision: 1,
+      tasks: ["task_a", "task_b"].map((taskId) => ({
+        id: taskId,
+        objective: `Implement ${taskId}`,
+        dependencies: [],
+        acceptanceCriteria: [{ id: "ready", text: `${taskId} is complete.` }],
+        acceptanceCriteriaVersion: 1,
+        status: "planned" as const,
+        requiredCapabilities: [],
+        attempt: 0,
+      })),
+    },
+  });
+  return runtime;
+}
+
+function failingManifestStore(calls: { count: number }): ContextManifestStore {
+  return {
+    record() {
+      calls.count += 1;
+      throw new Error("manifest store unavailable");
+    },
+    get: () => undefined,
+    listRun: () => [],
+    close() {},
+  };
+}
+
+function failingContextPack() {
+  return {
+    text: "pack",
+    sections: [],
+    omissions: [],
+    byteLength: 4,
+    estimatedTokens: 1,
+    digest: "d".repeat(64),
+  };
+}
+
+function openFailingStoreRuntime(
+  store: SqliteSchedulerStore,
+  runId: string,
+  manifests: ContextManifestStore,
+  resolution: "retry" | "proceed_without_manifest" | "abort",
+  onReached: () => void,
+): BuildRuntime {
+  const rationale = resolution === "proceed_without_manifest"
+    ? "The manifest is optional for this run."
+    : "Chosen.";
+  const runtime = new BuildRuntime({
+    runId,
+    store,
+    architectDriver: {
+      run: async (request) => {
+        assert.equal(request.reason.type, "context_recording_decision_required");
+        await recordContextPack({
+          store: manifests,
+          sleep: async () => undefined,
+          attemptBound: 1,
+          runId,
+          sessionId: `architect:${runId}`,
+          actor: { role: "architect", id: "architect_1" },
+          role: "architect",
+          purpose: "architect:context_recording_decision_required",
+          limits: { maxBytes: 1024, maxEstimatedTokens: 128 },
+          pack: failingContextPack(),
+          recordedAt: "2026-09-23T00:00:00.000Z",
+        });
+        onReached();
+        const result = await request.tools.invoke({
+          type: "tool_call",
+          callId: "resolve-recording",
+          name: "resolve_context_recording",
+          arguments: { resolution, rationale },
+        }, request.context);
+        assert.equal(result.isError, false, result.error?.message ?? "resolution failed");
+      },
+    },
+    workerDriver: {
+      run: async (assignment) => {
+        await recordContextPack({
+          store: manifests,
+          sleep: async () => undefined,
+          attemptBound: 1,
+          runId: assignment.runId,
+          sessionId: `worker:${assignment.task.id}:${assignment.attempt}`,
+          actor: { role: "worker", id: assignment.workerId },
+          role: "worker",
+          purpose: "worker:task",
+          taskId: assignment.task.id,
+          attempt: assignment.attempt,
+          limits: { maxBytes: 1024, maxEstimatedTokens: 128 },
+          pack: failingContextPack(),
+          recordedAt: "2026-09-23T00:00:00.000Z",
+        });
+        return { type: "paused", reason: "recorded" };
+      },
+    },
+    integrationDriver: {
+      integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+    },
+    maxConcurrency: 1,
+    workspaceFor: async () => "C:/work/task_a",
+    clock: () => "2026-09-23T00:00:00.000Z",
+  });
+  store.append({
+    runId,
+    type: "plan.created",
+    occurredAt: "2026-09-23T00:00:00.000Z",
+    actor: { role: "architect", id: "architect_1" },
+    idempotencyKey: "plan:1",
+    payload: {
+      revision: 1,
+      tasks: [{
+        id: "task_a",
+        objective: "Implement A",
+        dependencies: [],
+        acceptanceCriteria: [{ id: "ready", text: "Task A is complete." }],
+        acceptanceCriteriaVersion: 1,
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+      }],
+    },
+  });
+  return runtime;
+}
+
+function contextRecordingFailure(runId: string, purpose: string): ContextManifestRecordingError {
+  return new ContextManifestRecordingError({
+    runId,
+    sessionId: `${purpose}:session`,
+    purpose,
+    attempts: 3,
+  }, new Error("sqlite locked"));
+}
+
+function appendRecordingPause(store: SqliteSchedulerStore, runId: string) {
+  const noted = store.append(recordingPauseEvent(runId, 1));
+  store.append(recordingPausedEvent(runId, 1));
+  return noted;
+}
+
+function recordingPauseEvent(runId: string, index: number) {
+  return {
+    runId,
+    type: "context_manifest.recording_failed" as const,
+    occurredAt: "2026-09-23T00:00:00.000Z",
+    actor: { role: "runner" as const, id: "build-runtime" },
+    idempotencyKey: `context-recording-failed:${runId}:${index}`,
+    payload: {
+      purpose: "worker:task",
+      attempts: 3,
+      reason: "disk full",
+      taskId: "task_a",
+      attempt: index,
+      revision: "rev-1",
+    },
+  };
+}
+
+function recordingPausedEvent(runId: string, index: number) {
+  return {
+    runId,
+    type: "run.paused" as const,
+    occurredAt: "2026-09-23T00:00:00.000Z",
+    actor: { role: "runner" as const, id: "build-runtime" },
+    idempotencyKey: `context-recording-paused:${runId}:${index}`,
+    payload: { reason: "context_recording_failed", taskId: "task_a" },
+  };
+}
+
+async function decideRecording(
+  store: SqliteSchedulerStore,
+  runId: string,
+  resolution: "retry" | "proceed_without_manifest" | "abort",
+  rationale: string,
+) {
+  const runtime = openRecordingRuntime(store, runId, {
+    architect: async (request) => {
+      assert.equal(request.reason.type, "context_recording_decision_required");
+      const result = await request.tools.invoke({
+        type: "tool_call",
+        callId: "resolve-recording",
+        name: "resolve_context_recording",
+        arguments: { resolution, rationale },
+      }, request.context);
+      assert.equal(result.isError, false, result.error?.message ?? "resolution failed");
+    },
+    worker: async () => ({ type: "paused", reason: "unused" }),
+  });
+  appendRecordingPause(store, runId);
+  return { runtime, decision: await runtime.resolveContextRecordingFailure() };
 }
 
 class ScriptedIntegration implements IntegrationRuntimeDriver {

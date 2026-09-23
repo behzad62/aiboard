@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { IndependentVerifierDriver } from "../src/build-runtime.js";
+import { ContextManifestRecordingError } from "../src/context-manifest-store.js";
 import {
   buildCompletionReadiness,
   rebuildSchedulerProjection,
@@ -14,6 +15,7 @@ import {
   parseVerifierExpectations,
   parseVerifierReviewRequest,
   parseVerifierVerdict,
+  recordedReviewerIndependence,
   type VerifierCriterionVerdict,
   type VerifierReviewProjection,
 } from "../src/verifier-contracts.js";
@@ -175,6 +177,109 @@ test("verifier request rejects stale revisions, incomplete criteria, and non-ind
     } finally {
       fixture.close();
     }
+  }
+});
+
+test("verifier independence round-trips, rejects an unknown value, and replays a missing field as distinct_model", () => {
+  const fixture = createFixture("independence-round-trip");
+  try {
+    const legacy = verifierRequestPayload();
+    fixture.store.append(event(
+      "verifier.review_requested",
+      "verifier:request:legacy-independence",
+      legacy,
+      { role: "runner", id: "native-verifier-runtime" },
+    ));
+    const legacyReview = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID)).verifier?.current;
+    assert.equal(Object.hasOwn(legacyReview ?? {}, "independence"), false);
+    assert.equal(recordedReviewerIndependence(legacyReview), "distinct_model");
+  } finally {
+    fixture.close();
+  }
+
+  const explicit = createFixture("independence-explicit");
+  try {
+    explicit.store.append(event(
+      "verifier.review_requested",
+      "verifier:request:distinct",
+      verifierRequestPayload({ independence: "distinct_model" }),
+      { role: "runner", id: "native-verifier-runtime" },
+    ));
+    assert.equal(
+      rebuildSchedulerProjection(explicit.store.readRun(RUN_ID)).verifier?.current?.independence,
+      "distinct_model",
+    );
+  } finally {
+    explicit.close();
+  }
+
+  const unknown = createFixture("independence-unknown");
+  try {
+    assert.throws(
+      () => unknown.store.append(event(
+        "verifier.review_requested",
+        "verifier:request:unknown-independence",
+        verifierRequestPayload({ independence: "anchored" }),
+        { role: "runner", id: "native-verifier-runtime" },
+      )),
+      /distinct_model or fresh_context/,
+    );
+  } finally {
+    unknown.close();
+  }
+});
+
+test("same-model verifier is rejected for distinct_model and a missing field, and accepted for fresh_context", () => {
+  const sameModel = {
+    runtimeId: "openai:verifier-alias",
+    providerId: "openai",
+    modelId: "openai/architect-model",
+    modelIdentity: "architect-model",
+    sessionId: SESSION_ID,
+  };
+  for (const independence of [undefined, "distinct_model"] as const) {
+    const fixture = createFixture(`independence-reject-${independence ?? "missing"}`);
+    try {
+      const payload = verifierRequestPayload({
+        runtime: sameModel,
+        ...(independence ? { independence } : {}),
+      });
+      assert.throws(
+        () => fixture.store.append(event(
+          "verifier.review_requested",
+          `verifier:request:reject-${independence ?? "missing"}`,
+          payload,
+          { role: "runner", id: "native-verifier-runtime" },
+        )),
+        /not independent from the Architect or an accepted change author/,
+      );
+    } finally {
+      fixture.close();
+    }
+  }
+
+  const accepted = createFixture("independence-fresh");
+  try {
+    assert.doesNotThrow(() => {
+      accepted.store.append(event(
+        "verifier.review_requested",
+        "verifier:request:fresh",
+        verifierRequestPayload({
+          runtime: sameModel,
+          independence: "fresh_context",
+        }),
+        { role: "runner", id: "native-verifier-runtime" },
+      ));
+    });
+    const review = rebuildSchedulerProjection(accepted.store.readRun(RUN_ID)).verifier?.current;
+    assert.equal(review?.independence, "fresh_context");
+    assert.equal(review?.runtime.modelIdentity, "architect-model");
+    assert.equal(
+      review?.excludedModels.some((model) => model.source === "architect"),
+      true,
+    );
+  } finally {
+    accepted.close();
   }
 });
 
@@ -596,6 +701,43 @@ test("high-risk runtime assesses, verifies, and only then requests completion", 
     assert.equal(runtime.projection().projectHandoff?.status, "requested");
     assert.equal(verifierCalls, 1);
     assert.equal(completionCalls, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("verifier context recording failure pauses with the target revision and no completion", async () => {
+  const fixture = createFixture("runtime-recording");
+  const failure = new ContextManifestRecordingError({
+    runId: RUN_ID,
+    sessionId: "verifier:session",
+    purpose: "verifier:verdict",
+    attempts: 3,
+  }, new Error("sqlite locked"));
+  let completionCalls = 0;
+  try {
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => {
+        throw failure;
+      },
+    };
+    const runtime = createRuntime(fixture.store, verifier, async () => {
+      completionCalls += 1;
+    });
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    const paused = await runtime.step();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.action, "context_recording_failed");
+    const notes = fixture.store.readRun(RUN_ID).filter((event) => event.type === "context_manifest.recording_failed");
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]?.payload.purpose, "verifier:verdict");
+    assert.equal(notes[0]?.payload.attempts, 3);
+    assert.equal(notes[0]?.payload.reason, failure.message);
+    assert.equal(notes[0]?.payload.revision, REVISION);
+    assert.equal(completionCalls, 0);
+    assert.equal(runtime.projection().pauseReason?.reason, "context_recording_failed");
   } finally {
     fixture.close();
   }

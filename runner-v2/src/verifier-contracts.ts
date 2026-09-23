@@ -10,6 +10,8 @@ export interface VerifierCriterionReference {
   criterionId: string;
 }
 
+export type ReviewerIndependence = "distinct_model" | "fresh_context";
+
 export interface VerifierRuntimeBinding {
   runtimeId: string;
   providerId: string;
@@ -55,6 +57,11 @@ export interface VerifierReviewProjection {
   finalVerificationGenerationId: string;
   runtime: VerifierRuntimeBinding;
   excludedModels: VerifierExcludedModel[];
+  /**
+   * Absent on legacy reviews. Those replay as distinct_model: the old rule
+   * rejected a shared model identity, and the fixture projection has no field.
+   */
+  independence?: ReviewerIndependence;
   criteria: VerifierCriterionReference[];
   status: "requested" | "submitted";
   state: "current" | "invalidated" | "superseded";
@@ -78,6 +85,61 @@ export interface VerifierProjection {
 export function canonicalModelIdentity(modelId: string): string {
   const qualifiedModelId = modelId.trim().toLowerCase().replaceAll("\\", "/");
   return qualifiedModelId.split("/").filter(Boolean).at(-1) ?? qualifiedModelId;
+}
+
+/** Missing values replay as distinct_model. Any other value is rejected. */
+export function parseReviewerIndependence(value: unknown): ReviewerIndependence {
+  if (value === undefined) return "distinct_model";
+  if (value === "distinct_model" || value === "fresh_context") return value;
+  throw new Error(
+    "Reviewer independence must be distinct_model or fresh_context.",
+  );
+}
+
+export function recordedReviewerIndependence(
+  review: { independence?: ReviewerIndependence } | undefined,
+): ReviewerIndependence {
+  return review?.independence ?? "distinct_model";
+}
+
+/**
+ * A fresh-context reviewer starts from an empty session and a request built
+ * only from this role's pack. Call this before creating that session.
+ */
+export function assertFreshContextRequest(input: {
+  independence: ReviewerIndependence;
+  priorEventCount: number;
+  messages: readonly { id: string }[];
+  packMessageIds: readonly string[];
+}): void {
+  if (input.independence !== "fresh_context") return;
+  if (input.priorEventCount !== 0) {
+    throw new Error(
+      "A fresh-context reviewer cannot resume or reuse another session.",
+    );
+  }
+  const ids = input.messages.map((message) => message.id);
+  if (
+    ids.length !== input.packMessageIds.length ||
+    ids.some((id, index) => id !== input.packMessageIds[index])
+  ) {
+    throw new Error(
+      "A fresh-context reviewer request must be built only from its own request pack.",
+    );
+  }
+}
+
+/** After create, the session has no conversation events yet. */
+export function assertFreshContextSessionStarted(
+  independence: ReviewerIndependence,
+  events: readonly { type: string }[],
+): void {
+  if (independence !== "fresh_context") return;
+  if (events.length !== 1 || events[0]?.type !== "session.created") {
+    throw new Error(
+      "Fresh-context reviewer session event list must be empty before the first provider request.",
+    );
+  }
 }
 
 export function expectedVerifierCriteria(
@@ -110,7 +172,11 @@ export function parseVerifierReviewRequest(
   const excludedIdentities = new Set(
     excludedModels.map((excluded) => excluded.modelIdentity),
   );
-  if (excludedIdentities.has(runtime.modelIdentity)) {
+  const independence = parseReviewerIndependence(payload.independence);
+  if (
+    independence !== "fresh_context" &&
+    excludedIdentities.has(runtime.modelIdentity)
+  ) {
     throw new Error(
       "Verifier model is not independent from the Architect or an accepted change author.",
     );
@@ -126,6 +192,7 @@ export function parseVerifierReviewRequest(
     finalVerificationGenerationId,
     runtime,
     excludedModels,
+    ...(payload.independence === undefined ? {} : { independence }),
     criteria: expectedCriteria.map((criterion) => ({ ...criterion })),
     status: "requested",
     state: "current",

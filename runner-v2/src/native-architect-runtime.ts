@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
 import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
 import type { ExecutionGrantAuthority } from "./execution-grants.js";
@@ -5,6 +7,7 @@ import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
+  NativeTool,
   ToolCallBlock,
   ToolExecutionContext,
   ToolResult,
@@ -65,6 +68,15 @@ import { createSkillTools } from "./skill-tools.js";
 import { createResearchTools } from "./research-tools.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
+import {
+  assertArchitectInspectionMcpClass,
+  assertRoleToolSurface,
+  isCatalogToolName,
+  isMcpToolName,
+  mcpToolAdmitted,
+  roleToolSurface,
+  staticToolAdmitted,
+} from "./role-capabilities.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
@@ -72,9 +84,11 @@ import {
   assembleContextWithExtensions,
   registerExtensionCapabilities,
 } from "./extension-runtime.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import {
   AgentProtocolError,
+  ToolRegistry,
   type AgentToolRuntime,
 } from "./tool-registry.js";
 import type {
@@ -119,6 +133,15 @@ export interface NativeArchitectRuntimeOptions {
   providerRetryRuntime?: RunnerProviderRetryRuntime;
   contextManifests?: ContextManifestStore;
   recordContextPackText?: boolean;
+  /** Disposable copy for `run_evidence_command`. Absent means the tool is absent. */
+  commandWorkspace?: ArchitectCommandWorkspaceProvider;
+  execution?: OneShotCommandExecutor;
+}
+
+export interface ArchitectCommandWorkspaceProvider {
+  readonly workspaceKind: "independent-verifier";
+  create(targetRevision: string): Promise<{ readonly path: string }>;
+  cleanup(): Promise<void>;
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
@@ -128,6 +151,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
   };
   private readonly clock: () => string;
   private readonly candidateById: Map<string, AgentRuntimeCandidate>;
+  private architectCommandCopyOpen = false;
 
   constructor(private readonly options: NativeArchitectRuntimeOptions) {
     this.clock = options.clock ?? (() => new Date().toISOString());
@@ -192,7 +216,8 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         id: "architect-system",
         role: "system",
         content: [
-          "You are the AIBoard Architect. Use one native lifecycle tool for the requested decision.",
+          "You are the AIBoard Architect. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool.",
+          "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision.",
           "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
           "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.",
           "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
@@ -234,7 +259,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         content: [
           "Resume the current Architect action from the runner's current durable state.",
           "Earlier mechanical tool errors may have been resolved since the prior attempt.",
-          "Re-evaluate the requested action and invoke exactly one semantically appropriate lifecycle tool; do not substitute prose or an unrelated lifecycle operation.",
+          "Re-evaluate the requested action. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool. Do not substitute prose or an unrelated lifecycle operation.",
           `Current action: ${JSON.stringify(request.reason)}`,
         ].join("\n"),
       };
@@ -242,70 +267,31 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         messages.push(reminder);
       }
     }
-    const extras = new ToolBroker({
-      git: this.options.git, executionGrants: this.options.executionGrants,
-      permissionProfile: this.options.permissionProfile ?? "project",
-      workspacePath: this.options.projectRoot,
-      artifacts: this.options.artifacts,
-      ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
-      ...(this.options.permissions
-        ? { approve: (approval) => this.options.permissions!.requestTool(approval) }
-        : {}),
-    });
-    const repository = new RepositoryIntelligence(this.options.git ? (request) => this.options.git!.current().run(request) : undefined);
-    const language = this.options.language ?? new TypeScriptIntelligence(repository);
-    for (const tool of createFilesystemTools({
-      artifacts: this.options.artifacts,
-      repository,
-      ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
-      ...(this.options.protectedPaths ? { protectedPaths: this.options.protectedPaths } : {}),
-    })) {
-      if (tool.definition.readOnly) extras.register(tool);
-    }
-    for (const tool of createCodeIntelligenceTools({
-      repository,
-      language,
-    })) {
-      extras.register(tool);
-    }
-    for (const tool of createArtifactTools(this.options.artifacts)) extras.register(tool);
-    for (const tool of createSessionTools(this.options.sessions)) extras.register(tool);
-    for (const tool of createGitTools(this.options.git)) {
-      if (tool.definition.readOnly) extras.register(tool);
-    }
-    for (const tool of createEvidenceTools({
+    const commandRevision = this.architectCommandRevision(
+      await this.architectCommandCheckoutRevision(request, projection),
+    );
+    try {
+    const extras = createArchitectInspectionBroker({
       git: this.options.git,
-      store: this.options.evidenceStore,
+      executionGrants: this.options.executionGrants,
+      permissionProfile: this.options.permissionProfile ?? "project",
+      projectRoot: this.options.projectRoot,
       artifacts: this.options.artifacts,
-      taskId: "architect",
-      clock: this.clock,
-    })) {
-      if (tool.definition.name === "inspect_evidence") extras.register(tool);
-    }
-    for (const tool of createSkillTools(this.options.skillCatalog)) extras.register(tool);
-    for (const tool of createMemoryTools({
-      store: this.options.memoryStore,
+      sessions: this.options.sessions,
+      evidenceStore: this.options.evidenceStore,
+      skillCatalog: this.options.skillCatalog,
+      memoryStore: this.options.memoryStore,
       projectId: this.options.projectId,
       runId: request.runId,
       clock: this.clock,
-    })) extras.register(tool);
-    for (const tool of createResearchTools({ artifacts: this.options.artifacts })) {
-      extras.register(tool);
-    }
-    if (this.options.browserBackend) {
-      for (const tool of createBrowserTools({
-        backend: this.options.browserBackend,
-        artifacts: this.options.artifacts,
-        evidenceStore: this.options.evidenceStore,
-        taskId: "architect",
-        clock: this.clock,
-      })) extras.register(tool);
-    }
-    if (this.options.mcpManager) {
-      for (const tool of createMcpTools(this.options.mcpManager, this.options.artifacts)) {
-        extras.register(tool);
-      }
-    }
+      ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
+      ...(this.options.protectedPaths ? { protectedPaths: this.options.protectedPaths } : {}),
+      ...(this.options.browserBackend ? { browserBackend: this.options.browserBackend } : {}),
+      ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
+      ...(this.options.language ? { language: this.options.language } : {}),
+    });
     if (this.options.capabilityRegistry) {
       registerExtensionCapabilities(this.options.capabilityRegistry, extras, {
         includeTool: ({ tool }) =>
@@ -314,7 +300,24 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     }
     const inspectionTools = this.options.runPolicy === "plan_only"
       ? new PlanOnlyInspectionRuntime(extras)
-      : extras;
+      : commandRevision
+        ? composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
+            () => this.openArchitectCommandCopy(commandRevision),
+            {
+              projectRoot: this.options.projectRoot,
+              permissionProfile: this.options.permissionProfile ?? "project",
+              artifacts: this.options.artifacts,
+              evidenceStore: this.options.evidenceStore,
+              clock: this.clock,
+              ...(this.options.git ? { git: this.options.git } : {}),
+              ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
+              ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+              ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+              ...(this.options.execution ? { execution: this.options.execution } : {}),
+              ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
+            },
+          ))
+        : extras;
     const layeredTools = new LayeredToolRuntime(request.tools, inspectionTools);
     const tools = this.options.budgetLedger
       ? new BudgetedToolRuntime({
@@ -415,6 +418,60 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       idempotencyKey: `architect-pause:${projection.lastSequence}`,
       payload: { reason },
     });
+    } finally {
+      await this.closeArchitectCommandCopy();
+    }
+  }
+
+  /**
+   * review_required checks out the submission's taskRevision.
+   * Every other reason checks out the integration revision.
+   * A missing review revision is an error, never a fallback to integration.
+   */
+  private async architectCommandCheckoutRevision(
+    request: ArchitectActionRequest,
+    projection: ReturnType<typeof rebuildSchedulerProjection>,
+  ): Promise<string | undefined> {
+    if (request.reason.type !== "review_required") return projection.integrationRevision;
+    const submission = await loadArchitectReviewSubmission(
+      this.options.sessions,
+      request.runId,
+      request.reason,
+      projection,
+    );
+    if (!submission?.taskRevision) {
+      throw new Error("Review command copy requires the submission task revision.");
+    }
+    return submission.taskRevision;
+  }
+
+  /** Lists the command tool without creating a worktree. Creation waits for the first call. */
+  private architectCommandRevision(revision: string | undefined): string | undefined {
+    const provider = this.options.commandWorkspace;
+    if (!provider || this.options.runPolicy === "plan_only") return undefined;
+    if (provider.workspaceKind !== "independent-verifier") {
+      throw new Error("Architect command workspace must be an independent verifier workspace.");
+    }
+    if (!revision || !/^[a-f0-9]{40,64}$/.test(revision)) return undefined;
+    return revision;
+  }
+
+  private async openArchitectCommandCopy(revision: string): Promise<string> {
+    const provider = this.options.commandWorkspace;
+    if (!provider) throw new Error("Architect command workspace is unavailable.");
+    if (provider.workspaceKind !== "independent-verifier") {
+      throw new Error("Architect command workspace must be an independent verifier workspace.");
+    }
+    const workspace = await provider.create(revision);
+    if (!workspace?.path) throw new Error("Architect command copy was not created.");
+    this.architectCommandCopyOpen = true;
+    return workspace.path;
+  }
+
+  private async closeArchitectCommandCopy(): Promise<void> {
+    if (!this.architectCommandCopyOpen) return;
+    this.architectCommandCopyOpen = false;
+    await this.options.commandWorkspace?.cleanup();
   }
 
   private ensureInitialized(runId: string): void {
@@ -508,6 +565,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     projection: ReturnType<typeof rebuildSchedulerProjection>
   ) {
     const reviewSubmission = await this.reviewSubmission(request, projection);
+    const projectDocsStateText = await this.loadCommittedStateText(request.runId, projection);
     const [instructions, metadata] = await Promise.all([
       discoverProjectInstructions({ projectRoot: this.options.projectRoot }),
       this.options.skillCatalog.discover(),
@@ -567,6 +625,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       memories,
       evidence,
       recentHistory: [],
+      ...(projectDocsStateText !== undefined ? { projectDocsStateText } : {}),
     };
     if (!this.options.capabilityRegistry) return buildArchitectContext(input);
     return (await assembleContextWithExtensions({
@@ -589,6 +648,29 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       },
       artifacts: this.options.artifacts,
     })).pack;
+  }
+
+  private async loadCommittedStateText(
+    runId: string,
+    projection: ReturnType<typeof rebuildSchedulerProjection>,
+  ): Promise<string | undefined> {
+    const latest = [...(projection.projectDocs?.committed ?? [])]
+      .filter((commit) => commit.path === "docs/project/STATE.md")
+      .sort((left, right) => left.sequence - right.sequence)
+      .at(-1);
+    if (!latest) return undefined;
+    const requested = this.options.schedulerStore.readRun(runId).find((event) =>
+      event.type === "project_doc.requested" && event.payload.requestId === latest.requestId
+    );
+    const hash = requested?.payload.contentArtifactHash;
+    if (typeof hash !== "string") return undefined;
+    try {
+      const bytes = await this.options.artifacts.get(hash);
+      if (createHash("sha256").update(bytes).digest("hex") !== hash) return undefined;
+      return bytes.toString("utf8");
+    } catch {
+      return undefined;
+    }
   }
 
   private async reviewSubmission(
@@ -704,15 +786,278 @@ export function architectModelAttribution(
   };
 }
 
+export interface ArchitectInspectionBrokerInput {
+  git?: RunGitExecutionContext;
+  executionGrants?: ExecutionGrantAuthority;
+  permissionProfile: PermissionProfile;
+  projectRoot: string;
+  artifacts: ArtifactStore;
+  sessions: SqliteAgentSessionStore;
+  evidenceStore: EvidenceStore;
+  skillCatalog: SkillCatalog;
+  memoryStore: ProjectMemoryStore;
+  projectId: string;
+  runId: string;
+  clock: () => string;
+  ledger?: ToolInvocationLedger;
+  permissions?: SqlitePermissionStore;
+  hiddenPaths?: readonly string[];
+  protectedPaths?: readonly string[];
+  browserBackend?: BrowserBackend;
+  mcpManager?: McpManager;
+  language?: LanguageIntelligenceProvider;
+  /** Unlisted tools registered before the allow-list assert, so a missing assert fails open. */
+  probeTools?: readonly NativeTool<unknown>[];
+}
+
+/** Correct wiring returns the disposable copy. `projectRoot` is the prove-red target. */
+export function architectCommandWorkspacePath(disposablePath: string, projectRoot: string): string {
+  void projectRoot;
+  return disposablePath;
+}
+
+export interface ArchitectCommandBrokerInput {
+  disposablePath: string;
+  projectRoot: string;
+  permissionProfile: PermissionProfile;
+  artifacts: ArtifactStore;
+  evidenceStore: EvidenceStore;
+  clock: () => string;
+  git?: RunGitExecutionContext;
+  executionGrants?: ExecutionGrantAuthority;
+  ledger?: ToolInvocationLedger;
+  permissions?: SqlitePermissionStore;
+  execution?: OneShotCommandExecutor;
+  allowedCommands?: readonly string[];
+  /** Test double. Production uses `run_evidence_command` from `createEvidenceTools`. */
+  commandTool?: NativeTool<unknown>;
+}
+
+export function createArchitectCommandBroker(input: ArchitectCommandBrokerInput): ToolBroker {
+  const workspacePath = architectCommandWorkspacePath(input.disposablePath, input.projectRoot);
+  const broker = new ToolBroker({
+    ...(input.git ? { git: input.git } : {}),
+    ...(input.executionGrants ? { executionGrants: input.executionGrants } : {}),
+    permissionProfile: input.permissionProfile,
+    workspacePath,
+    artifacts: input.artifacts,
+    clock: input.clock,
+    ...(input.ledger ? { ledger: input.ledger } : {}),
+    ...(input.permissions
+      ? { approve: (approval) => input.permissions!.requestTool(approval) }
+      : {}),
+  });
+  const tool = input.commandTool ?? evidenceCommandTool(createEvidenceTools({
+    ...(input.git ? { git: input.git } : {}),
+    store: input.evidenceStore,
+    artifacts: input.artifacts,
+    taskId: "architect",
+    clock: input.clock,
+    ...(input.execution ? { execution: input.execution } : {}),
+    ...(input.allowedCommands ? { allowedCommands: input.allowedCommands } : {}),
+  }));
+  if (tool.definition.name !== "run_evidence_command") {
+    throw new Error("Architect command broker only registers run_evidence_command.");
+  }
+  if (!staticToolAdmitted("architect", "inspection", tool.definition.name)) {
+    throw new Error("Architect command tool is not on the inspection allow-list.");
+  }
+  broker.register(tool);
+  return broker;
+}
+
+/** Lists `run_evidence_command` immediately and creates the disposable copy on first execute. */
+class LazyArchitectCommandRuntime implements AgentToolRuntime {
+  private opening: Promise<ToolBroker> | undefined;
+  private readonly listing = new ToolRegistry();
+  private readonly input: Omit<ArchitectCommandBrokerInput, "disposablePath">;
+
+  constructor(
+    private readonly openCopy: () => Promise<string>,
+    input: Omit<ArchitectCommandBrokerInput, "disposablePath">,
+  ) {
+    const tool = input.commandTool ?? evidenceCommandTool(createEvidenceTools({
+      ...(input.git ? { git: input.git } : {}),
+      store: input.evidenceStore,
+      artifacts: input.artifacts,
+      taskId: "architect",
+      clock: input.clock,
+      ...(input.execution ? { execution: input.execution } : {}),
+      ...(input.allowedCommands ? { allowedCommands: input.allowedCommands } : {}),
+    }));
+    this.input = { ...input, commandTool: tool };
+    this.listing.register(tool);
+  }
+
+  definitions() {
+    return this.listing.definitions();
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return this.listing.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.listing.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.listing.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    let broker: ToolBroker;
+    try {
+      broker = await this.ensureBroker();
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : "Architect command copy could not be created.";
+      return {
+        callId: call.callId,
+        toolName: call.name,
+        content: [{ type: "text", text: message }],
+        isError: true,
+        error: { code: "command_workspace_unavailable", message },
+      };
+    }
+    return await broker.invoke(call, context);
+  }
+
+  private ensureBroker(): Promise<ToolBroker> {
+    this.opening ??= this.openCopy().then((disposablePath) =>
+      createArchitectCommandBroker({ ...this.input, disposablePath }),
+    );
+    return this.opening;
+  }
+}
+
+export function composeArchitectInspection(
+  reads: AgentToolRuntime,
+  command: AgentToolRuntime,
+): AgentToolRuntime {
+  const composed = new LayeredToolRuntime(reads, command);
+  assertArchitectInspectionMcpClass(composed.definitions());
+  assertRoleToolSurface(
+    "architect",
+    "inspection",
+    composed.definitions().map((definition) => definition.name),
+  );
+  return composed;
+}
+
+function evidenceCommandTool(tools: readonly NativeTool<unknown>[]): NativeTool<unknown> {
+  const tool = tools.find((candidate) => candidate.definition.name === "run_evidence_command");
+  if (!tool) throw new Error("Evidence tools did not include run_evidence_command.");
+  return tool;
+}
+
+export function createArchitectInspectionBroker(input: ArchitectInspectionBrokerInput): ToolBroker {
+  const broker = new ToolBroker({
+    git: input.git,
+    executionGrants: input.executionGrants,
+    permissionProfile: input.permissionProfile,
+    workspacePath: input.projectRoot,
+    artifacts: input.artifacts,
+    ...(input.ledger ? { ledger: input.ledger } : {}),
+    ...(input.permissions
+      ? { approve: (approval) => input.permissions!.requestTool(approval) }
+      : {}),
+  });
+  const repository = new RepositoryIntelligence(input.git ? (request) => input.git!.current().run(request) : undefined);
+  const language = input.language ?? new TypeScriptIntelligence(repository);
+  registerAdmitted(broker, createFilesystemTools({
+    artifacts: input.artifacts,
+    repository,
+    ...(input.hiddenPaths ? { hiddenPaths: input.hiddenPaths } : {}),
+    ...(input.protectedPaths ? { protectedPaths: input.protectedPaths } : {}),
+  }));
+  registerAdmitted(broker, createCodeIntelligenceTools({ repository, language }));
+  registerAdmitted(broker, createArtifactTools(input.artifacts));
+  registerAdmitted(broker, createSessionTools(input.sessions));
+  registerAdmitted(broker, createGitTools(input.git));
+  registerAdmitted(broker, createEvidenceTools({
+    git: input.git,
+    store: input.evidenceStore,
+    artifacts: input.artifacts,
+    taskId: "architect",
+    clock: input.clock,
+  }));
+  registerAdmitted(broker, createSkillTools(input.skillCatalog));
+  registerAdmitted(broker, createMemoryTools({
+    store: input.memoryStore,
+    projectId: input.projectId,
+    runId: input.runId,
+    clock: input.clock,
+  }));
+  registerAdmitted(broker, createResearchTools({ artifacts: input.artifacts }));
+  if (input.browserBackend) {
+    registerAdmitted(broker, createBrowserTools({
+      backend: input.browserBackend,
+      artifacts: input.artifacts,
+      evidenceStore: input.evidenceStore,
+      taskId: "architect",
+      clock: input.clock,
+    }));
+  }
+  if (input.mcpManager) {
+    const policy = roleToolSurface("architect", "inspection").mcpPolicy;
+    for (const tool of createMcpTools(input.mcpManager, input.artifacts)) {
+      if (mcpToolAdmitted(policy, tool.definition)) broker.register(tool);
+    }
+  }
+  for (const tool of input.probeTools ?? []) broker.register(tool);
+  assertArchitectInspectionMcpClass(broker.definitions());
+  assertRoleToolSurface(
+    "architect",
+    "inspection",
+    broker.definitions().map((definition) => definition.name),
+  );
+  return broker;
+}
+
+function registerAdmitted(broker: ToolBroker, tools: readonly NativeTool<unknown>[]): void {
+  for (const tool of tools) {
+    if (tool.definition.name === "run_evidence_command") continue;
+    if (staticToolAdmitted("architect", "inspection", tool.definition.name)) broker.register(tool);
+  }
+}
+
 export class PlanOnlyInspectionRuntime implements AgentToolRuntime {
   private readonly allowed: ReadonlySet<string>;
 
-  constructor(private readonly runtime: AgentToolRuntime) {
-    this.allowed = new Set(
-      runtime.definitions()
-        .filter((definition) => definition.readOnly && definition.effect !== "workspace")
-        .map((definition) => definition.name)
-    );
+  constructor(
+    private readonly runtime: AgentToolRuntime,
+    options?: { readonly probeToolNames?: readonly string[] },
+  ) {
+    const probe = new Set(options?.probeToolNames ?? []);
+    const policy = roleToolSurface("architect", "planOnly").mcpPolicy;
+    const admitted = new Set<string>();
+    const staticAdmitted: string[] = [];
+    for (const definition of runtime.definitions()) {
+      if (isMcpToolName(definition.name)) {
+        if (mcpToolAdmitted(policy, definition)) admitted.add(definition.name);
+        continue;
+      }
+      if (staticToolAdmitted("architect", "planOnly", definition.name)) {
+        admitted.add(definition.name);
+        staticAdmitted.push(definition.name);
+        continue;
+      }
+      if (
+        !isCatalogToolName(definition.name) &&
+        definition.readOnly === true &&
+        definition.effect !== "workspace"
+      ) {
+        admitted.add(definition.name);
+      }
+    }
+    for (const name of probe) {
+      admitted.add(name);
+      staticAdmitted.push(name);
+    }
+    assertRoleToolSurface("architect", "planOnly", staticAdmitted);
+    this.allowed = admitted;
   }
 
   definitions() {

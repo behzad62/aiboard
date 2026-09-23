@@ -9,7 +9,7 @@ import {
   rmdir,
   writeFile,
 } from "node:fs/promises";
-import { relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
 import {
@@ -18,6 +18,15 @@ import {
   type GitCommandOptions,
 } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
+import {
+  agentsMarkedSectionSatisfies,
+  claudePointerSatisfies,
+  spliceMarkedArchitectSection,
+  validateProjectDocPath,
+  type DocumentTipRelation,
+  type ProjectDocCommitRequest,
+  type ProjectDocCommitResult,
+} from "./project-docs.js";
 import {
   classifyOwnedWorktreeAssociations,
   isEmptyDirectory,
@@ -29,6 +38,13 @@ const RUNNER_IDENTITY: Readonly<Record<string, string>> = {
   GIT_AUTHOR_EMAIL: "integrator@aiboard.local",
   GIT_COMMITTER_NAME: "AIBoard Integrator",
   GIT_COMMITTER_EMAIL: "integrator@aiboard.local",
+};
+
+const ARCHITECT_DOC_IDENTITY: Readonly<Record<string, string>> = {
+  GIT_AUTHOR_NAME: "AIBoard Architect",
+  GIT_AUTHOR_EMAIL: "architect@aiboard.local",
+  GIT_COMMITTER_NAME: "AIBoard Architect",
+  GIT_COMMITTER_EMAIL: "architect@aiboard.local",
 };
 
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -476,6 +492,16 @@ export class IntegrationManager {
       await this.ensureIntegrationWorkspace();
       await this.assertCompatible(changeSet);
       await this.assertTaskHistory(changeSet);
+      const documentConflicts = projectDocumentConflictPaths(changeSet.changedPaths);
+      if (documentConflicts.length > 0) {
+        return {
+          status: "conflict",
+          changeSetId: changeSet.id,
+          taskId: changeSet.taskId,
+          integrationRevision: this.revision,
+          conflictPaths: documentConflicts,
+        };
+      }
       if (changeSet.commits.length === 0) {
         return {
           status: "integrated",
@@ -572,6 +598,113 @@ export class IntegrationManager {
         integrationRevision: this.currentRevision,
         changedPaths: [...changeSet.changedPaths],
       };
+    });
+  }
+
+  /**
+   * Commit Architect project documents on the integration branch.
+   * A request id already present in a commit body is returned unchanged.
+   * A new request still commits when the tree is unchanged.
+   */
+  async commitProjectDocuments(
+    input: ProjectDocCommitRequest,
+  ): Promise<ProjectDocCommitResult> {
+    return await this.serialized(async () => {
+      if (input.runId !== this.runId) {
+        throw new Error("Project document commit belongs to another run.");
+      }
+      if (!input.summary.trim() || input.summary.includes("\n") || input.summary.includes("\0")) {
+        throw new Error("Project document summary is invalid.");
+      }
+      if (!input.requestId.trim() || /[\r\n\0]/.test(input.requestId)) {
+        throw new Error("Project document request id is invalid.");
+      }
+      if (input.writes.length === 0) {
+        throw new Error("Project document commit requires at least one write.");
+      }
+      await this.ensureIntegrationWorkspace();
+      const existing = await this.findDocumentCommit(input.requestId);
+      if (existing) {
+        return await this.documentCommitResult(existing);
+      }
+      const writes = input.writes.map((write) => {
+        const checked = validateProjectDocPath(write.path);
+        if (!checked.ok) {
+          throw new Error(`Project document path is refused: ${checked.reason}.`);
+        }
+        return { path: checked.path, content: write.content };
+      });
+      for (const write of writes) {
+        await this.refuseProjectDocLink(write.path);
+      }
+      for (const write of writes) {
+        const absolute = this.containedProjectDocPath(write.path);
+        if (write.path === "AGENTS.md" || write.path === "CLAUDE.md") {
+          let existingText = "";
+          try {
+            existingText = await readFile(absolute, "utf8");
+          } catch (error) {
+            if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+          }
+          await writeFile(absolute, spliceMarkedArchitectSection(existingText, write.content));
+        } else {
+          await mkdir(dirname(absolute), { recursive: true });
+          await writeFile(absolute, write.content);
+        }
+      }
+      const paths = writes.map((write) => write.path);
+      await this.git(this.path, ["add", "--", ...paths]);
+      try {
+        await this.execute({
+          cwd: this.path,
+          args: [
+            "commit",
+            "--allow-empty",
+            "-m",
+            input.summary,
+            "--trailer",
+            `AIBoard-Run: ${input.runId}`,
+            "--trailer",
+            "AIBoard-Author: architect",
+            "--trailer",
+            `AIBoard-Doc-Request: ${input.requestId}`,
+            "--",
+            ...paths,
+          ],
+          env: ARCHITECT_DOC_IDENTITY,
+        });
+      } catch (error) {
+        await this.git(this.path, ["reset", "--hard", "HEAD"], true);
+        await this.git(this.path, ["clean", "-fd", "--", ...paths], true);
+        throw error;
+      }
+      const commit = await this.head();
+      this.currentRevision = commit;
+      return await this.documentCommitResult(commit);
+    });
+  }
+
+  /** Classify an integrated revision against the document tip. Equal is not a descendant. */
+  async relateToDocumentTip(input: {
+    revision: string;
+    tip: string;
+  }): Promise<DocumentTipRelation> {
+    return await this.serialized(async () => {
+      await this.ensureIntegrationWorkspace();
+      if (input.revision === input.tip) return "equal_to_tip";
+      const descendant = await this.git(
+        this.path,
+        ["merge-base", "--is-ancestor", input.tip, input.revision],
+        true,
+      );
+      if (descendant.exitCode === 0) return "strict_descendant";
+      const ancestor = await this.git(
+        this.path,
+        ["merge-base", "--is-ancestor", input.revision, input.tip],
+        true,
+      );
+      if (ancestor.exitCode === 0) return "ancestor";
+      throw new Error("Integrated revision is not related to the document tip.");
     });
   }
 
@@ -1603,6 +1736,110 @@ export class IntegrationManager {
     }
   }
 
+  private async findDocumentCommit(requestId: string): Promise<string | null> {
+    const needle = `AIBoard-Doc-Request: ${requestId}`;
+    for (const commit of await this.commitBodies()) {
+      if (commit.body.split(/\r?\n/).some((line) => line.trim() === needle)) {
+        return commit.revision;
+      }
+    }
+    return null;
+  }
+
+  private async commitBodies(): Promise<Array<{ revision: string; body: string }>> {
+    const history = await this.git(this.path, [
+      "log",
+      "--reverse",
+      "--format=%H%x00%B%x00",
+      `${this.baselineRevision}..HEAD`,
+    ]);
+    const fields = history.stdout.split("\0");
+    const commits: Array<{ revision: string; body: string }> = [];
+    for (let index = 0; index + 1 < fields.length; index += 2) {
+      const revision = fields[index].trim();
+      if (revision) commits.push({ revision, body: fields[index + 1] ?? "" });
+    }
+    return commits;
+  }
+
+  private async documentCommitResult(commit: string): Promise<ProjectDocCommitResult> {
+    const parent = (
+      await this.git(this.repositoryRoot, ["rev-parse", "--verify", `${commit}^`])
+    ).stdout.trim();
+    const head = await this.head();
+    this.currentRevision = head;
+    return {
+      commit,
+      parent,
+      head,
+      entryPoint: await this.projectDocEntryPointFacts(commit),
+    };
+  }
+
+  private async projectDocEntryPointFacts(revision: string): Promise<ProjectDocCommitResult["entryPoint"]> {
+    const readme = await this.git(
+      this.repositoryRoot,
+      ["cat-file", "-e", `${revision}:docs/project/README.md`],
+      true,
+    );
+    const agents = await this.readBlob(revision, "AGENTS.md");
+    const claude = await this.readBlob(revision, "CLAUDE.md");
+    return {
+      readme: readme.exitCode === 0,
+      agentsMarkedSection: agents !== null && agentsMarkedSectionSatisfies(agents),
+      claudePointer: claude !== null && claudePointerSatisfies(claude),
+    };
+  }
+
+  private async readBlob(revision: string, path: string): Promise<string | null> {
+    const result = await this.git(
+      this.repositoryRoot,
+      ["show", `${revision}:${path}`],
+      true,
+    );
+    return result.exitCode === 0 ? result.stdout : null;
+  }
+
+  private containedProjectDocPath(relativePath: string): string {
+    const absolute = resolve(this.path, ...relativePath.split("/"));
+    const fromRoot = relative(resolve(this.path), absolute);
+    if (fromRoot.startsWith("..") || isAbsolute(fromRoot)) {
+      throw new Error(`Project document path escapes the integration worktree: ${relativePath}`);
+    }
+    return absolute;
+  }
+
+  private async refuseProjectDocLink(relativePath: string): Promise<void> {
+    const parts = relativePath.split("/");
+    const targets: string[] = [];
+    if (relativePath === "AGENTS.md" || relativePath === "CLAUDE.md") {
+      targets.push(relativePath);
+    } else {
+      let accumulated = "";
+      for (const part of parts) {
+        accumulated = accumulated ? `${accumulated}/${part}` : part;
+        if (accumulated === "docs/project" || accumulated.startsWith("docs/project/")) {
+          targets.push(accumulated);
+        }
+      }
+    }
+    for (const target of targets) {
+      const absolute = this.containedProjectDocPath(target);
+      let stats;
+      try {
+        stats = await lstat(absolute);
+      } catch (error) {
+        if (isNodeError(error) && error.code === "ENOENT") return;
+        throw error;
+      }
+      if (stats.isSymbolicLink()) {
+        throw new Error(
+          `Project document path ${relativePath} is refused because ${target} is a symbolic link or junction.`,
+        );
+      }
+    }
+  }
+
   private async findIntegratedRevision(
     changeSet: ChangeSet
   ): Promise<string | null> {
@@ -1754,6 +1991,13 @@ function snapshotBytes(
     }),
     "utf8"
   );
+}
+
+function projectDocumentConflictPaths(paths: readonly string[]): string[] {
+  return paths.filter((path) => {
+    const normalized = path.replace(/\\/g, "/");
+    return normalized === "docs/project" || normalized.startsWith("docs/project/");
+  });
 }
 
 function safeName(value: string): string {
