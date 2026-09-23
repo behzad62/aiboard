@@ -5,11 +5,11 @@
 | | |
 |---|---|
 | SOURCE | `docs/superpowers/specs/2026-09-22-runner-v2-agent-capability-model-design.md`, revision 4 |
-| PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`, revision 9 |
+| PLAN | `docs/superpowers/plans/2026-09-22-runner-v2-agent-capability-and-change-critique.md`, revision 10 |
 | Moved scope | D4, D5, D7 → P6.6 owner amendment `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md` |
 | Base revision | `6c166f97` on `main` |
 | Planning branch | `docs/agent-capability-and-change-critique` |
-| Program state | **PLANNING — revision 9. PLAN BLOCKED on independent re-review of revision 9.** |
+| Program state | **PLANNING — revision 10. PLAN BLOCKED on independent re-review of revision 10.** |
 | Execution | **NOT STARTED.** No implementation worker has been launched. |
 | Last updated | 2026-09-22 |
 
@@ -35,15 +35,17 @@
 | Revision 8 | SOURCE revision 4 (D6 rewritten, AC-7/AC-17 rewritten, AC-25 added, OQ-2 closed); I2 removed; A4 `write_project_doc`; A5 `commitProjectDocuments` + worker refusal + completion check |
 | Re-review of revision 8 | INSUFFICIENT (`evidence/plan-review-r7.md`): R1-1 REPAIRED; graph, §5.2, cards clean; new A5 BLOCKING A5-1 (commit never runs on the completion path), A5-2 (document commit breaks handoff equality), A5-3 (legacy bit unreachable); IMPORTANT A5-4..A5-7; MINOR A5-8 |
 | Revision 9 | all eight fixed — cycle 1 of 3 on the new A5 |
-| **Independent re-review of revision 9** | **OUTSTANDING — blocks PLAN READY** |
+| Re-review of revision 9 | INSUFFICIENT (`evidence/plan-review-r8.md`): A5-1, A5-2, A5-4..A5-8 FIXED; **A5-3 NOT FIXED** (stamp unreachable: `initializeRun` appends first); IMPORTANT N1 (tip clearing on an ancestor return), N2 (fixtures), N3 (section body unnamed) |
+| Revision 10 | A5-3 cycle 2 of 3; N1–N3 cycle 1 |
+| **Independent re-review of revision 10** | **OUTSTANDING — blocks PLAN READY** |
 
 ---
 
 ## 2. Next eligible action
 
-**One action:** an independent re-review of revision 9, scoped to A4, A5, AC-7, AC-25 and SOURCE
-D6.7–D6.8, verified against the repository. Findings of `plan-review-r6.md` and `-r7.md` that were
-clean are reused. After a sufficient verdict the next action is **A0** (execution still needs the
+**One action:** an independent re-review of revision 10, scoped to A5 steps 5, 6 and 8 and their
+acceptance lines, verified against the repository. Everything found clean in `plan-review-r6.md`,
+`-r7.md` and `-r8.md` is reused. After a sufficient verdict the next action is **A0** (execution still needs the
 owner's instruction to start).
 
 Nothing else is eligible. Planning readiness does not authorize execution.
@@ -103,7 +105,7 @@ Empty.
 | ESC-3 | — | **DECIDED:** option A for both — one final cycle each for B-1 `abort` and A5 | owner | applied in revision 7 |
 | BL-7 | — | CLOSED — revision 7 re-reviewed (`plan-review-r6.md`) | controller | — |
 | ESC-4 | — | A5's commit step addresses the wrong workspace; the reviewer's own fix is to commit the `TaskWorkspace` object via `commitWorkspace` (`workspace-manager.ts:136`); ESC-3's last cycle is spent | owner | **DECIDED:** mechanism replaced (SOURCE D6 revision 4) |
-| **BL-8** | PLAN READY | revision 9 (A4, A5, AC-7, AC-25) not re-reviewed | controller | dispatch one scoped re-review |
+| **BL-8** | PLAN READY | revision 10 (A5 steps 5, 6, 8) not re-reviewed | controller | dispatch one scoped re-review |
 
 ---
 

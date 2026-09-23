@@ -1,6 +1,6 @@
 # Runner V2 — Agent capability model (execution plan)
 
-**Revision 9.** The filename is kept for reference stability; change critique and coverage
+**Revision 10.** The filename is kept for reference stability; change critique and coverage
 review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this plan.
 **Execution has not started.** Verdict in §11.
 
@@ -17,7 +17,7 @@ review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this p
 | PROJECT_RULES | `CLAUDE.md`, `AGENTS.md`, the Runner V2 Task 12 mandate |
 | MAX_WORKERS | 4 permitted; **this plan derives 2** — see §5 |
 | REPAIR_BUDGET | 3 evidence-backed cycles per tracked blocking issue; ESC-1 granted one extra cycle (used by revision 6); **ESC-3 grants one final cycle each to B-1 `abort` and to A5** (used by revision 7) |
-| Planning history | seven independent reviews of revisions 1–8: `evidence/plan-review-r1.md` … `-r7.md` |
+| Planning history | eight independent reviews of revisions 1–9: `evidence/plan-review-r1.md` … `-r8.md` |
 
 ### 0.1 Host capabilities — observed
 
@@ -287,20 +287,34 @@ check (`:1552-1566`), and `integration-manager.ts` is already a registered files
 5. **Handoff accounting — the fix for review r7 A5-2.** A document commit does **not** call
    `advanceIntegrationRevision` and does not touch final verification. The projection keeps a
    **document tip**: set by `project_doc.committed` when its `parent` equals the current
-   integration revision or the current document tip; cleared when a task integrates, because
-   `integrate` builds on HEAD, which already contains the document commits. The rule wherever the
+   integration revision or the current document tip. It is cleared when a task integrates
+   **only if** the newly recorded integration revision is HEAD — that is, equal to or a
+   descendant of the current document tip. `integrate` can also return an older applied ref
+   (`alreadyApplied` / `findIntegratedRevision`, `integration-manager.ts:489-518`, `:1606-1633`);
+   the runner then records it with an `isDescendantOfDocumentTip: false` fact, obtained with
+   `git merge-base --is-ancestor` inside `serialized`, and the tip is **kept** (review r8, N1). The rule wherever the
    code compares a handed-off or verified revision with `integrationRevision` — `project.handoff_selected`
    (`scheduler-store.ts:2777-2783`), and the final-verification currency test inside readiness
    (`:876-878`) — accepts either `integrationRevision` or the document tip, and nothing else. The
    runner is the only actor that appends `project_doc.committed`, and only
    `commitProjectDocuments` produces its commit, so a document tip is by construction the
    verified revision plus document-only commits (SOURCE D6.8).
-6. **New-versus-legacy stamp — the fix for review r7 A5-3.** In the `BuildRuntime` constructor
-   path that calls `configureRunPolicy` (`build-runtime.ts:1560-1577`): when the event log is
-   **empty** — a brand-new run — append runner-actor `project_docs.policy_configured
-   { version: 1 }` **before** `run.policy_configured`. A non-empty log without the stamp is a
-   legacy run and is never stamped later, so a crash between the two appends cannot turn a new
-   run into a legacy one. The reducer records the stamp on the projection.
+6. **New-versus-legacy stamp — the fix for review r7 A5-3, corrected by review r8.** In the
+   `BuildRuntime` constructor, **before** `this.initializeRun()` (`build-runtime.ts:301`), read the
+   log once: if it is **empty** — a brand-new run — append runner-actor
+   `project_docs.policy_configured { version: 1 }` as the **first event of the run**, then call
+   `initializeRun()` (which appends `run.initialized`) and the policy methods as today. A log that
+   already had any event when the constructor started is a legacy run and is never stamped. A
+   crash after the stamp leaves a stamped log (correct). A crash before it leaves an empty log,
+   which the next construction stamps (correct). There is no window in which a new run can look
+   legacy. The reducer records the stamp on the projection.
+   **Existing fixtures (review r8, N2).** Every `new BuildRuntime` on an empty store is now a new
+   run. Its exact event list begins with `project_docs.policy_configured`; the exact-list
+   assertions in `runner-v2/test/build-runtime.test.ts` (around `:523` and `:557`) gain that
+   event; the empty-store `plan_only` fixture (`:204-363`) must commit `docs/project/STATE.md`
+   and the entry point before `complete_run` and `selectProjectHandoff`, because it is now a new
+   run. Pre-seeded logs (`:371-462`) stay legacy. **No test-only opt-out:** an opt-out would
+   exempt real new runs too.
 7. **AC-25 check**, in `buildCompletionReadiness` for a stamped run: not ready unless the latest
    `project_doc.committed` for `docs/project/STATE.md` has a sequence after the run's latest
    `integrated` task event (for `plan_only`, any such commit) and its entry-point facts are all
@@ -308,16 +322,29 @@ check (`:1552-1566`), and `integration-manager.ts` is already a registered files
    `project.handoff_requested` calls it for `plan_only` too (`:2733-2736`) — the fix for review
    r7 A5-4. The readiness reason names what is missing.
 8. **Templates.** `project-docs.ts` exports the default layout (`README.md`, `STATE.md`,
-   `specs/`, `plans/`, `decisions.md`, `evidence/`), the default `AGENTS.md` section body, and the
-   one-line `CLAUDE.md` pointer (`See AGENTS.md for this project's documentation rules.`). A4 puts
-   them in the Architect prompt; the runner never writes documentation content itself.
+   `specs/`, `plans/`, `decisions.md`, `evidence/`), the one-line `CLAUDE.md` pointer (`See
+   AGENTS.md for this project's documentation rules.`), and the default `AGENTS.md` section body,
+   which must contain D6.2's three statements (review r8, N3):
+   - **what the folder holds** — the layout above, one line per entry;
+   - **read first** — "Before any work on this project, read `docs/project/README.md` and
+     `docs/project/STATE.md`.";
+   - **how to update** — "Keep specs, plans and decisions current as they change; update
+     `STATE.md` last, with where things stand and the next action."
+   The entry-point fact for `AGENTS.md` is true only when the marked section contains the three
+   marker lines `<!-- aiboard:docs:holds -->`, `<!-- aiboard:docs:read-first -->` and
+   `<!-- aiboard:docs:update -->`, each followed by non-empty text. A4 puts the templates in the
+   Architect prompt; the runner never writes documentation content itself.
 
 **Acceptance.** Per AC-7 (link case), AC-17 and AC-25, plus:
 - `write_project_doc` then `complete_run` **in the same Architect turn** completes (A5-1);
 - handoff after the `STATE.md` commit succeeds, final verification stays current, and the
   documents are in the project after handoff (A5-2);
-- a brand-new run is stamped; a legacy log replays unstamped and completes as before; a crash
-  between the stamp and `run.policy_configured` still leaves a stamped run (A5-3);
+- a brand-new run's first event is the stamp; a legacy log replays unstamped and completes as
+  before; a crash after the stamp and before `run.initialized` still leaves a stamped run; an
+  empty log after a crash before the stamp is stamped on the next construction (A5-3);
+- a retried `integrate` returning an older applied ref keeps the document tip, and handoff still
+  succeeds (N1);
+- an `AGENTS.md` section missing any of the three marker lines leaves the run not ready (N3);
 - a `plan_only` run cannot complete without `STATE.md` and the entry point (A5-4);
 - the restart test: request appended, commit made, crash before `project_doc.committed` → exactly
   one commit after recovery;
@@ -326,11 +353,13 @@ check (`:1552-1566`), and `integration-manager.ts` is already a registered files
 - the project working folder hash is unchanged until handoff.
 
 Prove-red: move the commit out of the handler to `tick` → the same-turn completion test reddens;
-make handoff compare only `integrationRevision` → the handoff test reddens; stamp any unstamped
+make handoff compare only `integrationRevision` → the handoff test reddens; stamp after `initializeRun` → the new-run
+completion test passes without documents and the AC-25 test reddens; stamp any non-empty
 log → the legacy replay test reddens; remove the `lstat` check → the link test reddens; remove
 the request-id lookup → the restart test finds two commits.
 
-**Budget.** Cycle 1 of 3 on this mechanism (review r7 findings A5-1..A5-6).
+**Budget.** Review r7 findings A5-1..A5-6 used cycle 1; review r8 confirmed all but A5-3. A5-3
+is now on cycle 2 of 3; N1–N3 are on cycle 1.
 
 ### B1 — Retry, typed error and recording suspension
 
@@ -579,7 +608,7 @@ waits for A3 and A5. Do not commit, stage or stash.
 
 ## 11. Verdict
 
-**PLAN BLOCKED — revision 9 not yet independently re-reviewed.**
+**PLAN BLOCKED — revision 10 not yet independently re-reviewed.**
 
 | Change | Reason |
 |---|---|
@@ -593,8 +622,11 @@ waits for A3 and A5. Do not commit, stage or stash.
   A5-1 synchronous commit in the tool handler; A5-2 document-tip handoff rule; A5-3 empty-log
   policy stamp; A5-4 `plan_only` included; A5-5 link check at commit time; A5-6 entry point
   required and templated; A5-7 STATE next action; A5-8 lane note.
-- **Unblock action:** one independent re-review of A4, A5, AC-7, AC-25 and SOURCE D6.7–D6.8
-  against the repository. Everything else found clean in `plan-review-r6.md` and `-r7.md` is
+- **Revision 10** answers review r8 (`evidence/plan-review-r8.md`: A5-1, A5-2, A5-4..A5-8
+  FIXED): A5-3 stamp moved before `initializeRun`; N1 tip kept for an ancestor return; N2
+  fixture updates named; N3 section body specified with marker lines.
+- **Unblock action:** one independent re-review of A5 steps 5, 6 and 8 and their acceptance
+  lines, against the repository. Everything else found clean in `plan-review-r6.md` and `-r7.md` is
   reused.
 
 **Execution has not started. Planning readiness does not authorize execution.**
