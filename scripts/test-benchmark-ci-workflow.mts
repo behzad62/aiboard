@@ -16,6 +16,8 @@ const workflow = existsSync(workflowPath) ? readFileSync(workflowPath, "utf8") :
 const acquireCommand = 'node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"';
 check("benchmark CI validates the pinned Windows runner and Linux evaluator",
   /os: \[ubuntu-latest, windows-latest\]/.test(workflow));
+check("cross-platform pinned source acquisition uses the declared Bash syntax",
+  /name: Acquire pinned Recoverable Job Service Runner source\s+shell: bash\s+run:/.test(workflow));
 const setupNodeIndex = workflow.indexOf("actions/setup-node@v4");
 const acquireIndex = workflow.indexOf(acquireCommand);
 const installIndex = workflow.indexOf("npm ci");
