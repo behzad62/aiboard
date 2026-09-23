@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { ContextManifestRecordingError } from "../src/context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import {
@@ -258,6 +259,133 @@ test("tick dispatches nothing while a plan critique is pending and resumes after
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("worker context recording failure appends one note and pauses without failing or redispatching", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-recording-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const failure = recordingFailure("run_1", "worker:task");
+  const driver = new ThrowingDriver(failure);
+  try {
+    store.append(planEvent("run_1", [task("a")]));
+    const scheduler = recordingScheduler(store, driver);
+    await scheduler.tick();
+    let idleError: unknown;
+    try {
+      await scheduler.awaitIdle();
+    } catch (error) {
+      idleError = error;
+    }
+    assert.equal(idleError, undefined, "context recording failure is recorded as a pause");
+    const notes = store.readRun("run_1").filter((event) => event.type === "context_manifest.recording_failed");
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]?.actor.role, "runner");
+    assert.deepEqual(notes[0]?.payload, {
+      purpose: "worker:task",
+      attempts: 3,
+      reason: failure.message,
+      taskId: "a",
+      attempt: 1,
+      revision: "baseline-1",
+    });
+    assert.equal(scheduler.projection().status, "paused");
+    assert.equal(scheduler.projection().pauseReason?.reason, "context_recording_failed");
+    assert.equal(scheduler.projection().tasks.a?.status, "running");
+    assert.notEqual(scheduler.projection().tasks.a?.status, "failed");
+    await scheduler.tick();
+    assert.equal(driver.assignments.length, 1, "paused context recording does not redispatch the worker");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a worker error other than context recording still fails the task", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-other-failure-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const driver = new ThrowingDriver(new Error("worker exploded"));
+  try {
+    store.append(planEvent("run_1", [task("a")]));
+    const scheduler = recordingScheduler(store, driver);
+    await scheduler.tick();
+    await scheduler.awaitIdle();
+    assert.equal(scheduler.projection().tasks.a?.status, "failed");
+    assert.equal(
+      store.readRun("run_1").filter((event) => event.type === "context_manifest.recording_failed").length,
+      0,
+    );
+    assert.notEqual(scheduler.projection().pauseReason?.reason, "context_recording_failed");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a context recording note whose scheduler append throws keeps the original error", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-recording-append-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const failure = recordingFailure("run_1", "worker:task");
+  const driver = new ThrowingDriver(failure);
+  const originalAppend = store.append.bind(store);
+  store.append = ((event) => {
+    if (event.type === "context_manifest.recording_failed") {
+      throw new Error("scheduler append failed");
+    }
+    return originalAppend(event);
+  }) as SqliteSchedulerStore["append"];
+  try {
+    store.append(planEvent("run_1", [task("a")]));
+    const scheduler = recordingScheduler(store, driver);
+    await scheduler.tick();
+    await assert.rejects(() => scheduler.awaitIdle(), (error: unknown) => {
+      assert.ok(error instanceof ContextManifestRecordingError);
+      assert.equal(error, failure);
+      return true;
+    });
+    assert.equal(
+      store.readRun("run_1").filter((event) => event.type === "context_manifest.recording_failed").length,
+      0,
+    );
+    assert.equal(scheduler.projection().status, "running");
+    assert.notEqual(scheduler.projection().tasks.a?.status, "failed");
+    assert.equal(driver.assignments.length, 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function recordingFailure(runId: string, purpose: string): ContextManifestRecordingError {
+  return new ContextManifestRecordingError({
+    runId,
+    sessionId: `${purpose}:session`,
+    purpose,
+    attempts: 3,
+  }, new Error("sqlite locked"));
+}
+
+function recordingScheduler(store: SqliteSchedulerStore, driver: WorkerRuntimeDriver): TaskScheduler {
+  return new TaskScheduler({
+    runId: "run_1",
+    store,
+    driver,
+    maxConcurrency: 1,
+    workspaceFor: async () => ({
+      path: "C:/work/a/1",
+      workspaceId: "a:attempt:1",
+      baselineRevision: "baseline-1",
+    }),
+    clock: () => "2026-07-12T00:00:00.000Z",
+  });
+}
+
+class ThrowingDriver implements WorkerRuntimeDriver {
+  readonly assignments: WorkerAssignment[] = [];
+  constructor(private readonly error: Error) {}
+  async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
+    this.assignments.push(assignment);
+    throw this.error;
+  }
+}
 
 function planEvent(runId: string, tasks: BuildTask[]) {
   return {

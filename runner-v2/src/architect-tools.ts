@@ -10,7 +10,9 @@ import {
   assertPendingUserGuidanceAllowsEvent,
   assertOpenArchitectQuestionAllowsEvent,
   buildCompletionReadiness,
+  latestUnresolvedContextRecordingNote,
   rebuildSchedulerProjection,
+  type SchedulerActor,
   type SchedulerStore,
 } from "./scheduler-store.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
@@ -254,11 +256,70 @@ export function resolvePlanCritiqueTool(
   });
 }
 
+function resolveContextRecordingTool(
+  store: SchedulerStore,
+  clock: () => string,
+): NativeTool<{ resolution: "retry" | "proceed_without_manifest" | "abort"; rationale: string }> {
+  return lifecycleTool({
+    name: "resolve_context_recording",
+    description: "Resolve a paused context-manifest recording failure by retrying, waiving the manifest with a rationale, or aborting the run",
+    schema: objectSchema({
+      resolution: { type: "string", enum: ["retry", "proceed_without_manifest", "abort"] },
+      rationale: { type: "string" },
+    }, ["resolution", "rationale"]),
+    validate: (input) => validateObject(input, (value) => {
+      if (
+        value.resolution !== "retry" &&
+        value.resolution !== "proceed_without_manifest" &&
+        value.resolution !== "abort"
+      ) return null;
+      if (typeof value.rationale !== "string") return null;
+      return {
+        resolution: value.resolution,
+        rationale: value.rationale,
+      };
+    }, "Context recording resolution is invalid."),
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const note = latestUnresolvedContextRecordingNote(projection);
+      if (!note) {
+        return errorOutput(
+          "context_recording_note_missing",
+          "No unresolved context-manifest recording failure is waiting for a decision.",
+        );
+      }
+      const actor: SchedulerActor = { role: "architect", id: context.actor.id };
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "context_manifest.recording_resolved",
+        occurredAt: clock(),
+        actor,
+        idempotencyKey: `context-recording-resolved:${note.sequence}`,
+        payload: {
+          noteSequence: note.sequence,
+          resolution: input.resolution,
+          rationale: input.rationale,
+        },
+      }, {
+        type: "architect_action",
+        action: "context_recording_resolved",
+        referenceId: String(note.sequence),
+      });
+    },
+  });
+}
+
 export function createArchitectTools(
   options: ArchitectToolsOptions
 ): NativeTool<unknown>[] {
   const clock = options.clock ?? (() => new Date().toISOString());
+  const contextRecordingTools = options.architectAction?.reason.type === "context_recording_decision_required"
+    ? [resolveContextRecordingTool(options.store, clock)]
+    : [];
   const baseCore = [
+    ...contextRecordingTools,
     planTasksTool(options.store, clock),
     reviseTaskTool(options.store, clock),
     answerGuidanceTool(options.store, clock),

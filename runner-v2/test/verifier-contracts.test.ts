@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { IndependentVerifierDriver } from "../src/build-runtime.js";
+import { ContextManifestRecordingError } from "../src/context-manifest-store.js";
 import {
   buildCompletionReadiness,
   rebuildSchedulerProjection,
@@ -596,6 +597,43 @@ test("high-risk runtime assesses, verifies, and only then requests completion", 
     assert.equal(runtime.projection().projectHandoff?.status, "requested");
     assert.equal(verifierCalls, 1);
     assert.equal(completionCalls, 1);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("verifier context recording failure pauses with the target revision and no completion", async () => {
+  const fixture = createFixture("runtime-recording");
+  const failure = new ContextManifestRecordingError({
+    runId: RUN_ID,
+    sessionId: "verifier:session",
+    purpose: "verifier:verdict",
+    attempts: 3,
+  }, new Error("sqlite locked"));
+  let completionCalls = 0;
+  try {
+    const verifier: IndependentVerifierDriver = {
+      candidateRuntimeIds: ["google:verifier"],
+      assessRisk: async () => highRiskInput(),
+      verify: async () => {
+        throw failure;
+      },
+    };
+    const runtime = createRuntime(fixture.store, verifier, async () => {
+      completionCalls += 1;
+    });
+    assert.equal((await runtime.step()).action, "build_risk_assessed");
+    const paused = await runtime.step();
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.action, "context_recording_failed");
+    const notes = fixture.store.readRun(RUN_ID).filter((event) => event.type === "context_manifest.recording_failed");
+    assert.equal(notes.length, 1);
+    assert.equal(notes[0]?.payload.purpose, "verifier:verdict");
+    assert.equal(notes[0]?.payload.attempts, 3);
+    assert.equal(notes[0]?.payload.reason, failure.message);
+    assert.equal(notes[0]?.payload.revision, REVISION);
+    assert.equal(completionCalls, 0);
+    assert.equal(runtime.projection().pauseReason?.reason, "context_recording_failed");
   } finally {
     fixture.close();
   }

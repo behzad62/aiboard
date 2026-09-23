@@ -14,7 +14,10 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { BuildRuntime } from "../src/build-runtime.js";
+import { BuildRuntime, type BuildStepResult } from "../src/build-runtime.js";
+import { failBuildIfActive } from "../src/cli-lifecycle.js";
+import { RunSupervisor } from "../src/run-supervisor.js";
+import { SqliteEventStore } from "../src/sqlite-event-store.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { ArtifactReachabilityGuard } from "../src/artifact-reachability.js";
 import type { NativeBuildSpec } from "../src/build-spec.js";
@@ -3248,6 +3251,294 @@ test("configured usage marks an Architect-only capability mismatch unavailable",
   assert.equal(worker.selectable, true);
   assert.deepEqual(verifier.roles, ["verifier"]);
   assert.equal(verifier.selectable, true);
+});
+
+test("the pump runs a context recording decision before reporting a supervisor pause", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recording-decision-"));
+  const log: string[] = [];
+  const results: BuildStepResult[] = [];
+  let manager: NativeBuildManager | undefined;
+  try {
+    const projection: ReturnType<BuildRuntime["projection"]> = {
+      ...fakeRuntime(spec.runId).projection(),
+      status: "paused",
+      pauseReason: { reason: "context_recording_failed" },
+    };
+    let untilCalls = 0;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (_runId, result) => {
+        log.push("pump");
+        results.push(result);
+      },
+      createRuntime: async () => ({
+        ...handleProjections(spec.runId),
+        runtime: {
+          ...fakeRuntime(spec.runId),
+          id: spec.runId,
+          projection: () => projection,
+          runUntilBlocked: async () => {
+            untilCalls += 1;
+            log.push("until");
+            if (untilCalls === 1) return { status: "paused" as const, action: "context_recording_failed" };
+            return { status: "completed" as const };
+          },
+          resolveContextRecordingFailure: async () => {
+            log.push("decision");
+            projection.status = "running";
+            delete projection.pauseReason;
+            return "resumed" as const;
+          },
+        } as BuildRuntime,
+        usage: () => emptyBudget(spec.runId),
+        observability: async () => emptyObservability(spec.runId),
+        projectHandoff: async () => ({
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        cleanup: async () => undefined,
+        close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    manager.activate(spec.runId);
+    await manager.awaitIdle(spec.runId);
+    assert.deepEqual(log, ["until", "decision", "until", "pump"]);
+    assert.equal(results.some((result) => result.action === "context_recording_failed"), false);
+    assert.equal(results[0]?.status, "completed");
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a plain error during the context recording decision surfaces through onPumpError", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recording-decision-error-"));
+  const schedulerPath = join(root, "scheduler.sqlite");
+  const errors: unknown[] = [];
+  const results: BuildStepResult[] = [];
+  let runtime: BuildRuntime | undefined;
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (_runId, result) => results.push(result),
+      onPumpError: (_runId, error) => errors.push(error),
+      createRuntime: async () => {
+        const store = new SqliteSchedulerStore(schedulerPath);
+        runtime = new BuildRuntime({
+          runId: spec.runId,
+          initialObjective: spec.objective,
+          runPolicy: "finish",
+          store,
+          workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+          architectDriver: {
+            run: async () => {
+              throw new Error("decision turn failed");
+            },
+          },
+          integrationDriver: {
+            integrate: async () => ({ status: "integrated", integrationRevision: "unused" }),
+          },
+          maxConcurrency: 1,
+          workspaceFor: async () => "unused",
+          clock: () => "2026-09-23T00:00:00.000Z",
+        });
+        store.append({
+          runId: spec.runId,
+          type: "context_manifest.recording_failed",
+          occurredAt: "2026-09-23T00:00:00.000Z",
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: "context-recording-failed:decision-error",
+          payload: { purpose: "worker:task", attempts: 3, reason: "disk full" },
+        });
+        store.append({
+          runId: spec.runId,
+          type: "run.paused",
+          occurredAt: "2026-09-23T00:00:00.000Z",
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: "context-recording-paused:decision-error",
+          payload: { reason: "context_recording_failed" },
+        });
+        return {
+          ...handleProjections(spec.runId),
+          runtime,
+          usage: () => emptyBudget(spec.runId),
+          observability: async () => emptyObservability(spec.runId),
+          projectHandoff: async () => ({
+            integrationRevision: "revision_final",
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: false,
+          }),
+          cleanup: async () => undefined,
+          close: async () => {
+            store.close();
+          },
+        };
+      },
+    });
+    await manager.create(spec);
+    manager.activate(spec.runId);
+    await manager.awaitIdle(spec.runId);
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0] instanceof Error);
+    assert.equal((errors[0] as Error).message, "decision turn failed");
+    assert.equal((errors[0] as Error).name, "Error");
+    assert.deepEqual(results, [{ status: "paused", action: "autonomous_pump_error" }]);
+    assert.ok(runtime);
+    assert.equal(runtime.projection().status, "paused");
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery of an aborted context recording fails the supervisor and does not dispatch", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recording-abort-"));
+  const schedulerPath = join(root, "scheduler.sqlite");
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(root, "events.sqlite")), {
+    clock: () => "2026-09-23T00:00:00.000Z",
+  });
+  supervisor.createRun({
+    runId: spec.runId,
+    projectPath: join(root, "project"),
+    permissionProfile: "full",
+    idempotencyKey: "create:run_1",
+  });
+  supervisor.captureBaseline(spec.runId, "baseline:run_1", "a".repeat(40), "refs/aiboard/runs/run-1/baseline");
+  supervisor.start(spec.runId, "start:run_1");
+  supervisor.pause(spec.runId, "pause:run_1", "user");
+  const seeding = new SqliteSchedulerStore(schedulerPath);
+  let runtime: BuildRuntime | undefined;
+  let architectCalls = 0;
+  let workerCalls = 0;
+  let manager: NativeBuildManager | undefined;
+  try {
+    const seeded = new BuildRuntime({
+      runId: spec.runId,
+      initialObjective: spec.objective,
+      runPolicy: "finish",
+      store: seeding,
+      workerDriver: { run: async () => ({ type: "paused", reason: "seed" }) },
+      architectDriver: { run: async () => undefined },
+      integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+      maxConcurrency: 1,
+      workspaceFor: async () => "unused",
+      clock: () => "2026-09-23T00:00:00.000Z",
+    });
+    const noted = seeding.append({
+      runId: spec.runId,
+      type: "context_manifest.recording_failed",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "context-recording-failed:abort",
+      payload: { purpose: "architect:plan_required", attempts: 3, reason: "disk full" },
+    });
+    seeding.append({
+      runId: spec.runId,
+      type: "run.paused",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "context-recording-paused:abort",
+      payload: { reason: "context_recording_failed" },
+    });
+    seeding.append({
+      runId: spec.runId,
+      type: "context_manifest.recording_resolved",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: `context-recording-resolved:${noted.sequence}`,
+      payload: { noteSequence: noted.sequence, resolution: "abort", rationale: "Stop the build." },
+    });
+    assert.equal(seeded.projection().status, "failed");
+    assert.equal(seeded.projection().planRevision, 0);
+    seeding.close();
+
+    const specs = new SqliteBuildSpecStore(join(root, "builds.sqlite"));
+    specs.save(spec);
+    manager = new NativeBuildManager({
+      specs,
+      shouldAutoRun: () => true,
+      onBuildFailed: (runId, reason) => failBuildIfActive(supervisor, runId, reason),
+      createRuntime: async () => {
+        const store = new SqliteSchedulerStore(schedulerPath);
+        runtime = new BuildRuntime({
+          runId: spec.runId,
+          initialObjective: spec.objective,
+          runPolicy: "finish",
+          store,
+          workerDriver: {
+            run: async () => {
+              workerCalls += 1;
+              return { type: "paused", reason: "unused" };
+            },
+          },
+          architectDriver: {
+            run: async () => {
+              architectCalls += 1;
+            },
+          },
+          integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+          maxConcurrency: 1,
+          workspaceFor: async () => "unused",
+          clock: () => "2026-09-23T00:00:00.000Z",
+        });
+        return {
+          ...handleProjections(spec.runId),
+          runtime,
+          usage: () => emptyBudget(spec.runId),
+          observability: async () => emptyObservability(spec.runId),
+          projectHandoff: async () => ({
+            integrationRevision: "revision_final",
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: false,
+          }),
+          cleanup: async () => undefined,
+          close: async () => {
+            store.close();
+          },
+        };
+      },
+    });
+    await manager.recover();
+    assert.equal(supervisor.getRun(spec.runId).state, "failed");
+    let stepped: BuildStepResult | undefined;
+    let stepError: unknown;
+    try {
+      stepped = await manager.step(spec.runId);
+    } catch (error) {
+      stepError = error;
+    }
+    assert.equal(architectCalls, 0, "a failed build does not dispatch");
+    assert.equal(workerCalls, 0, "a failed build does not dispatch");
+    assert.equal(stepError, undefined);
+    assert.deepEqual(stepped, { status: "failed", action: "context_recording_aborted" });
+    assert.ok(runtime);
+    assert.throws(() => runtime!.resume("user-resume-after-abort"), /A failed Build cannot be resumed\./);
+    await manager.close();
+    manager = undefined;
+
+    let secondCreates = 0;
+    const second = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      shouldRecoverSpec: async (candidate) => {
+        const state = supervisor.getRun(candidate.runId).state;
+        return state !== "failed" && state !== "completed" && state !== "stopped";
+      },
+      createRuntime: async () => {
+        secondCreates += 1;
+        throw new Error("a failed build must not be reconstructed");
+      },
+    });
+    await second.recover();
+    assert.equal(secondCreates, 0);
+    await second.close();
+  } finally {
+    await manager?.close();
+    supervisor.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function emptyBudget(scopeId: string) {

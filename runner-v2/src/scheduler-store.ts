@@ -168,7 +168,9 @@ export type SchedulerEventType =
   | "plan_critique.requested"
   | "plan_critique.submitted"
   | "plan_critique.resolved"
-  | "plan_critique.skipped";
+  | "plan_critique.skipped"
+  | "context_manifest.recording_failed"
+  | "context_manifest.recording_resolved";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -448,6 +450,49 @@ export interface VerifierSelectionProjection {
 export const DEFAULT_REPAIR_PLAN_LIMIT = 3;
 export const MAX_REPAIR_CYCLE_EXTENSION = 10;
 
+/** Retry resolution events allowed for one run before the reducer refuses another retry. */
+export const CONTEXT_RECORDING_RETRY_LIMIT = 3;
+
+export type ContextRecordingResolutionKind =
+  | "retry"
+  | "proceed_without_manifest"
+  | "abort";
+
+export interface ContextRecordingNoteProjection {
+  sequence: number;
+  purpose: string;
+  attempts: number;
+  reason: string;
+  taskId?: string;
+  attempt?: number;
+  revision?: string;
+  resolution?: {
+    sequence: number;
+    resolution: ContextRecordingResolutionKind;
+    rationale?: string;
+    actor: SchedulerActor;
+  };
+}
+
+export interface ContextRecordingProjection {
+  notes: ContextRecordingNoteProjection[];
+  waiver?: {
+    sequence: number;
+    rationale: string;
+  };
+}
+
+export function latestUnresolvedContextRecordingNote(
+  projection: SchedulerProjection,
+): ContextRecordingNoteProjection | undefined {
+  const notes = projection.contextRecording?.notes ?? [];
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index];
+    if (note && !note.resolution) return note;
+  }
+  return undefined;
+}
+
 export interface RepairCyclesProjection {
   limit: number;
   used: number;
@@ -472,6 +517,9 @@ export interface SchedulerProjection {
    * stopped state without recreating mutable scheduler authority.
    */
   status: "running" | "paused" | "completed" | "failed" | "stopped";
+  /** Set when an abort resolution fails the scheduler run. */
+  failureReason?: string;
+  contextRecording?: ContextRecordingProjection;
   /**
    * Legacy plans remain readable, but an active plan without criteria must
    * pass through one append-only Architect upgrade before it can proceed.
@@ -710,6 +758,10 @@ export function architectLifecycleEventMatchesReason(
       return event.actor.role === "architect" &&
         event.type === "plan_critique.resolved" &&
         event.payload.critiqueId === reason.critiqueId;
+    case "context_recording_decision_required":
+      return event.type === "context_manifest.recording_resolved" &&
+        (event.actor.role === "architect" || event.actor.role === "user") &&
+        event.payload.noteSequence === reason.noteSequence;
   }
 }
 
@@ -730,6 +782,7 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
     "verifier.repairs_planned",
     "task.revised",
     "plan_critique.resolved",
+    "context_manifest.recording_resolved",
   ].includes(event.type) ||
     (event.type === "task.transitioned" &&
       event.actor.role === "architect" && event.payload.status === "integrating");
@@ -833,6 +886,10 @@ function architectActionReasonIsApplicable(
         current.planRevision === reason.planRevision &&
         sameValue(current.blockingFindingIds ?? [], reason.blockingFindingIds);
     }
+    case "context_recording_decision_required":
+      return projection.status === "paused" &&
+        projection.pauseReason?.reason === "context_recording_failed" &&
+        latestUnresolvedContextRecordingNote(projection)?.sequence === reason.noteSequence;
   }
 }
 
@@ -1655,6 +1712,9 @@ export function reduceSchedulerEvent(
     ...(current.repairCycles
       ? { repairCycles: cloneRepairCyclesProjection(current.repairCycles) }
       : {}),
+    ...(current.contextRecording
+      ? { contextRecording: cloneContextRecording(current.contextRecording) }
+      : {}),
     ...(current.projectHandoff
       ? {
           projectHandoff: {
@@ -1678,6 +1738,16 @@ export function reduceSchedulerEvent(
     },
     lastSequence: event.sequence,
   };
+  if (
+    current.status === "failed" &&
+    (
+      event.type === "run.resumed" ||
+      event.type === "task.transitioned" ||
+      event.type === "worker.runtime_assigned"
+    )
+  ) {
+    throw new Error("A failed Build cannot be resumed or dispatched.");
+  }
   switch (event.type) {
     case "process.recovery_updated": {
       if (["completed", "failed", "stopped"].includes(current.status)) {
@@ -2700,6 +2770,12 @@ export function reduceSchedulerEvent(
       break;
     case "run.resumed":
       if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents resume.");
+      if (
+        current.pauseReason?.reason === "context_recording_failed" &&
+        latestUnresolvedContextRecordingNote(current)
+      ) {
+        throw new Error("Context recording failure must be resolved before the run can resume.");
+      }
       next.status = "running";
       delete next.pauseReason;
       break;
@@ -2954,6 +3030,14 @@ export function reduceSchedulerEvent(
     }
     case "plan_critique.resolved": {
       applyPlanCritiqueResolved(next, event);
+      break;
+    }
+    case "context_manifest.recording_failed": {
+      applyContextRecordingFailed(next, event);
+      break;
+    }
+    case "context_manifest.recording_resolved": {
+      applyContextRecordingResolved(next, event);
       break;
     }
   }
@@ -5439,6 +5523,161 @@ function acceptanceContractStatusForTasks(
   ).length > 0
     ? "acceptance_contract_upgrade_required"
     : "current";
+}
+
+function cloneContextRecording(
+  state: ContextRecordingProjection,
+): ContextRecordingProjection {
+  return {
+    notes: state.notes.map((note) => ({
+      ...note,
+      ...(note.resolution
+        ? { resolution: { ...note.resolution, actor: { ...note.resolution.actor } } }
+        : {}),
+    })),
+    ...(state.waiver ? { waiver: { ...state.waiver } } : {}),
+  };
+}
+
+function applyContextRecordingFailed(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may record a context-manifest failure.");
+  }
+  const purpose = requiredString(event.payload, "purpose");
+  const attempts = requiredPositiveInteger(event.payload, "attempts");
+  const reason = requiredString(event.payload, "reason");
+  const taskId = optionalContextText(event.payload, "taskId");
+  const attempt = optionalContextAttempt(event.payload, "attempt");
+  const revision = optionalContextText(event.payload, "revision");
+  const notes = projection.contextRecording?.notes ?? [];
+  projection.contextRecording = {
+    ...(projection.contextRecording?.waiver
+      ? { waiver: { ...projection.contextRecording.waiver } }
+      : {}),
+    notes: [
+      ...notes,
+      {
+        sequence: event.sequence,
+        purpose,
+        attempts,
+        reason,
+        ...(taskId ? { taskId } : {}),
+        ...(attempt !== undefined ? { attempt } : {}),
+        ...(revision ? { revision } : {}),
+      },
+    ],
+  };
+}
+
+function applyContextRecordingResolved(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  const resolution = event.payload.resolution;
+  if (
+    resolution !== "retry" &&
+    resolution !== "proceed_without_manifest" &&
+    resolution !== "abort"
+  ) {
+    throw new Error("Context recording resolution is invalid.");
+  }
+  if (resolution === "retry") {
+    if (event.actor.role !== "architect" && event.actor.role !== "user") {
+      throw new Error("Only the Architect or the user may retry context recording.");
+    }
+  } else if (event.actor.role !== "architect") {
+    throw new Error("Only the Architect may resolve context recording.");
+  }
+  if (projection.status !== "paused" || projection.pauseReason?.reason !== "context_recording_failed") {
+    throw new Error("Context recording can only be resolved while that failure pauses the run.");
+  }
+  const noteSequence = requiredPositiveInteger(event.payload, "noteSequence");
+  const notes = projection.contextRecording?.notes ?? [];
+  const named = notes.find((item) => item.sequence === noteSequence);
+  if (!named) throw new Error(`Context recording note ${noteSequence} does not exist.`);
+  if (named.resolution) {
+    throw new Error(`Context recording note ${noteSequence} is already resolved.`);
+  }
+  const latestUnresolved = [...notes].reverse().find((item) => !item.resolution);
+  if (!latestUnresolved || noteSequence !== latestUnresolved.sequence) {
+    throw new Error(
+      `Context recording resolution must name the latest unresolved note ${latestUnresolved?.sequence ?? "none"}.`,
+    );
+  }
+  const rationale = event.payload.rationale;
+  if (rationale !== undefined && (typeof rationale !== "string" || !rationale.trim())) {
+    throw new Error("Context recording rationale must be non-empty.");
+  }
+  if (
+    resolution === "proceed_without_manifest" &&
+    (typeof rationale !== "string" || !rationale.trim())
+  ) {
+    throw new Error("proceed_without_manifest requires a non-empty rationale.");
+  }
+  if (resolution === "retry") {
+    const retryEvents = new Set(
+      notes.flatMap((item) =>
+        item.resolution?.resolution === "retry" ? [item.resolution.sequence] : [],
+      ),
+    );
+    if (retryEvents.size >= CONTEXT_RECORDING_RETRY_LIMIT) {
+      throw new Error(
+        `Context recording retry budget of ${CONTEXT_RECORDING_RETRY_LIMIT} is exhausted.`,
+      );
+    }
+  }
+  const sharedResolution: {
+    sequence: number;
+    resolution: ContextRecordingResolutionKind;
+    rationale?: string;
+  } = {
+    sequence: event.sequence,
+    resolution,
+    ...(typeof rationale === "string" ? { rationale } : {}),
+  };
+  projection.contextRecording = {
+    ...(projection.contextRecording?.waiver
+      ? { waiver: { ...projection.contextRecording.waiver } }
+      : {}),
+    notes: notes.map((item) =>
+      item.resolution || item.sequence > noteSequence
+        ? item
+        : {
+            ...item,
+            resolution: {
+              ...sharedResolution,
+              actor: { ...event.actor },
+            },
+          },
+    ),
+    ...(resolution === "proceed_without_manifest"
+      ? { waiver: { sequence: event.sequence, rationale: (rationale as string).trim() } }
+      : {}),
+  };
+  if (resolution === "abort") {
+    projection.status = "failed";
+    projection.failureReason = "context_recording_aborted";
+    delete projection.pauseReason;
+  }
+}
+
+function optionalContextText(
+  payload: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  if (!Object.hasOwn(payload, key) || payload[key] === undefined) return undefined;
+  return requiredString(payload, key);
+}
+
+function optionalContextAttempt(
+  payload: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  if (!Object.hasOwn(payload, key) || payload[key] === undefined) return undefined;
+  return requiredPositiveInteger(payload, key);
 }
 
 function cloneRepairCyclesProjection(

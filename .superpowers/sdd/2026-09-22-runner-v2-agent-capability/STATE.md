@@ -141,6 +141,8 @@ Empty.
 | PD-21 | `architect_document` integrates through its own `documentApplier` port, never the worker `integrationDriver` | round 5: that driver requires a worker session, and a worker session would put the document on `acceptedChangeSessions`. **SUPERSEDED by PD-23.** |
 | PD-22 | Reviewer independence: distinct model preferred, fresh context fallback, recorded | owner decision D8, "same rule everywhere". P6.6 applies the same rule to its deliverable and coverage reviewers. |
 | PD-23 | The Architect maintains `docs/project/**` plus marked `AGENTS.md`/`CLAUDE.md` sections; the runner commits them on the integration branch outside the task graph; a new run cannot complete without a fresh `STATE.md` | owner redesign 2026-09-22/23 (ESC-4): any AI tool can pick the project up; handoff's clean-worktree rule keeps writes off the user's folder until handoff; PD-17 still holds — no general filesystem mutation tool |
+| PD-24 | CD-1: the pump runs the Architect's context-recording decision turn in the same cycle, before reporting a pause; recording is suspended for that turn only; a user resume counts as `retry` | B2 execution: the plan named no trigger for the Architect's decision |
+| PD-25 | CD-2: B2 may make the minimal edits in `control-server.ts`, `agent-contracts.ts`, `agent-loop.ts` and new `cli-lifecycle.ts` recorded in `evidence/B2.md` | type unions and a safe test seam required them; each is one line or a pure move |
 
 ---
 

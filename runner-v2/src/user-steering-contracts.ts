@@ -88,6 +88,16 @@ export type ArchitectActionReason =
       critiqueId: string;
       planRevision: number;
       blockingFindingIds: string[];
+    }
+  | {
+      type: "context_recording_decision_required";
+      purpose: string;
+      attempts: number;
+      reason: string;
+      noteSequence: number;
+      taskId?: string;
+      attempt?: number;
+      revision?: string;
     };
 
 export type ArchitectQuestionDecisionKind =
@@ -373,6 +383,24 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
     case "integration_resolution_required":
       exact(["taskId"]);
       return { type, taskId: text("taskId") };
+    case "context_recording_decision_required": {
+      exact(["purpose", "attempts", "reason", "noteSequence", "taskId", "attempt", "revision"]);
+      const taskId = reason.taskId === undefined ? undefined : text("taskId");
+      const attempt = reason.attempt === undefined
+        ? undefined
+        : requiredPositiveInteger(reason, "attempt");
+      const revision = reason.revision === undefined ? undefined : text("revision");
+      return {
+        type,
+        purpose: text("purpose"),
+        attempts: requiredPositiveInteger(reason, "attempts"),
+        reason: text("reason"),
+        noteSequence: requiredPositiveInteger(reason, "noteSequence"),
+        ...(taskId ? { taskId } : {}),
+        ...(attempt !== undefined ? { attempt } : {}),
+        ...(revision ? { revision } : {}),
+      };
+    }
     case "plan_critique_resolution_required": {
       exact(["critiqueId", "planRevision", "blockingFindingIds"]);
       if (

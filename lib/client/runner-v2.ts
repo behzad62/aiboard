@@ -558,13 +558,62 @@ export interface NativePlanCritiqueState {
   };
 }
 
+export interface NativeContextRecordingNote {
+  sequence: number;
+  purpose: string;
+  attempts: number;
+  reason: string;
+  taskId?: string;
+  attempt?: number;
+  revision?: string;
+  resolution?: {
+    sequence: number;
+    resolution: "retry" | "proceed_without_manifest" | "abort";
+    rationale?: string;
+  };
+}
+
+export interface NativeContextRecordingState {
+  notes: NativeContextRecordingNote[];
+  waiver?: {
+    sequence: number;
+    rationale: string;
+  };
+}
+
+export function contextRecordingView(
+  projection: Pick<NativeBuildProjection, "contextRecording"> | null | undefined,
+): {
+  purpose: string;
+  attempts: number;
+  reason: string;
+  resolution?: string;
+  rationale?: string;
+  suspended: boolean;
+} | undefined {
+  const notes = projection?.contextRecording?.notes;
+  if (!notes || notes.length === 0) return undefined;
+  const latest = notes[notes.length - 1];
+  if (!latest) return undefined;
+  return {
+    purpose: latest.purpose,
+    attempts: latest.attempts,
+    reason: latest.reason,
+    ...(latest.resolution ? { resolution: latest.resolution.resolution } : {}),
+    rationale: latest.resolution?.rationale ?? projection?.contextRecording?.waiver?.rationale,
+    suspended: projection?.contextRecording?.waiver !== undefined,
+  };
+}
+
 export interface NativeBuildProjection {
   runId: string;
-  status: "running" | "paused" | "completed";
+  status: "running" | "paused" | "completed" | "failed" | "stopped";
+  failureReason?: string;
   pauseReason?: {
     reason: string;
     taskId?: string;
   };
+  contextRecording?: NativeContextRecordingState;
   runPolicy?: BuildRunPolicy;
   planRevision: number;
   acceptanceContractStatus?: NativeAcceptanceContractStatus;
@@ -1214,7 +1263,7 @@ function cloneNativeReviewProjection(
 }
 
 export interface NativeBuildStepResult {
-  status: "progressed" | "paused" | "completed" | "idle" | "blocked";
+  status: "progressed" | "paused" | "completed" | "idle" | "blocked" | "failed";
   action?: string;
 }
 

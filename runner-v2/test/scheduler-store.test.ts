@@ -7,6 +7,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import {
   acceptanceContractAuditProjection,
+  CONTEXT_RECORDING_RETRY_LIMIT,
+  latestUnresolvedContextRecordingNote,
   rebuildSchedulerProjection,
   validateSchedulerEvidenceEvent,
   type NewSchedulerEvent,
@@ -1543,6 +1545,211 @@ test("projection records the most recently integrated revision", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("proceed_without_manifest without a rationale is rejected at the durable append", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-recording-rationale-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    const noted = pauseForContextRecording(store, "run_rationale");
+    const before = store.readRun("run_rationale").length;
+    assert.throws(
+      () => store.append(recordingResolution("run_rationale", noted.sequence, "proceed_without_manifest")),
+      /proceed_without_manifest requires a non-empty rationale\./,
+    );
+    assert.equal(store.readRun("run_rationale").length, before);
+    assert.equal(latestUnresolvedContextRecordingNote(rebuildSchedulerProjection(store.readRun("run_rationale")))?.sequence, noted.sequence);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a context recording note accepts exactly one resolution", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-recording-once-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    const noted = pauseForContextRecording(store, "run_once");
+    store.append(recordingResolution("run_once", noted.sequence, "retry", "Retry once."));
+    assert.equal(latestUnresolvedContextRecordingNote(rebuildSchedulerProjection(store.readRun("run_once"))), undefined);
+    assert.throws(
+      () => store.append(recordingResolution("run_once", noted.sequence, "abort", "Too late.", "second")),
+      /already resolved/,
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the context recording retry budget refuses a fourth retry", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-recording-budget-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    for (let index = 1; index <= CONTEXT_RECORDING_RETRY_LIMIT; index += 1) {
+      const noted = pauseForContextRecording(store, "run_budget", index);
+      store.append(recordingResolution("run_budget", noted.sequence, "retry", `Retry ${index}.`, `retry-${index}`));
+      store.append(event("run_budget", "run.resumed", `resume-${index}`, {}));
+    }
+    const fourth = pauseForContextRecording(store, "run_budget", CONTEXT_RECORDING_RETRY_LIMIT + 1);
+    const before = store.readRun("run_budget").length;
+    assert.throws(
+      () => store.append(recordingResolution(
+        "run_budget",
+        fourth.sequence,
+        "retry",
+        "Fourth retry.",
+        "retry-4",
+      )),
+      new RegExp(`Context recording retry budget of ${CONTEXT_RECORDING_RETRY_LIMIT} is exhausted\\.`),
+    );
+    assert.equal(store.readRun("run_budget").length, before);
+    assert.equal(rebuildSchedulerProjection(store.readRun("run_budget")).status, "paused");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("context recording resolution rejects an older note while a newer note is unresolved", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-recording-stale-note-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    const first = pauseForContextRecording(store, "run_stale_note", 1);
+    const second = pauseForContextRecording(store, "run_stale_note", 2);
+    const before = store.readRun("run_stale_note").length;
+    assert.throws(
+      () => store.append(recordingResolution("run_stale_note", first.sequence, "retry", "Cover the old note.")),
+      new RegExp(`Context recording resolution must name the latest unresolved note ${second.sequence}\\.`),
+    );
+    assert.equal(store.readRun("run_stale_note").length, before);
+    const notes = rebuildSchedulerProjection(store.readRun("run_stale_note")).contextRecording?.notes ?? [];
+    assert.equal(notes.length, 2);
+    assert.equal(notes.every((note) => note.resolution === undefined), true);
+    assert.equal(rebuildSchedulerProjection(store.readRun("run_stale_note")).status, "paused");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("one context recording retry covering two notes uses one unit of the retry budget", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-recording-budget-events-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const runId = "run_budget_events";
+  try {
+    const first = pauseForContextRecording(store, runId, 1);
+    const second = pauseForContextRecording(store, runId, 2);
+    store.append(recordingResolution(runId, second.sequence, "retry", "Retry both.", "retry-both"));
+    const covered = rebuildSchedulerProjection(store.readRun(runId)).contextRecording?.notes ?? [];
+    assert.equal(covered.length, 2);
+    assert.equal(covered[0]?.sequence, first.sequence);
+    assert.deepEqual(covered[0]?.resolution, covered[1]?.resolution);
+    assert.equal(covered[0]?.resolution?.resolution, "retry");
+    assert.equal(retryResolutionEventCount(covered), 1);
+    store.append(event(runId, "run.resumed", "resume-both", {}));
+    for (let index = 2; index <= CONTEXT_RECORDING_RETRY_LIMIT; index += 1) {
+      const noted = pauseForContextRecording(store, runId, index + 1);
+      store.append(recordingResolution(runId, noted.sequence, "retry", `Retry ${index}.`, `retry-${index}`));
+      store.append(event(runId, "run.resumed", `resume-${index}`, {}));
+      assert.equal(
+        retryResolutionEventCount(
+          rebuildSchedulerProjection(store.readRun(runId)).contextRecording?.notes ?? [],
+        ),
+        index,
+      );
+    }
+    const fourth = pauseForContextRecording(store, runId, CONTEXT_RECORDING_RETRY_LIMIT + 2);
+    const before = store.readRun(runId).length;
+    assert.throws(
+      () => store.append(recordingResolution(runId, fourth.sequence, "retry", "Fourth retry.", "retry-4")),
+      new RegExp(`Context recording retry budget of ${CONTEXT_RECORDING_RETRY_LIMIT} is exhausted\\.`),
+    );
+    assert.equal(store.readRun(runId).length, before);
+    assert.equal(rebuildSchedulerProjection(store.readRun(runId)).status, "paused");
+    assert.equal(
+      retryResolutionEventCount(
+        rebuildSchedulerProjection(store.readRun(runId)).contextRecording?.notes ?? [],
+      ),
+      CONTEXT_RECORDING_RETRY_LIMIT,
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("aborting context recording fails the run and refuses resume or dispatch", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-recording-abort-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  try {
+    const noted = pauseForContextRecording(store, "run_abort");
+    store.append(recordingResolution("run_abort", noted.sequence, "abort", "Stop the build."));
+    const projection = rebuildSchedulerProjection(store.readRun("run_abort"));
+    assert.equal(projection.status, "failed");
+    assert.equal(projection.failureReason, "context_recording_aborted");
+    assert.equal(projection.pauseReason, undefined);
+    assert.throws(
+      () => store.append(event("run_abort", "run.resumed", "resume-after-abort", {})),
+      /A failed Build cannot be resumed or dispatched\./,
+    );
+    assert.throws(
+      () => store.append(event("run_abort", "task.transitioned", "dispatch-after-abort", {
+        taskId: "task_a",
+        status: "running",
+      })),
+      /A failed Build cannot be resumed or dispatched\./,
+    );
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function retryResolutionEventCount(
+  notes: ReadonlyArray<{ resolution?: { sequence: number; resolution: string } }>,
+): number {
+  return new Set(
+    notes.flatMap((note) =>
+      note.resolution?.resolution === "retry" ? [note.resolution.sequence] : [],
+    ),
+  ).size;
+}
+
+function pauseForContextRecording(store: SqliteSchedulerStore, runId: string, index = 1): SchedulerEvent {
+  if (store.readRun(runId).length === 0) {
+    store.append(event(runId, "run.initialized", `${runId}:initialized`, {}));
+  }
+  const noted = store.append(event(runId, "context_manifest.recording_failed", `${runId}:note:${index}`, {
+    purpose: "worker:task",
+    attempts: 3,
+    reason: "disk full",
+    taskId: "task_a",
+    attempt: index,
+    revision: `rev-${index}`,
+  }));
+  store.append(event(runId, "run.paused", `${runId}:pause:${index}`, {
+    reason: "context_recording_failed",
+    taskId: "task_a",
+  }));
+  return noted;
+}
+
+function recordingResolution(
+  runId: string,
+  noteSequence: number,
+  resolution: "retry" | "proceed_without_manifest" | "abort",
+  rationale?: string,
+  key = `${runId}:resolved:${noteSequence}`,
+): NewSchedulerEvent {
+  return {
+    ...event(runId, "context_manifest.recording_resolved", key, {
+      noteSequence,
+      resolution,
+      ...(rationale === undefined ? {} : { rationale }),
+    }),
+    actor: { role: "architect", id: "architect_1" },
+  };
+}
 
 function event(
   runId: string,

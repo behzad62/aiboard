@@ -13,9 +13,15 @@ import type {
   SchedulerStore,
 } from "./scheduler-store.js";
 import {
+  clearContextRecordingSuspension,
+  ContextManifestRecordingError,
+  suspendContextRecording,
+} from "./context-manifest-store.js";
+import {
   architectLifecycleEventMatchesReason,
   DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
+  latestUnresolvedContextRecordingNote,
   rebuildSchedulerProjection,
   repairCyclesExhausted,
 } from "./scheduler-store.js";
@@ -206,7 +212,7 @@ export interface BuildRuntimeOptions {
 }
 
 export interface BuildStepResult {
-  status: "progressed" | "paused" | "completed" | "idle" | "blocked";
+  status: "progressed" | "paused" | "completed" | "idle" | "blocked" | "failed";
   action?: string;
 }
 
@@ -235,6 +241,11 @@ export class BuildRuntime {
   private readonly repairPlanLimit: number;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
+  private recordingFailureContext: {
+    taskId?: string;
+    attempt?: number;
+    revision?: string;
+  } = {};
 
   constructor(options: BuildRuntimeOptions) {
     this.id = options.runId;
@@ -303,6 +314,7 @@ export class BuildRuntime {
     this.configureVerifierPolicy();
     this.configureRepairPolicy();
     this.configurePlanCritiquePolicy();
+    this.rederiveContextRecordingSuspension();
     this.scheduler = new TaskScheduler({
       runId: options.runId,
       store: options.store,
@@ -364,6 +376,9 @@ export class BuildRuntime {
     if (projection.status === "completed") {
       throw new Error("A completed Build cannot be resumed.");
     }
+    if (projection.status === "failed") {
+      throw new Error("A failed Build cannot be resumed.");
+    }
     if (!renewBudgetWindow && projection.status !== "paused") {
       throw new Error("A benchmark continuation requires a paused Build.");
     }
@@ -390,6 +405,24 @@ export class BuildRuntime {
       this.runPolicy === "budgeted"
     ) {
       this.renewBudgetWindow?.(`budget-window:${idempotencyKey}`, occurredAt);
+    }
+    const unresolvedRecording = projection.status === "paused" &&
+      projection.pauseReason?.reason === "context_recording_failed"
+      ? latestUnresolvedContextRecordingNote(projection)
+      : undefined;
+    if (unresolvedRecording) {
+      this.store.append({
+        runId: this.runId,
+        type: "context_manifest.recording_resolved",
+        occurredAt,
+        actor: { role: "user", id: "local-user" },
+        idempotencyKey: `context-recording-resolved:user:${unresolvedRecording.sequence}`,
+        payload: {
+          noteSequence: unresolvedRecording.sequence,
+          resolution: "retry",
+          rationale: "User resumed the run.",
+        },
+      });
     }
     this.store.append({
       runId: this.runId,
@@ -574,6 +607,21 @@ export class BuildRuntime {
   }
 
   private async stepOnce(): Promise<BuildStepResult> {
+    try {
+      return await this.dispatchStep();
+    } catch (error) {
+      if (!(error instanceof ContextManifestRecordingError)) throw error;
+      try {
+        this.recordContextRecordingFailure(error);
+      } catch {
+        throw error;
+      }
+      return { status: "paused", action: "context_recording_failed" };
+    }
+  }
+
+  private async dispatchStep(): Promise<BuildStepResult> {
+    this.recordingFailureContext = {};
     const events = this.store.readRun(this.runId);
     if (events.length === 0) {
       await this.runArchitect({ type: "plan_required" }, emptyProjection(this.runId));
@@ -582,7 +630,12 @@ export class BuildRuntime {
 
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
-    if (projection.status === "paused") return { status: "paused" };
+    if (projection.status === "failed") {
+      return { status: "failed", action: "context_recording_aborted" };
+    }
+    if (projection.status === "paused") {
+      return { status: "paused", action: projection.pauseReason?.reason };
+    }
     const pendingInterruption = Object.values(projection.userGuidance)
       .filter((guidance) => guidance.interruptionStatus !== "completed")
       .sort((left, right) => left.version - right.version)[0];
@@ -838,7 +891,12 @@ export class BuildRuntime {
     await this.scheduler.awaitIdle();
     const afterWorkers = this.projection();
     if (afterWorkers.status === "paused") {
-      return { status: "paused", action: "worker_paused" };
+      return {
+        status: "paused",
+        action: afterWorkers.pauseReason?.reason === "context_recording_failed"
+          ? "context_recording_failed"
+          : "worker_paused",
+      };
     }
     if (afterWorkers.status === "completed") {
       return { status: "completed", action: "worker_completed" };
@@ -1215,6 +1273,9 @@ export class BuildRuntime {
       return this.afterArchitect("verifier_repair_plan_required");
     }
 
+    this.recordingFailureContext = {
+      ...(targetRevision ? { revision: targetRevision } : {}),
+    };
     const result = await driver.verify({
       runId: this.runId,
       projection,
@@ -1406,10 +1467,111 @@ export class BuildRuntime {
     this.initializeRun();
   }
 
+  private rederiveContextRecordingSuspension(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.length === 0) return;
+    const waiver = rebuildSchedulerProjection(events).contextRecording?.waiver;
+    if (waiver) suspendContextRecording(this.runId, waiver.rationale);
+  }
+
+  async resolveContextRecordingFailure(): Promise<"resumed" | "aborted" | "unresolved"> {
+    const projection = this.projection();
+    if (projection.status === "failed") return "aborted";
+    const note = latestUnresolvedContextRecordingNote(projection);
+    if (
+      projection.status !== "paused" ||
+      projection.pauseReason?.reason !== "context_recording_failed" ||
+      !note
+    ) {
+      return "unresolved";
+    }
+    suspendContextRecording(this.runId, "context_recording_decision_turn");
+    try {
+      await this.runArchitect({
+        type: "context_recording_decision_required",
+        purpose: note.purpose,
+        attempts: note.attempts,
+        reason: note.reason,
+        noteSequence: note.sequence,
+        ...(note.taskId ? { taskId: note.taskId } : {}),
+        ...(note.attempt !== undefined ? { attempt: note.attempt } : {}),
+        ...(note.revision ? { revision: note.revision } : {}),
+      }, projection);
+    } catch (error) {
+      if (!(error instanceof ContextManifestRecordingError)) throw error;
+      if (this.projection().status === "failed") return "aborted";
+      if (latestUnresolvedContextRecordingNote(this.projection())) return "unresolved";
+    } finally {
+      if (!this.projection().contextRecording?.waiver) {
+        clearContextRecordingSuspension(this.runId);
+      }
+    }
+    return this.finishContextRecordingResolution();
+  }
+
+  private finishContextRecordingResolution(): "resumed" | "aborted" | "unresolved" {
+    const projection = this.projection();
+    if (projection.status === "failed") return "aborted";
+    const note = projection.contextRecording?.notes.at(-1);
+    const resolution = note?.resolution;
+    if (!resolution) return "unresolved";
+    if (resolution.resolution === "abort") return "aborted";
+    if (projection.status === "running") return "resumed";
+    if (resolution.resolution === "proceed_without_manifest") {
+      suspendContextRecording(this.runId, resolution.rationale ?? projection.contextRecording?.waiver?.rationale ?? "");
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "run.resumed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `context-recording-resumed:${note?.sequence ?? projection.lastSequence}`,
+      payload: {},
+    });
+    return "resumed";
+  }
+
+  private recordContextRecordingFailure(error: ContextManifestRecordingError): void {
+    const projection = this.projection();
+    const details = this.recordingFailureContext;
+    this.store.append({
+      runId: this.runId,
+      type: "context_manifest.recording_failed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `context-recording-failed:${error.purpose}:${projection.lastSequence}`,
+      payload: {
+        purpose: error.purpose,
+        attempts: error.attempts,
+        reason: error.message,
+        ...(details.taskId ? { taskId: details.taskId } : {}),
+        ...(details.attempt !== undefined ? { attempt: details.attempt } : {}),
+        ...(details.revision ? { revision: details.revision } : {}),
+      },
+    });
+    const noted = this.projection();
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `context-recording-paused:${noted.lastSequence}`,
+      payload: {
+        reason: "context_recording_failed",
+        ...(details.taskId ? { taskId: details.taskId } : {}),
+      },
+    });
+  }
+
   private async runArchitect(
     reason: ArchitectActionReason,
     projection: SchedulerProjection
   ): Promise<void> {
+    this.recordingFailureContext = {
+      ...("taskId" in reason && reason.taskId ? { taskId: reason.taskId } : {}),
+      ...("attempt" in reason && typeof reason.attempt === "number" ? { attempt: reason.attempt } : {}),
+      ...(projection.integrationRevision ? { revision: projection.integrationRevision } : {}),
+    };
     const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
     const providerRetryDeadlineMs = this.providerRetryDeadlineMs?.();
     const tools = new ToolRegistry();
@@ -1702,6 +1864,9 @@ export class BuildRuntime {
       }
       return this.afterArchitect("plan_critique_resolution_required");
     }
+    this.recordingFailureContext = {
+      ...(projection.integrationRevision ? { revision: projection.integrationRevision } : {}),
+    };
     const result = await driver.critique({
       runId: this.runId,
       projection,
