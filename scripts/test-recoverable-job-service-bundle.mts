@@ -239,7 +239,11 @@ try {
   const fixtureSource = join(scratch, "fixture-source");
   const fixtureOrigin = join(scratch, "fixture-origin.git");
   const shallowClone = join(scratch, "fixture-shallow");
-  execFileSync("git", ["clone", "--no-hardlinks", root, fixtureSource], { stdio: "pipe" });
+  execFileSync("git", ["clone", "--depth=1", "--no-tags", pathToFileURL(root).href, fixtureSource], { stdio: "pipe" });
+  // A CI checkout stores the pin outside branch history. Seed the fixture origin
+  // explicitly instead of relying on a developer clone's incidental full history.
+  execFileSync("git", ["-C", fixtureSource, "fetch", "--depth=1", "origin",
+    `${PINNED_RJS_RUNNER_COMMIT}:refs/heads/fixture-pinned-runner`], { stdio: "pipe" });
   execFileSync("git", ["-C", fixtureSource, "checkout", "-b", "fixture-head"], { stdio: "pipe" });
   for (const relativePath of [
     "scripts/publish-downloads.mjs",
