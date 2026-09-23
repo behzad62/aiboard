@@ -333,3 +333,21 @@ it started that are still alive and for temporary files it created outside the w
 uses the runner's existing process ownership, so this is the same on every language and OS the
 runner supports. A leftover is cleaned up where ownership is proven, and is recorded as a
 finding either way; uncertain ownership is retained and reported, never killed on a guess.
+
+## OA-18 — Prompt hygiene pass after P6.6's prompt changes
+
+**Owner, 2026-09-23:** "fix what needs to be fixed now and what needs to fix later add as tasks to
+end of p6.6 only if needed".
+
+An independent review of every model-facing prompt (report
+`.superpowers/sdd/2026-09-06-runner-v2-evidence-gated-planning/prompt-review-2026-09-23.md`) found
+findings that are correct but not urgent, and that P6.6 itself would partly rewrite: M1, M3,
+M7–M12 and L1–L8. The urgent ones (H1–H5, M2, M4–M6) were fixed in the agent-capability program.
+
+**Obligation.** After P6.6's own prompt changes and before its final gate:
+1. Re-check each deferred finding against the prompts as they then stand. Drop a finding that no
+   longer applies, and record why. Fix every one that still applies.
+2. Token economy is measured, not assumed: record the per-role prompt token counts before and
+   after (T8's per-gate token report is the place).
+3. Any change to a checked statement (for example the `AGENTS.md` section sentences in
+   `project-docs.ts`) keeps the check and the template in step.

@@ -2,7 +2,9 @@
 
 ## Current revision — 2026-09-22 owner amendment, revision 2
 
-**PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED**
+**PLAN BLOCKED — OA-18 / EP52 / T10 (deferred prompt findings, added 2026-09-23 by owner direction) not yet independently reviewed.** Unblock: one scoped review of that delta.
+
+Before this addition: **PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED**
 
 On 2026-09-23 the owner replaced the agent-capability program's `architect_document` task kind
 with an Architect documentation folder (its D6 revision 4). P6.6 text naming the task kind was
@@ -37,14 +39,14 @@ Campaign order: **P6.5 → agent-capability program → P6.6 → P7** (OA-8).
 
 | Lane | Packets | State / claim | Required next base | Next eligible action |
 |---|---|---|---|---|
-| A | T1, T2, T3, then T9, then T4, then T6, T7, T8 | PLANNED; no worker/session/branch/worktree claim | Accepted agent-capability program for T1; later accepted packet snapshots; T4 on accepted T9 | None before prerequisites and execution authority; T1 first afterward |
+| A | T1, T2, T3, then T9, then T4, then T6, T7, T10, T8 | PLANNED; no worker/session/branch/worktree claim | Accepted agent-capability program for T1; later accepted packet snapshots; T4 on accepted T9 | None before prerequisites and execution authority; T1 first afterward |
 | B | T5 | PLANNED; no claim | Accepted T3, isolated from lane A's T9/T4 worktrees | Starts at T3 acceptance, beside T9; does not wait for T9 |
 | Controller | Assignment, integration, acceptance | Planning only | Actual approved snapshots | None until the agent-capability program is accepted and execution is authorized |
 
 ### Execution queue (not started; supersedes the queue further below)
 
 T1 → T2 → T3 → { lane A: T9 → T4 } ‖ { lane B: T5 } (separate owned worktrees; T5 starts at T3
-acceptance) → integrate T4 then T5 → T6 → T7 → T8.
+acceptance) → integrate T4 then T5 → T6 → T7 → T10 → T8.
 
 These state files were copied onto `main`'s planning branch
 `docs/agent-capability-and-change-critique` on 2026-09-22 from the
