@@ -98,6 +98,8 @@ export type ArchitectActionReason =
       taskId?: string;
       attempt?: number;
       revision?: string;
+      /** CONTEXT_RECORDING_RETRY_LIMIT minus retry resolutions already used. */
+      retriesRemaining?: number;
     };
 
 export type ArchitectQuestionDecisionKind =
@@ -235,6 +237,14 @@ function requiredTextArray(payload: Record<string, unknown>, key: string): strin
     if (typeof item !== "string" || !item.trim()) throw new Error(`${key} must contain nonblank strings.`);
     return item;
   });
+}
+
+function nonNegativeInteger(payload: Record<string, unknown>, key: string): number {
+  const value = payload[key];
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`${key} must be a non-negative integer.`);
+  }
+  return value as number;
 }
 
 function requiredPositiveInteger(payload: Record<string, unknown>, key: string): number {
@@ -384,12 +394,15 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
       exact(["taskId"]);
       return { type, taskId: text("taskId") };
     case "context_recording_decision_required": {
-      exact(["purpose", "attempts", "reason", "noteSequence", "taskId", "attempt", "revision"]);
+      exact(["purpose", "attempts", "reason", "noteSequence", "taskId", "attempt", "revision", "retriesRemaining"]);
       const taskId = reason.taskId === undefined ? undefined : text("taskId");
       const attempt = reason.attempt === undefined
         ? undefined
         : requiredPositiveInteger(reason, "attempt");
       const revision = reason.revision === undefined ? undefined : text("revision");
+      const retriesRemaining = reason.retriesRemaining === undefined
+        ? undefined
+        : nonNegativeInteger(reason, "retriesRemaining");
       return {
         type,
         purpose: text("purpose"),
@@ -399,6 +412,7 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
         ...(taskId ? { taskId } : {}),
         ...(attempt !== undefined ? { attempt } : {}),
         ...(revision ? { revision } : {}),
+        ...(retriesRemaining !== undefined ? { retriesRemaining } : {}),
       };
     }
     case "plan_critique_resolution_required": {

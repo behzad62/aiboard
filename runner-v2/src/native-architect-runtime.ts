@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import { withLanguageAgentLifecycle } from "./language-agent-lifecycle.js";
 import { withMcpAgentLifecycle } from "./mcp-agent-lifecycle.js";
 import type { ExecutionGrantAuthority } from "./execution-grants.js";
@@ -215,7 +217,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         role: "system",
         content: [
           "You are the AIBoard Architect. Use one native lifecycle tool for the requested decision.",
-          "You may run commands only in the disposable copy created for this turn, never in the user's project.",
+          "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision.",
           "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
           "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.",
           "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
@@ -265,7 +267,9 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         messages.push(reminder);
       }
     }
-    const commandRevision = this.architectCommandRevision(projection.integrationRevision);
+    const commandRevision = this.architectCommandRevision(
+      await this.architectCommandCheckoutRevision(request, projection),
+    );
     try {
     const extras = createArchitectInspectionBroker({
       git: this.options.git,
@@ -419,6 +423,28 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     }
   }
 
+  /**
+   * review_required checks out the submission's taskRevision.
+   * Every other reason checks out the integration revision.
+   * A missing review revision is an error, never a fallback to integration.
+   */
+  private async architectCommandCheckoutRevision(
+    request: ArchitectActionRequest,
+    projection: ReturnType<typeof rebuildSchedulerProjection>,
+  ): Promise<string | undefined> {
+    if (request.reason.type !== "review_required") return projection.integrationRevision;
+    const submission = await loadArchitectReviewSubmission(
+      this.options.sessions,
+      request.runId,
+      request.reason,
+      projection,
+    );
+    if (!submission?.taskRevision) {
+      throw new Error("Review command copy requires the submission task revision.");
+    }
+    return submission.taskRevision;
+  }
+
   /** Lists the command tool without creating a worktree. Creation waits for the first call. */
   private architectCommandRevision(revision: string | undefined): string | undefined {
     const provider = this.options.commandWorkspace;
@@ -539,6 +565,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     projection: ReturnType<typeof rebuildSchedulerProjection>
   ) {
     const reviewSubmission = await this.reviewSubmission(request, projection);
+    const projectDocsStateText = await this.loadCommittedStateText(request.runId, projection);
     const [instructions, metadata] = await Promise.all([
       discoverProjectInstructions({ projectRoot: this.options.projectRoot }),
       this.options.skillCatalog.discover(),
@@ -598,6 +625,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       memories,
       evidence,
       recentHistory: [],
+      ...(projectDocsStateText !== undefined ? { projectDocsStateText } : {}),
     };
     if (!this.options.capabilityRegistry) return buildArchitectContext(input);
     return (await assembleContextWithExtensions({
@@ -620,6 +648,29 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       },
       artifacts: this.options.artifacts,
     })).pack;
+  }
+
+  private async loadCommittedStateText(
+    runId: string,
+    projection: ReturnType<typeof rebuildSchedulerProjection>,
+  ): Promise<string | undefined> {
+    const latest = [...(projection.projectDocs?.committed ?? [])]
+      .filter((commit) => commit.path === "docs/project/STATE.md")
+      .sort((left, right) => left.sequence - right.sequence)
+      .at(-1);
+    if (!latest) return undefined;
+    const requested = this.options.schedulerStore.readRun(runId).find((event) =>
+      event.type === "project_doc.requested" && event.payload.requestId === latest.requestId
+    );
+    const hash = requested?.payload.contentArtifactHash;
+    if (typeof hash !== "string") return undefined;
+    try {
+      const bytes = await this.options.artifacts.get(hash);
+      if (createHash("sha256").update(bytes).digest("hex") !== hash) return undefined;
+      return bytes.toString("utf8");
+    } catch {
+      return undefined;
+    }
   }
 
   private async reviewSubmission(

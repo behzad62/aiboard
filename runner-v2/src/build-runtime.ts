@@ -22,6 +22,7 @@ import {
 } from "./context-manifest-store.js";
 import {
   architectLifecycleEventMatchesReason,
+  contextRecordingRetriesRemaining,
   DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
   latestUnresolvedContextRecordingNote,
@@ -1596,9 +1597,10 @@ export class BuildRuntime {
   private async recoverPendingProjectDocs(): Promise<void> {
     if (!this.projectDocs || !this.artifacts) return;
     const events = this.store.readRun(this.runId);
-    const committed = new Set(
+    const settled = new Set(
       events.flatMap((event) =>
-        event.type === "project_doc.committed" && typeof event.payload.requestId === "string"
+        (event.type === "project_doc.committed" || event.type === "project_doc.abandoned") &&
+        typeof event.payload.requestId === "string"
           ? [event.payload.requestId]
           : []
       ),
@@ -1606,7 +1608,7 @@ export class BuildRuntime {
     const pending = events.filter((event) =>
       event.type === "project_doc.requested" &&
       typeof event.payload.requestId === "string" &&
-      !committed.has(event.payload.requestId)
+      !settled.has(event.payload.requestId)
     );
     for (const event of pending) {
       const requestId = event.payload.requestId;
@@ -1621,18 +1623,45 @@ export class BuildRuntime {
       ) {
         throw new Error("Project document request is incomplete.");
       }
+      if (projectDocSummaryRejected(summary)) {
+        this.recordAbandonedProjectDoc(requestId, path);
+        continue;
+      }
       const bytes = await this.artifacts.get(hash);
       if (createHash("sha256").update(bytes).digest("hex") !== hash) {
         throw new Error(`Project document artifact ${hash} does not match its request.`);
       }
-      const result = await this.projectDocs.commit({
-        writes: [{ path, content: bytes.toString("utf8") }],
-        summary,
-        runId: this.runId,
-        requestId,
-      });
-      this.appendProjectDocCommitted(requestId, path, result);
+      try {
+        const result = await this.projectDocs.commit({
+          writes: [{ path, content: bytes.toString("utf8") }],
+          summary,
+          runId: this.runId,
+          requestId,
+        });
+        this.appendProjectDocCommitted(requestId, path, result);
+      } catch (error) {
+        if (error instanceof Error && error.message === "Project document summary is invalid.") {
+          this.recordAbandonedProjectDoc(requestId, path);
+          continue;
+        }
+        throw error;
+      }
     }
+  }
+
+  private recordAbandonedProjectDoc(requestId: string, path: string): void {
+    this.store.append({
+      runId: this.runId,
+      type: "project_doc.abandoned",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `project-doc-abandoned:${requestId}`,
+      payload: {
+        requestId,
+        path,
+        reason: "Project document summary is invalid.",
+      },
+    });
   }
 
   private appendProjectDocCommitted(
@@ -1692,6 +1721,7 @@ export class BuildRuntime {
         ...(note.taskId ? { taskId: note.taskId } : {}),
         ...(note.attempt !== undefined ? { attempt: note.attempt } : {}),
         ...(note.revision ? { revision: note.revision } : {}),
+        retriesRemaining: contextRecordingRetriesRemaining(projection),
       }, projection);
     } catch (error) {
       if (!(error instanceof ContextManifestRecordingError)) throw error;
@@ -1807,7 +1837,7 @@ export class BuildRuntime {
       : created;
     assertArchitectLifecycleRegistration(
       registered.map((tool) => tool.definition.name),
-      this.runPolicy !== "plan_only",
+      this.runPolicy !== "plan_only" && reason.type !== "context_recording_decision_required",
       this.store,
       this.clock,
     );
@@ -2175,6 +2205,10 @@ function emptyProjection(runId: string): SchedulerProjection {
 function boundedCleanupError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return redactSensitiveText(message, 4_096) || "Final verification cleanup failed.";
+}
+
+function projectDocSummaryRejected(summary: string): boolean {
+  return !summary.trim() || summary.includes("\n") || summary.includes("\0");
 }
 
 function isProjectDocToolInput(input: unknown): input is {

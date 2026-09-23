@@ -65,6 +65,30 @@ test("resolve_context_recording is only offered for a recording decision and app
       architectAction: { reason, sequence: noted.sequence },
     })) registry.register(tool);
     assert.equal(registry.definitions().some((tool) => tool.name === "resolve_context_recording"), true);
+    assert.deepEqual(
+      registry.definitions().map((tool) => tool.name).sort(),
+      ["ask_user", "resolve_context_recording"],
+    );
+    const rationaleSchema = registry.definitions().find((tool) => tool.name === "resolve_context_recording")
+      ?.inputSchema as { properties?: { rationale?: { minLength?: number } } };
+    assert.equal(rationaleSchema.properties?.rationale?.minLength, 1);
+
+    const emptyWaiver = await invoke(registry, "resolve_context_recording", {
+      resolution: "proceed_without_manifest",
+      rationale: "",
+    });
+    assert.equal(emptyWaiver.isError, true);
+    assert.equal(emptyWaiver.error?.code, "invalid_arguments");
+    const blankWaiver = await invoke(registry, "resolve_context_recording", {
+      resolution: "proceed_without_manifest",
+      rationale: "   ",
+    });
+    assert.equal(blankWaiver.isError, true);
+    assert.equal(blankWaiver.error?.code, "invalid_arguments");
+    assert.equal(
+      store.readRun(RUN_ID).some((event) => event.type === "context_manifest.recording_resolved"),
+      false,
+    );
 
     const denied = await invoke(registry, "resolve_context_recording", {
       resolution: "retry",

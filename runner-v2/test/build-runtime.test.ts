@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { buildArchitectContext } from "../src/agent-prompts.js";
 import type { ToolCallBlock } from "../src/agent-contracts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import {
@@ -35,6 +36,7 @@ import {
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import {
   buildCompletionReadiness,
+  CONTEXT_RECORDING_RETRY_LIMIT,
   latestUnresolvedContextRecordingNote,
   rebuildSchedulerProjection,
 } from "../src/scheduler-store.js";
@@ -1416,10 +1418,7 @@ test("a completion-ready finish run refuses complete_run until the context recor
             },
           );
           assert.equal(refused.isError, true);
-          assert.match(
-            refused.error?.message ?? "",
-            /Context recording failure must be resolved before completion or handoff\./,
-          );
+          assert.equal(refused.error?.code, "unknown_tool");
           const resolved = await request.tools.invoke({
             type: "tool_call",
             callId: "retry-recording",
@@ -1837,6 +1836,183 @@ test("a user resume with two unresolved context recording notes records one retr
     assert.equal(notes[0]?.resolution?.sequence, resolutions[0]?.sequence);
     assert.equal(retryResolutionEventCount(notes), 1);
     assert.equal(store.readRun(runId).filter((event) => event.type === "run.resumed").length, 1);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the context recording decision turn registers only resolve_context_recording and ask_user", async () => {
+  const runId = "run_recording_decision_tools";
+  const { root, store } = recordingHarness(runId);
+  let decision = 0;
+  try {
+    const runtime = openRecordingRuntime(store, runId, {
+      architect: async (request) => {
+        if (request.reason.type === "plan_required") {
+          throw contextRecordingFailure(runId, "architect:plan_required");
+        }
+        assert.equal(request.reason.type, "context_recording_decision_required");
+        if (request.reason.type !== "context_recording_decision_required") return;
+        decision += 1;
+        assert.deepEqual(
+          request.tools.definitions().map((tool) => tool.name).sort(),
+          ["ask_user", "resolve_context_recording"],
+        );
+        assert.equal(
+          request.reason.retriesRemaining,
+          decision === 1 ? CONTEXT_RECORDING_RETRY_LIMIT : CONTEXT_RECORDING_RETRY_LIMIT - 1,
+        );
+        const resolution = decision === 1 ? "retry" : "abort";
+        const result = await request.tools.invoke({
+          type: "tool_call",
+          callId: `resolve-${decision}`,
+          name: "resolve_context_recording",
+          arguments: {
+            resolution,
+            rationale: decision === 1 ? "Retry the manifest." : "Stop the run.",
+          },
+        }, request.context);
+        assert.equal(result.isError, false, result.error?.message ?? "resolution failed");
+      },
+      worker: async () => ({ type: "paused", reason: "unused" }),
+    });
+    assert.equal((await runtime.step()).action, "context_recording_failed");
+    assert.equal(await runtime.resolveContextRecordingFailure(), "resumed");
+    assert.equal((await runtime.step()).action, "context_recording_failed");
+    assert.equal(await runtime.resolveContextRecordingFailure(), "aborted");
+    assert.equal(decision, 2);
+  } finally {
+    clearContextRecordingSuspension(runId);
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery abandons a recorded multiline project-doc summary and continues", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-doc-recovery-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const artifacts = new ArtifactStore(join(root, "artifacts"));
+  const commits: string[] = [];
+  const runId = "run_doc_recovery";
+  try {
+    const badBody = Buffer.from("stale state\n");
+    const goodBody = Buffer.from("readme body\n");
+    const bad = await artifacts.put(badBody, "text/markdown", "docs/project/STATE.md");
+    const good = await artifacts.put(goodBody, "text/markdown", "docs/project/README.md");
+    const options = {
+      runId,
+      store,
+      artifacts,
+      workerDriver: { run: async () => ({ type: "paused" as const, reason: "unused" }) },
+      architectDriver: {
+        run: async (request: ArchitectActionRequest) => {
+          assert.equal(request.reason.type, "plan_required");
+          const result = await request.tools.invoke({
+            type: "tool_call",
+            callId: "plan-after-recovery",
+            name: "plan_tasks",
+            arguments: {
+              revision: 1,
+              tasks: [{
+                id: "task_a",
+                objective: "Draft the public API",
+                dependencies: [],
+                requiredCapabilities: ["code"],
+                acceptanceCriteria: [{ id: "api", text: "The public API is drafted." }],
+              }],
+            },
+          }, request.context);
+          assert.equal(result.isError, false, result.error?.message ?? "plan failed");
+        },
+      },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated" as const, integrationRevision: "unused" }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-09-23T00:00:00.000Z",
+      projectDocs: {
+        commit: async (input: { summary: string; writes: readonly { path: string }[] }) => {
+          commits.push(input.summary);
+          if (!input.summary.trim() || input.summary.includes("\n") || input.summary.includes("\0")) {
+            throw new Error("Project document summary is invalid.");
+          }
+          return {
+            commit: "c".repeat(40),
+            parent: "p".repeat(40),
+            head: "c".repeat(40),
+            entryPoint: {
+              readme: input.writes.some((write) => write.path === "docs/project/README.md"),
+              agentsMarkedSection: false,
+              claudePointer: false,
+            },
+          };
+        },
+        relateRevision: async () => "strict_descendant" as const,
+      },
+    };
+    const runtime = new BuildRuntime(options);
+    store.append({
+      runId,
+      type: "project_doc.requested",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "bad-state",
+      payload: {
+        requestId: "bad-state",
+        path: "docs/project/STATE.md",
+        contentArtifactHash: bad.hash,
+        contentBytes: badBody.byteLength,
+        summary: "line one\nline two",
+      },
+    });
+    store.append({
+      runId,
+      type: "project_doc.requested",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "architect", id: "architect_1" },
+      idempotencyKey: "good-readme",
+      payload: {
+        requestId: "good-readme",
+        path: "docs/project/README.md",
+        contentArtifactHash: good.hash,
+        contentBytes: goodBody.byteLength,
+        summary: "Record the readme",
+      },
+    });
+    const stepped = await runtime.step();
+    assert.equal(stepped.action, "plan_required");
+    assert.deepEqual(commits, ["Record the readme"]);
+    const abandoned = store.readRun(runId).filter((event) => event.type === "project_doc.abandoned");
+    assert.equal(abandoned.length, 1);
+    assert.equal(abandoned[0]?.payload.requestId, "bad-state");
+    assert.equal(abandoned[0]?.payload.reason, "Project document summary is invalid.");
+    const projection = runtime.projection();
+    assert.equal(
+      projection.projectDocs?.pending?.some((request) => request.requestId === "bad-state"),
+      false,
+    );
+    assert.equal(projection.projectDocs?.abandoned?.[0]?.path, "docs/project/STATE.md");
+    const pack = buildArchitectContext({
+      limits: { maxBytes: 64 * 1024, maxEstimatedTokens: 16 * 1024 },
+      objective: "Document the project.",
+      reason: { type: "plan_required" },
+      projection,
+      instructions: [],
+      skills: [],
+      memories: [],
+      evidence: [],
+      recentHistory: [],
+    });
+    assert.match(pack.text, /docs\/project\/STATE.md sequence=\d+ Project document summary is invalid\./);
+    const restarted = new BuildRuntime(options);
+    await restarted.step();
+    assert.deepEqual(commits, ["Record the readme"]);
+    assert.equal(
+      store.readRun(runId).filter((event) => event.type === "project_doc.abandoned").length,
+      1,
+    );
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });

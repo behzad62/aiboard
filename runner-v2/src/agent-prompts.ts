@@ -29,7 +29,7 @@ export const RUNNER_KERNEL_INVARIANTS = [
 ].join("\n");
 
 export const ARCHITECT_PROJECT_DOCS_INSTRUCTIONS = [
-  "At the start of every build, read `docs/project/README.md` and `docs/project/STATE.md` if present.",
+  "The project-docs section shows this run's committed documents, which your fs tools cannot see (they read the user's tree, not the integration branch). Base every rewrite on the committed text, since write_project_doc replaces the whole file.",
   "If the entry point is missing (`docs/project/README.md`, the marked AGENTS.md section, the marked CLAUDE.md pointer), write it first from the templates.",
   "Keep the folder current as the plan changes.",
   "Write `docs/project/STATE.md` as the last thing before completing or handing off.",
@@ -41,6 +41,11 @@ export const ARCHITECT_PROJECT_DOCS_INSTRUCTIONS = [
   DEFAULT_README_TEMPLATE,
   "docs/project/STATE.md:",
   DEFAULT_STATE_TEMPLATE,
+].join("\n");
+
+/** Shown only on a context_recording_decision_required turn, beside the reason JSON. */
+export const CONTEXT_RECORDING_DECISION_GUIDANCE = [
+  "context_recording_decision_required: the runner could not durably record a context manifest (the audit record of what an agent was shown) after `attempts` tries; `reason` is the storage error. Call only resolve_context_recording on this turn. All other lifecycle tools, including complete_run, are refused until it is resolved. Choose retry when the error looks transient (busy, locked, timeout, I/O) and retriesRemaining is greater than zero. Choose proceed_without_manifest, with a specific rationale, when the failure is persistent and the build can continue safely; manifests are then not recorded for the rest of this run. Choose abort only when continuing without the audit record is unacceptable for this objective; the run fails.",
 ].join("\n");
 
 export const VERIFIER_AUTHORITY_INVARIANTS = [
@@ -152,6 +157,8 @@ export interface BuildArchitectContextInput {
   memories: ProjectMemoryEntry[];
   evidence: PromptEvidence[];
   recentHistory: string[];
+  /** Committed docs/project/STATE.md text from the artifact store. Absent when none is committed. */
+  projectDocsStateText?: string;
 }
 
 export interface ArchitectReviewSubmission {
@@ -287,8 +294,9 @@ export function architectContextSections(
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     required("project-documentation", "system", ARCHITECT_PROJECT_DOCS_INSTRUCTIONS),
+    required("project-docs", "project-docs", renderArchitectProjectDocs(input)),
     required("build-objective", "user-intent", input.objective),
-    required("architect-action", "architect", JSON.stringify(input.reason, null, 2)),
+    required("architect-action", "architect", architectActionContent(input.reason)),
     required(
       "task-graph",
       "task-graph",
@@ -367,6 +375,66 @@ export function architectContextSections(
 
 function required(id: string, kind: string, content: string): ContextSection {
   return { id, kind, required: true, priority: 1000, content };
+}
+
+const PROJECT_DOCS_STATE_TEXT_CAP_BYTES = 4096;
+
+function architectActionContent(reason: unknown): string {
+  const body = JSON.stringify(reason, null, 2);
+  if (!isReasonType(reason, "context_recording_decision_required")) return body;
+  return `${CONTEXT_RECORDING_DECISION_GUIDANCE}\n${body}`;
+}
+
+function renderArchitectProjectDocs(input: BuildArchitectContextInput): string {
+  const committed = [...(input.projection.projectDocs?.committed ?? [])]
+    .sort((left, right) => left.sequence - right.sequence);
+  const abandoned = [...(input.projection.projectDocs?.abandoned ?? [])]
+    .sort((left, right) => left.sequence - right.sequence);
+  const latest = committed.at(-1);
+  const stateCommit = [...committed].reverse().find((commit) => commit.path === "docs/project/STATE.md");
+  const lines = [
+    `stateCurrent: ${projectDocsStateCurrent(input.projection)}`,
+    `entryPoint: readme=${latest?.readme ?? false} agentsMarkedSection=${latest?.agentsMarkedSection ?? false} claudePointer=${latest?.claudePointer ?? false}`,
+    "committed:",
+    ...(committed.length === 0
+      ? ["(none)"]
+      : committed.map((commit) => `${commit.path} sequence=${commit.sequence}`)),
+  ];
+  if (abandoned.length > 0) {
+    lines.push("abandoned:");
+    for (const item of abandoned) {
+      lines.push(`${item.path} sequence=${item.sequence} ${item.reason}`);
+    }
+  }
+  lines.push("STATE.md:");
+  if (!stateCommit) lines.push("(not committed)");
+  else if (input.projectDocsStateText === undefined) lines.push("(committed text unavailable)");
+  else lines.push(capProjectDocsStateText(input.projectDocsStateText));
+  return lines.join("\n");
+}
+
+function projectDocsStateCurrent(projection: SchedulerProjection): boolean {
+  const state = [...(projection.projectDocs?.committed ?? [])]
+    .filter((commit) => commit.path === "docs/project/STATE.md")
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1);
+  if (!state) return false;
+  if (projection.latestIntegratedTaskSequence === undefined) return true;
+  return state.sequence > projection.latestIntegratedTaskSequence;
+}
+
+function capProjectDocsStateText(text: string): string {
+  if (Buffer.byteLength(text, "utf8") <= PROJECT_DOCS_STATE_TEXT_CAP_BYTES) return text;
+  let end = text.length;
+  while (end > 0 && Buffer.byteLength(text.slice(0, end), "utf8") > PROJECT_DOCS_STATE_TEXT_CAP_BYTES) {
+    end -= 1;
+  }
+  return `${text.slice(0, end)}\n[truncated]`;
+}
+
+function isReasonType(reason: unknown, type: string): boolean {
+  return typeof reason === "object" && reason !== null && !Array.isArray(reason) &&
+    (reason as { type?: unknown }).type === type;
 }
 
 function optional(

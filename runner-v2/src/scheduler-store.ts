@@ -175,6 +175,7 @@ export type SchedulerEventType =
   | "context_manifest.recording_resolved"
   | "project_doc.requested"
   | "project_doc.committed"
+  | "project_doc.abandoned"
   | "project_docs.policy_configured";
 
 export interface SchedulerEvent {
@@ -286,12 +287,20 @@ export interface ProjectDocRequestProjection {
   sequence: number;
 }
 
+export interface ProjectDocAbandonmentProjection {
+  requestId: string;
+  path: string;
+  reason: string;
+  sequence: number;
+}
+
 /** Pending Architect document requests and commits on the integration branch. */
 export interface ProjectDocsProjection {
   pending: ProjectDocRequestProjection[];
   committed?: ProjectDocCommitProjection[];
   /** Document-only commits ahead of the canonical integration revision. */
   documentTip?: string;
+  abandoned?: ProjectDocAbandonmentProjection[];
 }
 
 export interface ProjectDocCommitProjection {
@@ -527,6 +536,16 @@ export function latestUnresolvedContextRecordingNote(
   return undefined;
 }
 
+/** Retry resolutions still allowed for this run. Matches the reducer budget. */
+export function contextRecordingRetriesRemaining(projection: SchedulerProjection): number {
+  const used = new Set(
+    (projection.contextRecording?.notes ?? []).flatMap((note) =>
+      note.resolution?.resolution === "retry" ? [note.resolution.sequence] : [],
+    ),
+  ).size;
+  return Math.max(0, CONTEXT_RECORDING_RETRY_LIMIT - used);
+}
+
 function rejectCompletionWhileContextRecordingUnresolved(
   projection: SchedulerProjection,
 ): void {
@@ -705,6 +724,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "final_verification.cleanup_succeeded" ||
     event.type === "final_verification.cleanup_failed" ||
     (event.type === "project_doc.committed" && event.actor.role === "runner") ||
+    (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     (event.type === "plan.created" && current.planRevision === 0) ||
     (event.type === "task.transitioned" &&
       (taskStatus === "integrated" || taskStatus === "integration_resolution"));
@@ -733,7 +753,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "architect.runtime_assigned" ||
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
-    (event.type === "project_doc.committed" && event.actor.role === "runner");
+    (event.type === "project_doc.committed" && event.actor.role === "runner") ||
+    (event.type === "project_doc.abandoned" && event.actor.role === "runner");
   if (!allowed) {
     throw new Error(
       `Blocking Architect question ${current.blockingArchitectQuestionId} must be answered before ${event.type} may advance the run.`
@@ -1846,15 +1867,7 @@ export function reduceSchedulerEvent(
       : {}),
     ...(current.projectDocs
       ? {
-          projectDocs: {
-            pending: current.projectDocs.pending.map((request) => ({ ...request })),
-            ...(current.projectDocs.committed
-              ? { committed: current.projectDocs.committed.map((commit) => ({ ...commit })) }
-              : {}),
-            ...(current.projectDocs.documentTip
-              ? { documentTip: current.projectDocs.documentTip }
-              : {}),
-          },
+          projectDocs: cloneProjectDocs(current.projectDocs),
         }
       : {}),
     runtime: {
@@ -3201,6 +3214,10 @@ export function reduceSchedulerEvent(
     }
     case "project_doc.committed": {
       applyProjectDocCommitted(next, event);
+      break;
+    }
+    case "project_doc.abandoned": {
+      applyProjectDocAbandoned(next, event);
       break;
     }
     case "project_docs.policy_configured": {
@@ -5802,12 +5819,7 @@ function applyProjectDocRequested(
         sequence: event.sequence,
       },
     ],
-    ...(projection.projectDocs?.committed
-      ? { committed: projection.projectDocs.committed.map((commit) => ({ ...commit })) }
-      : {}),
-    ...(projection.projectDocs?.documentTip
-      ? { documentTip: projection.projectDocs.documentTip }
-      : {}),
+    ...carriedProjectDocs(projection.projectDocs),
   };
 }
 
@@ -5860,6 +5872,75 @@ function applyProjectDocCommitted(
       : currentTip
         ? { documentTip: currentTip }
         : {}),
+    ...(projection.projectDocs?.abandoned
+      ? { abandoned: projection.projectDocs.abandoned.map((item) => ({ ...item })) }
+      : {}),
+  };
+}
+
+function applyProjectDocAbandoned(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may abandon a project document request.");
+  }
+  const requestId = requiredString(event.payload, "requestId");
+  const path = requiredString(event.payload, "path");
+  const checked = validateProjectDocPath(path);
+  if (!checked.ok) {
+    throw new Error(`Project document path is refused: ${checked.reason}.`);
+  }
+  const reason = requiredString(event.payload, "reason");
+  if (!reason.trim()) {
+    throw new Error("Project document abandonment reason is required.");
+  }
+  const pending = projection.projectDocs?.pending ?? [];
+  const request = pending.find((item) => item.requestId === requestId);
+  if (!request) {
+    throw new Error(`Project document request ${requestId} is not pending.`);
+  }
+  if (request.path !== checked.path) {
+    throw new Error(`Project document abandonment path does not match request ${requestId}.`);
+  }
+  const abandoned = projection.projectDocs?.abandoned ?? [];
+  if (abandoned.some((item) => item.requestId === requestId)) {
+    throw new Error(`Project document request ${requestId} is already abandoned.`);
+  }
+  projection.projectDocs = {
+    pending: pending.filter((item) => item.requestId !== requestId),
+    ...carriedProjectDocs(projection.projectDocs),
+    abandoned: [
+      ...abandoned.map((item) => ({ ...item })),
+      {
+        requestId,
+        path: checked.path,
+        reason,
+        sequence: event.sequence,
+      },
+    ],
+  };
+}
+
+function cloneProjectDocs(docs: ProjectDocsProjection): ProjectDocsProjection {
+  return {
+    pending: docs.pending.map((request) => ({ ...request })),
+    ...carriedProjectDocs(docs),
+  };
+}
+
+function carriedProjectDocs(
+  docs: ProjectDocsProjection | undefined,
+): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned"> {
+  if (!docs) return {};
+  return {
+    ...(docs.committed
+      ? { committed: docs.committed.map((commit) => ({ ...commit })) }
+      : {}),
+    ...(docs.documentTip ? { documentTip: docs.documentTip } : {}),
+    ...(docs.abandoned
+      ? { abandoned: docs.abandoned.map((item) => ({ ...item })) }
+      : {}),
   };
 }
 
@@ -5916,17 +5997,10 @@ function applyContextRecordingResolved(
   ) {
     throw new Error("proceed_without_manifest requires a non-empty rationale.");
   }
-  if (resolution === "retry") {
-    const retryEvents = new Set(
-      notes.flatMap((item) =>
-        item.resolution?.resolution === "retry" ? [item.resolution.sequence] : [],
-      ),
+  if (resolution === "retry" && contextRecordingRetriesRemaining(projection) === 0) {
+    throw new Error(
+      `Context recording retry budget of ${CONTEXT_RECORDING_RETRY_LIMIT} is exhausted.`,
     );
-    if (retryEvents.size >= CONTEXT_RECORDING_RETRY_LIMIT) {
-      throw new Error(
-        `Context recording retry budget of ${CONTEXT_RECORDING_RETRY_LIMIT} is exhausted.`,
-      );
-    }
   }
   const sharedResolution: {
     sequence: number;

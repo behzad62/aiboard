@@ -280,7 +280,7 @@ function resolveContextRecordingTool(
     description: "Resolve a paused context-manifest recording failure by retrying, waiving the manifest with a rationale, or aborting the run",
     schema: objectSchema({
       resolution: { type: "string", enum: ["retry", "proceed_without_manifest", "abort"] },
-      rationale: { type: "string" },
+      rationale: { type: "string", minLength: 1 },
     }, ["resolution", "rationale"]),
     validate: (input) => validateObject(input, (value) => {
       if (
@@ -288,7 +288,10 @@ function resolveContextRecordingTool(
         value.resolution !== "proceed_without_manifest" &&
         value.resolution !== "abort"
       ) return null;
-      if (typeof value.rationale !== "string") return null;
+      if (typeof value.rationale !== "string" || value.rationale.length < 1) return null;
+      if (value.resolution === "proceed_without_manifest" && value.rationale.trim().length === 0) {
+        return null;
+      }
       return {
         resolution: value.resolution,
         rationale: value.rationale,
@@ -337,7 +340,13 @@ function writeProjectDocTool(
     schema: objectSchema({
       path: { type: "string", minLength: 1 },
       content: { type: "string" },
-      summary: { type: "string", minLength: 1 },
+      summary: {
+        type: "string",
+        minLength: 1,
+        maxLength: 200,
+        pattern: "^[^\\r\\n\\u0000]+$",
+        description: "One line; used as the commit message.",
+      },
     }, ["path", "content", "summary"]),
     validate: validateWriteProjectDoc,
     execute: async (input, context) => {
@@ -413,9 +422,10 @@ function writeProjectDocTool(
 
 function validateWriteProjectDoc(input: unknown): ValidationResult<WriteProjectDocInput> {
   return validateObject(input, (value) => {
-    if (typeof value.path !== "string" || typeof value.content !== "string" || !nonEmpty(value.summary)) {
+    if (typeof value.path !== "string" || typeof value.content !== "string" || typeof value.summary !== "string") {
       return null;
     }
+    if (!projectDocSummaryAccepted(value.summary)) return null;
     const checked = validateProjectDocPath(value.path);
     if (!checked.ok) return null;
     const contentBytes = Buffer.byteLength(value.content, "utf8");
@@ -429,6 +439,14 @@ function validateWriteProjectDoc(input: unknown): ValidationResult<WriteProjectD
   }, "Project document write is invalid.");
 }
 
+/** One line the integration commit can accept as its message. */
+function projectDocSummaryAccepted(summary: string): boolean {
+  if (summary.length < 1 || summary.length > 200) return false;
+  if (/[\r\n\0]/.test(summary)) return false;
+  const trimmed = summary.trim();
+  return trimmed.length > 0 && trimmed.length <= 200;
+}
+
 function digestBytes(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
 }
@@ -437,11 +455,13 @@ export function createArchitectTools(
   options: ArchitectToolsOptions
 ): NativeTool<unknown>[] {
   const clock = options.clock ?? (() => new Date().toISOString());
-  const contextRecordingTools = options.architectAction?.reason.type === "context_recording_decision_required"
-    ? [resolveContextRecordingTool(options.store, clock)]
-    : [];
+  if (options.architectAction?.reason.type === "context_recording_decision_required") {
+    return [
+      resolveContextRecordingTool(options.store, clock),
+      askUserTool(options.store, clock, options.architectAction),
+    ];
+  }
   const baseCore = [
-    ...contextRecordingTools,
     planTasksTool(options.store, clock),
     reviseTaskTool(options.store, clock),
     answerGuidanceTool(options.store, clock),

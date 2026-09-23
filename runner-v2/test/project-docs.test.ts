@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { ToolCallBlock, ToolExecutionContext } from "../src/agent-contracts.js";
-import { ARCHITECT_PROJECT_DOCS_INSTRUCTIONS, buildArchitectContext } from "../src/agent-prompts.js";
+import { ARCHITECT_PROJECT_DOCS_INSTRUCTIONS, CONTEXT_RECORDING_DECISION_GUIDANCE, buildArchitectContext } from "../src/agent-prompts.js";
 import { createArchitectTools } from "../src/architect-tools.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import {
@@ -263,6 +263,42 @@ test("write_project_doc refuses oversize content", async () => {
   }
 });
 
+test("write_project_doc refuses a multiline summary before recording the request", async () => {
+  const fixture = openFixture();
+  try {
+    const tool = createArchitectTools({
+      store: fixture.store,
+      clock: CLOCK,
+      artifacts: fixture.artifacts,
+    }).find((candidate) => candidate.definition.name === "write_project_doc");
+    const summarySchema = (tool?.definition.inputSchema as {
+      properties?: { summary?: Record<string, unknown> };
+    }).properties?.summary;
+    assert.deepEqual(summarySchema, {
+      type: "string",
+      minLength: 1,
+      maxLength: 200,
+      pattern: "^[^\\r\\n\\u0000]+$",
+      description: "One line; used as the commit message.",
+    });
+    for (const summary of ["first line\nsecond line", "nul\0byte", "has\rreturn", "x".repeat(201)]) {
+      const result = await invoke(fixture.registry, {
+        path: "docs/project/STATE.md",
+        content: "body",
+        summary,
+      });
+      assert.equal(result.isError, true, JSON.stringify(summary));
+      assert.equal(result.error?.code, "invalid_arguments", JSON.stringify(summary));
+    }
+    assert.equal(
+      fixture.store.readRun(fixture.runId).some((event) => event.type === "project_doc.requested"),
+      false,
+    );
+  } finally {
+    fixture.close();
+  }
+});
+
 test("write_project_doc stores the content and records a pending request", async () => {
   const fixture = openFixture();
   try {
@@ -414,10 +450,107 @@ test("architect prompt contains the documentation statements and the CLAUDE poin
   assert.ok(pack.text.includes(DEFAULT_README_TEMPLATE));
   assert.ok(pack.text.includes(DEFAULT_STATE_TEMPLATE));
   assert.ok(pack.text.includes(ARCHITECT_PROJECT_DOCS_INSTRUCTIONS));
-  assert.match(pack.text, /At the start of every build, read `docs\/project\/README.md` and `docs\/project\/STATE.md` if present\./);
+  assert.match(pack.text, /The project-docs section shows this run's committed documents, which your fs tools cannot see/);
+  assert.match(pack.text, /Base every rewrite on the committed text, since write_project_doc replaces the whole file/);
   assert.match(pack.text, /write it first from the templates/);
   assert.match(pack.text, /Keep the folder current as the plan changes\./);
   assert.match(pack.text, /Write `docs\/project\/STATE.md` as the last thing before completing or handing off\./);
+  assert.equal(pack.sections.find((section) => section.id === "project-docs")?.required, true);
+  assert.match(pack.text, /stateCurrent: false/);
+  assert.doesNotMatch(pack.text, /proceed_without_manifest/);
+});
+
+test("Architect context carries committed STATE.md text, stateCurrent, and recording guidance", () => {
+  const limits = { maxBytes: 64 * 1024, maxEstimatedTokens: 16 * 1024 };
+  const committed = "PF1_COMMITTED_STATE_MARKER\nWhere things stand.\n";
+  const base = {
+    limits,
+    objective: "Document the project.",
+    instructions: [],
+    skills: [],
+    memories: [],
+    evidence: [],
+    recentHistory: [],
+  };
+  const projection = {
+    runId: "run_docs",
+    status: "running" as const,
+    planRevision: 1,
+    tasks: {},
+    guidance: {},
+    userGuidance: {},
+    userGuidanceVersion: 0,
+    architectQuestions: {},
+    architectQuestionVersion: 0,
+    reviews: {},
+    runtime: { providerHealth: {}, workerAssignments: {}, architect: {} },
+    lastSequence: 8,
+    latestIntegratedTaskSequence: 4,
+    projectDocs: {
+      pending: [],
+      committed: [{
+        requestId: "state-1",
+        path: "docs/project/STATE.md",
+        commit: "c".repeat(40),
+        parent: "p".repeat(40),
+        head: "c".repeat(40),
+        readme: true,
+        agentsMarkedSection: true,
+        claudePointer: false,
+        sequence: 6,
+      }],
+      abandoned: [{
+        requestId: "bad-1",
+        path: "docs/project/decisions.md",
+        reason: "Project document summary is invalid.",
+        sequence: 7,
+      }],
+    },
+  };
+  const current = buildArchitectContext({
+    ...base,
+    reason: { type: "plan_required" },
+    projection,
+    projectDocsStateText: committed,
+  });
+  assert.match(current.text, /PF1_COMMITTED_STATE_MARKER/);
+  assert.match(current.text, /stateCurrent: true/);
+  assert.match(current.text, /entryPoint: readme=true agentsMarkedSection=true claudePointer=false/);
+  assert.match(current.text, /docs\/project\/STATE.md sequence=6/);
+  assert.match(current.text, /abandoned:\ndocs\/project\/decisions.md sequence=7 Project document summary is invalid\./);
+  const stale = buildArchitectContext({
+    ...base,
+    reason: { type: "plan_required" },
+    projection: { ...projection, latestIntegratedTaskSequence: 9 },
+    projectDocsStateText: committed,
+  });
+  assert.match(stale.text, /stateCurrent: false/);
+  assert.match(stale.text, /PF1_COMMITTED_STATE_MARKER/);
+  const oversized = buildArchitectContext({
+    ...base,
+    reason: { type: "plan_required" },
+    projection,
+    projectDocsStateText: `${"x".repeat(5000)}END_MARKER`,
+  });
+  assert.match(oversized.text, /\[truncated\]/);
+  assert.doesNotMatch(oversized.text, /END_MARKER/);
+  const decision = buildArchitectContext({
+    ...base,
+    reason: {
+      type: "context_recording_decision_required",
+      purpose: "architect:plan_required",
+      attempts: 3,
+      reason: "disk full",
+      noteSequence: 2,
+      retriesRemaining: 2,
+    },
+    projection: {
+      ...projection,
+      projectDocs: { pending: [] },
+    },
+  });
+  assert.ok(decision.text.includes(CONTEXT_RECORDING_DECISION_GUIDANCE));
+  assert.match(decision.text, /"retriesRemaining": 2/);
 });
 
 test("a direct project_doc.requested append refuses lib/x.ts", () => {

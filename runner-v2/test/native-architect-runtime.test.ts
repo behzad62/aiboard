@@ -1511,6 +1511,136 @@ test("a failed Architect command copy is returned to the Architect and is not th
   });
 });
 
+const WORKER_TASK_REVISION = "b".repeat(40);
+
+test("review_required commands see the worker change and other turns see the integration revision", async () => {
+  const reviewRoot = mkdtempSync(join(tmpdir(), "aiboard-architect-review-copy-"));
+  const otherRoot = mkdtempSync(join(tmpdir(), "aiboard-architect-integration-copy-"));
+  const seen: string[] = [];
+  const revisions: string[] = [];
+  const workspaceFor = (root: string): ArchitectCommandWorkspaceProvider => ({
+    workspaceKind: "independent-verifier",
+    create: async (revision) => {
+      revisions.push(revision);
+      const copy = join(root, "copy");
+      mkdirSync(copy, { recursive: true });
+      writeFileSync(
+        join(copy, "marker.txt"),
+        revision === WORKER_TASK_REVISION ? "worker-change" : "integration-tree",
+      );
+      return { path: copy };
+    },
+    cleanup: async () => undefined,
+  });
+  const execution = markerExecutor(seen);
+  try {
+    await driveArchitectCommandTurn({
+      label: "review-copy",
+      root: reviewRoot,
+      turns: [{
+        blocks: [architectCommandCall("review-cmd")],
+        stopReason: "tool_calls",
+      }, {
+        blocks: [],
+        stopReason: "cancelled",
+      }],
+      permissionProfile: "full",
+      execution,
+      review: { changeSetId: "worker-change", taskRevision: WORKER_TASK_REVISION },
+      workspace: workspaceFor(reviewRoot),
+      assertTurn: (model) => {
+        assert.deepEqual(revisions, [WORKER_TASK_REVISION]);
+        assert.deepEqual(seen, ["worker-change"]);
+        const system = model.requests[0]?.messages.find((message) => message.role === "system");
+        assert.match(String(system?.content), /submission's taskRevision/);
+        assert.match(String(system?.content), /integration revision/);
+        const results = toolResults(model, 1);
+        assert.equal(results.length, 1);
+        assert.equal(results[0]?.isError, false, JSON.stringify(results[0]));
+      },
+    });
+    revisions.length = 0;
+    seen.length = 0;
+    await driveArchitectCommandTurn({
+      label: "integration-copy",
+      root: otherRoot,
+      turns: [{
+        blocks: [architectCommandCall("other-cmd")],
+        stopReason: "tool_calls",
+      }, {
+        blocks: [],
+        stopReason: "cancelled",
+      }],
+      permissionProfile: "full",
+      execution,
+      workspace: workspaceFor(otherRoot),
+      assertTurn: () => {
+        assert.deepEqual(revisions, [LAZY_COMMAND_REVISION]);
+        assert.deepEqual(seen, ["integration-tree"]);
+      },
+    });
+  } finally {
+    rmSync(reviewRoot, { recursive: true, force: true });
+    rmSync(otherRoot, { recursive: true, force: true });
+  }
+});
+
+test("a review command checkout failure is returned and does not fall back to integration", async () => {
+  const revisions: string[] = [];
+  await driveArchitectCommandTurn({
+    label: "review-checkout-fail",
+    turns: [{
+      blocks: [architectCommandCall("review-fail")],
+      stopReason: "tool_calls",
+    }, {
+      blocks: [],
+      stopReason: "cancelled",
+    }],
+    permissionProfile: "full",
+    execution: markerExecutor([]),
+    review: { changeSetId: "worker-change", taskRevision: WORKER_TASK_REVISION },
+    workspace: {
+      workspaceKind: "independent-verifier",
+      create: async (revision) => {
+        revisions.push(revision);
+        throw new Error("task revision unavailable");
+      },
+      cleanup: async () => undefined,
+    },
+    assertTurn: (model) => {
+      assert.deepEqual(revisions, [WORKER_TASK_REVISION]);
+      const results = toolResults(model, 1);
+      assert.equal(results.length, 1);
+      assert.equal(results[0]?.isError, true);
+      assert.equal(results[0]?.error?.code, "command_workspace_unavailable");
+      assert.match(results[0]?.error?.message ?? "", /task revision unavailable/);
+    },
+  });
+});
+
+function markerExecutor(seen: string[]): OneShotCommandExecutor {
+  return {
+    async execute(request) {
+      seen.push(readFileSync(join(request.workingDirectory, "marker.txt"), "utf8"));
+      return {
+        process: {
+          logicalProcessId: request.context.callId,
+          outcome: "exited",
+          exitCode: 0,
+          finishedAt: "2026-09-23T00:00:00.000Z",
+          output: [
+            { stream: "stdout", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+            { stream: "stderr", tail: "", totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0 },
+          ],
+          cleanup: { state: "not_required" },
+        },
+        enforcement: "unconfined_explicit_full",
+        disclosure: "unconfined_explicit_full",
+      };
+    },
+  };
+}
+
 function architectCommandCall(callId: string): ModelTurn["blocks"][number] {
   return {
     type: "tool_call",
@@ -1524,6 +1654,112 @@ function architectCommandCall(callId: string): ModelTurn["blocks"][number] {
     },
   };
 }
+
+test("the next Architect context contains the committed STATE.md text and stateCurrent", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-committed-state-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  const runId = "run-committed-state";
+  const objective = "Build the feature.";
+  const stateText = "PF1_COMMITTED_STATE_MARKER\nWhere things stand.\n";
+  try {
+    const record = await artifacts.put(Buffer.from(stateText), "text/markdown", "docs/project/STATE.md");
+    scheduler.append({
+      runId,
+      type: "run.initialized",
+      occurredAt: "2026-09-23T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "init",
+      payload: { objective },
+    });
+    scheduler.append({
+      runId,
+      type: "project_doc.requested",
+      occurredAt: "2026-09-23T00:00:01.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "state-request",
+      payload: {
+        requestId: "state-request",
+        path: "docs/project/STATE.md",
+        contentArtifactHash: record.hash,
+        contentBytes: Buffer.byteLength(stateText),
+        summary: "Record the current state",
+      },
+    });
+    scheduler.append({
+      runId,
+      type: "project_doc.committed",
+      occurredAt: "2026-09-23T00:00:02.000Z",
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "state-commit",
+      payload: {
+        requestId: "state-request",
+        path: "docs/project/STATE.md",
+        commit: "c".repeat(40),
+        parent: "p".repeat(40),
+        head: "c".repeat(40),
+        readme: true,
+        agentsMarkedSection: true,
+        claudePointer: false,
+      },
+    });
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "test:architect",
+      providerId: "test",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const model = new ScriptedModel([{ blocks: [], stopReason: "cancelled" }]);
+    const architect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, model]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-committed-state",
+      projectRoot: project,
+      objective,
+    });
+    await architect.run({
+      runId,
+      reason: { type: "plan_required" },
+      projection: rebuildSchedulerProjection(scheduler.readRun(runId)),
+      tools: new ToolRegistry(),
+      context: {
+        runId,
+        sessionId: `architect:${runId}`,
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const context = model.requests[0]?.messages.find((message) => message.role === "user");
+    const text = String(context?.content);
+    assert.match(text, /PF1_COMMITTED_STATE_MARKER/);
+    assert.match(text, /stateCurrent: true/);
+    assert.match(text, /entryPoint: readme=true agentsMarkedSection=true claudePointer=false/);
+    assert.match(text, /docs\/project\/STATE.md sequence=\d+/);
+  } finally {
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function recordingExecutor(directories: string[]): OneShotCommandExecutor {
   return {
@@ -1581,6 +1817,7 @@ async function driveArchitectCommandTurn(input: {
   root?: string;
   permissionProfile?: "full";
   execution?: OneShotCommandExecutor;
+  review?: { changeSetId: string; taskRevision: string };
 }): Promise<void> {
   const root = input.root ?? mkdtempSync(join(tmpdir(), `aiboard-architect-${input.label}-`));
   const project = join(root, "project");
@@ -1672,9 +1909,35 @@ async function driveArchitectCommandTurn(input: {
         ? { execution: input.execution, git: fixtureGitContext(input.permissionProfile ?? "full", input.execution) }
         : {}),
     });
+    if (input.review) {
+      const sessionId = `worker:${runId}:task-a:0`;
+      await sessions.create({
+        sessionId,
+        runId,
+        actor: { role: "worker", id: "worker_task-a_0" },
+        occurredAt: "2026-09-23T00:00:04.000Z",
+      });
+      await sessions.submit(sessionId, {
+        id: input.review.changeSetId,
+        runId,
+        taskId: "task-a",
+        baselineRevision: "c".repeat(40),
+        taskRevision: input.review.taskRevision,
+        commits: [],
+        changedPaths: ["worker-change.txt"],
+        diffArtifactHash: "d".repeat(64),
+        evidenceArtifactHashes: [],
+        externalEffects: [],
+        guidanceIds: [],
+        memoryIds: [],
+        unresolvedConcerns: [],
+      }, "2026-09-23T00:00:05.000Z");
+    }
     await architect.run({
       runId,
-      reason: { type: "user_guidance_required", guidanceId: "guidance-1", version: 1 },
+      reason: input.review
+        ? { type: "review_required", taskId: "task-a", changeSetId: input.review.changeSetId }
+        : { type: "user_guidance_required", guidanceId: "guidance-1", version: 1 },
       projection: rebuildSchedulerProjection(scheduler.readRun(runId)),
       tools: new ToolRegistry(),
       context: {
