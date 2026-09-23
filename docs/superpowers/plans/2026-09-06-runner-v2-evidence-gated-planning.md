@@ -130,9 +130,26 @@ Common task DoD: all task-owned mandatory acceptance conditions below have curre
 
 For each task, PREPARE inspects the accepted dependency snapshots, actual checkout, its contract and relevant source sections. Then establish the relevant negative case, implement the coherent behavior, validate exact/affected scope, review, repair within budget, integrate and validate boundaries. Do not run any of the commands in this document during planning.
 
+### 5.0 Grounding corrections from T1a (2026-09-23) — binding on every task
+
+T1a inspected the merged tree (`main` `3cae2b70`) against every symbol this plan names. Report:
+`.superpowers/sdd/2026-09-06-runner-v2-evidence-gated-planning/evidence/T1a-compatibility-map.md`. It found no owner-decision item. These corrections apply to every task below; each task's PREPARE re-greps line numbers rather than trusting a citation.
+
+- **G-1** `runner-capability-contract.ts` is the digest-checked runner-extension/plugin-trust contract (`RUNNER_CAPABILITY_CONTRACT_VERSION = 1`), unrelated to planning. `HostPlanningCapabilities` goes in `planning-contracts.ts`.
+- **G-2** Direct-append/replay validation (T2) extends the scheduler reducer `reduceSchedulerEvent` in `scheduler-store.ts`, not `reducer.ts` (which is the separate top-level `RunState` supervisor reducer).
+- **G-3** `buildCompletionReadiness` is at `scheduler-store.ts` ~977-1043 (not 848-873). The capability program's documentation gate — called "AC-25" in its plan — is `projectDocumentationReadiness` (~1188). New readiness conditions (T1, T3, T9) add to `buildCompletionReadiness` beside it and never bypass it.
+- **G-4** There is no "reader" role. Roles are `architect | verifier | plan-critic | worker` (`role-capabilities.ts`); "reader command execution" means `run_evidence_command` on the `inspection` broker surfaces (`SURFACES["<role>:inspection"]`). The existing `inspect_evidence` tool (`evidence-tools.ts`) is a reuse target for showing recorded evidence to reviewers (T3, T5, T6).
+- **G-5** `MAX_WORKERS` does not exist; T4 introduces it in `task-resource-claims.ts`. The only repair constant is the run-level `DEFAULT_REPAIR_PLAN_LIMIT = 3` (`scheduler-store.ts` ~493); T6's issue-level budget is new and must not reuse it. The existing `issueIds` field is mechanical-failure source attribution, not a repair-issue identity.
+- **G-6** `RuntimeRouter.selectVerifier` (~178) already returns `independence: "distinct_model" | "fresh_context"` (~220). T3's coverage reviewer, T6's deliverable reviewer and T9's opt-in answer reviewer call it; none adds a selector.
+- **G-7** RG-6 two-pass verification lives in the verifier family (`native-verifier-runtime.ts`, `verifier-verdict-authority.ts`, `verifier-tools.ts`, `verifier-contracts.ts`); the final-candidate gate lives in `final-verification-*.ts`. T6 extends the former for the deliverable review; T8 owns the latter.
+- **G-8** `risk-policy.ts` (`assessBuildRisk`, `BuildRiskLevel` low/high) decides whether the independent final verifier is required under the `risk_based` verifier policy (`build-runtime.ts` ~1265, `scheduler-store.ts` ~1147). T5's `change-risk.ts` (OA-4) sets per-task deliverable-review depth — a different gate. Use distinct names (`ChangeRiskLevel`, `assessChangeRisk`); the two models coexist, neither replaces the other.
+- **G-9** RG-1's "a resolved critique cannot be requested again" is already enforced in `applyPlanCritiqueRequested` (`scheduler-store.ts` ~4912: "Plan critique is already resolved for this run."). T3 preserves it; T1a's contrary note was checked and is wrong.
+- **G-10** OA-17 temp paths: today's `mkdtemp` call sites are `execution-host.ts`, `native-build-factory.ts`, `runner-capability-contract.ts` (2) and `windows-process-semantic-probes.ts`; none writes a creation record. T6 adds the record at each runner site that creates a path outside a workspace.
+- **G-11** Worker self-acceptance is already structurally impossible: `submit_task` only sets `readiness: "ready_for_architect_review"`; `review_task` and `request_integration` are Architect-only; `IntegrationManager.integrate` is the one integration authority and has no affected-boundary validation today (new T6 work).
+
 ### T1 — Source identities and complete planning contracts (BP1)
 
-**Scope/files:** Create `source-manifest.ts`, `planning-contracts.ts` and their tests. Extend `build-spec.ts`, `task-contracts.ts`, `acceptance-contracts.ts` and `runner-capability-contract.ts` only for the new versioned interfaces. Create the explicitly new feature document `docs/runner-v2/evidence-gated-planning.md` with the behavior. No scheduler execution, UI, process control, dependency or lockfile changes.
+**Scope/files:** Create `source-manifest.ts`, `planning-contracts.ts` and their tests. Extend `build-spec.ts`, `task-contracts.ts` and `acceptance-contracts.ts` only for the new versioned interfaces. `HostPlanningCapabilities` lives in the new `planning-contracts.ts`, **not** `runner-capability-contract.ts` (G-1). Create the explicitly new feature document `docs/runner-v2/evidence-gated-planning.md` with the behavior. No scheduler execution, UI, process control, dependency or lockfile changes.
 
 **Consumes/produces:** Approved immutable source artifacts and existing Build spec/capability versioning → strict source/requirement/phase/task/validation/review contracts from section 3. Export parsers/validators that return typed issues with source/requirement refs; exact API signatures are fixed here for all subsequent tasks.
 
@@ -229,7 +246,7 @@ Interrupt planning after ledger creation and after a completed source section: r
 
 ### T6 — One deliverable review, bounded repair and integrated acceptance (BP5)
 
-**Scope/files:** Create `delivery-acceptance.ts`/test; extend `build-runtime.ts`, `scheduler-store.ts`, `architect-tools.ts`, `worker-lifecycle-tools.ts`, `worker-runtime.ts`, `integration-manager.ts`, final-verification orchestration and actual P6.5 repair/replan contracts. Shared kernel writes are serialized after T4/T5. No UI or external publishing.
+**Scope/files:** Create `delivery-acceptance.ts`/test; extend `build-runtime.ts`, `scheduler-store.ts`, `architect-tools.ts`, `worker-lifecycle-tools.ts`, `worker-runtime.ts`, `integration-manager.ts`, the RG-6 verifier family (`native-verifier-runtime.ts`, `verifier-verdict-authority.ts`, `verifier-tools.ts`, `verifier-contracts.ts`) for the deliverable review, `final-verification-*.ts` only for the final-ready readiness condition (T8 owns the final-candidate gate), and actual P6.5 repair/replan contracts (G-7). Shared kernel writes are serialized after T4/T5. No UI or external publishing.
 
 **Consumes/produces:** T3 reviewed plan, T4 owned assignments, T5 meaningful evidence, P6.5 repair/replan policy → combined independent deliverable review, affected integration checks, durable task/phase acceptance, repair/reopen and final-ready decision.
 
