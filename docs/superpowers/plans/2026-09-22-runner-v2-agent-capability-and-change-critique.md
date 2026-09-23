@@ -1,6 +1,6 @@
 # Runner V2 — Agent capability model (execution plan)
 
-**Revision 11.** The filename is kept for reference stability; change critique and coverage
+**Revision 12.** The filename is kept for reference stability; change critique and coverage
 review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this plan.
 **Execution has not started.** Verdict in §11.
 
@@ -17,7 +17,7 @@ review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this p
 | PROJECT_RULES | `CLAUDE.md`, `AGENTS.md`, the Runner V2 Task 12 mandate |
 | MAX_WORKERS | 4 permitted; **this plan derives 2** — see §5 |
 | REPAIR_BUDGET | 3 evidence-backed cycles per tracked blocking issue; ESC-1 granted one extra cycle (used by revision 6); **ESC-3 grants one final cycle each to B-1 `abort` and to A5** (used by revision 7) |
-| Planning history | nine independent reviews of revisions 1–10: `evidence/plan-review-r1.md` … `-r9.md` |
+| Planning history | ten independent reviews of revisions 1–11: `evidence/plan-review-r1.md` … `-r10.md` |
 
 ### 0.1 Host capabilities — observed
 
@@ -340,14 +340,17 @@ check (`:1552-1566`), and `integration-manager.ts` is already a registered files
    The exported body **contains** the three marker lines, each followed by its statement:
    `<!-- aiboard:docs:holds -->` then the layout list, `<!-- aiboard:docs:read-first -->` then the
    read-first sentence, `<!-- aiboard:docs:update -->` then the update sentence. So writing the
-   template verbatim satisfies the check. The entry-point fact for `AGENTS.md` is true only when
-   the marked section contains all three markers **and** the text after each carries the
-   statement's required content, checked mechanically (the Architect may add prose, but cannot
-   pass with placeholders — review r9, N3):
-   - after `holds`: each of `README.md`, `STATE.md`, `specs/`, `plans/`, `decisions.md`,
-     `evidence/`;
-   - after `read-first`: both `docs/project/README.md` and `docs/project/STATE.md`;
-   - after `update`: `STATE.md` and the word `last`.
+   template verbatim satisfies the check. The fact checks exact statements. `project-docs.ts` exports each statement as a constant: `DOCS_LAYOUT_LINES` (six lines,
+   one per entry: `README.md`, `STATE.md`, `specs/`, `plans/`, `decisions.md`, `evidence/`, each
+   with its one-line purpose), `DOCS_READ_FIRST_SENTENCE` and `DOCS_UPDATE_SENTENCE` (quoted
+   above). The entry-point fact for `AGENTS.md` is true only when the marked Architect section
+   contains all three markers and the **span** after each marker — ending at the next marker or
+   at the end of the Architect section, never beyond — contains that marker's statement
+   **verbatim** after whitespace normalization (runs of spaces, tabs and line endings compared as
+   one space): every one of the six `DOCS_LAYOUT_LINES` in the `holds` span, the read-first
+   sentence in the `read-first` span, the update sentence in the `update` span. Extra prose may
+   surround them. Token-only text, placeholders, and a statement placed under the wrong marker
+   all leave the fact false (reviews r9 and r10, N3).
    A4 puts the templates in the Architect prompt; the runner never writes documentation content
    itself.
 
@@ -362,8 +365,10 @@ check (`:1552-1566`), and `integration-manager.ts` is already a registered files
   change set returning the tip itself, each keep the document tip, leave the canonical revision
   and a current final verification unchanged, and handoff still succeeds; a real task commit on
   top clears the tip (N1);
-- the verbatim template section makes the `AGENTS.md` fact true; a section missing a marker, or
-  with `x` / `y` / `z` placeholder text after the markers, leaves the run not ready (N3);
+- the verbatim template section makes the `AGENTS.md` fact true, also with extra prose around
+  each statement; each of these leaves the run not ready: a missing marker; `x` / `y` / `z`
+  placeholders; the token-only section (layout names, the two paths, `STATE.md`, `last`); the
+  update sentence moved under the `read-first` marker; one layout line missing (N3);
 - a `plan_only` run cannot complete without `STATE.md` and the entry point (A5-4);
 - the restart test: request appended, commit made, crash before `project_doc.committed` → exactly
   one commit after recovery;
@@ -378,7 +383,8 @@ log → the legacy replay test reddens; remove the `lstat` check → the link te
 the request-id lookup → the restart test finds two commits.
 
 **Budget.** Review r7 findings A5-1..A5-6 used cycle 1; review r8 confirmed all but A5-3. A5-3
-used cycle 2 and was confirmed fixed by review r9; N2 is fixed; N1 and N3 are now on cycle 2 of 3.
+used cycle 2 and was confirmed fixed by review r9; N2 is fixed; N1 was fixed on cycle 2 (review r10). **N3 is on its final cycle, 3 of 3;
+if review finds it unsound it escalates to the owner.**
 
 ### B1 — Retry, typed error and recording suspension
 
@@ -627,7 +633,7 @@ waits for A3 and A5. Do not commit, stage or stash.
 
 ## 11. Verdict
 
-**PLAN BLOCKED — revision 11 not yet independently re-reviewed.**
+**PLAN BLOCKED — revision 12 not yet independently re-reviewed.**
 
 | Change | Reason |
 |---|---|
@@ -647,7 +653,9 @@ waits for A3 and A5. Do not commit, stage or stash.
 - **Revision 11** answers review r9 (`evidence/plan-review-r9.md`: A5-3 and N2 FIXED): N1
   three-way classification keeps the tip for the empty-change-set return; N3 template contains
   the markers and the fact checks required content.
-- **Unblock action:** one independent re-review of A5 steps 5 and 8 and their acceptance lines. Everything else found clean in `plan-review-r6.md` and `-r7.md` is
+- **Revision 12** answers review r10 (`evidence/plan-review-r10.md`: N1 FIXED): N3 fact now
+  requires each exact statement inside its own marker's span.
+- **Unblock action:** one independent re-review of A5 step 8 and its acceptance line. Everything else found clean in `plan-review-r6.md` and `-r7.md` is
   reused.
 
 **Execution has not started. Planning readiness does not authorize execution.**
