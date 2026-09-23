@@ -16,6 +16,7 @@ import { assessPlanRisk } from "../src/plan-critique-contracts.js";
 import { LanguageProviderRouter } from "../src/language-provider-router.js";
 import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import { PlanOnlyInspectionRuntime, architectInspectionWorkspace, architectModelAttribution, loadArchitectReviewSubmission, prioritizedArchitectCapabilities } from "../src/native-architect-runtime.js";
+import { roleToolSurface } from "../src/role-capabilities.js";
 import { NativeArchitectRuntime } from "./support/git-fixture.js";
 import type { SchedulerProjection } from "../src/scheduler-store.js";
 import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
@@ -894,6 +895,20 @@ test("Architect excludes mutating extension tools under Project and Full access"
   }
 });
 
+function planOnlyListedTool(name: string) {
+  return {
+    definition: {
+      name,
+      description: name,
+      inputSchema: { type: "object", additionalProperties: false },
+      readOnly: true as const,
+      effect: "none" as const,
+    },
+    validate: () => ({ ok: true as const, value: {} }),
+    execute: async () => ({ content: [], isError: false as const }),
+  };
+}
+
 function fixtureLanguageProvider(): LanguageIntelligenceProvider {
   return {
     descriptor: {
@@ -963,6 +978,9 @@ test("Plan-only rejects forged mutating browser and MCP calls even under Full ac
     registry.register(tool);
   }
   for (const tool of createMcpTools(mcp, artifacts)) registry.register(tool);
+  for (const name of roleToolSurface("architect", "planOnly").tools) {
+    registry.register(planOnlyListedTool(name));
+  }
   const runtime = new PlanOnlyInspectionRuntime(registry);
   const names = runtime.definitions().map((tool) => tool.name);
   assert.equal(names.includes("browser.snapshot"), true);

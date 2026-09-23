@@ -6,7 +6,6 @@ import type {
   AgentMessage,
   AgentModel,
   NativeTool,
-  ToolDefinition,
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
 import {
@@ -46,6 +45,12 @@ import type {
   RuntimeRouter,
 } from "./runtime-router.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
+import {
+  assertRoleToolSurface,
+  staticToolAdmitted,
+  type RoleCapabilityBroker,
+  type RoleCapabilityRole,
+} from "./role-capabilities.js";
 import { ToolBroker } from "./tool-broker.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { VerificationWorkspace } from "./verification-workspace.js";
@@ -455,7 +460,7 @@ export class NativeVerifierRuntime {
       );
     }
 
-    const broker = createInspectionTools({
+    const broker = createVerifierReviewBroker({
       git: this.options.git, executionGrants: this.options.executionGrants,
       workspacePath: workspace.path,
       artifacts: this.options.artifacts,
@@ -703,7 +708,7 @@ export class NativeVerifierRuntime {
     if (!authority) {
       throw new Error("Two-pass verification requires a verdict authority.");
     }
-    const broker = createInspectionTools({
+    const broker = createVerifierExpectationsBroker({
       git: this.options.git,
       executionGrants: this.options.executionGrants,
       workspacePath: baseline.path,
@@ -843,7 +848,7 @@ export function verifierModelAttribution(
 
 const REVISION_REACHING_GIT_TOOLS = ["git.diff", "git.log", "git.show"] as const;
 
-export function createInspectionTools(input: {
+export interface InspectionToolsInput {
   git?: RunGitExecutionContext;
   executionGrants?: ExecutionGrantAuthority;
   workspacePath: string;
@@ -854,7 +859,44 @@ export function createInspectionTools(input: {
   ledger?: ToolInvocationLedger;
   lifecycleTool?: NativeTool<unknown>;
   excludeToolNames?: readonly string[];
-}): ToolBroker {
+  capabilityRole: RoleCapabilityRole;
+  capabilityBroker: RoleCapabilityBroker;
+  probeTools?: readonly NativeTool<unknown>[];
+}
+
+export function createVerifierReviewBroker(
+  input: Omit<InspectionToolsInput, "capabilityRole" | "capabilityBroker">,
+): ToolBroker {
+  const broker = createInspectionTools({
+    ...input,
+    capabilityRole: "verifier",
+    capabilityBroker: "inspection",
+  });
+  assertRoleToolSurface(
+    "verifier",
+    "inspection",
+    broker.definitions().map((definition) => definition.name),
+  );
+  return broker;
+}
+
+export function createVerifierExpectationsBroker(
+  input: Omit<InspectionToolsInput, "capabilityRole" | "capabilityBroker">,
+): ToolBroker {
+  const broker = createInspectionTools({
+    ...input,
+    capabilityRole: "verifier",
+    capabilityBroker: "expectations",
+  });
+  assertRoleToolSurface(
+    "verifier",
+    "expectations",
+    broker.definitions().map((definition) => definition.name),
+  );
+  return broker;
+}
+
+export function createInspectionTools(input: InspectionToolsInput): ToolBroker {
   const broker = new ToolBroker({
     git: input.git, executionGrants: input.executionGrants,
     permissionProfile: "guarded",
@@ -879,33 +921,18 @@ export function createInspectionTools(input: {
           artifacts: input.artifacts,
           taskId: "verifier",
           clock: input.clock,
-        }).filter((tool) => tool.definition.name === "inspect_evidence")
+        })
       : []),
-  ].filter(
-    (tool) =>
-      tool.definition.readOnly &&
-      tool.definition.effect === "none" &&
-      tool.definition.lifecycle !== true &&
-      !excludedToolNames.has(tool.definition.name)
-  );
+  ];
   for (const tool of tools) {
-    assertReadOnlyInspectionDefinition(tool.definition);
-    broker.register(tool);
+    if (excludedToolNames.has(tool.definition.name)) continue;
+    if (staticToolAdmitted(input.capabilityRole, input.capabilityBroker, tool.definition.name)) {
+      broker.register(tool);
+    }
   }
   if (input.lifecycleTool) broker.register(input.lifecycleTool);
+  for (const tool of input.probeTools ?? []) broker.register(tool);
   return broker;
-}
-
-function assertReadOnlyInspectionDefinition(definition: ToolDefinition): void {
-  if (
-    !definition.readOnly ||
-    definition.effect !== "none" ||
-    definition.lifecycle === true
-  ) {
-    throw new Error(
-      `Verifier inspection tool ${definition.name} exceeds read-only authority.`
-    );
-  }
 }
 
 function assertInspectionRequest(request: NativeVerifierInspectionRequest): void {
