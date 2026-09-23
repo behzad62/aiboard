@@ -1,8 +1,9 @@
 import type {
   AgentToolRuntime,
 } from "./tool-registry.js";
-import type { ToolExecutionContext } from "./agent-contracts.js";
-import { createArchitectTools } from "./architect-tools.js";
+import type { NativeTool, ToolExecutionContext } from "./agent-contracts.js";
+import { createArchitectTools, type ArchitectToolsOptions } from "./architect-tools.js";
+import { ARCHITECT_LIFECYCLE_TOOLS } from "./role-capabilities.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
   BuildRiskAssessmentProjection,
@@ -209,6 +210,10 @@ export interface BuildRuntimeOptions {
   independentVerifier?: IndependentVerifierDriver;
   planCritic?: PlanCriticDriver;
   repairPlanLimit?: number;
+  /** Test probe applied to lifecycle tools immediately before the allow-list assert. */
+  architectLifecycleProbe?: (
+    tools: readonly NativeTool<unknown>[],
+  ) => readonly NativeTool<unknown>[];
 }
 
 export interface BuildStepResult {
@@ -239,6 +244,7 @@ export class BuildRuntime {
   private readonly independentVerifier?: IndependentVerifierDriver;
   private readonly planCritic?: PlanCriticDriver;
   private readonly repairPlanLimit: number;
+  private readonly architectLifecycleProbe?: BuildRuntimeOptions["architectLifecycleProbe"];
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
   private recordingFailureContext: {
@@ -269,6 +275,7 @@ export class BuildRuntime {
     this.independentVerifier = options.independentVerifier;
     this.planCritic = options.planCritic;
     this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
+    this.architectLifecycleProbe = options.architectLifecycleProbe;
     if (
       this.independentVerifier &&
       (
@@ -1575,7 +1582,7 @@ export class BuildRuntime {
     const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
     const providerRetryDeadlineMs = this.providerRetryDeadlineMs?.();
     const tools = new ToolRegistry();
-    for (const tool of createArchitectTools({
+    const created = createArchitectTools({
       store: this.store,
       clock: this.clock,
       runPolicy: this.runPolicy,
@@ -1604,7 +1611,17 @@ export class BuildRuntime {
         ? { discardFinalVerificationProfile: this.discardFinalVerificationProfile }
         : {}),
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
-    })) {
+    });
+    const registered = this.architectLifecycleProbe
+      ? this.architectLifecycleProbe(created)
+      : created;
+    assertArchitectLifecycleRegistration(
+      registered.map((tool) => tool.definition.name),
+      this.runPolicy !== "plan_only",
+      this.store,
+      this.clock,
+    );
+    for (const tool of registered) {
       tools.register(tool);
     }
     await this.architectDriver.run({
@@ -1968,4 +1985,182 @@ function emptyProjection(runId: string): SchedulerProjection {
 function boundedCleanupError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return redactSensitiveText(message, 4_096) || "Final verification cleanup failed.";
+}
+
+/**
+ * Exact sorted names `createArchitectTools` can register from an Architect turn.
+ * One turn registers a subset: reason gates and `plan_only` omit tools. A4 may
+ * move this list into role-capabilities. It is not a broker.
+ */
+export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
+  "acknowledge_user_guidance",
+  "answer_guidance",
+  "ask_user",
+  "complete_run",
+  "plan_final_verification",
+  "plan_tasks",
+  "plan_verification_repairs",
+  "plan_verifier_repairs",
+  "reconcile_plan",
+  "request_integration",
+  "resolve_context_recording",
+  "resolve_plan_critique",
+  "review_final_verification",
+  "review_task",
+  "revise_task",
+  "upgrade_acceptance_contract",
+]);
+
+const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store" | "clock">[] = [
+  {
+    runPolicy: "finish",
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    runPolicy: "budgeted",
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    runPolicy: "plan_only",
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    runPolicy: "plan_only",
+    planOnlyCompletionAvailable: true,
+    architectAction: {
+      reason: { type: "completion_decision_required", runPolicy: "plan_only" },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    architectAction: {
+      reason: {
+        type: "context_recording_decision_required",
+        purpose: "record",
+        attempts: 1,
+        reason: "failed",
+        noteSequence: 1,
+      },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    architectAction: {
+      reason: { type: "user_guidance_required", guidanceId: "guidance", version: 1 },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    finalVerificationPlanAvailable: true,
+    architectAction: {
+      reason: { type: "final_verification_plan_required", integrationRevision: "rev" },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    finalVerificationReviewAvailable: true,
+    architectAction: {
+      reason: {
+        type: "final_verification_review_required",
+        taskId: "task",
+        generationId: "generation",
+        submissionId: "submission",
+        targetRevision: "rev",
+      },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    finalVerificationRepairPlanAvailable: true,
+    architectAction: {
+      reason: {
+        type: "final_verification_repair_plan_required",
+        finalVerificationTaskId: "task",
+        generationId: "generation",
+        targetRevision: "rev",
+        source: { type: "semantic_review", submissionId: "submission", reviewId: "review" },
+        failedCategories: [],
+        evidenceIds: [],
+      },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    verifierRepairPlanAvailable: true,
+    architectAction: {
+      reason: {
+        type: "verifier_repair_plan_required",
+        reviewId: "review",
+        targetRevision: "rev",
+        unsatisfiedCriteria: [],
+      },
+      sequence: 0,
+    },
+  },
+  {
+    runPolicy: "finish",
+    planCritiqueResolutionAvailable: true,
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+];
+
+/** Names produced by calling `createArchitectTools` across every registration shape. */
+export function architectLifecycleUniverseNames(
+  store: SchedulerStore,
+  clock: () => string,
+): readonly string[] {
+  const names = new Set<string>();
+  for (const options of ARCHITECT_LIFECYCLE_UNIVERSE) {
+    for (const tool of createArchitectTools({ store, clock, ...options })) {
+      names.add(tool.definition.name);
+    }
+  }
+  return Object.freeze([...names].sort(compareToolNames));
+}
+
+function assertArchitectLifecycleRegistration(
+  registeredNames: readonly string[],
+  requireLifecycleTools: boolean,
+  store: SchedulerStore,
+  clock: () => string,
+): void {
+  const universe = architectLifecycleUniverseNames(store, clock);
+  const surface = ARCHITECT_LIFECYCLE_SURFACE;
+  if (!sortedNamesEqual(universe, surface)) {
+    const allowed = new Set<string>(surface);
+    const extra = universe.find((name) => !allowed.has(name));
+    if (extra) {
+      throw new Error(`Architect lifecycle registered tool ${extra} is not on the allow-list.`);
+    }
+    const present = new Set<string>(universe);
+    const missing = surface.find((name) => !present.has(name));
+    throw new Error(`Architect lifecycle surface omitted ${missing ?? "a required tool"}.`);
+  }
+  if (requireLifecycleTools) {
+    for (const name of ARCHITECT_LIFECYCLE_TOOLS) {
+      if (!registeredNames.includes(name)) {
+        throw new Error(`Architect lifecycle required tool ${name} is missing.`);
+      }
+    }
+  }
+  const allowed = new Set<string>(surface);
+  for (const name of registeredNames) {
+    if (!allowed.has(name)) {
+      throw new Error(`Architect lifecycle registered tool ${name} is not on the allow-list.`);
+    }
+  }
+}
+
+function sortedNamesEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((name, index) => name === right[index]);
+}
+
+function compareToolNames(left: string, right: string): number {
+  return left.localeCompare(right);
 }
