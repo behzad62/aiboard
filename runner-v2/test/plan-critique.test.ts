@@ -19,7 +19,10 @@ import {
   type WorkerRuntimeDriver,
 } from "../src/task-scheduler.js";
 import type { BuildTask } from "../src/task-contracts.js";
-import type { VerifierRuntimeBinding } from "../src/verifier-contracts.js";
+import {
+  recordedReviewerIndependence,
+  type VerifierRuntimeBinding,
+} from "../src/verifier-contracts.js";
 
 const RUN_ID = "run_critique";
 const AT = "2026-09-02T00:00:00.000Z";
@@ -381,6 +384,78 @@ test("risk below the threshold unblocks workers under risk_based and still block
     assert.equal(planCritiquePending(projection()), false);
     configureRisk(append, projection);
     assert.equal(planCritiquePending(projection()), false);
+  });
+});
+
+test("plan critique independence round-trips, rejects an unknown value, and replays a missing field as distinct_model", () => {
+  withStore((store, append, projection) => {
+    configurePolicy(append);
+    configureRisk(append, projection);
+    append("plan_critique.requested", "critique:legacy", {
+      critiqueId: "critique-legacy",
+      planRevision: 1,
+      runtime: criticRuntime(),
+      excludedModels: architectExclusion(),
+    });
+    const legacy = projection().planCritique?.current;
+    assert.equal(Object.hasOwn(legacy ?? {}, "independence"), false);
+    assert.equal(recordedReviewerIndependence(legacy), "distinct_model");
+    assert.equal(store.readRun(RUN_ID).some((event) => event.type === "plan_critique.requested"), true);
+  });
+  withStore((_, append, projection) => {
+    configurePolicy(append);
+    configureRisk(append, projection);
+    append("plan_critique.requested", "critique:distinct", {
+      critiqueId: "critique-distinct",
+      planRevision: 1,
+      runtime: criticRuntime(),
+      excludedModels: architectExclusion(),
+      independence: "distinct_model",
+    });
+    assert.equal(projection().planCritique?.current?.independence, "distinct_model");
+  });
+  withStore((_, append, projection) => {
+    configurePolicy(append);
+    configureRisk(append, projection);
+    assert.throws(() => append("plan_critique.requested", "critique:unknown", {
+      critiqueId: "critique-unknown",
+      planRevision: 1,
+      runtime: criticRuntime(),
+      excludedModels: architectExclusion(),
+      independence: "anchored",
+    }), /distinct_model or fresh_context/);
+  });
+});
+
+test("same-model plan critic is rejected for distinct_model and a missing field, and accepted for fresh_context", () => {
+  const sameModel = binding("openai:architect", "architect", "plan-critic:same");
+  for (const independence of [undefined, "distinct_model"] as const) {
+    withStore((_, append, projection) => {
+      configurePolicy(append);
+      configureRisk(append, projection);
+      assert.throws(() => append("plan_critique.requested", `critique:reject:${independence ?? "missing"}`, {
+        critiqueId: "critique-same",
+        planRevision: 1,
+        runtime: sameModel,
+        excludedModels: architectExclusion(),
+        ...(independence ? { independence } : {}),
+      }), /not independent from the Architect/);
+    });
+  }
+  withStore((_, append, projection) => {
+    configurePolicy(append);
+    configureRisk(append, projection);
+    append("plan_critique.requested", "critique:fresh", {
+      critiqueId: "critique-fresh",
+      planRevision: 1,
+      runtime: sameModel,
+      excludedModels: architectExclusion(),
+      independence: "fresh_context",
+    });
+    const current = projection().planCritique?.current;
+    assert.equal(current?.independence, "fresh_context");
+    assert.equal(current?.runtime.modelIdentity, "architect");
+    assert.equal(current?.excludedModels[0]?.source, "architect");
   });
 });
 

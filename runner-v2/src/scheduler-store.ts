@@ -69,6 +69,7 @@ import {
   cloneVerifierReview,
   expectedVerifierCriteria,
   parseExcludedModels,
+  parseReviewerIndependence,
   parseRuntimeBinding,
   parseVerifierExpectations,
   parseVerifierReviewRequest,
@@ -4869,7 +4870,11 @@ function applyPlanCritiqueRequested(
   }
   const runtime = parseRuntimeBinding(event.payload.runtime);
   const excludedModels = parseExcludedModels(event.payload.excludedModels);
-  if (excludedModels.some((excluded) => excluded.modelIdentity === runtime.modelIdentity)) {
+  const independence = parseReviewerIndependence(event.payload.independence);
+  if (
+    independence !== "fresh_context" &&
+    excludedModels.some((excluded) => excluded.modelIdentity === runtime.modelIdentity)
+  ) {
     throw new Error("Plan critic model is not independent from the Architect.");
   }
   const critiqueId = requiredString(event.payload, "critiqueId");
@@ -4892,6 +4897,7 @@ function applyPlanCritiqueRequested(
     planRevision,
     runtime,
     excludedModels,
+    ...(event.payload.independence === undefined ? {} : { independence }),
     status: "requested",
     requestedAt: event.occurredAt,
   };

@@ -65,7 +65,11 @@ import {
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { VerificationWorkspace } from "./verification-workspace.js";
 import {
+  assertFreshContextRequest,
+  assertFreshContextSessionStarted,
   canonicalModelIdentity,
+  recordedReviewerIndependence,
+  type ReviewerIndependence,
   type VerifierExcludedModel,
   type VerifierReviewProjection,
   type VerifierVerdictProjection,
@@ -342,6 +346,7 @@ export class NativeVerifierRuntime {
             sessionId,
           },
           excludedModels,
+          independence: selection.independence,
           criteria: request.criteria.map((item) => ({
             taskId: item.taskId,
             criterionId: item.criterion.id,
@@ -360,6 +365,7 @@ export class NativeVerifierRuntime {
         candidate,
         sessionId,
         excludedModels,
+        independence: selection.independence,
       });
     }
     if (
@@ -372,6 +378,7 @@ export class NativeVerifierRuntime {
         candidate,
         model,
         review: durableReview,
+        independence: selection.independence,
       });
       if (passOne) return passOne;
       durableReview = this.options.verdictAuthority?.currentReview(request.runId);
@@ -424,14 +431,27 @@ export class NativeVerifierRuntime {
     };
     let messages: AgentMessage[] = [systemMessage, contextMessage];
     const sessionEvents = this.options.sessions.events(sessionId);
+    const freshStart = sessionEvents.length === 0;
+    if (freshStart) {
+      assertFreshContextRequest({
+        independence: selection.independence,
+        priorEventCount: sessionEvents.length,
+        messages,
+        packMessageIds: [systemMessage.id, contextMessage.id],
+      });
+    }
     let recoveredCompleted = false;
-    if (sessionEvents.length === 0) {
+    if (freshStart) {
       await this.options.sessions.create({
         sessionId,
         runId: request.runId,
         actor: { role: "verifier", id: candidate.runtimeId },
         occurredAt: this.clock(),
       });
+      assertFreshContextSessionStarted(
+        selection.independence,
+        this.options.sessions.events(sessionId),
+      );
     } else {
       const recovered = await this.options.sessions.load(sessionId);
       if (
@@ -439,7 +459,11 @@ export class NativeVerifierRuntime {
         recovered.actor.id !== candidate.runtimeId ||
         recovered.runId !== request.runId
       ) {
-        throw new Error("Recovered verifier session identity does not match the request.");
+        throw new Error(
+          selection.independence === "fresh_context"
+            ? "A fresh-context reviewer cannot resume or reuse another session."
+            : "Recovered verifier session identity does not match the request.",
+        );
       }
       if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
       recoveredCompleted = recovered.status === "completed";
@@ -638,8 +662,10 @@ export class NativeVerifierRuntime {
     candidate: AgentRuntimeCandidate;
     model: AgentModel;
     review: VerifierReviewProjection;
+    independence: ReviewerIndependence;
   }): Promise<NativeVerifierInspectionResult | undefined> {
     const { request, candidate, model, review } = input;
+    const independence = input.independence ?? recordedReviewerIndependence(review);
     const baselineRevision = request.baselineRevision;
     if (!baselineRevision) {
       throw new Error("Two-pass verifier inspection requires a baseline revision.");
@@ -700,13 +726,26 @@ export class NativeVerifierRuntime {
     };
     let messages: AgentMessage[] = [systemMessage, contextMessage];
     const sessionEvents = this.options.sessions.events(sessionId);
-    if (sessionEvents.length === 0) {
+    const freshStart = sessionEvents.length === 0;
+    if (freshStart) {
+      assertFreshContextRequest({
+        independence,
+        priorEventCount: sessionEvents.length,
+        messages,
+        packMessageIds: [systemMessage.id, contextMessage.id],
+      });
+    }
+    if (freshStart) {
       await this.options.sessions.create({
         sessionId,
         runId: request.runId,
         actor: { role: "verifier", id: candidate.runtimeId },
         occurredAt: this.clock(),
       });
+      assertFreshContextSessionStarted(
+        independence,
+        this.options.sessions.events(sessionId),
+      );
     } else {
       const recovered = await this.options.sessions.load(sessionId);
       if (
@@ -714,7 +753,11 @@ export class NativeVerifierRuntime {
         recovered.actor.id !== candidate.runtimeId ||
         recovered.runId !== request.runId
       ) {
-        throw new Error("Recovered verifier expectations session identity does not match the request.");
+        throw new Error(
+          independence === "fresh_context"
+            ? "A fresh-context reviewer cannot resume or reuse another session."
+            : "Recovered verifier expectations session identity does not match the request.",
+        );
       }
       if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
       if (!messages.some((message) => message.id === contextMessage.id)) {
@@ -1184,6 +1227,7 @@ function assertBoundVerifierReview(input: {
   candidate: AgentRuntimeCandidate;
   sessionId: string;
   excludedModels: readonly VerifierExcludedModel[];
+  independence: ReviewerIndependence;
 }): void {
   const expectedCriteria = input.request.criteria
     .map((item) => ({
@@ -1214,7 +1258,8 @@ function assertBoundVerifierReview(input: {
     (input.request.baselineRevision ?? undefined) !== input.review.baselineRevision ||
     JSON.stringify(actualCriteria) !== JSON.stringify(expectedCriteria) ||
     JSON.stringify(input.review.excludedModels) !==
-      JSON.stringify(input.excludedModels)
+      JSON.stringify(input.excludedModels) ||
+    input.review.independence !== input.independence
   ) {
     throw new Error(
       "Durable verifier review conflicts with its kernel-selected revision, identity, or criteria.",

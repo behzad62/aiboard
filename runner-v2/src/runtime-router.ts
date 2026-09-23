@@ -2,7 +2,10 @@ import type {
   ProviderFailure,
   ProviderHealthRegistry,
 } from "./provider-health.js";
-import { canonicalModelIdentity } from "./verifier-contracts.js";
+import {
+  canonicalModelIdentity,
+  type ReviewerIndependence,
+} from "./verifier-contracts.js";
 
 export interface AgentRuntimeCandidate {
   runtimeId: string;
@@ -54,6 +57,7 @@ export type VerifierSelection =
   | {
       status: "assigned";
       runtime: AgentRuntimeCandidate;
+      independence: ReviewerIndependence;
     }
   | {
       status: "unavailable";
@@ -193,19 +197,28 @@ export class RuntimeRouter {
       }
       excludedModelIdentities.add(canonicalModelIdentity(author.modelId));
     }
-    const runtime = this.eligible(required).find(
+    const eligibleAllowed = this.eligible(required).filter(
       (candidate) =>
         allowedRuntimeIds.has(candidate.runtimeId) &&
-        !input.excludedRuntimeIds?.has(candidate.runtimeId) &&
-        !excludedModelIdentities.has(canonicalModelIdentity(candidate.modelId))
+        !input.excludedRuntimeIds?.has(candidate.runtimeId),
     );
-    return runtime
-      ? { status: "assigned", runtime: cloneCandidate(runtime) }
-      : {
-          status: "unavailable",
-          reason: "no_independent_healthy_capability_match",
-          requiredCapabilities: required,
-        };
+    const distinct = eligibleAllowed.find(
+      (candidate) =>
+        !excludedModelIdentities.has(canonicalModelIdentity(candidate.modelId)),
+    );
+    const runtime = distinct ?? eligibleAllowed[0];
+    if (!runtime) {
+      return {
+        status: "unavailable",
+        reason: "no_independent_healthy_capability_match",
+        requiredCapabilities: required,
+      };
+    }
+    return {
+      status: "assigned",
+      runtime: cloneCandidate(runtime),
+      independence: distinct ? "distinct_model" : "fresh_context",
+    };
   }
 
   confirmArchitectHandoff(

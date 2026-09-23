@@ -35,7 +35,10 @@ import {
   type BuildTask,
 } from "./task-contracts.js";
 import {
+  assertFreshContextRequest,
+  assertFreshContextSessionStarted,
   canonicalModelIdentity,
+  type ReviewerIndependence,
   type VerifierExcludedModel,
 } from "./verifier-contracts.js";
 import type {
@@ -231,6 +234,7 @@ export class NativePlanCriticRuntime {
         sessionId,
       },
       excludedModels,
+      independence: selection.independence,
       occurredAt: this.clock(),
     });
     assertBoundPlanCritique({
@@ -239,6 +243,7 @@ export class NativePlanCriticRuntime {
       candidate,
       sessionId,
       excludedModels,
+      independence: selection.independence,
     });
     const systemMessage: AgentMessage = {
       id: "plan-critic-system",
@@ -252,14 +257,27 @@ export class NativePlanCriticRuntime {
     };
     let messages: AgentMessage[] = [systemMessage, contextMessage];
     const sessionEvents = this.options.sessions.events(sessionId);
+    const freshStart = sessionEvents.length === 0;
+    if (freshStart) {
+      assertFreshContextRequest({
+        independence: selection.independence,
+        priorEventCount: sessionEvents.length,
+        messages,
+        packMessageIds: [systemMessage.id, contextMessage.id],
+      });
+    }
     let recoveredCompleted = false;
-    if (sessionEvents.length === 0) {
+    if (freshStart) {
       await this.options.sessions.create({
         sessionId,
         runId: request.runId,
         actor: { role: "verifier", id: candidate.runtimeId },
         occurredAt: this.clock(),
       });
+      assertFreshContextSessionStarted(
+        selection.independence,
+        this.options.sessions.events(sessionId),
+      );
     } else {
       const recovered = await this.options.sessions.load(sessionId);
       if (
@@ -267,7 +285,11 @@ export class NativePlanCriticRuntime {
         recovered.actor.id !== candidate.runtimeId ||
         recovered.runId !== request.runId
       ) {
-        throw new Error("Recovered plan critic session identity does not match the request.");
+        throw new Error(
+          selection.independence === "fresh_context"
+            ? "A fresh-context reviewer cannot resume or reuse another session."
+            : "Recovered plan critic session identity does not match the request.",
+        );
       }
       if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
       recoveredCompleted = recovered.status === "completed";
@@ -474,6 +496,7 @@ function assertBoundPlanCritique(input: {
   candidate: AgentRuntimeCandidate;
   sessionId: string;
   excludedModels: readonly VerifierExcludedModel[];
+  independence: ReviewerIndependence;
 }): void {
   if (
     input.critique.planRevision !== input.request.planRevision ||
@@ -484,7 +507,8 @@ function assertBoundPlanCritique(input: {
       canonicalModelIdentity(input.candidate.modelId) ||
     input.critique.runtime.sessionId !== input.sessionId ||
     JSON.stringify(input.critique.excludedModels) !==
-      JSON.stringify(input.excludedModels)
+      JSON.stringify(input.excludedModels) ||
+    input.critique.independence !== input.independence
   ) {
     throw new Error(
       "Durable plan critique conflicts with its kernel-selected revision, identity, or excluded models.",

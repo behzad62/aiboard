@@ -428,6 +428,8 @@ export interface NativeVerifierReviewProjection {
     runtimeId: string;
     modelIdentity: string;
   }>;
+  /** Absent on legacy reviews, which replay as a distinct model. */
+  independence?: "distinct_model" | "fresh_context";
   criteria: Array<{ taskId: string; criterionId: string }>;
   status: "requested" | "submitted";
   state: "current" | "invalidated" | "superseded";
@@ -516,6 +518,8 @@ export interface NativePlanCritiqueProjection {
     runtimeId: string;
     modelIdentity: string;
   }>;
+  /** Absent on legacy critiques, which replay as a distinct model. */
+  independence?: "distinct_model" | "fresh_context";
   status: "requested" | "submitted" | "resolved";
   requestedAt: string;
   submittedAt?: string;

@@ -708,6 +708,24 @@ const expectationsMarkup = renderToStaticMarkup(
     projection: projectionWithoutHandoff as unknown as NativeBuildProjection,
   }),
 );
+const freshContextMarkup = renderToStaticMarkup(
+  createElement(IndependentVerifierManifest, {
+    verifier: {
+      ...verifierSnapshot.independentVerifier,
+      review: {
+        ...verifierSnapshot.independentVerifier.review,
+        current: {
+          ...verifierSnapshot.independentVerifier.review.current,
+          independence: "fresh_context",
+        },
+      },
+    } as unknown as NativeIndependentVerifierObservability,
+    projection: projectionWithoutHandoff as unknown as NativeBuildProjection,
+  }),
+);
+assert.match(freshContextMarkup, /same model, fresh context/);
+assert.doesNotMatch(expectationsMarkup, /same model, fresh context/);
+
 assert.match(expectationsMarkup, /Expectations recorded \(1 criteria\)/);
 assert.match(expectationsMarkup, /src\/auth\/session\.ts:40-55/);
 assert.match(expectationsMarkup, /<ol/);
@@ -1181,6 +1199,17 @@ checkCritique("submitted blocking claim in detail", () => {
 });
 checkCritique("submitted blocking reason label", () => {
   assert.match(submittedMarkup, /Resolving plan critique/);
+});
+const freshCritiqueMarkup = renderCritiquePanel(
+  critiquePanelProjection(critiqueState(critiqueProjection("submitted", [blockingFinding], {
+    independence: "fresh_context",
+  }))),
+);
+checkCritique("fresh-context plan critique label", () => {
+  assert.match(freshCritiqueMarkup, /same model, fresh context/);
+});
+checkCritique("distinct plan critique has no fresh-context label", () => {
+  assert.doesNotMatch(submittedMarkup, /same model, fresh context/);
 });
 checkCritique("submitted blocking summary", () => {
   assert.match(submittedMarkup, /Plan critique: submitted \(1 blocking, 0 advisory\)/);

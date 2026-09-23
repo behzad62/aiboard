@@ -165,6 +165,34 @@ test("restart excludes a provider-failed pending verifier session and selects fa
   }
 });
 
+test("fresh-context verifier request omits architect and worker session text", async () => {
+  const sentinel = "R1_FRESH_CONTEXT_SENTINEL";
+  const runId = "run_fresh_context";
+  const fixture = createFixture("fresh-context", [{
+    blocks: [{ type: "text", text: "Inspection complete." }],
+    stopReason: "end_turn",
+  }], TARGET_REVISION, undefined, false, false, {
+    verifierRuntimeIds: ["openai:architect"],
+  });
+  try {
+    await seedForeignSession(fixture.sessions, `architect:${runId}`, runId, "architect", "openai:architect", sentinel);
+    await seedForeignSession(fixture.sessions, `worker:${runId}`, runId, "worker", "openai:architect", sentinel);
+    const result = await fixture.runtime.inspect(verifierRequest(runId));
+    assert.equal(result.status, "inspected");
+    if (result.status === "inspected") {
+      assert.equal(result.runtimeId, "openai:architect");
+      assert.notEqual(result.sessionId, `architect:${runId}`);
+      assert.notEqual(result.sessionId, `worker:${runId}`);
+    }
+    const request = fixture.model.requests[0];
+    assert.ok(request);
+    assert.equal(JSON.stringify(request).includes(sentinel), false);
+    assert.equal(request.sessionId.startsWith(`verifier:${runId}:`), true);
+  } finally {
+    fixture.close();
+  }
+});
+
 test("verifier receives complete revision-bound context in a separate read-only session", async () => {
   const fixture = createFixture("context", [{
     blocks: [{ type: "text", text: "Inspection complete." }],
@@ -777,11 +805,18 @@ function createFixture(
   verdictAuthority?: VerifierVerdictAuthority,
   interruptAfterAssistantCheckpoint = false,
   withBudget = false,
-  recordContextPackTextOrOptions: boolean | { twoPass?: boolean; recordContextPackText?: boolean } = false,
+  recordContextPackTextOrOptions: boolean | {
+    twoPass?: boolean;
+    recordContextPackText?: boolean;
+    verifierRuntimeIds?: readonly string[];
+  } = false,
 ) {
   const recordContextPackText = typeof recordContextPackTextOrOptions === "boolean"
     ? recordContextPackTextOrOptions
     : recordContextPackTextOrOptions.recordContextPackText === true;
+  const verifierRuntimeIds = typeof recordContextPackTextOrOptions === "boolean"
+    ? ["google:verifier", "fallback:verifier"]
+    : [...(recordContextPackTextOrOptions.verifierRuntimeIds ?? ["google:verifier", "fallback:verifier"])];
   const root = mkdtempSync(join(tmpdir(), `aiboard-native-verifier-${name}-`));
   const workspacePath = join(root, "workspace");
   mkdirSync(workspacePath);
@@ -850,11 +885,8 @@ function createFixture(
     runtime: new NativeVerifierRuntime({
       router,
       candidates,
-      models: new Map([
-        ["google:verifier", model],
-        ["fallback:verifier", model],
-      ]),
-      verifierRuntimeIds: ["google:verifier", "fallback:verifier"],
+      models: new Map(verifierRuntimeIds.map((runtimeId) => [runtimeId, model])),
+      verifierRuntimeIds,
       sessions,
       artifacts,
       evidenceStore,
@@ -938,6 +970,7 @@ class FakeVerifierVerdictAuthority implements VerifierVerdictAuthority {
       finalVerificationGenerationId: input.finalVerificationGenerationId,
       runtime: { ...input.runtime },
       excludedModels: input.excludedModels.map((model) => ({ ...model })),
+      ...(input.independence ? { independence: input.independence } : {}),
       criteria: input.criteria.map((criterion) => ({ ...criterion })),
       status: "requested",
       state: "current",
@@ -1101,6 +1134,27 @@ function verifierRequest(
       ? { twoPass: true as const, baselineRevision: BASELINE_REVISION }
       : {}),
   };
+}
+
+async function seedForeignSession(
+  sessions: SqliteAgentSessionStore,
+  sessionId: string,
+  runId: string,
+  role: "architect" | "worker",
+  actorId: string,
+  sentinel: string,
+): Promise<void> {
+  await sessions.create({
+    sessionId,
+    runId,
+    actor: { role, id: actorId },
+    occurredAt: "2026-08-27T00:00:00.000Z",
+  });
+  await sessions.checkpoint(sessionId, {
+    messages: [{ id: `${role}-sentinel`, role: "user", content: sentinel }],
+    turns: 1,
+    seenCallIds: [],
+  }, "2026-08-27T00:00:00.000Z");
 }
 
 class ScriptedModel implements AgentModel {

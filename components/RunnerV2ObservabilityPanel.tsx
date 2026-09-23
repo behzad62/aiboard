@@ -185,13 +185,16 @@ function planCritiqueSummaryLine(state: NativePlanCritiqueState | undefined): st
   }
   const current = state.current;
   if (!current) return undefined;
-  if (current.status === "requested") return "Plan critique: requested";
+  const freshContext = current.independence === "fresh_context"
+    ? " · same model, fresh context"
+    : "";
+  if (current.status === "requested") return `Plan critique: requested${freshContext}`;
   const findings = current.findings ?? [];
   const blocking = findings.filter((finding) => finding.severity === "blocking").length;
   const advisory = findings.filter((finding) => finding.severity === "advisory").length;
   const counts = `${blocking} blocking, ${advisory} advisory`;
-  if (current.status === "resolved") return `Plan critique: resolved (${counts})`;
-  if (current.status === "submitted") return `Plan critique: submitted (${counts})`;
+  if (current.status === "resolved") return `Plan critique: resolved (${counts})${freshContext}`;
+  if (current.status === "submitted") return `Plan critique: submitted (${counts})${freshContext}`;
   return undefined;
 }
 
@@ -1626,6 +1629,7 @@ function PlanCritiqueFindings({
           {current?.excludedModels.length
             ? ` · ${current.excludedModels.map((model) => model.modelIdentity).join(", ")}`
             : ""}
+          {current?.independence === "fresh_context" ? " · same model, fresh context" : ""}
         </p>
         <ul className="space-y-2">
           {findings.map((finding) => {
@@ -1813,6 +1817,11 @@ export function IndependentVerifierManifest({
                     ? "Runner will bind a distinct verifier to the exact integrated revision."
                     : "The current low-risk revision does not require an independent verdict."}
             </p>
+            {review?.independence === "fresh_context" ? (
+              <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
+                same model, fresh context
+              </p>
+            ) : null}
             {review?.expectations && review.expectations.length > 0 ? (
               <p className="mt-2 text-[0.7rem] leading-relaxed text-muted-foreground">
                 Expectations recorded ({review.expectations.length} criteria)
