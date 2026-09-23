@@ -94,6 +94,7 @@ try {
   const health = await waitForHealth();
   assert.deepEqual(health.rjs, {
     ready: true,
+    managedBuildSupported: process.platform === "win32",
     nodeVersion: "24.18.0",
     quickjsVersion: "0.32.0",
     contractHash: RECOVERABLE_JOB_SERVICE_INPUT_HASHES.contractHash,
