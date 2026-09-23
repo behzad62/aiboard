@@ -5,6 +5,7 @@ import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
+  NativeTool,
   ToolCallBlock,
   ToolExecutionContext,
   ToolResult,
@@ -65,6 +66,14 @@ import { createSkillTools } from "./skill-tools.js";
 import { createResearchTools } from "./research-tools.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
+import {
+  assertRoleToolSurface,
+  isCatalogToolName,
+  isMcpToolName,
+  mcpToolAdmitted,
+  roleToolSurface,
+  staticToolAdmitted,
+} from "./role-capabilities.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
@@ -242,70 +251,27 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         messages.push(reminder);
       }
     }
-    const extras = new ToolBroker({
-      git: this.options.git, executionGrants: this.options.executionGrants,
-      permissionProfile: this.options.permissionProfile ?? "project",
-      workspacePath: this.options.projectRoot,
-      artifacts: this.options.artifacts,
-      ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
-      ...(this.options.permissions
-        ? { approve: (approval) => this.options.permissions!.requestTool(approval) }
-        : {}),
-    });
-    const repository = new RepositoryIntelligence(this.options.git ? (request) => this.options.git!.current().run(request) : undefined);
-    const language = this.options.language ?? new TypeScriptIntelligence(repository);
-    for (const tool of createFilesystemTools({
-      artifacts: this.options.artifacts,
-      repository,
-      ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
-      ...(this.options.protectedPaths ? { protectedPaths: this.options.protectedPaths } : {}),
-    })) {
-      if (tool.definition.readOnly) extras.register(tool);
-    }
-    for (const tool of createCodeIntelligenceTools({
-      repository,
-      language,
-    })) {
-      extras.register(tool);
-    }
-    for (const tool of createArtifactTools(this.options.artifacts)) extras.register(tool);
-    for (const tool of createSessionTools(this.options.sessions)) extras.register(tool);
-    for (const tool of createGitTools(this.options.git)) {
-      if (tool.definition.readOnly) extras.register(tool);
-    }
-    for (const tool of createEvidenceTools({
+    const extras = createArchitectInspectionBroker({
       git: this.options.git,
-      store: this.options.evidenceStore,
+      executionGrants: this.options.executionGrants,
+      permissionProfile: this.options.permissionProfile ?? "project",
+      projectRoot: this.options.projectRoot,
       artifacts: this.options.artifacts,
-      taskId: "architect",
-      clock: this.clock,
-    })) {
-      if (tool.definition.name === "inspect_evidence") extras.register(tool);
-    }
-    for (const tool of createSkillTools(this.options.skillCatalog)) extras.register(tool);
-    for (const tool of createMemoryTools({
-      store: this.options.memoryStore,
+      sessions: this.options.sessions,
+      evidenceStore: this.options.evidenceStore,
+      skillCatalog: this.options.skillCatalog,
+      memoryStore: this.options.memoryStore,
       projectId: this.options.projectId,
       runId: request.runId,
       clock: this.clock,
-    })) extras.register(tool);
-    for (const tool of createResearchTools({ artifacts: this.options.artifacts })) {
-      extras.register(tool);
-    }
-    if (this.options.browserBackend) {
-      for (const tool of createBrowserTools({
-        backend: this.options.browserBackend,
-        artifacts: this.options.artifacts,
-        evidenceStore: this.options.evidenceStore,
-        taskId: "architect",
-        clock: this.clock,
-      })) extras.register(tool);
-    }
-    if (this.options.mcpManager) {
-      for (const tool of createMcpTools(this.options.mcpManager, this.options.artifacts)) {
-        extras.register(tool);
-      }
-    }
+      ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      ...(this.options.hiddenPaths ? { hiddenPaths: this.options.hiddenPaths } : {}),
+      ...(this.options.protectedPaths ? { protectedPaths: this.options.protectedPaths } : {}),
+      ...(this.options.browserBackend ? { browserBackend: this.options.browserBackend } : {}),
+      ...(this.options.mcpManager ? { mcpManager: this.options.mcpManager } : {}),
+      ...(this.options.language ? { language: this.options.language } : {}),
+    });
     if (this.options.capabilityRegistry) {
       registerExtensionCapabilities(this.options.capabilityRegistry, extras, {
         includeTool: ({ tool }) =>
@@ -704,15 +670,134 @@ export function architectModelAttribution(
   };
 }
 
+export interface ArchitectInspectionBrokerInput {
+  git?: RunGitExecutionContext;
+  executionGrants?: ExecutionGrantAuthority;
+  permissionProfile: PermissionProfile;
+  projectRoot: string;
+  artifacts: ArtifactStore;
+  sessions: SqliteAgentSessionStore;
+  evidenceStore: EvidenceStore;
+  skillCatalog: SkillCatalog;
+  memoryStore: ProjectMemoryStore;
+  projectId: string;
+  runId: string;
+  clock: () => string;
+  ledger?: ToolInvocationLedger;
+  permissions?: SqlitePermissionStore;
+  hiddenPaths?: readonly string[];
+  protectedPaths?: readonly string[];
+  browserBackend?: BrowserBackend;
+  mcpManager?: McpManager;
+  language?: LanguageIntelligenceProvider;
+  /** Unlisted tools registered before the allow-list assert, so a missing assert fails open. */
+  probeTools?: readonly NativeTool<unknown>[];
+}
+
+export function createArchitectInspectionBroker(input: ArchitectInspectionBrokerInput): ToolBroker {
+  const broker = new ToolBroker({
+    git: input.git,
+    executionGrants: input.executionGrants,
+    permissionProfile: input.permissionProfile,
+    workspacePath: input.projectRoot,
+    artifacts: input.artifacts,
+    ...(input.ledger ? { ledger: input.ledger } : {}),
+    ...(input.permissions
+      ? { approve: (approval) => input.permissions!.requestTool(approval) }
+      : {}),
+  });
+  const repository = new RepositoryIntelligence(input.git ? (request) => input.git!.current().run(request) : undefined);
+  const language = input.language ?? new TypeScriptIntelligence(repository);
+  registerAdmitted(broker, createFilesystemTools({
+    artifacts: input.artifacts,
+    repository,
+    ...(input.hiddenPaths ? { hiddenPaths: input.hiddenPaths } : {}),
+    ...(input.protectedPaths ? { protectedPaths: input.protectedPaths } : {}),
+  }));
+  registerAdmitted(broker, createCodeIntelligenceTools({ repository, language }));
+  registerAdmitted(broker, createArtifactTools(input.artifacts));
+  registerAdmitted(broker, createSessionTools(input.sessions));
+  registerAdmitted(broker, createGitTools(input.git));
+  registerAdmitted(broker, createEvidenceTools({
+    git: input.git,
+    store: input.evidenceStore,
+    artifacts: input.artifacts,
+    taskId: "architect",
+    clock: input.clock,
+  }));
+  registerAdmitted(broker, createSkillTools(input.skillCatalog));
+  registerAdmitted(broker, createMemoryTools({
+    store: input.memoryStore,
+    projectId: input.projectId,
+    runId: input.runId,
+    clock: input.clock,
+  }));
+  registerAdmitted(broker, createResearchTools({ artifacts: input.artifacts }));
+  if (input.browserBackend) {
+    registerAdmitted(broker, createBrowserTools({
+      backend: input.browserBackend,
+      artifacts: input.artifacts,
+      evidenceStore: input.evidenceStore,
+      taskId: "architect",
+      clock: input.clock,
+    }));
+  }
+  if (input.mcpManager) {
+    const policy = roleToolSurface("architect", "inspection").mcpPolicy;
+    for (const tool of createMcpTools(input.mcpManager, input.artifacts)) {
+      if (mcpToolAdmitted(policy, tool.definition)) broker.register(tool);
+    }
+  }
+  for (const tool of input.probeTools ?? []) broker.register(tool);
+  assertRoleToolSurface(
+    "architect",
+    "inspection",
+    broker.definitions().map((definition) => definition.name),
+  );
+  return broker;
+}
+
+function registerAdmitted(broker: ToolBroker, tools: readonly NativeTool<unknown>[]): void {
+  for (const tool of tools) {
+    if (staticToolAdmitted("architect", "inspection", tool.definition.name)) broker.register(tool);
+  }
+}
+
 export class PlanOnlyInspectionRuntime implements AgentToolRuntime {
   private readonly allowed: ReadonlySet<string>;
 
-  constructor(private readonly runtime: AgentToolRuntime) {
-    this.allowed = new Set(
-      runtime.definitions()
-        .filter((definition) => definition.readOnly && definition.effect !== "workspace")
-        .map((definition) => definition.name)
-    );
+  constructor(
+    private readonly runtime: AgentToolRuntime,
+    options?: { readonly probeToolNames?: readonly string[] },
+  ) {
+    const probe = new Set(options?.probeToolNames ?? []);
+    const policy = roleToolSurface("architect", "planOnly").mcpPolicy;
+    const admitted = new Set<string>();
+    const staticAdmitted: string[] = [];
+    for (const definition of runtime.definitions()) {
+      if (isMcpToolName(definition.name)) {
+        if (mcpToolAdmitted(policy, definition)) admitted.add(definition.name);
+        continue;
+      }
+      if (staticToolAdmitted("architect", "planOnly", definition.name)) {
+        admitted.add(definition.name);
+        staticAdmitted.push(definition.name);
+        continue;
+      }
+      if (
+        !isCatalogToolName(definition.name) &&
+        definition.readOnly === true &&
+        definition.effect !== "workspace"
+      ) {
+        admitted.add(definition.name);
+      }
+    }
+    for (const name of probe) {
+      admitted.add(name);
+      staticAdmitted.push(name);
+    }
+    assertRoleToolSurface("architect", "planOnly", staticAdmitted);
+    this.allowed = admitted;
   }
 
   definitions() {

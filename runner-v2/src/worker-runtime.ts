@@ -4,6 +4,7 @@ import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
+  NativeTool,
 } from "./agent-contracts.js";
 import type { AcceptanceCriterion } from "./acceptance-contracts.js";
 import {
@@ -45,6 +46,12 @@ import { createMcpTools, type McpManager } from "./mcp-tools.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
 import type { ManagedProcessService } from "./managed-process.js";
 import { createManagedProcessTools } from "./managed-process-tools.js";
+import {
+  assertRoleToolSurface,
+  mcpToolAdmitted,
+  roleToolSurface,
+  staticToolAdmitted,
+} from "./role-capabilities.js";
 import { ToolBroker } from "./tool-broker.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import type { LanguageIntelligenceProvider } from "./language-intelligence.js";
@@ -105,11 +112,17 @@ export interface RunWorkerTaskOptions {
   signal?: AbortSignal;
   execution?: OneShotCommandExecutor;
   executionGrants?: ExecutionGrantAuthority;
+  /** Unlisted tools registered before the allow-list assert, so a missing assert fails open. */
+  toolSurfaceProbe?: readonly NativeTool<unknown>[];
 }
 
 export interface WorkerTaskResult {
   loop: AgentLoopResult;
   changeSet?: ChangeSet;
+}
+
+function registerStaticWorkerTool(broker: ToolBroker, tool: NativeTool<unknown>): void {
+  if (staticToolAdmitted("worker", "task", tool.definition.name)) broker.register(tool);
 }
 
 export async function runWorkerTask(
@@ -172,29 +185,29 @@ export async function runWorkerTask(
     ...(options.hiddenPaths ? { hiddenPaths: options.hiddenPaths } : {}),
     ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
   })) {
-    broker.register(tool);
+    registerStaticWorkerTool(broker, tool);
   }
   for (const tool of createCodeIntelligenceTools({
     repository,
     language,
   })) {
-    broker.register(tool);
+    registerStaticWorkerTool(broker, tool);
   }
-  for (const tool of createArtifactTools(options.artifacts)) broker.register(tool);
-  for (const tool of createSessionTools(options.sessions)) broker.register(tool);
+  for (const tool of createArtifactTools(options.artifacts)) registerStaticWorkerTool(broker, tool);
+  for (const tool of createSessionTools(options.sessions)) registerStaticWorkerTool(broker, tool);
   for (const tool of createProcessTools({
     ...(options.execution ? { execution: options.execution } : {}),
     ...(options.allowedCommands
       ? { allowedCommands: options.allowedCommands }
       : {}),
-  })) broker.register(tool);
+  })) registerStaticWorkerTool(broker, tool);
   if (options.managedProcesses) {
     for (const tool of createManagedProcessTools(options.managedProcesses)) {
-      broker.register(tool);
+      registerStaticWorkerTool(broker, tool);
     }
   }
   for (const tool of createResearchTools({ artifacts: options.artifacts })) {
-    broker.register(tool);
+    registerStaticWorkerTool(broker, tool);
   }
   if (options.browserBackend) {
     for (const tool of createBrowserTools({
@@ -207,14 +220,15 @@ export async function runWorkerTask(
       ...(options.allowedCommands
         ? { allowedCommands: options.allowedCommands }
         : {}),
-    })) broker.register(tool);
+    })) registerStaticWorkerTool(broker, tool);
   }
   if (options.mcpManager) {
+    const policy = roleToolSurface("worker", "task").mcpPolicy;
     for (const tool of createMcpTools(options.mcpManager, options.artifacts)) {
-      broker.register(tool);
+      if (mcpToolAdmitted(policy, tool.definition)) broker.register(tool);
     }
   }
-  for (const tool of createGitTools(options.git)) broker.register(tool);
+  for (const tool of createGitTools(options.git)) registerStaticWorkerTool(broker, tool);
   if (options.evidenceStore) {
     for (const tool of createEvidenceTools({
       git: options.git,
@@ -225,10 +239,10 @@ export async function runWorkerTask(
       clock,
       ...(attempt !== undefined ? { attempt } : {}),
       ...(options.allowedCommands ? { allowedCommands: options.allowedCommands } : {}),
-    })) broker.register(tool);
+    })) registerStaticWorkerTool(broker, tool);
   }
   if (options.skillCatalog) {
-    for (const tool of createSkillTools(options.skillCatalog)) broker.register(tool);
+    for (const tool of createSkillTools(options.skillCatalog)) registerStaticWorkerTool(broker, tool);
   }
   if (options.memoryStore && options.projectId) {
     for (const tool of createMemoryTools({
@@ -237,14 +251,14 @@ export async function runWorkerTask(
       runId: options.runId,
       taskId: options.taskId,
       clock,
-    })) broker.register(tool);
+    })) registerStaticWorkerTool(broker, tool);
   }
   if (options.schedulerStore) {
     for (const tool of createWorkerLifecycleTools({
       store: options.schedulerStore,
       taskId: options.taskId,
       clock,
-    })) broker.register(tool);
+    })) registerStaticWorkerTool(broker, tool);
   }
   for (const tool of createSubagentTools({
     git: options.git,
@@ -282,7 +296,7 @@ export async function runWorkerTask(
     ...(options.execution ? { execution: options.execution } : {}),
     ...(options.executionGrants ? { executionGrants: options.executionGrants } : {}),
     language,
-  })) broker.register(tool);
+  })) registerStaticWorkerTool(broker, tool);
 
   let producedChangeSet: ChangeSet | undefined;
   broker.register(createSubmitTaskTool(async ({
@@ -369,6 +383,12 @@ export async function runWorkerTask(
     });
     return producedChangeSet;
   }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined }));
+  for (const tool of options.toolSurfaceProbe ?? []) broker.register(tool);
+  assertRoleToolSurface(
+    "worker",
+    "task",
+    broker.definitions().map((definition) => definition.name),
+  );
   if (options.capabilityRegistry) {
     registerExtensionCapabilities(options.capabilityRegistry, broker);
   }

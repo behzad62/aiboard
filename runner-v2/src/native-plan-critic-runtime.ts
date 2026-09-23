@@ -51,9 +51,11 @@ import {
   createInspectionTools,
   verifierExcludedModels,
   verifierModelAttribution,
+  type InspectionToolsInput,
   type VerifierGuidanceSnapshot,
   type VerifierWorkspaceProvider,
 } from "./native-verifier-runtime.js";
+import { assertRoleToolSurface } from "./role-capabilities.js";
 
 const REVISION_PATTERN = /^[a-f0-9]{40,64}$/;
 
@@ -98,6 +100,22 @@ export interface NativePlanCriticRuntimeOptions {
   recordContextPackText?: boolean;
   maxTurns?: number;
   clock?: () => string;
+}
+
+export function createPlanCriticInspectionBroker(
+  input: Omit<InspectionToolsInput, "capabilityRole" | "capabilityBroker">,
+): ReturnType<typeof createInspectionTools> {
+  const broker = createInspectionTools({
+    ...input,
+    capabilityRole: "plan-critic",
+    capabilityBroker: "inspection",
+  });
+  assertRoleToolSurface(
+    "plan-critic",
+    "inspection",
+    broker.definitions().map((definition) => definition.name),
+  );
+  return broker;
 }
 
 export class NativePlanCriticRuntime {
@@ -273,7 +291,7 @@ export class NativePlanCriticRuntime {
         .filter((task) => task.status !== "cancelled" && !isFinalVerificationTask(task))
         .map((task) => [task.id, task]),
     );
-    const broker = createInspectionTools({
+    const broker = createPlanCriticInspectionBroker({
       git: this.options.git,
       executionGrants: this.options.executionGrants,
       workspacePath: workspace.path,
