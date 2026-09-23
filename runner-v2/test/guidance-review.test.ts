@@ -44,6 +44,7 @@ test("Architect and worker lifecycle tools publish complete model-facing schemas
       complete_run: ["summary"],
       ask_architect: ["requestId", "question", "blocking", "evidenceSequence"],
       challenge_guidance: ["requestId", "expectedVersion", "evidenceSequence", "reason"],
+      request_replan: ["requestId", "reason", "summary", "proposedChange", "evidenceSequence"],
       submit_task: ["summary", "readiness"],
     };
     for (const tool of tools) {

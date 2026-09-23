@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
 import { captureGitBaseline } from "./support/git-fixture.js";
 import { runGit } from "./support/git-fixture.js";
@@ -162,6 +165,78 @@ test("unborn repository bootstrap creates HEAD and applies safe ignore defaults"
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("baseline capture accepts a host-native alias of the repository root", async (t: TestContext) => {
+  const created = mkdtempSync(join(tmpdir(), "aiboard-baseline-alias-"));
+  const alias = hostNativeAliasDirectory(created);
+  if (!alias) {
+    rmSync(created, { recursive: true, force: true });
+    t.skip("Host did not expose a native 8.3 or Darwin /var alias for the fixture root.");
+    return;
+  }
+  const project = join(alias, "project");
+  const state = join(alias, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "app.ts"), "export const ready = true;\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_alias",
+    });
+    assert.equal(baseline.initializedRepository, true);
+    assert.equal(await gitText(project, ["rev-parse", "HEAD"]), baseline.revision);
+  } finally {
+    rmSync(created, { recursive: true, force: true });
+  }
+});
+
+test("baseline capture refuses a nested subdirectory of another Git repository", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-baseline-nested-"));
+  const project = join(root, "project");
+  const nested = join(project, "nested");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(nested);
+  mkdirSync(state);
+  writeFileSync(join(project, "app.ts"), "export {};\n");
+  try {
+    await runGit({ cwd: project, args: ["init", "-b", "main"] });
+    await runGit({ cwd: project, args: ["add", "-A"] });
+    await runGit({ cwd: project, args: ["commit", "-m", "initial"], env: identity });
+    await assert.rejects(
+      captureGitBaseline({
+        projectPath: nested,
+        stateDirectory: state,
+        runId: "run_nested",
+      }),
+      /must be the Git repository root/i
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function hostNativeAliasDirectory(created: string): string | undefined {
+  if (process.platform === "darwin") {
+    const canonical = realpathSync.native(created);
+    return created === canonical ? undefined : created;
+  }
+  if (process.platform !== "win32") return undefined;
+  try {
+    const short = execFileSync("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `$fso = New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder(${JSON.stringify(created)}).ShortPath`,
+    ], { encoding: "utf8" }).trim();
+    if (!short || !existsSync(short)) return undefined;
+    if (short.toLowerCase() === realpathSync.native(created).toLowerCase()) return undefined;
+    return short;
+  } catch {
+    return undefined;
+  }
+}
 
 async function gitText(cwd: string, args: string[]): Promise<string> {
   return (await runGit({ cwd, args })).stdout.trim();

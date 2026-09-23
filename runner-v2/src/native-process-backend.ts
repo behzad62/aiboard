@@ -6,16 +6,18 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type {
-  ProcessBackend,
-  ProcessBackendBinding,
-  ProcessEffectFence,
-  ProcessLaunchRequest,
+import {
+  ProcessReleasePendingError,
+  type ProcessBackend,
+  type ProcessBackendBinding,
+  type ProcessEffectFence,
+  type ProcessLaunchRequest,
 } from "./process-backend.js";
-import type { ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
+import type { ExecutionLifecycleScope, ExecutionSafetyCapabilities, ProcessEscalationAction, ProcessOutputStream } from "./execution-safety-contracts.js";
 import { createPortableProcessChannelProvider, validatePortableAcknowledgementEvidence } from "./portable-process-channel.js";
+import { parsePosixGroupMembers } from "./portable-process-posix-control.mjs";
 import { PortableOutputRetirementBlockedError, runPortableFenceSnapshotSync } from "./portable-process-protocol.mjs";
-import { OwnedFenceAuthorityRetirementError, OwnedFenceLockUnavailableError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
+import { OwnedFenceAuthorityRetirementError, retiredOwnedFenceCleanupAvailable, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "./owned-fence-lock.mjs";
 
 const PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS = 2_000;
 const WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS = 15_000;
@@ -30,6 +32,7 @@ export interface NativeOwnedProcessBackendOptions {
   readonly pollIntervalMs?: number;
   readonly platform: "posix" | "windows";
   readonly backendId: string;
+  readonly lifecycleScope: ExecutionLifecycleScope;
   readonly capabilities: ExecutionSafetyCapabilities;
   readonly operations?: NativeProcessOperations;
   readonly replayCapacityChunks?: number;
@@ -155,10 +158,15 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
 
   async probe(): Promise<unknown> {
     return Object.freeze({
-      attestationVersion: 1,
+      attestationVersion: 2,
       backendId: this.options.backendId,
       verified: true,
       platformLabel: this.options.platform,
+      lifecycle: Object.freeze({
+        scope: this.options.lifecycleScope,
+        termination: this.options.capabilities.tree_termination,
+        emptiness: this.options.capabilities.verified_emptiness,
+      }),
       capabilities: Object.freeze({ ...this.options.capabilities }),
     });
   }
@@ -226,9 +234,9 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         // A late exact birth is not launch success authority. It is retained
         // only so a matching supervisor can bind the child barrier to its
         // durable birth before this caller accepts any launch state.
-        writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
+        writeJsonAtomic(join(directory, "lock-holder.json"), {
           nonce, holderPid: child.pid, holderBirth: supervisorBirth.fingerprint,
-        }), { mode: 0o600 });
+        });
       }
       if (Date.now() >= startupDeadline) throw new Error("Portable process startup deadline is exhausted.");
       if (supervisorBirth.deadlineExpired) throw new Error("Portable supervisor birth discovery deadline is exhausted.");
@@ -249,7 +257,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         };
       }
       if (!identity) throw new Error("Portable supervisor identity is unavailable.");
-      if (state.status !== "running") throw new Error(state.error ?? "Portable process launch failed.");
+      if (!this.launchStateProvesAccepted(state)) throw new Error(state.error ?? "Portable process launch failed.");
       const startedAt = state.updatedAt;
       return launchResult(identity, startedAt);
     } catch (error) {
@@ -291,6 +299,13 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
   }
 
+  private launchStateProvesAccepted(state: SupervisorState): boolean {
+    if (state.status === "running") return true;
+    return this.options.platform === "posix" && state.protocol === "aiboard-portable-process/v2" &&
+      state.status === "stopped" && state.launchEffect === "started" &&
+      state.workloadGroupRetirement.state === "retired";
+  }
+
   backpressuredChannelProvider() {
     return createPortableProcessChannelProvider({
       replayCapacityChunks: this.options.replayCapacityChunks ?? 16,
@@ -304,25 +319,39 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
           nonce: identity.nonce,
           fence,
           supervisorPid: identity.supervisorPid,
+          reattestFence: () => this.assertDurableFence(identity, fence),
           reattest: () => {
-            this.assertFence(identity, fence);
+            this.assertDurableFence(identity, fence);
             const state = this.validate(identity);
             if (state === "mismatch" || state === "unknown") throw new Error("Portable channel identity re-attestation failed.");
             return state === "live" ? "live" : "exited";
           },
           reattestObservation: async (signal) => {
-            this.assertDurableFence(identity, fence);
-            const inspection = this.operations.inspectProcessBirthAsync
-              ? await this.operations.inspectProcessBirthAsync(identity.supervisorPid, this.options.platform, signal)
-              : this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
-            // Never reuse pre-wait ownership or POSIX identity as current authority.
-            if (signal.aborted) throw new Error("Portable channel observation cancelled.");
-            this.assertDurableFence(identity, fence);
-            if (identity.version === 2 && this.posixWorkloadSnapshot(identity).state !== "ready")
-              throw new Error("Portable channel workload identity re-attestation failed.");
-            if (inspection.state === "unknown" || inspection.state === "present" && !sameProcessBirth(inspection.fingerprint, identity.supervisorBirth))
-              throw new Error("Portable channel identity re-attestation failed.");
-            return inspection.state === "present" ? "live" : "exited";
+            for (;;) {
+              this.assertDurableFence(identity, fence);
+              const inspection = this.operations.inspectProcessBirthAsync
+                ? await this.operations.inspectProcessBirthAsync(identity.supervisorPid, this.options.platform, signal)
+                : this.operations.inspectProcessBirth(identity.supervisorPid, this.options.platform);
+              // Never reuse pre-wait ownership or POSIX identity as current authority.
+              if (signal.aborted) throw new Error("Portable channel observation cancelled.");
+              this.assertDurableFence(identity, fence);
+              if (identity.version === 2 && this.posixWorkloadSnapshot(identity).state !== "ready")
+                throw new Error("Portable channel workload identity re-attestation failed.");
+              if (inspection.state === "present" && !sameProcessBirth(inspection.fingerprint, identity.supervisorBirth))
+                throw new Error("Portable channel identity re-attestation failed.");
+              if (inspection.state === "unknown") {
+                if (this.options.platform !== "posix")
+                  throw new Error("Portable channel identity re-attestation failed.");
+                // Passive POSIX observation cannot promote missing birth evidence
+                // into a terminal process result. Exact control and cleanup paths
+                // still fail closed independently; this watcher keeps re-attesting
+                // the durable fence and workload identity until evidence returns or
+                // its consumer cancels/detaches it.
+                await delay(this.pollIntervalMs);
+                continue;
+              }
+              return inspection.state === "present" ? "live" : "exited";
+            }
           },
           effect: (kind, effect) => {
             const preparation = this.options.beforeFenceEffect?.(kind);
@@ -470,7 +499,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     try { identity = this.identity(binding); } catch (error) {
       return { state: error instanceof OwnedProcessIdentityMismatchError ? "identity_mismatch" : "outcome_unknown" };
     }
-    try { this.assertFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
+    try { this.assertObservationFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
     const validation = this.validate(identity);
     if (validation === "mismatch") return { state: "identity_mismatch" };
     if (validation === "unknown") return { state: "outcome_unknown" };
@@ -499,7 +528,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     }
     try { assertPortableOutputSettledAtFence(identity, _fence); }
     catch { return { state: "outcome_unknown" }; }
-    try { this.assertFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
+    try { this.assertObservationFence(identity, _fence); } catch { return { state: "identity_mismatch" }; }
     const finalValidation = this.validate(identity);
     const finalState = readState(identity.directory);
     if ((finalValidation !== "live" && finalValidation !== "exited") || !finalState || finalState.nonce !== identity.nonce ||
@@ -521,22 +550,10 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const assertOutputSettled = authorityRetired
       ? () => assertPortableOutputSettled(identity)
       : () => assertPortableOutputSettledAtFence(identity, _fence);
-    let validation = this.validate(identity);
+    const validation = this.validate(identity);
     if (validation === "mismatch" || validation === "unknown") throw new Error("Cannot release ownership without exact supervisor birth re-attestation.");
-    if (this.options.platform === "posix" && identity.version === 2 && validation !== "exited") {
-      const retired = this.posixWorkloadSnapshot(identity);
-      if (retired.state === "ready" && retired.value.workloadGroupRetirement.state === "retired") {
-        const waitUntil = Date.now() + POSIX_FORCE_SETTLEMENT_DEADLINE_MS;
-        while (validation !== "exited" && Date.now() < waitUntil) {
-          await delay(this.pollIntervalMs);
-          validation = this.validate(identity);
-          if (validation === "mismatch" || validation === "unknown")
-            throw new Error("Cannot release ownership without exact supervisor birth re-attestation.");
-        }
-      }
-      if (validation !== "exited")
-        throw new Error("Cannot release POSIX workload authority while its terminal supervisor witness is still alive.");
-    }
+    if (this.options.platform === "posix" && identity.version === 2 && validation !== "exited")
+      throw new ProcessReleasePendingError("Cannot release POSIX workload authority while its terminal supervisor witness is still alive.");
     const emptiness = await this.emptiness(identity);
     if (emptiness !== "empty")
       throw new Error(emptiness === "outcome_unknown" ? "Cannot release ownership with unknown empty verification." : "Cannot release non-empty owned process identity.");
@@ -615,6 +632,20 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
     const current = readOwnedFence(join(identity.directory, "fence.json"), identity);
     if (fence.ownerId !== current.ownerId || fence.fencingToken !== current.fencingToken)
       throw new OwnedProcessIdentityMismatchError("Owned process writer fence is stale at the effect boundary.");
+  }
+  private assertObservationFence(identity: Identity, fence: ProcessEffectFence | undefined): void {
+    if (!fence) {
+      if (!identity.fence) return;
+      throw new OwnedProcessIdentityMismatchError("Owned process writer fence is unavailable.");
+    }
+    try {
+      const current = readOwnedFence(join(identity.directory, "fence.json"), identity);
+      if (current.ownerId === fence.ownerId && current.fencingToken === fence.fencingToken) return;
+    } catch {
+      // Preserve the existing claim path for missing/corrupt evidence so it
+      // retains its fail-closed behavior and legacy initialization rules.
+    }
+    this.assertFence(identity, fence);
   }
   private validate(identity: Identity): "live" | "exited" | "mismatch" | "unknown" {
     if (identity.version === 2) {
@@ -739,6 +770,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
       const initial = this.posixWorkloadSnapshot(identity);
       if (initial.state === "identity_mismatch") throw new Error("Launch cleanup refused a changed POSIX workload identity.");
       if (initial.state === "outcome_unknown") throw launchBlocker(identity, "Launch cleanup could not read the durable POSIX workload identity.");
+      let awaitingQueuedForceRetirement = false;
       if (initial.value.workloadGroupRetirement.state === "active") {
         if (validation !== "live") throw launchBlocker(identity, "Launch cleanup preserved POSIX authority because its supervisor exited before workload retirement proof.");
         this.cleanupFenceEffect(identity, () => {
@@ -753,6 +785,7 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
             action: "force_terminate",
           });
         });
+        awaitingQueuedForceRetirement = true;
       }
       let emptySince: number | undefined;
       while (Date.now() < deadline) {
@@ -761,7 +794,13 @@ export class NativeOwnedProcessBackend implements ProcessBackend {
         if (snapshot.state === "outcome_unknown") throw launchBlocker(identity, "Launch cleanup lost durable POSIX workload retirement evidence.");
         const emptiness = await this.emptiness(identity);
         if (emptiness === "identity_mismatch") throw new Error("Launch cleanup observed a recycled owned identity.");
-        if (emptiness === "outcome_unknown") throw launchBlocker(identity, "Launch cleanup lost POSIX workload membership verification.");
+        if (emptiness === "outcome_unknown") {
+          if (awaitingQueuedForceRetirement && snapshot.value.workloadGroupRetirement.state === "active") {
+            await delay(this.pollIntervalMs);
+            continue;
+          }
+          throw launchBlocker(identity, "Launch cleanup lost POSIX workload membership verification.");
+        }
         validation = this.validate(identity);
         if (validation === "mismatch") throw new Error("Launch cleanup observed a recycled supervisor identity.");
         if (validation === "unknown") throw launchBlocker(identity, "Launch cleanup lost its supervisor birth inspection.");
@@ -992,7 +1031,13 @@ async function osProcessBirthAsync(pid: number, platform: "posix" | "windows", s
       encoding: "utf8", windowsHide: true, timeout: PROCESS_BIRTH_INITIAL_INSPECTION_DEADLINE_MS,
       maxBuffer: 64 * 1024, signal,
     }, (error, stdout) => {
-      if (!error && !signal.aborted) inspection = parseBirthInspection(stdout.trim(), platform);
+      if (signal.aborted) return;
+      if (!error) {
+        const result = stdout.trim();
+        inspection = platform === "posix" && result.length === 0 && pidAlive(pid)
+          ? { state: "unknown" }
+          : parseBirthInspection(result, platform);
+      } else if (platform === "posix" && !pidAlive(pid)) inspection = { state: "absent" };
     });
     // Abort emits an early error callback. Retain the owned child until close,
     // so cancellation cannot leave inspection work outside the channel task.
@@ -1044,8 +1089,11 @@ function osProcessBirth(
       }
     }
     const result = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: boundedDeadlineMs }).trim();
-    return result ? { state: "present", fingerprint: result } : { state: "absent" };
-  } catch { return { state: "unknown" }; }
+    if (result) return { state: "present", fingerprint: result };
+    return pidAlive(pid) ? { state: "unknown" } : { state: "absent" };
+  } catch {
+    return platform === "posix" && !pidAlive(pid) ? { state: "absent" } : { state: "unknown" };
+  }
 }
 function osProcessBirths(pids: readonly number[], platform: "posix" | "windows"): ReadonlyMap<number, ProcessBirthInspection> | undefined {
   if (platform !== "windows" || pids.length < 1 || pids.length > 256 || pids.some((pid) => !Number.isSafeInteger(pid) || pid < 1)) return undefined;
@@ -1087,17 +1135,12 @@ function osProcessBirths(pids: readonly number[], platform: "posix" | "windows")
     return result;
   } catch { return undefined; }
 }
-function osPosixGroupMembers(groupId: number): number[] | undefined {
+function osPosixGroupMembers(groupId: number): readonly number[] | undefined {
   try {
-    return execFileSync("ps", ["-e", "-o", "pid=,pgid="], {
+    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid=,stat="], {
       encoding: "utf8",
       timeout: PROCESS_MEMBERSHIP_INSPECTION_DEADLINE_MS,
-    })
-      .split(/\r?\n/)
-      .map((line) => line.trim().split(/\s+/).map(Number))
-      .filter(([, pgid]) => pgid === groupId)
-      .map(([pid]) => pid!)
-      .filter((pid) => pid > 0);
+    }), groupId);
   } catch { return undefined; }
 }
 function pidAlive(pid: number): boolean {
@@ -1212,7 +1255,7 @@ function commitOwnedFenceEffect<T>(identity: Identity, candidate: ProcessEffectF
       return effect();
     });
   } catch (error) {
-    if (error instanceof OwnedProcessIdentityMismatchError || error instanceof OwnedFenceLockUnavailableError) throw error;
+    if (error instanceof OwnedProcessIdentityMismatchError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }
@@ -1227,7 +1270,7 @@ async function commitOwnedFenceEffectAsync<T>(identity: Identity, candidate: Pro
       return effect();
     }, { retireAfterEffect: Boolean(retireAuthority), ...(retireAuthority ? { retireAuthority } : {}) });
   } catch (error) {
-    if (error instanceof OwnedProcessIdentityMismatchError || error instanceof OwnedFenceLockUnavailableError) throw error;
+    if (error instanceof OwnedProcessIdentityMismatchError) throw error;
     throw new OwnedProcessIdentityMismatchError("Owned process writer fence effect boundary is unavailable.", { cause: error });
   }
 }

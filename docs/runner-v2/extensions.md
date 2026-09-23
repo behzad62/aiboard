@@ -63,4 +63,4 @@ Context contributors return bounded optional text. Runner V2 calls them through 
 
 The run's observability snapshot records loaded extension manifests, configured provider metadata, bounded language-route audit records, and extension tool calls with their `extensionId`. Runner owns configured LSP process trees. During run cleanup it stops owned language providers before closing extension instances, in reverse startup order; an extension/provider startup failure also closes everything that began successfully.
 
-Use maintained Node.js 22.x or 24.x lines when operating Runner V2. Runner enforces the runtime capabilities it requires at startup (including `node:sqlite`) without asking operators to configure or pin a particular patch release.
+Use Node.js 24.x when operating Runner V2. Runner enforces that certified release line at startup without asking operators to pin a particular patch release.

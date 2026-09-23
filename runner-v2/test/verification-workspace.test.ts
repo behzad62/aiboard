@@ -233,6 +233,59 @@ test("refuses a dirty canonical checkout before creating verification state", as
   }
 });
 
+test("baseline suffix isolates an independent-verifier worktree at a different revision", async () => {
+  const fixture = await createFixture("baseline-suffix");
+  const baselineRevision = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+  writeFileSync(join(fixture.project, "second.txt"), "second\n");
+  await runGit({ cwd: fixture.project, args: ["add", "second.txt"] });
+  await runGit({ cwd: fixture.project, args: ["commit", "-m", "Second revision"] });
+  const integrationRevision = await gitText(fixture.project, ["rev-parse", "HEAD"]);
+  assert.notEqual(baselineRevision, integrationRevision);
+
+  const integrationManager = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    kind: "independent-verifier",
+    targetRevision: integrationRevision,
+  });
+  const baselineManager = new VerificationWorkspaceManager({
+    repositoryRoot: fixture.project,
+    stateDirectory: fixture.state,
+    runId: fixture.runId,
+    kind: "independent-verifier",
+    workspaceSuffix: "baseline",
+    targetRevision: baselineRevision,
+  });
+  try {
+    const integrationWorkspace = await integrationManager.create();
+    const baselineWorkspace = await baselineManager.create();
+    assert.notEqual(baselineWorkspace.path, integrationWorkspace.path);
+    assert.notEqual(baselineWorkspace.metadataPath, integrationWorkspace.metadataPath);
+    const integrationMetadata = JSON.parse(readFileSync(integrationWorkspace.metadataPath, "utf8")) as {
+      targetRevision: string;
+    };
+    const baselineMetadata = JSON.parse(readFileSync(baselineWorkspace.metadataPath, "utf8")) as {
+      targetRevision: string;
+    };
+    assert.equal(integrationMetadata.targetRevision, integrationRevision);
+    assert.equal(baselineMetadata.targetRevision, baselineRevision);
+    assert.equal(await gitText(integrationWorkspace.path, ["rev-parse", "HEAD"]), integrationRevision);
+    assert.equal(await gitText(baselineWorkspace.path, ["rev-parse", "HEAD"]), baselineRevision);
+
+    await baselineManager.cleanup();
+    assert.equal(existsSync(baselineWorkspace.path), false);
+    assert.equal(existsSync(baselineWorkspace.metadataPath), false);
+    assert.equal(existsSync(integrationWorkspace.path), true);
+    assert.equal(existsSync(integrationWorkspace.metadataPath), true);
+    assert.equal(await gitText(integrationWorkspace.path, ["rev-parse", "HEAD"]), integrationRevision);
+  } finally {
+    await baselineManager.cleanup().catch(() => undefined);
+    await integrationManager.cleanup().catch(() => undefined);
+    await closeFixture(fixture);
+  }
+});
+
 test("cleanup removes only the owned verification worktree and preserves integration history", async () => {
   const fixture = await createFixture("cleanup");
   const manager = new VerificationWorkspaceManager({

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import type { ToolExecutionContext } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { PermissionProfile } from "./contracts.js";
@@ -10,6 +10,7 @@ import { createExecutionCommandGrantScope, type ExecutionCommandGrantScope,
 import type { GitCommandOptions } from "./git-command.js";
 import { createRuntimeGitCommandRunner, type GitCommandAuthorization, type GitCommandRunner } from "./git-runtime-runner.js";
 import type { OneShotCommandExecutor, OneShotCommandRequest, OneShotCommandResult } from "./one-shot-command-executor.js";
+import { isTrustedRunnerHostAliasResolution } from "./runner-capabilities-config.js";
 
 export type GitLifecyclePurpose = "baseline" | "workspace" | "integration" | "verification" | "inspection" | "cleanup";
 
@@ -131,13 +132,14 @@ export function createRunGitExecutionContext(input: RunGitExecutionContextOption
         if (purpose === "inspection" && options.args[0] === "symbolic-ref" &&
             (options.args.includes("--delete") || options.args.includes("-d") || options.args.slice(1).filter((argument) => !argument.startsWith("-")).length !== 1))
           throw new Error("Git inspection cannot mutate a symbolic ref.");
-        const workingDirectory = await ownedDirectory(options.cwd, roots);
+        const canonicalRoots = await Promise.all(roots.map(canonicalDeclaredRoot));
+        const workingDirectory = await ownedDirectory(options.cwd, canonicalRoots);
         input.assertOpen();
         const binding: ExecutionGrantBinding = Object.freeze({ runId: input.runId,
           sessionId: `run-git:${purpose}`, actor: Object.freeze({ role: "runner_internal", id: `git:${purpose}` }),
           toolName: `runner.git.${purpose}`, callId: `git-lifecycle-${randomUUID()}`, permissionProfile: input.permissionProfile });
-        const parent = await input.executionGrants.issue({ ...binding, workspacePath: roots[0]!,
-          access: roots.map((path) => ({ path, mode: purpose === "inspection" ? "read" as const : "write" as const })),
+        const parent = await input.executionGrants.issue({ ...binding, workspacePath: canonicalRoots[0]!,
+          access: canonicalRoots.map((path) => ({ path, mode: purpose === "inspection" ? "read" as const : "write" as const })),
           // These exact per-run working roots live outside the selected project.
           // No entire state directory, credential directory or foreign run is granted.
           externalApproved: true, destructiveApproved: false, networkApproved: false, credentialNames: [] });
@@ -186,13 +188,70 @@ export function gitWorkingRootsForRun(projectRoot: string, stateDirectory: strin
 
 async function ownedDirectory(path: string, roots: readonly string[]): Promise<string> {
   if (!isAbsolute(path)) throw new Error("Git working directory must be an absolute owned directory.");
-  const stat = await lstat(path);
+  const requested = resolve(path);
+  const stat = await lstat(requested);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Git working directory must not be a link.");
-  const directory = resolve(await realpath(path));
-  if (!roots.some((root) => { const rel = relative(root, directory); return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel)); })) {
+  await rejectUntrustedSymbolicPathComponents(requested);
+  const directory = resolve(await realpath(requested));
+  if (!roots.some((root) => contained(root, directory))) {
     throw new Error("Git working directory is outside this run's owned roots.");
   }
   return directory;
+}
+
+async function canonicalDeclaredRoot(target: string): Promise<string> {
+  if (!target || !isAbsolute(target) || target.includes("\0")) {
+    throw new Error("Git working roots require absolute owned paths and a run identity.");
+  }
+  let current = resolve(target);
+  const missing: string[] = [];
+  while (true) {
+    try {
+      await rejectUntrustedSymbolicPathComponents(current);
+      const metadata = await lstat(current);
+      if (metadata.isSymbolicLink()) {
+        const actual = resolve(await realpath(current));
+        if (!isTrustedRunnerHostAliasResolution(current, actual)) {
+          throw new Error("Git working roots cannot resolve through a symbolic path.");
+        }
+        return resolve(actual, ...missing);
+      }
+      return resolve(await realpath(current), ...missing);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = dirname(current);
+      if (parent === current) throw new Error("Git working roots require absolute owned paths and a run identity.");
+      missing.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+async function rejectUntrustedSymbolicPathComponents(candidate: string): Promise<void> {
+  const root = parse(candidate).root || candidate;
+  let current = root;
+  for (const segment of relative(root, candidate).split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    let metadata;
+    try {
+      metadata = await lstat(current);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (!metadata.isSymbolicLink()) continue;
+    let actual: string;
+    try { actual = resolve(await realpath(current)); }
+    catch { throw new Error("Git working directory must not be a link."); }
+    if (!isTrustedRunnerHostAliasResolution(current, actual)) {
+      throw new Error("Git working directory must not be a link.");
+    }
+  }
+}
+
+function contained(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function sameIdentity(a: ExecutionGrantBinding, b: ExecutionGrantBinding): boolean {

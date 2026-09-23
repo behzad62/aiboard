@@ -1,5 +1,5 @@
 import { lstat, readFile, realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute, parse, relative, resolve } from "node:path";
+import { dirname, isAbsolute, parse, posix, relative, resolve } from "node:path";
 
 import {
   parseLanguageProviderDescriptor,
@@ -393,6 +393,22 @@ function invalidIsolationProvider(message: string): RunnerCapabilitiesConfigErro
   return new RunnerCapabilitiesConfigError("invalid_isolation_provider", message);
 }
 
+export function isTrustedRunnerHostAliasResolution(
+  requested: string,
+  canonical: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "darwin") return false;
+  const requestedPath = posix.resolve(requested);
+  const canonicalPath = posix.resolve(canonical);
+  for (const [alias, target] of [["/var", "/private/var"], ["/tmp", "/private/tmp"], ["/etc", "/private/etc"]] as const) {
+    if (requestedPath !== alias && !requestedPath.startsWith(`${alias}/`)) continue;
+    const expected = posix.normalize(`${target}${requestedPath.slice(alias.length)}`);
+    return canonicalPath === expected;
+  }
+  return false;
+}
+
 function normalizePath(path: string): string {
   const resolved = resolve(path);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
@@ -413,17 +429,17 @@ async function pathHasUntrustedSymbolicParent(requested: string): Promise<boolea
     } catch {
       return true;
     }
-    if (parentMetadata.isSymbolicLink() && !isTrustedOsAliasPrefix(current)) return true;
+    if (parentMetadata.isSymbolicLink()) {
+      let canonicalParent: string;
+      try { canonicalParent = await realpath(current); }
+      catch { return true; }
+      if (!isTrustedRunnerHostAliasResolution(current, canonicalParent)) return true;
+    }
     if (current === root || dirname(current) === current) return false;
     current = dirname(current);
   }
 }
 
-function isTrustedOsAliasPrefix(pathValue: string): boolean {
-  if (process.platform !== "darwin") return false;
-  const normalized = resolve(pathValue);
-  return normalized === "/var" || normalized === "/tmp" || normalized === "/etc";
-}
 
 function boundedError(error: unknown): string {
   const value = error instanceof Error ? error.message : String(error);

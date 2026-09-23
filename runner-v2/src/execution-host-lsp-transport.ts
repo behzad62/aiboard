@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  freezeExecutionLifecycleRequirements,
+  resolveRequiredLifecycleScope,
+} from "./execution-lifecycle-policy.js";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { ExecutionHostRunBinding } from "./execution-host.js";
@@ -58,7 +62,10 @@ export function createExecutionHostLspTransportFactory(options: Readonly<{
           ...(request.explicitEnvironment ? { explicitEnvironment: request.explicitEnvironment } : {}),
           intent: { invocationId: launchId, runId: owner.runId, sessionId: owner.sessionId, kind: "language_server",
             executable: identity.path, arguments: Object.freeze([...request.arguments]), workingDirectory: workspace,
-            requestedCapabilities: ["tree_termination", "verified_emptiness"] },
+            requiredLifecycleScope: resolveRequiredLifecycleScope({
+              permissionProfile: options.permissionProfile,
+              lifecycleRequirements: freezeExecutionLifecycleRequirements(request.lifecycleRequirements),
+            }), requestedCapabilities: [] },
           verifyHandshake: (io) => pump(io, async (writer) => {
             try { return await request.initialize(writer); }
             catch (error) { if (error instanceof LspClientError) initializationFailure = error; throw error; }

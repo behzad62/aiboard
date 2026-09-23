@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 30
     strategy:
       matrix:
-        node-version: [22.x, 24.18.0]
+        node-version: [24.18.0]
 
     steps:
       - name: Checkout
@@ -38,6 +38,7 @@ jobs:
           npm run publish-downloads 2>&1 | tee benchmark-results/publish-downloads.log
           npm run test:certified 2>&1 | tee benchmark-results/test-certified.log
           npm run test:benchmark 2>&1 | tee benchmark-results/test-benchmark.log
+          npm run test:benchmark:recoverable-job-service 2>&1 | tee benchmark-results/test-recoverable-job-service.log
           npm run build 2>&1 | tee benchmark-results/build.log
 
       - name: Upload benchmark logs

@@ -1,9 +1,11 @@
 import { ToolBroker } from "../src/tool-broker.js";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { createRunGitExecutionContext, gitWorkingRootsForRun } from "../src/git-run-context.js";
 import { createExecutionGrantAuthority, type ConsumedExecutionGrantClaims } from "../src/execution-grants.js";
@@ -12,8 +14,30 @@ import type { ArtifactStore } from "../src/artifact-store.js";
 import type { OneShotCommandRequest, OneShotCommandResult } from "../src/one-shot-command-executor.js";
 
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "p6-git-context-"));
+function canonicalPath(path: string): string {
+  return realpathSync.native(path);
+}
+function hostNativeAliasDirectory(created: string): string | undefined {
+  if (process.platform === "darwin") {
+    const canonical = canonicalPath(created);
+    return created === canonical ? undefined : created;
+  }
+  if (process.platform !== "win32") return undefined;
+  try {
+    const short = execFileSync("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `$fso = New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder(${JSON.stringify(created)}).ShortPath`,
+    ], { encoding: "utf8" }).trim();
+    if (!short || !existsSync(short)) return undefined;
+    if (short.toLowerCase() === canonicalPath(created).toLowerCase()) return undefined;
+    return short;
+  } catch {
+    return undefined;
+  }
+}
+async function fixture(rootDirectory?: string) {
+  const root = rootDirectory ?? await mkdtemp(join(tmpdir(), "p6-git-context-"));
   const project = join(root, "project"); const state = join(root, "state"); const foreign = join(root, "foreign");
   await mkdir(project); await mkdir(state); await mkdir(foreign);
   const grants = createExecutionGrantAuthority();
@@ -45,8 +69,8 @@ async function fixture() {
     workspacePath: project, access: [{ path: project, mode: "write" }], externalApproved: false, destructiveApproved: false, networkApproved: false });
   return { root, project, state, foreign, runId, grants, git, context, gate, requests, claims };
 }
-async function use(t: TestContext, body: (value: Awaited<ReturnType<typeof fixture>>) => Promise<void>) {
-  const f = await fixture(); let failed = false;
+async function use(t: TestContext, body: (value: Awaited<ReturnType<typeof fixture>>) => Promise<void>, rootDirectory?: string) {
+  const f = await fixture(rootDirectory); let failed = false;
   t.diagnostic(`new synthetic Git context root: ${f.root}`);
   try { await body(f); } catch (error) { failed = true; throw error; }
   finally { await f.grants.revokeAll("cleanup"); if (!failed) { await rm(f.root, { recursive: true }); t.diagnostic(`released grants; removed exact root: ${f.root}`); } else t.diagnostic(`released grants; retained diagnostic root: ${f.root}`); }
@@ -108,6 +132,53 @@ test("Git lifecycle refuses a foreign working directory and network command befo
 test("Git lifecycle canonicalization refuses a junction escape from an owned working root", async (t) => use(t, async (f) => {
   const link = join(f.project, "foreign-link"); await symlink(f.foreign, link, "junction");
   await assert.rejects(f.git.lifecycle("inspection").run({ cwd: link, args: ["status"] }), /directory|owned|link/i);
+  assert.equal(f.requests.length, 0);
+}));
+
+test("Git lifecycle accepts host-native aliases of declared roots including not-yet-created run workspaces", async (t) => {
+  const created = await mkdtemp(join(process.platform === "darwin" ? "/var/tmp" : tmpdir(), "p6-git-alias-"));
+  const alias = hostNativeAliasDirectory(created);
+  if (!alias) {
+    await rm(created, { recursive: true, force: true });
+    t.skip("Host did not expose a native 8.3 or Darwin /var alias for the fixture root.");
+    return;
+  }
+  await use(t, async (f) => {
+    assert.notEqual(f.project, canonicalPath(f.project));
+    const roots = gitWorkingRootsForRun(f.project, f.state, f.runId);
+    const workspace = roots.find((path) => path.includes("workspaces"))!;
+    assert.equal(existsSync(workspace), false, "per-run workspace must still be missing when roots are declared");
+    await mkdir(workspace, { recursive: true });
+    await f.git.lifecycle("workspace").run({ cwd: canonicalPath(workspace), args: ["status"] });
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.requests[0]!.workingDirectory, canonicalPath(workspace));
+    assert.deepEqual(f.claims[0]!.access.map((item) => item.canonicalPath), roots.map((path) => {
+      const existing = [f.project, f.state].find((root) => path === root || path.startsWith(`${root}\\`) || path.startsWith(`${root}/`));
+      return existing ? join(canonicalPath(existing), path.slice(existing.length)) : path;
+    }));
+  }, alias);
+});
+
+test("Git lifecycle refuses a declared-root parent junction instead of widening the grant", async (t) => use(t, async (f) => {
+  const roots = gitWorkingRootsForRun(f.project, f.state, f.runId);
+  const workspace = roots.find((path) => path.includes("workspaces"))!;
+  await symlink(f.foreign, dirname(workspace), "junction");
+  await mkdir(join(f.foreign, basename(workspace)), { recursive: true });
+  await assert.rejects(f.git.lifecycle("workspace").run({ cwd: workspace, args: ["status"] }), /directory|owned|link|symbolic/i);
+  await assert.rejects(f.git.lifecycle("workspace").run({ cwd: canonicalPath(join(f.foreign, basename(workspace))), args: ["status"] }), /directory|owned|link|symbolic/i);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.grants.activeSnapshots().length, 1, "escaped parent junction must not mint a run-owned grant");
+}));
+
+test("Git lifecycle refuses a nested cwd alias even when the target stays inside an owned root", async (t) => use(t, async (f) => {
+  const roots = gitWorkingRootsForRun(f.project, f.state, f.runId);
+  const workspace = roots.find((path) => path.includes("workspaces"))!;
+  const inner = join(workspace, "inner");
+  const nested = join(inner, "nested");
+  const alias = join(workspace, "alias");
+  await mkdir(nested, { recursive: true });
+  await symlink(inner, alias, "junction");
+  await assert.rejects(f.git.lifecycle("inspection").run({ cwd: join(alias, "nested"), args: ["status"] }), /directory|owned|link|symbolic/i);
   assert.equal(f.requests.length, 0);
 }));
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -21,6 +21,10 @@ import { SqliteEventStore } from "../src/sqlite-event-store.js";
 import { runnerRunStateSegment } from "../src/run-state-identity.js";
 import { openSqliteStreamingSessionStore } from "../src/streaming-session-store.js";
 import { cliRootCaptureArgs, forwardCliRootRecords } from "./support/cli-root-capture.js";
+
+// Outer test-process budget only: the portable contract runs test files concurrently.
+// Product startup, Git, MCP, and cleanup deadlines remain unchanged.
+const CLI_STARTUP_FIXTURE_BUDGET_MS = process.platform === "win32" ? 90_000 : 30_000;
 
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
 const tsxPath = fileURLToPath(
@@ -293,7 +297,7 @@ test("CLI accepts a valid external capability configuration before listening", a
           throw new Error(`Runner exited before readiness (${String(code)}): ${diagnostics.join("")}`);
         }),
         new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), 10_000);
+          timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), CLI_STARTUP_FIXTURE_BUDGET_MS);
         }),
       ]);
       assert.equal(readiness.protocolVersion, 2);
@@ -334,6 +338,7 @@ test("CLI rejects an active legacy Build without a capability contract before li
     permissionProfile: "project",
     idempotencyKey: `create:${runId}`,
   });
+  supervisor.captureBaseline(runId, `baseline:${runId}`, "a".repeat(40), `refs/aiboard/baselines/${runId}`);
   specs.save({
     version: 2,
     runId,
@@ -381,13 +386,14 @@ test("CLI records an unsupported persisted execution-safety version as a per-run
   const token = "cli-execution-safety-version-token";
   mkdirSync(project);
   mkdirSync(state);
+  initializeGitRepository(project);
   writeCapabilitiesConfig(config, []);
   const contract = await createRunnerCapabilityContractSnapshot({
     extensions: [],
     languageServers: [],
   }, state);
-  saveActiveBuild(state, project, runId, contract);
-  replacePersistedExecutionSafetyVersion(state, runId, 2);
+  saveActiveBuild(state, project, runId, contract, true);
+  replacePersistedExecutionSafetyVersion(state, runId, 3);
 
   try {
     const outcome = await runCliToExit(project, state, config, token);
@@ -905,7 +911,7 @@ async function awaitCliReadiness(
         );
       }),
       new Promise<never>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), 10_000);
+        timeout = setTimeout(() => reject(new Error("Runner readiness timed out.")), CLI_STARTUP_FIXTURE_BUDGET_MS);
       }),
     ]);
   } finally {
@@ -969,6 +975,15 @@ function writeCapabilitiesConfig(config: string, extensions: readonly string[]):
   writeFileSync(config, JSON.stringify({ version: 1, extensions, languageServers: [] }));
 }
 
+function initializeGitRepository(project: string): void {
+  const result = spawnSync("git", ["init", "--quiet"], {
+    cwd: project,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, `Git fixture init failed: ${result.stderr ?? result.error?.message ?? "unknown"}`);
+}
+
 function writeExtension(
   directory: string,
   input: { id: string; module: string },
@@ -991,7 +1006,7 @@ async function runCliToExit(
   config: string,
   token: string,
   extraArgs: readonly string[] = [],
-  startupDeadlineMs = 10_000,
+  startupDeadlineMs = CLI_STARTUP_FIXTURE_BUDGET_MS,
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const runner = spawnCli(project, state, config, token, extraArgs);
   const { child } = runner;

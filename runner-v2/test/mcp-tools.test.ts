@@ -237,6 +237,20 @@ test("C5 round4 actual empty owner release proof reopens retained durable state 
   }
 });
 
+test("C5 round4 constructed fixture retries one exact transient owner close before declaring cleanup failure", async () => {
+  const roots = syntheticMcpRoots();
+  let attempts = 0;
+  try {
+    const owner = await constructOwnedMcpFixture(roots.stateDirectory, async (own) => {
+      own("run", { async close() { attempts += 1; if (attempts === 1) throw new Error("retryable synthetic cleanup"); } });
+      return {};
+    });
+    await owner.close({ retainStateDirectory: true });
+    assert.equal(attempts, 2);
+    assert.equal(existsSync(roots.stateDirectory), true);
+  } finally { roots.dispose(); }
+});
+
 test("C5 round4 successful disposal follows retained idempotent close pending settlement and every proof", async () => {
   const roots = syntheticMcpRoots();
   const events: string[] = [];
@@ -787,7 +801,48 @@ test("strict public MCP uses the separately attested portable image command and 
   }
 });
 
-test("public MCP manager close verifies its launched server tree is empty", async () => {
+test("strict OCI MCP containment retires a detached session-changing descendant", { timeout: 120_000 }, async (t) => {
+  const docker = availableDockerNodeFixture();
+  if (!docker) return t.skip("Docker with the local node:24-slim image is unavailable; no pull or weakening attempted.");
+  const root = mkdtempSync(join(tmpdir(), "aiboard-mcp-strict-detached-"));
+  const projectDirectory = join(root, "project");
+  mkdirSync(projectDirectory);
+  const fixture = join(projectDirectory, "mcp-descendant-server.mjs");
+  copyFileSync(join(here, "fixtures", "mcp-descendant-server.mjs"), fixture);
+  const providerId = `sd-${randomUUID().replaceAll("-", "")}`;
+  let owned: Awaited<ReturnType<typeof strictOwnedManager>> | undefined;
+  let primaryFailure: unknown;
+  let hasPrimaryFailure = false;
+  try {
+    owned = await strictOwnedManager(
+      projectDirectory,
+      docker,
+      providerId,
+      { name: "detached", command: `node ${quoteCommandArgument(fixture)} --lazy --detached` },
+    );
+    await owned.manager.start();
+    const result = await owned.invoke("probe", {});
+    const text = result.content?.[0]?.text;
+    if (typeof text !== "string") assert.fail("Detached MCP probe did not return text content.");
+    assert.match(text, /^tree-alive:\d+$/);
+    assert.notEqual(dockerOwnedContainers(docker, providerId), "", "detached workload must run inside the owned OCI boundary");
+    await owned.close({ retainStateDirectory: true });
+    assert.equal(dockerOwnedContainers(docker, providerId), "", "whole-container release must retire detached descendants");
+    assert.deepEqual(owned.mcpSessionStates(), ["released"]);
+  } catch (error) {
+    hasPrimaryFailure = true; primaryFailure = error;
+  } finally {
+    await finishOwnedMcpFixture({
+      root,
+      owner: owned,
+      primaryFailure,
+      hasPrimaryFailure,
+      verify: [async () => { assert.equal(dockerOwnedContainers(docker, providerId), ""); }],
+    });
+  }
+});
+
+test("public MCP manager process-group scope closes its inherited server tree", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-mcp-owned-tree-"));
   const descendantMarker = join(root, "descendant.pid");
   const serverMarker = join(root, "server.pid");
@@ -1298,6 +1353,7 @@ async function constructOwnedMcpFixture<T>(
   construct: (own: <O extends { close(): Promise<unknown> }>(kind: McpCloserKind, owner: O) => O) => Promise<T>,
 ): Promise<T & OwnedMcpFixture> {
   const closers: { kind: McpCloserKind; owner: { close(): Promise<unknown> } }[] = [];
+  let constructionComplete = false;
   let closeComplete = false;
   let closePromise: Promise<void> | undefined;
   const close = async (options?: Readonly<{ retainStateDirectory?: boolean }>) => {
@@ -1307,7 +1363,19 @@ async function constructOwnedMcpFixture<T>(
       const failures: unknown[] = [];
       for (const kind of ["manager", "run", "internal", "host"] as const) {
         for (const entry of closers.filter((entry) => entry.kind === kind)) {
-          try { await entry.owner.close(); } catch (error) { failures.push(error); }
+          try {
+            await entry.owner.close();
+          } catch (firstError) {
+            if (!constructionComplete) {
+              failures.push(firstError);
+              continue;
+            }
+            try {
+              await entry.owner.close();
+            } catch (retryError) {
+              failures.push(new AggregateError([firstError, retryError], `Owned MCP ${kind} cleanup failed after one exact retry.`));
+            }
+          }
         }
       }
       if (failures.length > 0) throw new AggregateError(failures, "Owned MCP test cleanup failed.");
@@ -1319,6 +1387,7 @@ async function constructOwnedMcpFixture<T>(
   };
   try {
     const result = await construct((kind, owner) => { closers.push({ kind, owner }); return owner; });
+    constructionComplete = true;
     return Object.freeze({ ...result, stateDirectory, close });
   } catch (primaryFailure) {
     const failures: unknown[] = [primaryFailure];

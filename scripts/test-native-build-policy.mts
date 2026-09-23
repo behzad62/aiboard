@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 
 import {
   effectiveNativeBuildPolicy,
+  MINIMUM_NATIVE_RUNNER_NODE_VERSION,
+  NATIVE_RUNNER_NODE_LTS_LINES,
+  NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   nativeBuildBudgetEnforceabilityError,
   nativeProviderBillingBasis,
   supportsNativeRunnerNodeVersion,
@@ -120,8 +123,11 @@ assert.equal(
   "unknown",
 );
 
-assert.equal(supportsNativeRunnerNodeVersion("22.13.0"), true);
-assert.equal(supportsNativeRunnerNodeVersion("22.18.0"), true);
+assert.equal(NATIVE_RUNNER_NODE_POLICY_DESCRIPTION, "Node.js 24.x");
+assert.deepEqual(NATIVE_RUNNER_NODE_LTS_LINES, [24]);
+assert.equal(MINIMUM_NATIVE_RUNNER_NODE_VERSION, "24.0.0");
+assert.equal(supportsNativeRunnerNodeVersion("22.13.0"), false);
+assert.equal(supportsNativeRunnerNodeVersion("22.18.0"), false);
 assert.equal(supportsNativeRunnerNodeVersion("24.0.0"), true);
 assert.equal(supportsNativeRunnerNodeVersion("24.20.0"), true);
 assert.equal(supportsNativeRunnerNodeVersion("22.12.9"), false);

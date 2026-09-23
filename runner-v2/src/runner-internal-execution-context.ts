@@ -1,6 +1,7 @@
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
 import { McpRpcPeer, parseMcpToolList } from "./mcp-rpc-peer.js";
 import { McpConfigurationError, parseMcpCommand, snapshotMcpServerSpec, mcpConfigurationDigest, fixedMcpEnvelope, type McpFixedEnvelope } from "./mcp-configuration.js";
+import { lifecycleRequirementsDigest } from "./execution-lifecycle-policy.js";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access, lstat, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
@@ -99,6 +100,10 @@ export interface McpRuntimeServerLaunch {
   readonly arguments: readonly string[];
   readonly configDigest: string;
   readonly executableDigest: string;
+  /** Trusted lifecycle requirements bound into launch identity; never inferred. */
+  readonly lifecycleRequirements?: import("./execution-lifecycle-policy.js").ExecutionLifecycleRequirements;
+  /** Exact digest of lifecycleRequirements; required whenever requirements are present. */
+  readonly lifecycleRequirementsDigest?: string;
 }
 
 export interface RunnerInternalExecutionContextOptions {
@@ -144,6 +149,8 @@ interface TrustedMcpAttestation extends McpConfigurationAttestation {
   readonly executablePath: string;
   readonly imageExecutable?: string;
   readonly arguments: readonly string[];
+  readonly lifecycleRequirements?: import("./execution-lifecycle-policy.js").ExecutionLifecycleRequirements;
+  readonly lifecycleRequirementsDigest?: string;
 }
 
 const TRUSTED_MCP_ATTESTATIONS = new WeakMap<object, TrustedMcpAttestation>();
@@ -388,6 +395,12 @@ export function createRunnerInternalExecutionContext(
         arguments: [...server.arguments],
         configDigest: server.configDigest,
         executableDigest: server.executableDigest,
+        ...(server.lifecycleRequirements
+          ? {
+              lifecycleRequirements: server.lifecycleRequirements,
+              lifecycleRequirementsDigest: server.lifecycleRequirementsDigest,
+            }
+          : {}),
       })));
     },
 
@@ -550,6 +563,12 @@ async function attestMcpConfigurations(
       executableDigest: executable.digest,
       envelope: fixedMcpEnvelope(server.envelope),
       configDigest: mcpConfigurationDigest(server),
+      ...(server.lifecycleRequirements
+        ? {
+            lifecycleRequirements: server.lifecycleRequirements,
+            lifecycleRequirementsDigest: lifecycleRequirementsDigest(server.lifecycleRequirements),
+          }
+        : {}),
     });
   }));
 }

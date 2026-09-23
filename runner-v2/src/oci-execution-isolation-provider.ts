@@ -305,11 +305,12 @@ export function createOciExecutionIsolationProvider(
         providerId,
       );
       return deepFreeze({
-        attestationVersion: 1 as const,
+        attestationVersion: 2 as const,
         providerId,
         verified: true,
         mechanism: "docker-compatible-oci",
         exactGrantWriteConfinement: true,
+      lifecycle: Object.freeze({ scope: "contained_workload" as const, termination: "enforced" as const, emptiness: "enforced" as const }),
         interactiveAttach,
         expiresAt: new Date(clock().getTime() + 60_000).toISOString(),
         executableIdentity: { path: cliPath, digest: cliDigest },
@@ -567,6 +568,7 @@ export function createOciExecutionIsolationProvider(
       }
       return deepFreeze({
         ...intent,
+        requiredLifecycleScope: "process_group" as const,
         executable: cliPath,
         arguments: requiresInteractiveAttach(intent)
           ? ["start", "--attach", "--interactive", owned.containerId]

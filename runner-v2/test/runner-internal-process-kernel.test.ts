@@ -9,7 +9,7 @@ import type {
   BackpressuredOutputMetadata,
   InteractiveProcessChannel,
 } from "../src/interactive-process-channel.js";
-import type { ProcessBackend } from "../src/process-backend.js";
+import { ProcessReleasePendingError, type ProcessBackend } from "../src/process-backend.js";
 import { createRunnerInternalProcessKernel } from "../src/runner-internal-process-kernel.js";
 
 test("internal owned-process cleanup retries a transient verified-empty failure", async () => {
@@ -31,6 +31,38 @@ test("internal owned-process cleanup retries a transient verified-empty failure"
     assert.equal(kernel.activeCount(), 1);
     await owned.closeVerified({ shutdownTimeoutMs: 1, terminationTimeoutMs: 50 });
     assert.equal(kernel.activeCount(), 0);
+    assert.equal(fixture.releaseCalls(), 1);
+  } finally {
+    await kernel.close().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("internal cleanup waits through a transient terminal-supervisor release barrier", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-internal-kernel-release-pending-"));
+  const fixture = faultBackend({ releasePendingFailures: 2 });
+  const kernel = createRunnerInternalProcessKernel({ stateDirectory: root, platform: process.platform, backend: fixture.backend });
+  try {
+    const owned = await kernel.launch(launchInput(root, "release-pending"));
+    owned.setOutputSink(() => undefined);
+    await owned.closeVerified({ shutdownTimeoutMs: 1, terminationTimeoutMs: 200 });
+    assert.equal(kernel.activeCount(), 0);
+    assert.equal(fixture.releaseCalls(), 3);
+  } finally {
+    await kernel.close().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("internal cleanup does not retry a terminal release failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "runner-internal-kernel-release-terminal-"));
+  const fixture = faultBackend({ releaseFailure: new Error("stale release authority") });
+  const kernel = createRunnerInternalProcessKernel({ stateDirectory: root, platform: process.platform, backend: fixture.backend });
+  try {
+    const owned = await kernel.launch(launchInput(root, "release-terminal"));
+    owned.setOutputSink(() => undefined);
+    await assert.rejects(owned.closeVerified({ shutdownTimeoutMs: 1, terminationTimeoutMs: 200 }), /stale release authority/);
+    assert.equal(kernel.activeCount(), 1);
     assert.equal(fixture.releaseCalls(), 1);
   } finally {
     await kernel.close().catch(() => undefined);
@@ -97,8 +129,11 @@ type TestBackend = ProcessBackend & Readonly<{
 function faultBackend(options: {
   readonly acquireFailure?: boolean;
   readonly verifyEmptyFailures?: number;
+  readonly releasePendingFailures?: number;
+  readonly releaseFailure?: Error;
 }) {
   let verifyEmptyFailures = options.verifyEmptyFailures ?? 0;
+  let releasePendingFailures = options.releasePendingFailures ?? 0;
   let releases = 0;
   const channel: InteractiveProcessChannel & Readonly<{
     subscribeBackpressuredOutput(
@@ -115,10 +150,11 @@ function faultBackend(options: {
   };
   const backend: TestBackend = {
     probe: async () => ({
-      attestationVersion: 1,
+      attestationVersion: 2,
       backendId: "runner-internal-fault-backend",
       verified: true,
       platformLabel: "test",
+      lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
       capabilities: {
         tree_termination: "enforced",
         crash_cleanup: "unavailable",
@@ -147,6 +183,11 @@ function faultBackend(options: {
     reconcile: async () => ({ state: "exited", exitCode: 0 }),
     release: async () => {
       releases += 1;
+      if (releasePendingFailures > 0) {
+        releasePendingFailures -= 1;
+        throw new ProcessReleasePendingError("terminal supervisor is still settling");
+      }
+      if (options.releaseFailure) throw options.releaseFailure;
       return { released: true };
     },
     backpressuredChannelProvider() {

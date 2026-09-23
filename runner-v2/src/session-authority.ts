@@ -237,6 +237,10 @@ export interface SessionAuthority {
     authorization: SessionOperationAuthorization,
     expected: OperationAuthorizationAssertion,
   ): void;
+  validateOperationAuthorization(
+    authorization: SessionOperationAuthorization,
+    expected: OperationAuthorizationAssertion,
+  ): Readonly<StreamingSessionRecord>;
   recoverUnadopted(input: UnadoptedSessionRecoveryRequest): Readonly<{
     record: Readonly<StreamingSessionRecord>;
   }>;
@@ -329,6 +333,41 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
     reservedSessionIds.add(sessionId);
     reservedLaunchIds.add(launchId);
     return authorization;
+  };
+  const validateOperationAuthorizationRecord = (
+    authorization: SessionOperationAuthorization,
+    expected: OperationAuthorizationAssertion,
+  ): Readonly<StreamingSessionRecord> => {
+    const details = authorizations.get(authorization as object);
+    if (!details) {
+      throw new SessionAuthorityError("authorization_forged", "Session operation authorization is not Runner-issued.");
+    }
+    if (details.sessionId !== expected.sessionId || details.operation !== expected.operation) {
+      throw new SessionAuthorityError("operation_mismatch", "Session operation authorization does not match this operation.");
+    }
+    if (!sameExecutionGrantBinding(details.binding, expected.binding)) {
+      throw new SessionAuthorityError("binding_mismatch", "Session operation authorization has a different call binding.");
+    }
+    if (!sameAccess(details.requestAccess, expected.requestAccess) ||
+        !sameTextSet(details.credentialNames, expected.credentialNames) ||
+        details.networkApproved !== expected.networkApproved ||
+        details.externalApproved !== expected.externalApproved ||
+        details.destructiveApproved !== expected.destructiveApproved) {
+      throw new SessionAuthorityError("operation_mismatch", "Session operation authorization has a different access check.");
+    }
+    const record = options.sessions.store.readBySession(details.sessionId);
+    assertSessionOperationAvailable(record, details.operation, clock);
+    if (record.ownerId !== details.ownerId || record.fencingToken !== details.fencingToken) {
+      throw new SessionAuthorityError("authorization_stale", "Session operation authorization has a stale owner fence.");
+    }
+    if (record.runId !== details.binding.runId ||
+        record.agentSessionId !== details.binding.sessionId ||
+        record.actor.role !== details.binding.actor.role ||
+        record.actor.id !== details.binding.actor.id) {
+      throw new SessionAuthorityError("authorization_stale", "Session operation authorization no longer matches this session identity.");
+    }
+    assertCurrentClaims(details.claims);
+    return record;
   };
   const authority: SessionAuthority = Object.freeze({
     stageLaunch(input: StageLaunchRequest): StagedLaunchAuthorization {
@@ -545,35 +584,13 @@ export function createSessionAuthority(options: SessionAuthorityOptions): Sessio
       authorization: SessionOperationAuthorization,
       expected: OperationAuthorizationAssertion,
     ): void {
-      const details = authorizations.get(authorization as object);
-      if (!details) {
-        throw new SessionAuthorityError("authorization_forged", "Session operation authorization is not Runner-issued.");
-      }
-      if (details.sessionId !== expected.sessionId || details.operation !== expected.operation) {
-        throw new SessionAuthorityError("operation_mismatch", "Session operation authorization does not match this operation.");
-      }
-      if (!sameExecutionGrantBinding(details.binding, expected.binding)) {
-        throw new SessionAuthorityError("binding_mismatch", "Session operation authorization has a different call binding.");
-      }
-      if (!sameAccess(details.requestAccess, expected.requestAccess) ||
-          !sameTextSet(details.credentialNames, expected.credentialNames) ||
-          details.networkApproved !== expected.networkApproved ||
-          details.externalApproved !== expected.externalApproved ||
-          details.destructiveApproved !== expected.destructiveApproved) {
-        throw new SessionAuthorityError("operation_mismatch", "Session operation authorization has a different access check.");
-      }
-      const record = options.sessions.store.readBySession(details.sessionId);
-      assertSessionOperationAvailable(record, details.operation, clock);
-      if (record.ownerId !== details.ownerId || record.fencingToken !== details.fencingToken) {
-        throw new SessionAuthorityError("authorization_stale", "Session operation authorization has a stale owner fence.");
-      }
-      if (record.runId !== details.binding.runId ||
-          record.agentSessionId !== details.binding.sessionId ||
-          record.actor.role !== details.binding.actor.role ||
-          record.actor.id !== details.binding.actor.id) {
-        throw new SessionAuthorityError("authorization_stale", "Session operation authorization no longer matches this session identity.");
-      }
-      assertCurrentClaims(details.claims);
+      validateOperationAuthorizationRecord(authorization, expected);
+    },
+    validateOperationAuthorization(
+      authorization: SessionOperationAuthorization,
+      expected: OperationAuthorizationAssertion,
+    ): Readonly<StreamingSessionRecord> {
+      return validateOperationAuthorizationRecord(authorization, expected);
     },
     recoverUnadopted(input: UnadoptedSessionRecoveryRequest) {
       let record = options.sessions.store.readBySession(input.sessionId);

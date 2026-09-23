@@ -17,7 +17,9 @@ export interface GenericPosixProcessInspectionOperations {
     | { readonly outcome: "absent" | "timeout" | "malformed" | "failure" };
 }
 export class OwnedFenceLockUnavailableError extends Error {}
+export class OwnedFenceContentionError extends OwnedFenceLockUnavailableError {}
 export class OwnedFenceAuthorityRetirementError extends Error {}
+export function isOwnedFenceLockContention(error: unknown): boolean;
 export function currentProcessBirthFingerprint(): string;
 export function inspectGenericPosixProcessBirth(
   pid: number,

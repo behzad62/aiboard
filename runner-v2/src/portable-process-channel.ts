@@ -12,13 +12,13 @@ import {
 } from "./interactive-process-channel.js";
 import type { ProcessBackendBinding, ProcessEffectFence } from "./process-backend.js";
 import {
-  PortableAuthorityUnavailableError,
+  PortableOutputRetirementBlockedError,
   readPortableOutputSnapshot,
   validatePortableAcknowledgements,
   type PortableFenceSnapshotOutcome,
   type PortableOutputSnapshot,
 } from "./portable-process-protocol.mjs";
-import { OwnedFenceLockUnavailableError } from "./owned-fence-lock.mjs";
+import { isOwnedFenceLockContention } from "./owned-fence-lock.mjs";
 
 export interface PortableChannelAuthority {
   readonly directory: string;
@@ -27,6 +27,8 @@ export interface PortableChannelAuthority {
   /** Exact durable supervisor PID; authenticates its atomic publication names. */
   readonly supervisorPid?: number;
   reattest(): "live" | "exited";
+  /** Read-side exact-fence check; unlike a writer claim it must not contend with output retirement. */
+  reattestFence?(): void;
   /** Observation only; never authorizes a protected effect. Must settle after cancellation. */
   reattestObservation?(signal: AbortSignal): Promise<"live" | "exited">;
   effect<T>(kind: "attach" | "write" | "close" | "signal" | "output_ack" | "ack_consume", effect: () => T): Promise<T>;
@@ -94,6 +96,7 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   private outputTasks = 0;
   private outputSettlementDeadlineAt?: number;
   private outputSettlement?: Promise<BackpressuredOutputSettlement>;
+  private liveStoppedObserved = false;
 
   constructor(private readonly authority: PortableChannelAuthority, private readonly pollIntervalMs: number, private readonly clock: () => number) {
     this.channelDirectory = join(authority.directory, "channel");
@@ -266,35 +269,37 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         return { terminal: state.status === "stopped", output: this.readOutputSnapshot() };
       });
       if (snapshot.status === "stale") return { status: "blocked", reason: "stale_fence" };
-      if (snapshot.status === "unavailable" && snapshot.cause === "coordination") {
+      if (snapshot.status === "unavailable" && snapshot.cause === "coordination" && isRetryablePortableCoordination(snapshot.error)) {
         coordinationBlocked = true;
         await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
         continue;
       }
       if (snapshot.status === "unavailable") return { status: "blocked", reason: "outcome_unknown" };
       if (snapshot.status !== "applied") return { status: "blocked", reason: "output_unaccounted" };
-      if (this.channelFailure) {
-        if (isRetryablePortableCoordination(this.channelFailure)) {
-          this.channelFailure = undefined;
-          coordinationBlocked = true;
-          await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
-          continue;
-        }
-        return { status: "blocked", reason: this.channelFailure instanceof PortableOutputSettlementFailure ? this.channelFailure.reason : "outcome_unknown" };
-      }
+      if (this.channelFailure) return { status: "blocked", reason: this.channelFailure instanceof PortableOutputSettlementFailure ? this.channelFailure.reason : "outcome_unknown" };
       const { terminal, output } = snapshot.value;
       if (terminal && output.output.length === 0 && output.acknowledgements.length === 0 && this.outputTasks === 0) {
         if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
           return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
         }
-        try { this.reattest(false); } catch { return { status: "blocked", reason: "stale_fence" }; }
+        try { this.reattest(false); }
+        catch (error) {
+          if (isRetryablePortableCoordination(error)) {
+            coordinationBlocked = true;
+            await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
+            continue;
+          }
+          return { status: "blocked", reason: "stale_fence" };
+        }
         if (this.clock() >= deadlineAt || Date.now() >= wallDeadline) {
           return { status: "blocked", reason: coordinationBlocked ? "coordination_unavailable" : "deadline" };
         }
         return { status: "settled" };
       }
       coordinationBlocked = false;
-      if (this.outputTasks === 0 && output.output.some((entry) => !this.deliveredOutput.has(entry.name))) this.scheduleOutput();
+      if (this.outputTasks === 0 && output.output.some((entry) =>
+        !this.deliveredOutput.has(entry.name) || !this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)
+      )) this.scheduleOutput();
       await delay(this.settlementRetryDelayMs(deadlineAt, wallDeadline));
     }
   }
@@ -336,23 +341,43 @@ class PortableProcessChannel implements InteractiveProcessChannel {
   }
 
   private scheduleOutput(): void {
+    if (this.outputTasks > 0) return;
     this.outputTasks++;
     this.outputTail = this.outputTail.then(async () => {
       const sink = this.outputSink;
       if (!sink || this.detached) return;
       this.assertOutputDeadline();
-      this.reattest(false);
+      if (this.authority.reattestFence) this.authority.reattestFence();
+      else this.reattest(false);
       const snapshot = this.outputSnapshot();
-      if (process.env.TASK12_MCP_TRACE === "1" && (snapshot.status !== "applied" || (snapshot.status === "applied" && snapshot.value.output.length > 0))) {
-        process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "channel.scheduleOutput", dir: this.authority.directory.slice(-48), status: snapshot.status, cause: "cause" in snapshot ? snapshot.cause : undefined, entries: snapshot.status === "applied" ? snapshot.value.output.length : undefined })}\n`);
-      }
       if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return;
       const entries = this.requireSnapshot(snapshot).output;
       const present = new Set(entries.map((entry) => entry.name));
       for (const name of this.deliveredOutput) if (!present.has(name)) this.deliveredOutput.delete(name);
+      const acknowledgeOutput = async (entry: (typeof entries)[number]) => {
+        if (this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) return;
+        this.assertOutputDeadline();
+        try {
+          await this.authority.effect("output_ack", () => {
+            this.assertOutputDeadline();
+            writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({
+              nonce: this.authority.nonce,
+              ownerId: this.authority.fence.ownerId,
+              fencingToken: this.authority.fence.fencingToken,
+              metadata: entry.metadata,
+            }));
+          });
+        } catch (error) {
+          if (isRetryablePortableCoordination(error) && this.hasExactDurableOutputAcknowledgement(entry.name, entry.metadata)) return;
+          throw error;
+        }
+      };
       for (const entry of entries) {
         if (sink !== this.outputSink || this.detached) return;
-        if (this.deliveredOutput.has(entry.name)) continue;
+        if (this.deliveredOutput.has(entry.name)) {
+          await acknowledgeOutput(entry);
+          continue;
+        }
         this.assertOutputDeadline();
         let acknowledgement: BackpressuredOutputAcknowledgement;
         try { acknowledgement = await sink(entry.metadata, entry.bytes); }
@@ -360,17 +385,13 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         if (JSON.stringify(acknowledgement) !== JSON.stringify(entry.metadata))
           throw new Error("Portable output acknowledgement metadata mismatch.");
         if (this.detached || sink !== this.outputSink) return;
-        this.assertOutputDeadline();
-        await this.authority.effect("output_ack", () => {
-          this.assertOutputDeadline();
-          writeAtomic(join(this.ackDirectory, entry.name), JSON.stringify({
-            nonce: this.authority.nonce,
-            ownerId: this.authority.fence.ownerId,
-            fencingToken: this.authority.fence.fencingToken,
-            metadata: entry.metadata,
-          }));
-        });
+        // The sink has accepted this exact retained chunk. Preserve that fact
+        // in-memory before publishing its durable ACK so transient fence
+        // contention retries only ACK publication, never sink delivery. A new
+        // channel intentionally starts without this set and therefore retains
+        // at-least-once replay after detach/restart when no ACK survived.
         this.deliveredOutput.add(entry.name);
+        await acknowledgeOutput(entry);
       }
     }).catch((error) => {
       if (isRetryablePortableCoordination(error)) return;
@@ -379,6 +400,16 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       this.deliverTerminal({ state: "outcome_unknown" });
       this.scheduleTerminal();
     }).finally(() => { this.outputTasks--; });
+  }
+
+  private hasExactDurableOutputAcknowledgement(name: string, metadata: BackpressuredOutputMetadata): boolean {
+    try {
+      const value = JSON.parse(readFileSync(join(this.ackDirectory, name), "utf8"));
+      return value.nonce === this.authority.nonce &&
+        value.ownerId === this.authority.fence.ownerId &&
+        value.fencingToken === this.authority.fence.fencingToken &&
+        JSON.stringify(value.metadata) === JSON.stringify(metadata);
+    } catch { return false; }
   }
 
   private outputFiles(): Array<{ name: string; metadata: BackpressuredOutputMetadata; bytes: Uint8Array }> {
@@ -469,6 +500,29 @@ class PortableProcessChannel implements InteractiveProcessChannel {
       if (state.nonce !== this.authority.nonce) throw new Error("Portable channel identity mismatch.");
       if (!["running", "stopping", "stopped", "outcome_unknown"].includes(state.status)) return { state: "outcome_unknown" };
       if (birth === "exited" && state.status !== "stopped") return { state: "outcome_unknown" };
+      if (this.liveStoppedObserved && state.status !== "stopped") return { state: "outcome_unknown" };
+      // A live supervisor with durable stopped state may still own output
+      // retirement. Inspect that protocol read-only so terminal polling never
+      // competes for the writer lock. Once the retained window is fully retired,
+      // re-attest identity and the exact durable fence without waiting for the
+      // supervisor process itself to disappear.
+      if (state.status === "stopped" && birth === "live") {
+        this.liveStoppedObserved = true;
+        const pending = this.readLiveStoppedOutput();
+        if (!pending || this.hasPendingOutput(pending)) return undefined;
+        await this.reattestObservation(signal);
+        state = JSON.parse(readFileSync(join(this.authority.directory, "state.json"), "utf8"));
+        if (state.nonce !== this.authority.nonce || state.status !== "stopped") return { state: "outcome_unknown" };
+        const finalOutput = this.readLiveStoppedOutput();
+        if (!finalOutput || this.hasPendingOutput(finalOutput)) return undefined;
+        if (this.authority.reattestFence) this.authority.reattestFence();
+        else {
+          const finalFence = this.authority.snapshot(() => true);
+          if (finalFence.status === "unavailable" && finalFence.cause === "coordination") return undefined;
+          if (finalFence.status !== "applied") throw new Error("Portable terminal fence is unavailable.");
+        }
+        return { state: "exited", ...(state.exitCode === null ? {} : { exitCode: state.exitCode }), ...(state.signal ? { signal: state.signal } : {}) };
+      }
       if (state.status === "stopped") {
         const snapshot = this.outputSnapshot();
         if (snapshot.status === "unavailable" && snapshot.cause === "coordination") return undefined;
@@ -491,6 +545,19 @@ class PortableProcessChannel implements InteractiveProcessChannel {
         ? { state: "exited", ...(state.exitCode === null ? {} : { exitCode: state.exitCode }), ...(state.signal ? { signal: state.signal } : {}) }
         : state.status === "outcome_unknown" ? { state: "outcome_unknown" } : undefined;
     } catch { return { state: "outcome_unknown" }; }
+  }
+
+  private readLiveStoppedOutput(): PortableOutputSnapshot | undefined {
+    try { return this.readOutputSnapshot(); }
+    catch (error) {
+      if (error instanceof PortableOutputRetirementBlockedError) return undefined;
+      throw error;
+    }
+  }
+
+  private hasPendingOutput(output: PortableOutputSnapshot): boolean {
+    return output.output.length > 0 ||
+      output.acknowledgements.some((name) => /^(stdout|stderr)-/.test(name));
   }
 
   private async reattestObservation(signal: AbortSignal): Promise<"live" | "exited"> {
@@ -549,17 +616,7 @@ function positive(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error("Portable channel capacity/state is invalid.");
   return value as number;
 }
-function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function isRetryablePortableCoordination(error: unknown): boolean {
-  let current = error;
-  for (let depth = 0; depth < 6 && current; depth += 1) {
-    if (current instanceof OwnedFenceLockUnavailableError) return true;
-    if (current instanceof PortableAuthorityUnavailableError) return false;
-    const message = current instanceof Error ? current.message : String(current);
-    if (/writer fence is stale|identity re-attestation failed|identity mismatch/i.test(message)) return false;
-    if (/uncertain sidecar|database is locked|SQLITE_BUSY|fence lock remains held|fence effect boundary is unavailable/i.test(message))
-      return true;
-    current = current instanceof Error ? current.cause : undefined;
-  }
-  return false;
+  return isOwnedFenceLockContention(error);
 }
+function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }

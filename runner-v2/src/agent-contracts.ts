@@ -90,6 +90,15 @@ export type AgentLifecycleSignal =
       reviewId: string;
       satisfied: boolean;
     }
+  | {
+      type: "verifier_expectations_recorded";
+      reviewId: string;
+    }
+  | {
+      type: "plan_critique_submitted";
+      critiqueId: string;
+      blockingFindingCount: number;
+    }
   | { type: "ask_architect"; requestId: string; blocking: boolean }
   | { type: "request_replan"; requestId: string }
   | { type: "return_subagent"; summary: string; artifactHashes: string[] }
@@ -108,6 +117,7 @@ export type AgentLifecycleSignal =
         | "verification_repairs_planned"
         | "user_guidance_acknowledged"
         | "user_question_requested"
+        | "plan_critique_resolved"
         | "run_completed";
       referenceId?: string;
     };

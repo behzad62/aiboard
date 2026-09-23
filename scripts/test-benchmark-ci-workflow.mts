@@ -26,11 +26,18 @@ check(
   { setupNodeIndex, acquireIndex, installIndex, publishIndex }
 );
 
+check(
+  "benchmark CI certifies only Node 24.x",
+  /node-version:\s*\[24\.(?:x|\d+\.\d+)\]/.test(workflow) && !/22\.x/.test(workflow),
+  workflow
+);
+
 for (const expected of [
   "npm ci",
   "npm run publish-downloads",
   "npm run test:certified",
   "npm run test:benchmark",
+  "npm run test:benchmark:recoverable-job-service",
   "npm run build",
   "actions/upload-artifact",
 ]) {
@@ -46,8 +53,8 @@ check(
 );
 
 check(
-  "benchmark CI retains Node 22 coverage and an exact Node 24.18.0 RJS runtime lane",
-  /node-version:\s*\[[^\]]*22\.x[^\]]*24\.18\.0[^\]]*\]/.test(workflow),
+  "benchmark CI uses the exact supported Node 24.18.0 RJS runtime",
+  /node-version:\s*\[[^\]]*24\.18\.0[^\]]*\]/.test(workflow),
   workflow
 );
 

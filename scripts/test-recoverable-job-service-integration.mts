@@ -30,7 +30,7 @@ const baseline = JSON.parse(
   await readFile(
     resolve(
       repoRoot,
-      ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/standard-packs-before.json"
+      "benchmarks/recoverable-job-service/private/fixtures/standard-packs-before.json"
     ),
     "utf8"
   )

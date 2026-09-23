@@ -31,6 +31,8 @@ export interface NativeBuildRuntimeHandle {
   historical?: true;
   usage(): NativeBuildUsageProjection;
   observability(): Promise<BuildObservabilitySnapshot>;
+  /** Recorded context packs shown to models; empty when the handle has no store. */
+  contextManifests?(): import("./context-manifest-store.js").ContextManifest[];
   transcript(afterSequence?: number): Promise<BuildTranscriptPage>;
   files(): Promise<IntegrationFileSnapshot>;
   compact(): void | Promise<void>;
@@ -289,6 +291,10 @@ export class NativeBuildManager implements BuildControlPlane {
     return await this.require(runId).observability();
   }
 
+  contextManifests(runId: string): import("./context-manifest-store.js").ContextManifest[] {
+    return this.require(runId).contextManifests?.() ?? [];
+  }
+
   async transcript(runId: string, afterSequence = 0): Promise<BuildTranscriptPage> {
     return await this.require(runId).transcript(afterSequence);
   }
@@ -466,6 +472,19 @@ export class NativeBuildManager implements BuildControlPlane {
     const handle = this.requireMutable(runId);
     const projection = await this.withRuntimeActivity(async () =>
       handle.runtime.selectVerifierRuntime(runtimeId, idempotencyKey)
+    );
+    this.wake(runId);
+    return projection;
+  }
+
+  async extendRepairCycles(
+    runId: string,
+    additionalRepairPlans: number,
+    idempotencyKey: string,
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.extendRepairCycles(additionalRepairPlans, idempotencyKey)
     );
     this.wake(runId);
     return projection;

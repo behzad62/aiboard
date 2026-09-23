@@ -10,7 +10,7 @@ import { ProviderTransportError } from "../src/account-runner-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
-import { recoverableWorkerSuspension, workerContinuationMessages, shouldFailoverWorkerFailure, shouldAutoContinueWorker, workerModelAttribution } from "../src/native-worker-driver.js";
+import { recoverableWorkerSuspension, workerContinuationMessages, shouldFailoverWorkerFailure, shouldAutoContinueWorker, workerModelAttribution, guidanceOutcomeFromProjection } from "../src/native-worker-driver.js";
 import { NativeWorkerDriver } from "./support/git-fixture.js";
 import { rankSkillsForTask } from "../src/skill-routing.js";
 import type { SkillMetadata } from "../src/skill-catalog.js";
@@ -18,6 +18,7 @@ import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import { SkillCatalog } from "../src/skill-catalog.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
+import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -31,6 +32,7 @@ import {
   workerSessionId,
 } from "../src/worker-identity.js";
 import { createTestOneShotCommandExecutor } from "./support/one-shot-command-executor.js";
+import { emptyProjectionForTest } from "./support/projection-fixtures.js";
 
 class ScriptedModel implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
@@ -138,7 +140,118 @@ test("worker lifecycle no-ops preserve the attempt and receive a fresh resume re
   assert.match(String(resumed[1].content), /same durable task attempt/i);
   assert.match(String(resumed[1].content), /submit_task/);
   assert.match(String(resumed[1].content), /ask_architect/);
+  assert.match(String(resumed[1].content), /request_replan/);
   assert.doesNotMatch(String(resumed[1].content), /request_guidance/);
+});
+
+test("guidanceOutcomeFromProjection maps an open replan request to a blocking guidance outcome", () => {
+  const outcome = guidanceOutcomeFromProjection({
+    ...emptyProjectionForTest("run_replan"),
+    guidance: {
+      "replan-1": {
+        requestId: "replan-1", taskId: "T1", blocking: true, question: "Replan requested.",
+        evidenceSequence: 3, version: 1, status: "open", kind: "replan",
+        replan: { reason: "scope_exceeded", summary: "s", proposedChange: "p" },
+      },
+    },
+  }, "replan-1");
+  assert.deepEqual(outcome, {
+    type: "guidance", requestId: "replan-1", blocking: true, question: "Replan requested.", evidenceSequence: 3,
+  });
+  assert.deepEqual(guidanceOutcomeFromProjection(emptyProjectionForTest("run_replan"), "missing"), {
+    type: "failed", reason: "missing_guidance:missing",
+  });
+});
+
+test("native worker maps a replan_requested loop result to a blocking guidance outcome", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-replan-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let scheduler: SqliteSchedulerStore | undefined;
+  let evidence: SqliteEvidenceStore | undefined;
+  let memory: SqliteProjectMemoryStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_1",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_1",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_a");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+    evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+    seedRunningTask(scheduler);
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "primary:code",
+      providerId: "primary",
+      modelId: "code",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const driver = new NativeWorkerDriver({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([
+        toolTurn("replan", "request_replan", {
+          requestId: "replan-1",
+          reason: "scope_exceeded",
+          summary: "The cache key factory lives outside this task.",
+          proposedChange: "Split the task.",
+          evidenceSequence: 3,
+        }),
+      ])]]),
+      permissionProfile: "full",
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore: evidence,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      projectId: "project_1",
+      projectRoot: project,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
+    });
+    const outcome = await driver.run({
+      runId: "run_1",
+      task: rebuildTask(scheduler),
+      attempt: 1,
+      workerId: "worker_task_a_1",
+      workspacePath: workspace.path,
+    });
+    assert.deepEqual(outcome, {
+      type: "guidance",
+      requestId: "replan-1",
+      blocking: true,
+      question:
+        "Replan requested (scope_exceeded): The cache key factory lives outside this task.\nProposed change: Split the task.",
+      evidenceSequence: 3,
+    });
+  } finally {
+    sessions?.close();
+    ledger?.close();
+    scheduler?.close();
+    evidence?.close();
+    memory?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
 });
 
 test("native worker fails over with the same session, context, tools, and evidence", async (t) => {
@@ -494,6 +607,103 @@ test("worker skill routing prefers required capability skills over generic descr
     1
   );
   assert.equal(broadCapability[0]?.name, "testing");
+});
+
+test("every worker attempt records one context manifest bound to task, attempt, and revision", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-worker-manifest-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "value.txt"), "one\n");
+  let sessions: SqliteAgentSessionStore | undefined;
+  let ledger: SqliteToolLedger | undefined;
+  let scheduler: SqliteSchedulerStore | undefined;
+  let evidence: SqliteEvidenceStore | undefined;
+  let memory: SqliteProjectMemoryStore | undefined;
+  let contextManifests: SqliteContextManifestStore | undefined;
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_1",
+    });
+    const workspaces = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_1",
+      baselineRevision: baseline.revision,
+    });
+    const workspace = await workspaces.createTaskWorkspace("task_a");
+    const artifacts = new ArtifactStore(join(state, "artifacts"));
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    ledger = new SqliteToolLedger(join(state, "tools.sqlite"));
+    scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+    evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+    memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+    contextManifests = new SqliteContextManifestStore(join(state, "context-manifests.sqlite"));
+    seedRunningTask(scheduler);
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "primary:code",
+      providerId: "primary",
+      modelId: "code",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const driver = new NativeWorkerDriver({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([
+        toolTurn("replan", "request_replan", {
+          requestId: "replan-1",
+          reason: "scope_exceeded",
+          summary: "The cache key factory lives outside this task.",
+          proposedChange: "Split the task.",
+          evidenceSequence: 3,
+        }),
+      ])]]),
+      permissionProfile: "full",
+      workspaceManager: workspaces,
+      artifacts,
+      ledger,
+      sessions,
+      evidenceStore: evidence,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      projectId: "project_1",
+      projectRoot: project,
+      contextManifests,
+      execution: createTestOneShotCommandExecutor(t, { artifacts }),
+    });
+    const outcome = await driver.run({
+      runId: "run_1",
+      task: rebuildTask(scheduler),
+      attempt: 1,
+      workerId: "worker_task_a_1",
+      workspacePath: workspace.path,
+    });
+    assert.equal(outcome.type, "guidance");
+    const manifests = contextManifests.listRun("run_1");
+    assert.equal(manifests.length, 1);
+    const manifest = manifests[0]!;
+    assert.equal(manifest.role, "worker");
+    assert.equal(manifest.purpose, "worker:task");
+    assert.equal(manifest.taskId, "task_a");
+    assert.equal(manifest.attempt, 1);
+    assert.equal(manifest.repositoryRevision, baseline.revision);
+    assert.equal(manifest.packArtifactHash, undefined);
+  } finally {
+    contextManifests?.close();
+    sessions?.close();
+    ledger?.close();
+    scheduler?.close();
+    evidence?.close();
+    memory?.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
 });
 
 function seedRunningTask(store: SqliteSchedulerStore): void {

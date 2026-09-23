@@ -1,4 +1,9 @@
 import type { ToolExecutionContext } from "./agent-contracts.js";
+import {
+  freezeExecutionLifecycleRequirements,
+  resolveRequiredLifecycleScope,
+  type ExecutionLifecycleRequirements,
+} from "./execution-lifecycle-policy.js";
 import { createHash } from "node:crypto";
 import type { PermissionProfile } from "./contracts.js";
 import type { ChildEnvironmentFactory } from "./child-environment.js";
@@ -33,6 +38,8 @@ export interface OneShotCommandRequest {
   readonly workingDirectory: string;
   readonly explicitEnvironment?: Readonly<Record<string, string | undefined>>;
   readonly timeoutMs: number;
+  /** Trusted lifecycle requirements; never inferred from argv or model text. */
+  readonly lifecycleRequirements?: ExecutionLifecycleRequirements;
   readonly context: Pick<ToolExecutionContext, "runId" | "sessionId" | "signal"> & {
     readonly actor: ExecutionGrantBinding["actor"];
     readonly callId: string;
@@ -50,10 +57,15 @@ export function createBoundedProcessOutputFactory(input: {
 }): ProcessOutputFactory {
   const sessions = new Map<string, ProcessOutputSession>();
   const create = (ownerId: string): ProcessOutputSession => {
+    const ownerDigest = createHash("sha256").update(ownerId).digest("hex");
     const spool = new BoundedOutputSpool({
-      spillRoot: input.spillRoot,
+      // A durable output owner must have an independently claimable root. A
+      // shared physical root races both directory creation and ownership-marker
+      // validation when one-shot commands execute concurrently. The owner digest
+      // is stable across restart, so reopen reaches the exact same private root.
+      spillRoot: `${input.spillRoot}-${ownerDigest.slice(0, 20)}`,
       projectRoot: input.projectRoot,
-      ownershipId: `process-output-${createHash("sha256").update(ownerId).digest("hex")}`,
+      ownershipId: `process-output-${ownerDigest}`,
       artifactStore: input.artifacts,
     });
     const session: ProcessOutputSession = Object.freeze({
@@ -155,10 +167,11 @@ export function createRuntimeBackedOneShotCommandExecutor(
         executable: request.executable,
         arguments: Object.freeze([...request.arguments]),
         workingDirectory: request.workingDirectory,
-        requestedCapabilities: Object.freeze([
-          "tree_termination" as const,
-          "verified_emptiness" as const,
-        ]),
+        requiredLifecycleScope: resolveRequiredLifecycleScope({
+          permissionProfile: options.permissionProfile,
+          lifecycleRequirements: freezeExecutionLifecycleRequirements(request.lifecycleRequirements),
+        }),
+        requestedCapabilities: Object.freeze([]),
       });
       const claims = options.executionGrants.consume(opaqueGrant, {
         runId: request.context.runId,

@@ -29,6 +29,7 @@ import {
   type FinalVerificationCheckDriver,
   type IndependentVerifierDriver,
   type IntegrationRuntimeDriver,
+  type PlanCriticDriver,
 } from "./build-runtime.js";
 import type { AgentSessionProjection } from "./agent-session-store.js";
 import { nativeBuildBudgetEnforceabilityError } from "./budget-enforceability.js";
@@ -75,9 +76,16 @@ import {
 } from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
 import {
+  NativePlanCriticRuntime,
+  type NativePlanCritiqueRequest,
+} from "./native-plan-critic-runtime.js";
+import {
   NativeVerifierRuntime,
   type NativeVerifierInspectionRequest,
 } from "./native-verifier-runtime.js";
+import { SchedulerPlanCritiqueAuthority } from "./plan-critique-authority.js";
+import type { PlanRiskReason } from "./plan-critique-contracts.js";
+import { isFinalVerificationTask } from "./task-contracts.js";
 import { NativeWorkerDriver } from "./native-worker-driver.js";
 import { resolveWorkerSessionId, standardWorkerId } from "./worker-identity.js";
 import { OpenAICompatibleModel } from "./openai-compatible-model.js";
@@ -151,6 +159,7 @@ import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
 import { rebuildProjectMemories } from "./project-memory.js";
 import { SqliteSchedulerStore } from "./sqlite-scheduler-store.js";
 import { SqliteToolLedger } from "./sqlite-tool-ledger.js";
+import { SqliteContextManifestStore } from "./sqlite-context-manifest-store.js";
 import type { ToolLedgerEvent } from "./tool-ledger.js";
 import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.js";
@@ -206,6 +215,7 @@ export type NativeBuildRuntimeResourceStage =
   | "integration_workspace"
   | "verification_workspace"
   | "independent_verifier_workspace"
+  | "independent_verifier_baseline_workspace"
   | "memory_store"
   | "managed_process_service";
 
@@ -574,7 +584,11 @@ export class NativeBuildFactory {
     await this.options.runtimeConstructionHooks?.afterAcquire?.("session_store");
     initializationStage = "tool_ledger";
     const ledger = new SqliteToolLedger(join(runRoot, "tool-ledger.sqlite"));
-    constructionResources.add("tool_ledger", () => ledger.close(), true);
+    const contextManifests = new SqliteContextManifestStore(join(runRoot, "context-manifests.sqlite"));
+    constructionResources.add("tool_ledger", () => {
+      contextManifests.close();
+      ledger.close();
+    }, true);
     await this.options.runtimeConstructionHooks?.afterAcquire?.("tool_ledger");
     initializationStage = "budget_ledger";
     const budgetLedger = new SqliteBudgetLedger(join(runRoot, "budget.sqlite"), {
@@ -636,12 +650,28 @@ export class NativeBuildFactory {
       () => verifierWorkspace.cleanup(),
     );
     await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_workspace");
+    initializationStage = "independent_verifier_baseline_workspace";
+    const verifierBaselineWorkspace = new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      integrationManager,
+      kind: "independent-verifier",
+      workspaceSuffix: "baseline",
+    });
+    constructionResources.add(
+      "independent_verifier_baseline_workspace",
+      () => verifierBaselineWorkspace.cleanup(),
+    );
+    await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_baseline_workspace");
     if (
       schedulerEvents.length > 0 &&
       rebuildSchedulerProjection(schedulerEvents).verifier?.current?.status ===
         "submitted"
     ) {
       await verifierWorkspace.cleanup();
+      await verifierBaselineWorkspace.cleanup();
     }
     const finalVerificationCleanup = new OwnedFinalVerificationCleanup({
       stateDirectory: this.options.stateDirectory,
@@ -845,6 +875,8 @@ export class NativeBuildFactory {
       managedProcesses,
       execution: commandExecution,
       executionGrants,
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -889,7 +921,16 @@ export class NativeBuildFactory {
       ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
       browserBackend: this.browserBackend,
       ...(runMcpManager ? { mcpManager: runMcpManager } : {}),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
     });
+    const verifierWorkspaceProvider = {
+      workspaceKind: "independent-verifier" as const,
+      create: async (targetRevision: string) =>
+        await verifierWorkspace.create(targetRevision),
+      createBaseline: (revision: string) => verifierBaselineWorkspace.create(revision),
+      cleanupBaseline: () => verifierBaselineWorkspace.cleanup(),
+    };
     const nativeVerifier = new NativeVerifierRuntime({
       git: gitContext,
       executionGrants,
@@ -900,21 +941,67 @@ export class NativeBuildFactory {
       sessions,
       artifacts: this.artifacts,
       evidenceStore,
-      workspaceManager: {
-        workspaceKind: "independent-verifier",
-        create: async (targetRevision) =>
-          await verifierWorkspace.create(targetRevision),
-      },
+      workspaceManager: verifierWorkspaceProvider,
       budgetLedger,
       ledger,
       modelCostEstimators,
       modelCostBases,
       verdictAuthority: new SchedulerVerifierVerdictAuthority(schedulerStore),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
     });
+    const planCritic = new NativePlanCriticRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      verifierRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      workspaceManager: verifierWorkspaceProvider,
+      critiqueAuthority: new SchedulerPlanCritiqueAuthority(schedulerStore),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const planCriticDriver: PlanCriticDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      mode: spec.planCritique ?? "risk_based",
+      stricterQualification: spec.alwaysRequireIndependentVerifier,
+      architectDeclaration: (projection) => projection.planRiskDeclaration?.risk ?? "low",
+      critique: async ({ projection, riskReasons, preferredRuntimeId, signal }) => {
+        const result = await planCritic.critique(buildPlanCritiqueRequest({
+          runId: spec.runId,
+          objective: spec.objective,
+          architectRuntimeId: projection.runtime.architect.runtimeId ?? spec.architectRuntimeId,
+          projection,
+          baselineRevision: integrationManager.revision,
+          riskReasons,
+          ...(preferredRuntimeId ? { preferredRuntimeId } : {}),
+          ...(signal ? { signal } : {}),
+          providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+            spec.budgetLimits.maxActiveMs,
+            budgetLedger.snapshot(spec.runId).effective.activeMs,
+            Date.now(),
+          ),
+        }));
+        if (result.status === "submitted") {
+          await verifierWorkspace.cleanup();
+          return { status: "submitted", critiqueId: result.critiqueId };
+        }
+        if (result.status === "unavailable") return { status: "unavailable", reason: result.reason };
+        return { status: "suspended", reason: result.reason, runtimeId: result.runtimeId, ...(result.error ? { error: result.error } : {}) };
+      },
+    };
     const independentVerifier: IndependentVerifierDriver = {
       candidateRuntimeIds: [...spec.verifierRuntimeIds],
       alwaysRequireIndependentVerifier:
         spec.alwaysRequireIndependentVerifier,
+      twoPass: spec.verifierTwoPass ?? true,
       assessRisk: async ({ projection }) => deriveNativeVerifierRiskInput({
         projection,
         sessions: await sessions.listRun(spec.runId),
@@ -932,6 +1019,8 @@ export class NativeBuildFactory {
               spec.architectRuntimeId,
             projection: request.projection,
             sessions: await sessions.listRun(spec.runId),
+            schedulerEvents: schedulerStore.readRun(spec.runId),
+            twoPass: spec.verifierTwoPass ?? true,
             risk: request.risk,
             ...(request.preferredRuntimeId
               ? { preferredRuntimeId: request.preferredRuntimeId }
@@ -963,6 +1052,7 @@ export class NativeBuildFactory {
         }
         if (result.status === "verdict_submitted") {
           await verifierWorkspace.cleanup();
+          await verifierBaselineWorkspace.cleanup();
           return { status: "verdict_submitted" };
         }
         if (result.status === "unavailable") {
@@ -1096,6 +1186,8 @@ export class NativeBuildFactory {
         }
       },
       independentVerifier,
+      planCritic: planCriticDriver,
+      repairPlanLimit: spec.repairPlanLimit,
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {
@@ -1234,8 +1326,10 @@ export class NativeBuildFactory {
           ),
           independentVerifier:
             projectIndependentVerifierObservability(schedulerProjection),
+          contextManifestCount: contextManifests.listRun(spec.runId).length,
         };
       },
+      contextManifests: () => contextManifests.listRun(spec.runId),
       transcript: async (afterSequence = 0) =>
         await sessions.transcript(spec.runId, afterSequence),
       files: async () => {
@@ -1271,6 +1365,7 @@ export class NativeBuildFactory {
             () => sessions.compactRun(spec.runId),
             () => workspaceManager.cleanup(),
             () => verifierWorkspace.cleanup(),
+            () => verifierBaselineWorkspace.cleanup(),
             () => integrationManager.cleanup(),
           ],
           spec.runId
@@ -1369,6 +1464,7 @@ export class NativeBuildFactory {
     const runRoot = join(this.options.stateDirectory, "builds", safeSegment(spec.runId));
     let evidenceStore: SqliteEvidenceStore | undefined;
     let ledger: SqliteToolLedger | undefined;
+    let contextManifestStore: SqliteContextManifestStore | undefined;
     let sessions: SqliteAgentSessionStore | undefined;
     let budgetLedger: SqliteBudgetLedger | undefined;
     let schedulerStore: SqliteSchedulerStore | undefined;
@@ -1386,6 +1482,7 @@ export class NativeBuildFactory {
         schedulerStore,
         budgetLedger,
         sessions,
+        contextManifestStore,
         ledger,
         evidenceStore,
       ];
@@ -1413,6 +1510,7 @@ export class NativeBuildFactory {
     try {
       const evidencePath = join(runRoot, "evidence.sqlite");
       const ledgerPath = join(runRoot, "tools.sqlite");
+      const contextManifestPath = join(runRoot, "context-manifests.sqlite");
       const sessionsPath = join(runRoot, "sessions.sqlite");
       const budgetPath = join(runRoot, "budget.sqlite");
       const schedulerPath = join(runRoot, "scheduler.sqlite");
@@ -1430,6 +1528,12 @@ export class NativeBuildFactory {
       }
       if (hasHistoricalStore(ledgerPath)) {
         ledger = new SqliteToolLedger(await snapshotStorePath(ledgerPath), { readOnly: true });
+      }
+      if (hasHistoricalStore(contextManifestPath)) {
+        contextManifestStore = new SqliteContextManifestStore(
+          await snapshotStorePath(contextManifestPath),
+          { readOnly: true },
+        );
       }
       if (hasHistoricalStore(sessionsPath)) {
         sessions = new SqliteAgentSessionStore(
@@ -1607,6 +1711,7 @@ export class NativeBuildFactory {
         continue: () => readOnlyError(),
         selectArchitectHandoff: () => readOnlyError(),
         selectVerifierRuntime: () => readOnlyError(),
+        extendRepairCycles: () => readOnlyError(),
         submitUserGuidance: () => readOnlyError(),
         submitManagedUserGuidance: () => readOnlyError(),
         completeManagedUserGuidanceInterruption: () => readOnlyError(),
@@ -1710,8 +1815,10 @@ export class NativeBuildFactory {
             ),
             independentVerifier:
               projectIndependentVerifierObservability(schedulerProjection),
+            contextManifestCount: contextManifestStore?.listRun(spec.runId).length ?? 0,
           };
         },
+        contextManifests: () => contextManifestStore?.listRun(spec.runId) ?? [],
         transcript: async (afterSequence = 0) => {
           const provenance = await transcriptProvenance();
           const page = provenance === "unavailable"
@@ -2398,12 +2505,84 @@ export function deriveNativeVerifierRiskInput(input: {
   };
 }
 
+export function buildPlanCritiqueRequest(input: {
+  runId: string;
+  objective: string;
+  architectRuntimeId: string;
+  projection: SchedulerProjection;
+  baselineRevision: string;
+  riskReasons: readonly PlanRiskReason[];
+  preferredRuntimeId?: string;
+  providerRetryDeadlineMs?: number;
+  signal?: AbortSignal;
+}): NativePlanCritiqueRequest {
+  const guidance = [
+    ...Object.values(input.projection.userGuidance).map((item) => ({
+      id: item.guidanceId,
+      kind: "user_guidance" as const,
+      version: item.version,
+      text: item.text,
+    })),
+    ...Object.values(input.projection.guidance)
+      .filter((item) => item.status === "answered" && item.answer)
+      .map((item) => ({
+        id: item.requestId,
+        kind: "architect_answer" as const,
+        version: item.version,
+        text: item.answer!,
+      })),
+    ...Object.values(input.projection.architectQuestions)
+      .filter((item) => item.status === "answered" && item.answer)
+      .map((item) => ({
+        id: item.questionId,
+        kind: "architect_answer" as const,
+        version: item.version,
+        text: item.answer!,
+      })),
+  ].sort((left, right) => left.id.localeCompare(right.id));
+  return {
+    runId: input.runId,
+    objective: input.objective,
+    planRevision: input.projection.planRevision,
+    baselineRevision: input.baselineRevision,
+    architectRuntimeId: input.architectRuntimeId,
+    tasks: Object.values(input.projection.tasks)
+      .filter((task) => task.status !== "cancelled" && !isFinalVerificationTask(task)),
+    riskReasons: [...input.riskReasons],
+    guidance,
+    ...(input.preferredRuntimeId ? { preferredRuntimeId: input.preferredRuntimeId } : {}),
+    ...(input.providerRetryDeadlineMs !== undefined
+      ? { providerRetryDeadlineMs: input.providerRetryDeadlineMs }
+      : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+  };
+}
+
+export function runBaselineRevision(
+  schedulerEvents: readonly SchedulerEvent[],
+  projection: SchedulerProjection,
+): string {
+  const first = schedulerEvents.find(
+    (event) =>
+      event.type === "integration.revision_advanced" &&
+      typeof event.payload.previousIntegrationRevision === "string" &&
+      event.payload.previousIntegrationRevision.trim().length > 0,
+  );
+  const baseline = first
+    ? (first.payload.previousIntegrationRevision as string)
+    : projection.integrationRevision;
+  if (!baseline) throw new Error("Run baseline revision is unknown.");
+  return baseline;
+}
+
 export function buildNativeVerifierInspectionRequest(input: {
   runId: string;
   objective: string;
   architectRuntimeId: string;
   projection: SchedulerProjection;
   sessions: readonly AgentSessionProjection[];
+  schedulerEvents: readonly SchedulerEvent[];
+  twoPass: boolean;
   risk: BuildRiskAssessmentProjection;
   preferredRuntimeId?: string;
   providerRetryDeadlineMs?: number;
@@ -2531,6 +2710,8 @@ export function buildNativeVerifierInspectionRequest(input: {
       ...reason,
       evidence: [...reason.evidence],
     })),
+    baselineRevision: runBaselineRevision(input.schedulerEvents, input.projection),
+    twoPass: input.twoPass,
     ...(input.preferredRuntimeId
       ? { preferredRuntimeId: input.preferredRuntimeId }
       : {}),

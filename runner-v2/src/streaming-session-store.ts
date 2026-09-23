@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parseEvidenceContinuation, type EvidenceContinuation } from "./evidence-continuation.js";
-import { parseExecutionSafetyCapabilities, type ExecutionSafetyCapabilities } from "./execution-safety-contracts.js";
+import { parseExecutionLifecycleAttestation, parseExecutionSafetyCapabilities, type ExecutionLifecycleAttestation, type ExecutionSafetyCapabilities } from "./execution-safety-contracts.js";
 
 export type StreamingSessionStoreErrorCode =
   | "invalid_record"
@@ -81,6 +81,8 @@ export interface StreamingSessionBackendBinding {
   readonly attestationDigest: string;
   /** Exact semantic states reported by the selected backend attestation. */
   readonly capabilities?: ExecutionSafetyCapabilities;
+  /** Missing only on legacy v1 backend bindings. */
+  readonly lifecycle?: ExecutionLifecycleAttestation;
   readonly opaqueIdentity: string;
   readonly birthFingerprint: Readonly<{
     observedAt: string;
@@ -869,7 +871,7 @@ function parseLease(value: unknown): void {
 function parseBackendBinding(value: unknown): void {
   const allowed = new Set([
     "registryId", "backendId", "implementationGeneration", "implementationDigest", "attestationVersion",
-    "attestationDigest", "capabilities", "opaqueIdentity", "birthFingerprint", "rootPid", "startedAt",
+    "attestationDigest", "capabilities", "lifecycle", "opaqueIdentity", "birthFingerprint", "rootPid", "startedAt",
   ]);
   assertExactKeys(value, allowed, "streaming session backend binding");
   const binding = value as Record<string, unknown>;
@@ -890,10 +892,17 @@ function parseBackendBinding(value: unknown): void {
       throw new StreamingSessionStoreError("invalid_record", `Streaming session backend ${field} is invalid.`);
     }
   }
-  if (!Number.isSafeInteger(binding.attestationVersion) || (binding.attestationVersion as number) < 1) {
-    throw new StreamingSessionStoreError("invalid_record", "Streaming session backend attestation version is invalid.");
+  if (binding.attestationVersion !== 1 && binding.attestationVersion !== 2) {
+    throw new StreamingSessionStoreError("invalid_record", "Streaming session backend attestation version is unsupported.");
   }
   if (binding.capabilities !== undefined) parseExecutionSafetyCapabilities(binding.capabilities);
+  const lifecycle = binding.lifecycle === undefined ? undefined : parseExecutionLifecycleAttestation(binding.lifecycle);
+  if (binding.attestationVersion === 1 && lifecycle !== undefined) {
+    throw new StreamingSessionStoreError("invalid_record", "Legacy streaming backend binding cannot claim v2 lifecycle scope.");
+  }
+  if (binding.attestationVersion === 2 && lifecycle === undefined) {
+    throw new StreamingSessionStoreError("invalid_record", "V2 streaming backend binding is missing lifecycle scope.");
+  }
   if (binding.rootPid !== undefined &&
       (!Number.isSafeInteger(binding.rootPid) || (binding.rootPid as number) < 1)) {
     throw new StreamingSessionStoreError("invalid_record", "Streaming session backend root pid is invalid.");

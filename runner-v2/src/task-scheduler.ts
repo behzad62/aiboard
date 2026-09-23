@@ -2,7 +2,10 @@ import type {
   SchedulerProjection,
   SchedulerStore,
 } from "./scheduler-store.js";
-import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import {
+  planCritiquePending,
+  rebuildSchedulerProjection,
+} from "./scheduler-store.js";
 import { isFinalVerificationTask, type BuildTask } from "./task-contracts.js";
 import { readyTaskIds } from "./task-graph.js";
 import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
@@ -119,6 +122,7 @@ export class TaskScheduler {
         projection.acceptanceContractStatus ===
         "acceptance_contract_upgrade_required"
       ) return;
+      if (planCritiquePending(projection)) return;
 
       for (const task of Object.values(projection.tasks)) {
         if (this.active.size >= this.maxConcurrency) break;

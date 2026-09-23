@@ -34,6 +34,8 @@ export interface VerificationWorkspaceManagerOptions {
   integrationManager?: { readonly revision: string };
   /** Isolate independent verifier inspection from command/browser verification output. */
   kind?: VerificationWorkspaceKind;
+  /** Separates a second worktree for the same run and kind, such as the baseline pass. */
+  workspaceSuffix?: string;
   execute?: GitRunner;
 }
 
@@ -91,7 +93,10 @@ export class VerificationWorkspaceManager {
         : "verifier-workspaces"
     );
     this.runId = options.runId;
-    this.workspaceId = safeName(options.runId);
+    const suffix = options.workspaceSuffix;
+    this.workspaceId = suffix
+      ? `${safeName(options.runId)}-${safeName(suffix)}`
+      : safeName(options.runId);
     this.workspacePath = resolve(this.workspaceRoot, this.workspaceId);
     this.metadataFilePath = resolve(
       this.workspaceRoot,

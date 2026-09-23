@@ -20,7 +20,7 @@ Runner V2 runs on your machine, binds to `127.0.0.1`, and requires a control tok
 
 ## Requirements
 
-- Node.js 22.x or 24.x. Node 22.x must be 22.13.0 or newer for unflagged `node:sqlite` support.
+- Node.js 24.x.
 - Git on `PATH` for Build mode. Runner V2 stops before any model call if Git is unavailable.
 - Provider credentials only for the models you choose.
 

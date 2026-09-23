@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createHmac } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -9,20 +11,45 @@ import { createSubprocessRuntimeKernel, exceptionalRecoveryCallId, durableBacken
 import { createChildEnvironmentFactory } from "../src/child-environment.js";
 import { createExecutionGrantAuthority } from "../src/execution-grants.js";
 
-async function fixture(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>) {
-  const f = await setup(); let passed = false;
+interface LegacyLaunchBinding {
+  attestationVersion: number;
+  lifecycle?: unknown;
+}
+interface LegacyMutationData {
+  requiredLifecycleScope?: unknown;
+  requiredCapabilities: unknown;
+  binding: LegacyLaunchBinding;
+}
+interface LegacyDurableMutation {
+  readonly kind: string;
+  data: LegacyMutationData;
+}
+interface LegacyDurableRecord {
+  requiredLifecycleScope?: unknown;
+  requiredCapabilities: unknown;
+  readonly mutations: readonly LegacyDurableMutation[];
+  backendBinding: LegacyLaunchBinding;
+}
+function requireLegacyMutation(mutations: readonly LegacyDurableMutation[], kind: string): LegacyDurableMutation {
+  const mutation = mutations.find((entry) => entry.kind === kind);
+  if (mutation === undefined) throw new Error(`Legacy durable fixture is missing the ${kind} mutation.`);
+  return mutation;
+}
+
+async function fixture(run: (f: Awaited<ReturnType<typeof setup>>) => Promise<void>, options: { readonly legacyScope?: boolean } = {}) {
+  const f = await setup(options); let passed = false;
   try { await run(f); passed = true; }
   finally { await f.authority.revokeAll("cleanup"); f.kernel.readOnlyStore.close();
     if (passed) fs.rmSync(f.root, { recursive: true, force: true }); else console.error(`Task11 kernel RED root retained: ${f.root}`); }
 }
-async function setup() {
+async function setup(options: { readonly legacyScope?: boolean } = {}) {
   const root = fs.mkdtempSync(join(tmpdir(), "aiboard-task11-kernel-")), path = join(root, "state.sqlite"), key = new Uint8Array(32).fill(13);
   let now = new Date("2026-09-15T00:00:00.000Z"), running = true;
   const calls: string[] = []; let beforeProbe: (() => Promise<void>) | undefined; let beforeReconcile: (() => Promise<void>) | undefined;
   let empty = true;
   const capabilities = { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "unverified" } as const;
   const backend = {
-    probe: async () => { calls.push("probe"); await beforeProbe?.(); return { attestationVersion: 1, backendId: "fixture", verified: true, platformLabel: "portable fixture", capabilities }; },
+    probe: async () => { calls.push("probe"); await beforeProbe?.(); return { attestationVersion: 2, backendId: "fixture", verified: true, platformLabel: "portable fixture", lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" }, capabilities }; },
     launch: async () => { throw new Error("Recovery must not launch"); }, observe: async () => ({ state: "exited", exitCode: 0 }),
     reconcile: async () => { calls.push("reconcile"); await beforeReconcile?.(); return running ? { state: "running" } : { state: "exited", exitCode: 7 }; },
     signal: async () => { calls.push("signal"); running = false; return { state: "exited" }; },
@@ -30,7 +57,7 @@ async function setup() {
     release: async () => { calls.push("release"); return { released: true }; },
   };
   const registry = createProcessBackendRegistry([createProcessBackendRegistration({ stableAdapterId: "fixture", backendId: "fixture", codeDigest: "a".repeat(64), configDigest: "b".repeat(64), backend })]);
-  const selected = await selectProcessBackend(registry, []);
+  const selected = await selectProcessBackend(registry, [], "process_group");
   const store = openSqliteDurableProcessKernel(path, key);
   const writer = Object.getOwnPropertySymbols(store).map(symbol => Object.getOwnPropertyDescriptor(store, symbol)?.value)
     .find(value => value?.claim && value?.apply) as DurableProcessRuntimeWriter;
@@ -38,7 +65,7 @@ async function setup() {
   writer.claim({ schemaVersion: 2, revision: 0, logicalProcessId: "logical", invocationId: "invocation", runId: "run", taskId: "task", sessionId: "session",
     requestFingerprint: "c".repeat(64), retryKey: "c".repeat(64), ownerId: "prior-owner", leaseExpiresAt: new Date(now.getTime() + 10).toISOString(),
     outputOwnerId: "output-logical", outputPrepared: false, state: "prepared", history: [{ state: "prepared", at: now.toISOString() }],
-    requiredCapabilities: ["tree_termination", "verified_emptiness"], environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] }, escalation: [], cleanup: { state: "pending" } });
+    requiredLifecycleScope: "process_group", requiredCapabilities: [], environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] }, escalation: [], cleanup: { state: "pending" } });
   const apply = (command: Record<string, unknown>) => {
     const current = store.store.readByInvocation("invocation")!;
     return writer.apply({ ...command, invocationId: "invocation", expectedRevision: current.revision, ownerId: current.ownerId, fencingToken: current.fencingToken, at: now.toISOString() } as never);
@@ -47,10 +74,31 @@ async function setup() {
   apply({ type: "record_environment", environmentAudit: { inheritedNames: [], removedNames: [], explicitSafeNames: [], grantedNames: [] } });
   apply({ type: "mark_launching" });
   apply({ type: "bind_launch", binding: { registryId: selected.registryId, backendId: "fixture", implementationGeneration: selected.implementationGeneration,
-    implementationDigest: selected.implementationDigest, attestationVersion: 1, attestationDigest: selected.attestationDigest,
-    opaqueIdentity: "opaque", birthFingerprint: { observedAt: now.toISOString(), discriminator: "birth" }, rootPid: 123, startedAt: now.toISOString() } });
+    implementationDigest: selected.implementationDigest, attestationVersion: selected.attestation.attestationVersion, attestationDigest: selected.attestationDigest,
+    lifecycle: selected.attestation.lifecycle, opaqueIdentity: "opaque", birthFingerprint: { observedAt: now.toISOString(), discriminator: "birth" }, rootPid: 123, startedAt: now.toISOString() } });
   apply({ type: "fail", state: "outcome_unknown", detail: "Interrupted prior observation" });
-  store.store.close(); now = new Date(now.getTime() + 100);
+  store.store.close();
+  if (options.legacyScope) {
+    const db = new DatabaseSync(path);
+    try {
+      const row = db.prepare("SELECT revision, record_json FROM durable_processes WHERE invocation_id = ?").get("invocation") as { revision: number; record_json: string };
+      const legacy = JSON.parse(row.record_json) as LegacyDurableRecord;
+      delete legacy.requiredLifecycleScope;
+      legacy.requiredCapabilities = ["tree_termination", "verified_emptiness"];
+      const preparedMutation = requireLegacyMutation(legacy.mutations, "prepared");
+      delete preparedMutation.data.requiredLifecycleScope;
+      preparedMutation.data.requiredCapabilities = ["tree_termination", "verified_emptiness"];
+      legacy.backendBinding.attestationVersion = 1;
+      delete legacy.backendBinding.lifecycle;
+      const bindMutation = requireLegacyMutation(legacy.mutations, "bind_launch");
+      bindMutation.data.binding.attestationVersion = 1;
+      delete bindMutation.data.binding.lifecycle;
+      const json = JSON.stringify(legacy);
+      const integrity = createHmac("sha256", key).update(`invocation\0${row.revision}\0${json}`).digest("hex");
+      db.prepare("UPDATE durable_processes SET record_json = ?, integrity = ? WHERE invocation_id = ?").run(json, integrity, "invocation");
+    } finally { db.close(); }
+  }
+  now = new Date(now.getTime() + 100);
   const output = { ownerId: "output-logical", write: async () => {}, cleanup: async () => { calls.push("output-cleanup"); },
     finalize: async () => { calls.push("output-finalize"); return { streams: ["stdout", "stderr"].map(stream => ({ stream, tail: "", tailBytesBase64: "", tailByteLength: 0, tailDisplayTruncated: false,
       totalBytes: 0, truncated: false, spillBytes: 0, lossyBytes: 0, lossyOutput: false, lossReasons: [], spillState: "empty" })) } as never; } };
@@ -77,6 +125,16 @@ async function setup() {
   return { root, kernel, calls, request, authority, backend, setEmpty: (value: boolean) => { empty = value; },
     setProbe: (value: () => Promise<void>) => { beforeProbe = value; }, setReconcile: (value: () => Promise<void>) => { beforeReconcile = value; } };
 }
+
+test("legacy scope-less recovery stays inspectable but cannot acquire destructive authority", () => fixture(async f => {
+  const legacy = f.kernel.readOnlyStore.readByInvocation("invocation")!;
+  assert.equal(legacy.requiredLifecycleScope, undefined);
+  assert.equal(legacy.backendBinding?.attestationVersion, 1);
+  const error = await f.kernel.runtime.recoverExceptional(await f.request("terminate")).then(() => undefined, (value: unknown) => value);
+  assert.ok(error instanceof Error);
+  assert.deepEqual(f.calls, [], "scope-ambiguous legacy ownership must not probe, reconcile, signal, verify, release, or relaunch");
+  assert.equal(f.kernel.readOnlyStore.readByInvocation("invocation")?.state, "outcome_unknown");
+}, { legacyScope: true }));
 
 test("exceptional kernel requires an actual original-authority grant, not an approval boolean", () => fixture(async f => {
   const r = await f.request("terminate");

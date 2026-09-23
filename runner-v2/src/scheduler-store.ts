@@ -3,10 +3,13 @@ import { createHash } from "node:crypto";
 
 import {
   isFinalVerificationTask,
+  REPLAN_REASONS,
   type BuildTask,
   type PlanNewTask,
   type PlanReconciliation,
   type PlanTaskUpdate,
+  type ReplanReason,
+  type ReplanRequest,
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import {
@@ -17,12 +20,14 @@ import {
 } from "./final-verification-contracts.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import {
+  assertSatisfiedVerdictsCiteGreenEvidence,
   validateCriterionEvidenceLinks,
   validateCriterionReviewVerdicts,
   validateAcceptanceCriteria,
   type AcceptanceCriterion,
   type CriterionEvidenceLink,
   type CriterionReviewVerdict,
+  type GreenEvidenceVerdict,
 } from "./acceptance-contracts.js";
 import {
   evidenceFactArtifactHashes,
@@ -62,12 +67,29 @@ import {
   cloneVerifierProjection,
   cloneVerifierReview,
   expectedVerifierCriteria,
+  parseExcludedModels,
+  parseRuntimeBinding,
+  parseVerifierExpectations,
   parseVerifierReviewRequest,
   parseVerifierVerdict,
   sameVerifierReview,
   type VerifierCriterionReference,
   type VerifierProjection,
 } from "./verifier-contracts.js";
+import {
+  assessPlanRisk,
+  parsePlanCritiqueFindings,
+  planCritiqueRequired,
+  PLAN_CRITIQUE_MODES,
+  type PlanCritiqueFinding,
+  type PlanCritiqueMode,
+  type PlanCritiqueProjection,
+  type PlanCritiqueResolutionItem,
+  type PlanCritiqueSkipReason,
+  type PlanCritiqueState,
+  type PlanRiskAssessment,
+  type PlanRiskLevel,
+} from "./plan-critique-contracts.js";
 import {
   assessBuildRisk,
   type BuildRiskAssessment,
@@ -135,8 +157,18 @@ export type SchedulerEventType =
   | "verifier.selection_required"
   | "verifier.selection_selected"
   | "verifier.review_requested"
+  | "verifier.expectations_recorded"
   | "verifier.verdict_submitted"
-  | "verifier.repairs_planned";
+  | "verifier.repairs_planned"
+  | "repair.policy_configured"
+  | "repair.cycle_limit_reached"
+  | "repair.cycle_limit_extended"
+  | "plan_critique.policy_configured"
+  | "plan_critique.risk_assessed"
+  | "plan_critique.requested"
+  | "plan_critique.submitted"
+  | "plan_critique.resolved"
+  | "plan_critique.skipped";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -163,6 +195,8 @@ export interface GuidanceProjection {
   challengeEvidenceSequence?: number;
   challengedVersion?: number;
   challengeReason?: string;
+  kind?: "question" | "replan";
+  replan?: ReplanRequest;
 }
 
 export interface CriterionSubmissionProjection {
@@ -385,6 +419,7 @@ export interface VerifierPolicyProjection {
   mode: "risk_based";
   candidateRuntimeIds: string[];
   alwaysRequireIndependentVerifier: boolean;
+  twoPass: boolean;
 }
 
 export interface BuildRiskAssessmentProjection {
@@ -408,6 +443,21 @@ export interface VerifierSelectionProjection {
   requiredCapabilities: string[];
   candidateRuntimeIds: string[];
   selectedRuntimeId?: string;
+}
+
+export const DEFAULT_REPAIR_PLAN_LIMIT = 3;
+export const MAX_REPAIR_CYCLE_EXTENSION = 10;
+
+export interface RepairCyclesProjection {
+  limit: number;
+  used: number;
+  extensions: number;
+  pause?: {
+    source: "final_verification" | "verifier";
+    targetRevision: string;
+    used: number;
+    limit: number;
+  };
 }
 
 export interface SchedulerProjection {
@@ -454,7 +504,14 @@ export interface SchedulerProjection {
   verifierPolicy?: VerifierPolicyProjection;
   buildRisk?: BuildRiskProjection;
   verifierSelection?: VerifierSelectionProjection;
+  repairCycles?: RepairCyclesProjection;
   verifier?: VerifierProjection;
+  planRiskDeclaration?: {
+    risk: PlanRiskLevel;
+    rationale?: string;
+    source: "architect" | "legacy_default";
+  };
+  planCritique?: PlanCritiqueState;
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
   lastArchitectActionEvent?: {
@@ -470,6 +527,31 @@ export interface SchedulerStore {
   append(input: NewSchedulerEvent): SchedulerEvent;
   readRun(runId: string, afterSequence?: number): SchedulerEvent[];
   close(): void;
+}
+
+export function repairCyclesExhausted(projection: SchedulerProjection): boolean {
+  const cycles = projection.repairCycles;
+  return cycles !== undefined && cycles.used >= cycles.limit;
+}
+
+export function planCritiquePending(projection: SchedulerProjection): boolean {
+  const state = projection.planCritique;
+  if (!state?.policy || state.policy.mode === "off") return false;
+  if (state.skipped) return false;
+  if (!state.risk) return true;
+  if (!planCritiqueRequired(state.policy.mode, state.risk.assessment)) return false;
+  return state.current?.status !== "resolved";
+}
+
+export function consumeRepairCycle(projection: SchedulerProjection): void {
+  const cycles = projection.repairCycles;
+  if (!cycles) return;
+  if (cycles.used >= cycles.limit) {
+    throw new Error(
+      `Repair plan limit reached: ${cycles.used} of ${cycles.limit} repair plans used; the user must extend the repair-cycle budget.`,
+    );
+  }
+  projection.repairCycles = { ...cycles, used: cycles.used + 1 };
 }
 
 export function assertPendingUserGuidanceAllowsEvent(
@@ -581,7 +663,13 @@ export function architectLifecycleEventMatchesReason(
         event.payload.guidanceId === reason.guidanceId &&
         event.payload.expectedVersion === reason.version;
     case "guidance_required":
-      return event.actor.role === "architect" && event.type === "guidance.answered" && event.payload.requestId === reason.requestId;
+      return event.actor.role === "architect" && (
+        (event.type === "guidance.answered" && event.payload.requestId === reason.requestId) ||
+        (event.type === "plan.reconciled" &&
+          Array.isArray(event.payload.taskUpdates) &&
+          event.payload.taskUpdates.some((update) =>
+            isRecord(update) && update.taskId === reason.taskId))
+      );
     case "review_required":
       return event.actor.role === "architect" && event.type === "review.decided" && event.payload.taskId === reason.taskId;
     case "integration_approval_required":
@@ -618,6 +706,10 @@ export function architectLifecycleEventMatchesReason(
           Array.isArray(event.payload.taskUpdates) &&
           event.payload.taskUpdates.some((update) =>
             isRecord(update) && update.taskId === reason.taskId)));
+    case "plan_critique_resolution_required":
+      return event.actor.role === "architect" &&
+        event.type === "plan_critique.resolved" &&
+        event.payload.critiqueId === reason.critiqueId;
   }
 }
 
@@ -637,6 +729,7 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
     "final_verification.repairs_planned",
     "verifier.repairs_planned",
     "task.revised",
+    "plan_critique.resolved",
   ].includes(event.type) ||
     (event.type === "task.transitioned" &&
       event.actor.role === "architect" && event.payload.status === "integrating");
@@ -733,6 +826,13 @@ function architectActionReasonIsApplicable(
     }
     case "integration_resolution_required":
       return projection.tasks[reason.taskId]?.status === "integration_resolution";
+    case "plan_critique_resolution_required": {
+      const current = projection.planCritique?.current;
+      return current?.status === "submitted" &&
+        current.critiqueId === reason.critiqueId &&
+        current.planRevision === reason.planRevision &&
+        sameValue(current.blockingFindingIds ?? [], reason.blockingFindingIds);
+    }
   }
 }
 
@@ -1073,6 +1173,11 @@ export function validateSchedulerEvidenceEvent(
     if (records.length !== uniqueEvidenceIds.length) {
       throw new Error("Verifier verdict cites missing or foreign evidence.");
     }
+    assertSatisfiedVerdictsCiteGreenEvidence(
+      event.payload.criterionVerdicts as GreenEvidenceVerdict[],
+      records,
+      "Verifier verdict",
+    );
     return;
   }
   if (event.type === "verifier.repairs_planned") {
@@ -1194,6 +1299,7 @@ export function validateSchedulerEvidenceEvent(
     records,
     "Review decision",
   );
+  assertSatisfiedVerdictsCiteGreenEvidence(verdicts, records, "Review decision");
 }
 
 function validateFinalVerificationCheckEvidence(
@@ -1426,6 +1532,13 @@ export function acceptanceContractAuditProjection(
             ...(verdict.artifactHashes
               ? { artifactHashes: [...verdict.artifactHashes] }
               : {}),
+            ...(verdict.acceptedFailures
+              ? {
+                  acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                    ...failure,
+                  })),
+                }
+              : {}),
           })),
           ...(review ? { reviewStatus: review.status } : {}),
           submissionHistory: (projection.submissionHistory?.[task.id] ?? []).map(
@@ -1487,7 +1600,9 @@ export function reduceSchedulerEvent(
   assertOpenArchitectQuestionAllowsEvent(current, event);
   if (
     event.actor.role === "verifier" &&
-    event.type !== "verifier.verdict_submitted"
+    event.type !== "verifier.verdict_submitted" &&
+    event.type !== "verifier.expectations_recorded" &&
+    event.type !== "plan_critique.submitted"
   ) {
     throw new Error("The verifier has no scheduler lifecycle authority.");
   }
@@ -1511,6 +1626,12 @@ export function reduceSchedulerEvent(
     ...(current.verifier
       ? { verifier: cloneVerifierProjection(current.verifier) }
       : {}),
+    ...(current.planRiskDeclaration
+      ? { planRiskDeclaration: { ...current.planRiskDeclaration } }
+      : {}),
+    ...(current.planCritique
+      ? { planCritique: clonePlanCritiqueState(current.planCritique) }
+      : {}),
     ...(current.verifierPolicy
       ? {
           verifierPolicy: {
@@ -1530,6 +1651,9 @@ export function reduceSchedulerEvent(
             candidateRuntimeIds: [...current.verifierSelection.candidateRuntimeIds],
           },
         }
+      : {}),
+    ...(current.repairCycles
+      ? { repairCycles: cloneRepairCyclesProjection(current.repairCycles) }
       : {}),
     ...(current.projectHandoff
       ? {
@@ -1603,6 +1727,7 @@ export function reduceSchedulerEvent(
       next.planRevision = requiredNumber(event.payload, "revision");
       next.tasks = Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)]));
       next.acceptanceContractStatus = acceptanceContractStatusForTasks(tasks);
+      next.planRiskDeclaration = parsePlanRiskDeclaration(event.payload);
       break;
     }
     case "acceptance_contract.upgrade_required": {
@@ -1802,6 +1927,13 @@ export function reduceSchedulerEvent(
       recordVerifierReviewRequest(next, event.payload, event.occurredAt);
       break;
     }
+    case "verifier.expectations_recorded": {
+      if (event.actor.role !== "verifier") {
+        throw new Error("Only the selected verifier may record expectations.");
+      }
+      recordVerifierExpectations(next, event);
+      break;
+    }
     case "verifier.verdict_submitted": {
       if (event.actor.role !== "verifier") {
         throw new Error("Only the selected verifier may submit a verifier verdict.");
@@ -1814,6 +1946,66 @@ export function reduceSchedulerEvent(
         throw new Error("Only the Architect may plan verifier repairs.");
       }
       createVerifierRepairTasks(next, event.payload);
+      break;
+    }
+    case "repair.policy_configured": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure repair policy.");
+      }
+      const limit = event.payload.repairPlanLimit;
+      if (!Number.isSafeInteger(limit) || (limit as number) < 0) {
+        throw new Error("repairPlanLimit must be a non-negative integer.");
+      }
+      if (current.repairCycles && current.repairCycles.limit !== limit) {
+        throw new Error("Repair policy is already configured differently.");
+      }
+      next.repairCycles = current.repairCycles ?? { limit: limit as number, used: 0, extensions: 0 };
+      break;
+    }
+    case "repair.cycle_limit_reached": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may report a repair-cycle limit.");
+      }
+      const cycles = current.repairCycles;
+      if (!cycles) throw new Error("Repair-cycle limit requires configured repair policy.");
+      const source = event.payload.source;
+      if (source !== "final_verification" && source !== "verifier") {
+        throw new Error("Repair-cycle limit source is invalid.");
+      }
+      const used = requiredNumber(event.payload, "used");
+      const limit = requiredNumber(event.payload, "limit");
+      if (used !== cycles.used || limit !== cycles.limit || used < limit) {
+        throw new Error("Repair-cycle limit event does not match the kernel repair-cycle count.");
+      }
+      next.repairCycles = {
+        ...cycles,
+        pause: { source, targetRevision: requiredString(event.payload, "targetRevision"), used, limit },
+      };
+      next.status = "paused";
+      next.pauseReason = { reason: "repair_cycle_limit" };
+      break;
+    }
+    case "repair.cycle_limit_extended": {
+      if (event.actor.role !== "user") {
+        throw new Error("Repair-cycle extension requires the user.");
+      }
+      const cycles = current.repairCycles;
+      if (!cycles?.pause) throw new Error("There is no repair-cycle pause to extend.");
+      const additional = event.payload.additionalRepairPlans;
+      if (
+        !Number.isSafeInteger(additional) ||
+        (additional as number) < 1 ||
+        (additional as number) > MAX_REPAIR_CYCLE_EXTENSION
+      ) {
+        throw new Error(`additionalRepairPlans must be an integer between 1 and ${MAX_REPAIR_CYCLE_EXTENSION}.`);
+      }
+      next.repairCycles = {
+        limit: cycles.limit + (additional as number),
+        used: cycles.used,
+        extensions: cycles.extensions + 1,
+      };
+      next.status = "running";
+      delete next.pauseReason;
       break;
     }
     case "task.revised": {
@@ -2246,6 +2438,24 @@ export function reduceSchedulerEvent(
       }
       if (next.guidance[requestId]) throw new Error(`Duplicate guidance ${requestId}.`);
       const blocking = event.payload.blocking === true;
+      const kind = event.payload.kind === undefined ? "question" : event.payload.kind;
+      if (kind !== "question" && kind !== "replan") {
+        throw new Error(`Guidance kind ${String(kind)} is invalid.`);
+      }
+      let replan: ReplanRequest | undefined;
+      if (kind === "replan") {
+        if (!blocking) throw new Error("A replan guidance must be blocking.");
+        if (!isRecord(event.payload.replan)) throw new Error("A replan guidance requires a replan record.");
+        const reason = requiredString(event.payload.replan, "reason");
+        if (!REPLAN_REASONS.includes(reason as ReplanReason)) {
+          throw new Error(`A replan reason ${reason} is invalid.`);
+        }
+        replan = {
+          reason: reason as ReplanReason,
+          summary: requiredString(event.payload.replan, "summary"),
+          proposedChange: requiredString(event.payload.replan, "proposedChange"),
+        };
+      }
       next.guidance[requestId] = {
         requestId,
         taskId,
@@ -2254,6 +2464,8 @@ export function reduceSchedulerEvent(
         evidenceSequence: requiredNumber(event.payload, "evidenceSequence"),
         version: 1,
         status: "open",
+        kind,
+        ...(replan ? { replan } : {}),
       };
       if (blocking) {
         next.tasks[taskId] = applyTaskTransition(task, "waiting_guidance", {
@@ -2433,6 +2645,13 @@ export function reduceSchedulerEvent(
           evidenceIds: [...verdict.evidenceIds],
           ...(verdict.artifactHashes
             ? { artifactHashes: [...verdict.artifactHashes] }
+            : {}),
+          ...(verdict.acceptedFailures
+            ? {
+                acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                  ...failure,
+                })),
+              }
             : {}),
         }));
       }
@@ -2713,6 +2932,30 @@ export function reduceSchedulerEvent(
       delete next.pauseReason;
       break;
     }
+    case "plan_critique.policy_configured": {
+      applyPlanCritiquePolicyConfigured(next, event);
+      break;
+    }
+    case "plan_critique.risk_assessed": {
+      applyPlanCritiqueRiskAssessed(next, event);
+      break;
+    }
+    case "plan_critique.skipped": {
+      applyPlanCritiqueSkipped(next, event);
+      break;
+    }
+    case "plan_critique.requested": {
+      applyPlanCritiqueRequested(next, event);
+      break;
+    }
+    case "plan_critique.submitted": {
+      applyPlanCritiqueSubmitted(next, event);
+      break;
+    }
+    case "plan_critique.resolved": {
+      applyPlanCritiqueResolved(next, event);
+      break;
+    }
   }
   if (isArchitectLifecycleEvent(event)) {
     next.lastArchitectActionEvent = {
@@ -2815,11 +3058,17 @@ function parseVerifierPolicy(
       "Independent verifier qualification policy must be a boolean.",
     );
   }
+  const twoPass = payload.twoPass;
+  if (twoPass !== undefined && typeof twoPass !== "boolean") {
+    throw new Error("Independent verifier two-pass policy must be a boolean.");
+  }
   return {
     mode: "risk_based",
     candidateRuntimeIds,
     // Events written before P4.6 had only risk-based candidate selection.
     alwaysRequireIndependentVerifier: strict === true,
+    // Events written before P6.5 had no two-pass field and stay single-pass.
+    twoPass: twoPass === true,
   };
 }
 
@@ -3371,6 +3620,52 @@ function recordVerifierReviewRequest(
   };
 }
 
+function recordVerifierExpectations(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  const current = projection.verifier?.current;
+  if (!current || current.status !== "requested" || current.state !== "current") {
+    throw new Error("Verifier expectations require a current requested review.");
+  }
+  if (current.twoPass !== true) {
+    throw new Error("Verifier expectations require a two-pass review.");
+  }
+  if (event.actor.id !== current.runtime.runtimeId) {
+    throw new Error(
+      "Verifier expectations actor does not match the selected runtime identity.",
+    );
+  }
+  const reviewId = requiredString(event.payload, "reviewId");
+  const targetRevision = requiredString(event.payload, "targetRevision");
+  const baselineRevision = requiredString(event.payload, "baselineRevision");
+  const sessionId = requiredString(event.payload, "sessionId");
+  if (reviewId !== current.reviewId) {
+    throw new Error("Verifier expectations are stale or foreign to the current review.");
+  }
+  if (targetRevision !== current.targetRevision) {
+    throw new Error("Verifier expectations are stale or foreign to the current review.");
+  }
+  if (baselineRevision !== current.baselineRevision) {
+    throw new Error("Verifier expectations are stale or foreign to the current review.");
+  }
+  const expectations = parseVerifierExpectations(
+    event.payload.expectations,
+    current.criteria,
+  );
+  if (current.expectations) {
+    if (
+      current.expectationsSessionId === sessionId &&
+      sameValue(current.expectations, expectations)
+    ) {
+      return;
+    }
+    throw new Error("Verifier expectations conflict with the recorded expectations.");
+  }
+  current.expectations = expectations;
+  current.expectationsSessionId = sessionId;
+}
+
 function recordVerifierVerdict(
   projection: SchedulerProjection,
   event: SchedulerEvent,
@@ -3408,7 +3703,20 @@ function recordVerifierVerdict(
   if (event.actor.id !== current.runtime.runtimeId) {
     throw new Error("Verifier verdict actor does not match the selected runtime identity.");
   }
+  if (current.twoPass === true && !current.expectations) {
+    throw new Error("Two-pass verifier verdict requires recorded expectations.");
+  }
   const verdict = parseVerifierVerdict(event.payload, current, occurredAt);
+  if (current.twoPass === true) {
+    for (const criterionVerdict of verdict.criterionVerdicts) {
+      if (
+        criterionVerdict.verdict === "unsatisfied" &&
+        !(criterionVerdict.reproduction && criterionVerdict.reproduction.length > 0)
+      ) {
+        throw new Error("Two-pass unsatisfied verdicts require reproduction steps.");
+      }
+    }
+  }
   const submitted: typeof current = {
     ...cloneVerifierReview(current),
     status: "submitted",
@@ -3425,6 +3733,7 @@ function createVerifierRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
 ): void {
+  consumeRepairCycle(projection);
   const current = projection.verifier?.current;
   if (
     !current || current.state !== "current" ||
@@ -3593,6 +3902,7 @@ function createFinalVerificationRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
 ): void {
+  consumeRepairCycle(projection);
   const current = requireCurrentFinalVerification(projection, {
     ...payload,
     taskId: payload.finalVerificationTaskId,
@@ -4145,6 +4455,412 @@ function failureReference(
     .digest("hex")}`;
 }
 
+function parsePlanRiskDeclaration(
+  payload: Record<string, unknown>,
+): NonNullable<SchedulerProjection["planRiskDeclaration"]> {
+  if (payload.riskDeclaration === undefined) {
+    return { risk: "low", source: "legacy_default" };
+  }
+  if (!isRecord(payload.riskDeclaration)) {
+    throw new Error("Plan risk declaration is invalid.");
+  }
+  const risk = payload.riskDeclaration.risk;
+  if (risk !== "low" && risk !== "high") {
+    throw new Error("Plan risk declaration risk must be low or high.");
+  }
+  const rationale = payload.riskDeclaration.rationale;
+  if (rationale !== undefined && (typeof rationale !== "string" || !rationale.trim())) {
+    throw new Error("Plan risk declaration rationale must be a non-empty string when present.");
+  }
+  return {
+    risk,
+    ...(typeof rationale === "string" ? { rationale: rationale.trim() } : {}),
+    source: "architect",
+  };
+}
+
+function applyPlanCritiquePolicyConfigured(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may configure plan critique policy.");
+  }
+  const mode = event.payload.mode;
+  if (!(PLAN_CRITIQUE_MODES as readonly string[]).includes(mode as string)) {
+    throw new Error(`Plan critique mode ${String(mode)} is invalid.`);
+  }
+  const typedMode = mode as PlanCritiqueMode;
+  if (projection.planCritique?.policy) {
+    if (projection.planCritique.policy.mode !== typedMode) {
+      throw new Error("Plan critique policy is already configured differently.");
+    }
+    return;
+  }
+  projection.planCritique = { policy: { mode: typedMode }, history: [] };
+}
+
+function applyPlanCritiqueRiskAssessed(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may assess plan risk.");
+  }
+  if (!projection.planCritique?.policy) {
+    throw new Error("Plan risk cannot be assessed before plan critique policy is configured.");
+  }
+  const planRevision = requiredNumber(event.payload, "planRevision");
+  if (planRevision !== projection.planRevision) {
+    throw new Error("Plan risk assessment plan revision does not match the current plan revision.");
+  }
+  const architectDeclaration = event.payload.architectDeclaration;
+  if (architectDeclaration !== "low" && architectDeclaration !== "high") {
+    throw new Error("Plan risk architectDeclaration must be low or high.");
+  }
+  const expectedDeclaration = projection.planRiskDeclaration?.risk ?? "low";
+  if (architectDeclaration !== expectedDeclaration) {
+    throw new Error("Plan risk architectDeclaration does not match the recorded plan risk declaration.");
+  }
+  const stricterQualification = event.payload.stricterQualification;
+  if (typeof stricterQualification !== "boolean") {
+    throw new Error("Plan risk stricterQualification must be a boolean.");
+  }
+  const expectedStrict = projection.verifierPolicy?.alwaysRequireIndependentVerifier ?? false;
+  if (stricterQualification !== expectedStrict) {
+    throw new Error("Plan risk stricterQualification does not match the configured verifier qualification.");
+  }
+  const expected = assessPlanRisk({
+    architectDeclaration,
+    stricterQualification,
+    tasks: Object.values(projection.tasks),
+  });
+  const assessment = event.payload.assessment;
+  if (!sameValue(assessment, expected)) {
+    throw new Error("Plan risk assessment conflicts with the kernel recomputation.");
+  }
+  const existing = projection.planCritique.risk;
+  if (existing && existing.planRevision !== planRevision) {
+    throw new Error("Plan risk has already been assessed for this run.");
+  }
+  if (existing && sameValue(existing.assessment, expected)
+    && existing.architectDeclaration === architectDeclaration
+    && existing.stricterQualification === stricterQualification) {
+    return;
+  }
+  if (existing) {
+    throw new Error("Plan risk has already been assessed for this run.");
+  }
+  projection.planCritique = {
+    ...projection.planCritique,
+    risk: {
+      planRevision,
+      architectDeclaration,
+      stricterQualification,
+      assessment: expected,
+      assessedAt: event.occurredAt,
+    },
+  };
+}
+
+function applyPlanCritiqueSkipped(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may skip a plan critique.");
+  }
+  if (!projection.planCritique?.policy) {
+    throw new Error("Plan critique skip requires a configured policy.");
+  }
+  const reason = event.payload.reason;
+  if (!isPlanCritiqueSkipReason(reason)) {
+    throw new Error(`Plan critique skip reason ${String(reason)} is invalid.`);
+  }
+  const currentStatus = projection.planCritique.current?.status;
+  if (currentStatus === "submitted" || currentStatus === "resolved") {
+    throw new Error("Plan critique skip is forbidden after a critique is submitted or resolved.");
+  }
+  const planRevision = requiredNumber(event.payload, "planRevision");
+  projection.planCritique = {
+    ...projection.planCritique,
+    skipped: { planRevision, reason, skippedAt: event.occurredAt },
+  };
+}
+
+function isPlanCritiqueSkipReason(value: unknown): value is PlanCritiqueSkipReason {
+  return value === "policy_off" || value === "low_plan_risk"
+    || value === "critic_failed" || value === "plan_only";
+}
+
+function applyPlanCritiqueRequested(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may request a plan critique.");
+  }
+  if (!projection.planCritique?.policy) {
+    throw new Error("Plan critique request requires a configured policy.");
+  }
+  if (!projection.planCritique.risk) {
+    throw new Error("Plan critique request requires a recorded plan risk.");
+  }
+  const planRevision = requiredNumber(event.payload, "planRevision");
+  if (planRevision !== projection.planRevision) {
+    throw new Error("Plan critique request plan revision does not match the current plan revision.");
+  }
+  const dispatched = Object.values(projection.tasks).some((task) =>
+    task.status !== "cancelled"
+    && !isFinalVerificationTask(task)
+    && (task.status !== "planned" || task.attempt !== 0)
+  );
+  if (dispatched) {
+    throw new Error("Plan critique cannot start after a worker was dispatched.");
+  }
+  const runtime = parseRuntimeBinding(event.payload.runtime);
+  const excludedModels = parseExcludedModels(event.payload.excludedModels);
+  if (excludedModels.some((excluded) => excluded.modelIdentity === runtime.modelIdentity)) {
+    throw new Error("Plan critic model is not independent from the Architect.");
+  }
+  const critiqueId = requiredString(event.payload, "critiqueId");
+  const state = projection.planCritique;
+  if (state.current?.status === "resolved" || state.history.some((entry) => entry.status === "resolved")) {
+    throw new Error("Plan critique is already resolved for this run.");
+  }
+  let history = [...state.history];
+  if (state.current?.status === "requested") {
+    const supersedes = event.payload.supersedesCritiqueId;
+    if (supersedes !== state.current.critiqueId) {
+      throw new Error("A pending requested plan critique must be superseded by name.");
+    }
+    history = [...history, { ...state.current, supersededByCritiqueId: critiqueId }];
+  } else if (state.current?.status === "submitted") {
+    throw new Error("A submitted plan critique cannot be replaced.");
+  }
+  const nextCritique: PlanCritiqueProjection = {
+    critiqueId,
+    planRevision,
+    runtime,
+    excludedModels,
+    status: "requested",
+    requestedAt: event.occurredAt,
+  };
+  projection.planCritique = {
+    ...state,
+    history,
+    current: nextCritique,
+  };
+}
+
+function applyPlanCritiqueSubmitted(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  const current = projection.planCritique?.current;
+  if (!current || current.status === "resolved") {
+    throw new Error("Plan critique submission does not match the selected critic runtime.");
+  }
+  if (event.actor.role !== "verifier" || event.actor.id !== current.runtime.runtimeId) {
+    throw new Error("Plan critique submission does not match the selected critic runtime.");
+  }
+  const critiqueId = requiredString(event.payload, "critiqueId");
+  if (critiqueId !== current.critiqueId) {
+    throw new Error("Plan critique submission critiqueId does not match the current critique.");
+  }
+  const planRevision = requiredNumber(event.payload, "planRevision");
+  if (planRevision !== current.planRevision || planRevision !== projection.planRevision) {
+    throw new Error("Plan critique submission plan revision is stale.");
+  }
+  const sessionId = requiredString(event.payload, "sessionId");
+  if (sessionId !== current.runtime.sessionId) {
+    throw new Error("Plan critique submission sessionId does not match the current critique session.");
+  }
+  const findings = parsePlanCritiqueFindings(event.payload.findings, projection.tasks);
+  if (current.status === "submitted") {
+    if (sameValue(current.findings, findings)) return;
+    throw new Error("Plan critique submission conflicts with the already submitted findings.");
+  }
+  const blockingFindingIds = findings
+    .filter((finding) => finding.severity === "blocking")
+    .map((finding) => finding.findingId);
+  projection.planCritique = {
+    ...projection.planCritique!,
+    current: {
+      ...current,
+      status: "submitted",
+      findings,
+      blockingFindingIds,
+      submittedAt: event.occurredAt,
+    },
+  };
+}
+
+function applyPlanCritiqueResolved(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  const current = projection.planCritique?.current;
+  if (!current || current.status !== "submitted") {
+    throw new Error("Plan critique resolution requires a submitted critique.");
+  }
+  const blockingFindingIds = current.blockingFindingIds ?? [];
+  const resolvedBy = event.actor.role === "architect"
+    ? "architect" as const
+    : event.actor.role === "runner" && blockingFindingIds.length === 0
+      ? "runner" as const
+      : undefined;
+  if (!resolvedBy) {
+    if (event.actor.role === "runner") {
+      throw new Error("Plan critique blocking findings require an Architect resolution.");
+    }
+    throw new Error("Plan critique blocking findings require an Architect resolution.");
+  }
+  const critiqueId = requiredString(event.payload, "critiqueId");
+  if (critiqueId !== current.critiqueId) {
+    throw new Error("Plan critique resolution critiqueId does not match the current critique.");
+  }
+  const planRevision = requiredNumber(event.payload, "planRevision");
+  if (planRevision !== current.planRevision || planRevision !== projection.planRevision) {
+    throw new Error("Plan critique resolution plan revision is stale.");
+  }
+  const resolutions = parsePlanCritiqueResolutions(event.payload.resolutions, blockingFindingIds);
+  const reconciled = resolutions.filter((item) => item.resolution === "plan_reconciled");
+  if (reconciled.length > 0) {
+    if (event.payload.planReconciliation === undefined) {
+      throw new Error("Plan critique plan_reconciled resolutions require a planReconciliation.");
+    }
+    const reconciliation = parsePlanReconciliation(event.payload.planReconciliation);
+    const updatedIds = new Set(reconciliation.taskUpdates.map((update) => update.taskId));
+    for (const item of reconciled) {
+      const finding = current.findings?.find((candidate) => candidate.findingId === item.findingId);
+      const taskIds = finding?.taskIds ?? [];
+      if (taskIds.length > 0 && !taskIds.some((taskId) => updatedIds.has(taskId))) {
+        throw new Error(
+          `Plan critique finding ${item.findingId} plan_reconciled resolutions require a taskUpdates entry for one of its taskIds.`,
+        );
+      }
+    }
+    applyPlanReconciliation(projection, reconciliation);
+  }
+  projection.planCritique = {
+    ...projection.planCritique!,
+    current: {
+      ...current,
+      status: "resolved",
+      resolvedAt: event.occurredAt,
+      resolution: {
+        planRevisionAfter: projection.planRevision,
+        resolvedBy,
+        resolutions,
+      },
+    },
+  };
+}
+
+function parsePlanCritiqueResolutions(
+  value: unknown,
+  blockingFindingIds: readonly string[],
+): PlanCritiqueResolutionItem[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Plan critique resolutions must be an array.");
+  }
+  const seen = new Set<string>();
+  const items = value.map((candidate, index) => {
+    if (!isRecord(candidate)) {
+      throw new Error(`Plan critique resolution ${index} is invalid.`);
+    }
+    const findingId = requiredString(candidate, "findingId");
+    if (seen.has(findingId)) {
+      throw new Error(`Plan critique has a duplicate resolution for finding ${findingId}.`);
+    }
+    seen.add(findingId);
+    if (!blockingFindingIds.includes(findingId)) {
+      throw new Error(`Plan critique resolution references unknown finding ${findingId}.`);
+    }
+    const resolution = candidate.resolution;
+    if (resolution !== "plan_reconciled" && resolution !== "rejected") {
+      throw new Error(`Plan critique resolution ${findingId} is invalid.`);
+    }
+    const rationale = candidate.rationale;
+    if (typeof rationale !== "string" || !rationale.trim()) {
+      throw new Error(`Plan critique resolution ${findingId} rationale is required.`);
+    }
+    const item: PlanCritiqueResolutionItem = {
+      findingId,
+      resolution,
+      rationale: rationale.trim(),
+    };
+    return item;
+  });
+  for (const findingId of blockingFindingIds) {
+    if (!seen.has(findingId)) {
+      throw new Error(`Plan critique blocking finding ${findingId} has no resolution.`);
+    }
+  }
+  return items;
+}
+
+function clonePlanCritiqueState(state: PlanCritiqueState): PlanCritiqueState {
+  return {
+    ...(state.policy ? { policy: { ...state.policy } } : {}),
+    ...(state.risk
+      ? {
+          risk: {
+            ...state.risk,
+            assessment: clonePlanRiskAssessment(state.risk.assessment),
+          },
+        }
+      : {}),
+    ...(state.current ? { current: clonePlanCritiqueProjection(state.current) } : {}),
+    history: state.history.map(clonePlanCritiqueProjection),
+    ...(state.skipped ? { skipped: { ...state.skipped } } : {}),
+  };
+}
+
+function clonePlanRiskAssessment(assessment: PlanRiskAssessment): PlanRiskAssessment {
+  return {
+    ...assessment,
+    reasons: assessment.reasons.map((reason) => ({
+      ...reason,
+      evidence: [...reason.evidence],
+    })),
+  };
+}
+
+function clonePlanCritiqueProjection(projection: PlanCritiqueProjection): PlanCritiqueProjection {
+  return {
+    ...projection,
+    runtime: { ...projection.runtime },
+    excludedModels: projection.excludedModels.map((excluded) => ({ ...excluded })),
+    ...(projection.findings
+      ? { findings: projection.findings.map(clonePlanCritiqueFinding) }
+      : {}),
+    ...(projection.blockingFindingIds
+      ? { blockingFindingIds: [...projection.blockingFindingIds] }
+      : {}),
+    ...(projection.resolution
+      ? {
+          resolution: {
+            ...projection.resolution,
+            resolutions: projection.resolution.resolutions.map((item) => ({ ...item })),
+          },
+        }
+      : {}),
+  };
+}
+
+function clonePlanCritiqueFinding(finding: PlanCritiqueFinding): PlanCritiqueFinding {
+  return {
+    ...finding,
+    taskIds: [...finding.taskIds],
+    evidence: [...finding.evidence],
+    ...(finding.criterionIds
+      ? { criterionIds: finding.criterionIds.map((criterion) => ({ ...criterion })) }
+      : {}),
+  };
+}
+
 function parsePlanReconciliation(value: unknown): PlanReconciliation {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Missing plan reconciliation.");
@@ -4338,6 +5054,7 @@ function applyPlanReconciliation(
       task.status !== "planned" &&
       task.status !== "failed" &&
       task.status !== "rejected" &&
+      task.status !== "waiting_guidance" &&
       !steeringCheckpoint
     ) {
       throw new Error(
@@ -4419,6 +5136,18 @@ function applyPlanReconciliation(
         : {}),
     };
     const criteriaChanged = update.acceptanceCriteria !== undefined;
+    if (!steeringCheckpoint && task.status === "waiting_guidance") {
+      candidateTasks[update.taskId] = {
+        ...applyTaskTransition(task, "planned", {
+          ...patch,
+          guidanceRequestId: undefined,
+        }),
+        ...(criteriaChanged
+          ? { acceptanceCriteriaVersion: (task.acceptanceCriteriaVersion ?? 0) + 1 }
+          : {}),
+      };
+      continue;
+    }
     const grantsFreshAttempt =
       task.status === "failed" ||
       task.status === "rejected" ||
@@ -4513,6 +5242,19 @@ function applyPlanReconciliation(
           answer: `Superseded by acknowledged user guidance ${options.supersedingGuidanceId}.`,
         };
       }
+    }
+  }
+  const touchedTaskIds = new Set(reconciliation.taskUpdates.map((update) => update.taskId));
+  for (const guidance of Object.values(projection.guidance)) {
+    if (
+      guidance.status === "open" &&
+      touchedTaskIds.has(guidance.taskId)
+    ) {
+      projection.guidance[guidance.requestId] = {
+        ...guidance,
+        status: "answered",
+        answer: `plan_reconciled:${reconciliation.revision}`,
+      };
     }
   }
   projection.planRevision = reconciliation.revision;
@@ -4699,6 +5441,17 @@ function acceptanceContractStatusForTasks(
     : "current";
 }
 
+function cloneRepairCyclesProjection(
+  cycles: RepairCyclesProjection,
+): RepairCyclesProjection {
+  return {
+    limit: cycles.limit,
+    used: cycles.used,
+    extensions: cycles.extensions,
+    ...(cycles.pause ? { pause: { ...cycles.pause } } : {}),
+  };
+}
+
 function cloneUserGuidanceItem(guidance: UserGuidanceItem): UserGuidanceItem {
   return {
     ...guidance,
@@ -4778,6 +5531,7 @@ function planProjection(
     planRevision: requiredNumber(event.payload, "revision"),
     tasks: Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)])),
     acceptanceContractStatus: acceptanceContractStatusForTasks(tasks),
+    planRiskDeclaration: parsePlanRiskDeclaration(event.payload),
     ...(event.actor.role === "architect"
       ? {
           lastArchitectActionEvent: {
@@ -4905,6 +5659,13 @@ function cloneCriterionReviewVerdicts(
     evidenceIds: [...verdict.evidenceIds],
     ...(verdict.artifactHashes
       ? { artifactHashes: [...verdict.artifactHashes] }
+      : {}),
+    ...(verdict.acceptedFailures
+      ? {
+          acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+            ...failure,
+          })),
+        }
       : {}),
   }));
 }

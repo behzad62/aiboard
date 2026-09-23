@@ -38,11 +38,12 @@ test("shared executor selects isolation before launch and releases after verifie
     providerId: "oci",
     implementationDigest: "a".repeat(64),
     attestation: {
-      attestationVersion: 1,
+      attestationVersion: 2,
       providerId: "oci",
       verified: true,
       mechanism: "fixture",
       exactGrantWriteConfinement: true,
+      lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
       capabilities: {
         tree_termination: "enforced",
         crash_cleanup: "enforced",
@@ -101,7 +102,8 @@ test("shared executor selects isolation before launch and releases after verifie
           executable: "attested-oci-cli",
           arguments: ["start", "--attach", "owned-container"],
           workingDirectory: workspace,
-          requestedCapabilities: ["tree_termination", "verified_emptiness"],
+          requiredLifecycleScope: "process_group",
+          requestedCapabilities: [],
         };
       },
       release: async () => { order.push("release"); },
@@ -257,7 +259,51 @@ test("runtime outcome uncertainty still releases strict isolation and a release 
   }
 });
 
-function grantRequest(workspace: string, permissionProfile: "project", callId: string) {
+for (const flag of ["requireCompleteCleanup", "knownUnavoidableDetachment"] as const) {
+  test(`one-shot full + explicit ${flag} requests contained_workload on the launch intent`, async () => {
+    const workspace = mkdtempSync(join(tmpdir(), `aiboard-one-shot-${flag}-`));
+    const authority = createExecutionGrantAuthority();
+    const grant = await authority.issue({
+      ...grantRequest(workspace, "project", flag),
+      permissionProfile: "full",
+    });
+    let observed: string | undefined;
+    const stop = new Error("controlled one-shot lifecycle boundary");
+    const executor = createRuntimeBackedOneShotCommandExecutor({
+      runtime: {
+        invoke: async () => { throw new Error("must not launch"); },
+        cancel: async () => false, reconcileStartup: async () => [],
+        recoverExceptional: async () => { throw new Error("Fake one-shot runtime never performs exceptional recovery."); },
+      },
+      runtimeGrants: { issue: () => undefined, revoke: () => true },
+      executionGrants: authority,
+      isolation: {
+        acquire: async (input) => {
+          observed = input.intent.requiredLifecycleScope;
+          throw stop;
+        },
+        prepareExecution: async (_selection, intent) => intent,
+        release: async () => undefined,
+        recoverOwnedLeases: async () => [], activeLeases: () => [],
+        enforcementState: async () => ({ version: 1, boundary: "provider_specific_not_universal_security_boundary", records: [] }),
+      },
+      permissionProfile: "full", ambientEnvironment: {},
+      environments: createChildEnvironmentFactory({ credentialResolver: { consume: () => { throw new Error(); } } }),
+    });
+    try {
+      await assert.rejects(executor.execute({
+        ...commandRequest(workspace, grant, flag),
+        lifecycleRequirements: { [flag]: true },
+      }), (error: unknown) => error === stop);
+      assert.equal(observed, "contained_workload");
+    } finally {
+      await authority.revoke(grant, "cleanup").catch(() => undefined);
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+}
+
+function grantRequest(workspace: string, permissionProfile: "project" | "full", callId: string) {
   return {
     runId: "run_1",
     sessionId: "session_1",
@@ -297,11 +343,12 @@ function strictSelection(invocationId: string): ExecutionIsolationSelection {
     providerId: "oci",
     implementationDigest: "a".repeat(64),
     attestation: {
-      attestationVersion: 1,
+      attestationVersion: 2,
       providerId: "oci",
       verified: true,
       mechanism: "fixture",
       exactGrantWriteConfinement: true,
+      lifecycle: { scope: "contained_workload", termination: "enforced", emptiness: "enforced" },
       capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "enforced" },
     },
     lease: {

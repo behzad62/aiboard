@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   lstat,
   readFile,
+  realpath,
   rm,
 } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
@@ -80,7 +81,7 @@ export async function captureGitBaseline(
   if (!inspection.repository || !inspection.root) {
     throw new Error(`Git repository initialization failed for ${projectPath}.`);
   }
-  if (inspection.root !== projectPath) {
+  if (!(await sameCanonicalExistingDirectory(inspection.root, projectPath))) {
     throw new Error(
       `Project path must be the Git repository root (${inspection.root}).`
     );
@@ -290,4 +291,24 @@ function safeName(value: string): string {
     .slice(0, 40) || "run";
   const hash = createHash("sha256").update(value).digest("hex").slice(0, 10);
   return `${readable}-${hash}`;
+}
+
+async function sameCanonicalExistingDirectory(left: string, right: string): Promise<boolean> {
+  const [a, b] = await Promise.all([
+    canonicalExistingDirectory(left),
+    canonicalExistingDirectory(right),
+  ]);
+  if (a === null || b === null) return false;
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+async function canonicalExistingDirectory(path: string): Promise<string | null> {
+  try {
+    const requested = resolve(path);
+    const metadata = await lstat(requested);
+    if (!metadata.isDirectory() || metadata.isSymbolicLink()) return null;
+    return resolve(await realpath(requested));
+  } catch {
+    return null;
+  }
 }

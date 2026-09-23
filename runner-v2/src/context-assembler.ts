@@ -22,6 +22,8 @@ export interface IncludedContextSection {
   priority: number;
   byteLength: number;
   digest: string;
+  sourceDigest?: string;
+  artifactHash?: string;
 }
 
 export interface ContextOmission {
@@ -135,6 +137,8 @@ export class ContextAssembler {
         priority: section.priority,
         byteLength: Buffer.byteLength(render(section)),
         digest: digest(section.content),
+        ...(section.sourceDigest ? { sourceDigest: section.sourceDigest } : {}),
+        ...(section.artifactHash ? { artifactHash: section.artifactHash } : {}),
       })),
       omissions,
       byteLength: actualBytes,

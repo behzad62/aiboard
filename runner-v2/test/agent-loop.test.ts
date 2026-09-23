@@ -16,6 +16,12 @@ import type {
 import { runAgentLoop } from "../src/agent-loop.js";
 import { compactAgentMessages } from "../src/agent-loop.js";
 import { ToolRegistry } from "../src/tool-registry.js";
+import { createRecordVerificationExpectationsTool } from "../src/verifier-tools.js";
+import type {
+  RecordVerifierExpectationsInput,
+  VerifierVerdictAuthority,
+} from "../src/verifier-verdict-authority.js";
+import type { VerifierReviewProjection } from "../src/verifier-contracts.js";
 import { BudgetExceededError } from "../src/budget-ledger.js";
 import { BudgetedAgentModel } from "../src/budgeted-model.js";
 import {
@@ -85,6 +91,144 @@ test("model budget exhaustion is a typed budget suspension, not a provider failu
   assert.match(result.error ?? "", /modelCalls/);
   assert.equal(model.requests.length, 1);
   assert.equal(sleeps, 0);
+});
+
+test("a plan_critique_submitted lifecycle tool ends the loop with the typed critique result", async () => {
+  const registry = new ToolRegistry();
+  registry.register(submitPlanCritiqueTool({
+    critiqueId: "critique-1",
+    blockingFindingCount: 1,
+  }));
+  const model = new ScriptedModel([
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "critique_1",
+        name: "submit_plan_critique",
+        arguments: { findings: [{ findingId: "F-1" }] },
+      }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: {
+      ...context(),
+      actor: { role: "verifier", id: "critic_1" },
+    },
+    initialMessages,
+  });
+  assert.equal(result.status, "plan_critique_submitted");
+  assert.equal(result.critiqueId, "critique-1");
+  assert.equal(result.blockingFindingCount, 1);
+  assert.equal(result.turns, 1);
+});
+
+test("record_verification_expectations ends the loop and records expectations through the tool", async () => {
+  const recorded: RecordVerifierExpectationsInput[] = [];
+  const authority: VerifierVerdictAuthority = {
+    requestReview: () => { throw new Error("unused"); },
+    currentReview: () => undefined,
+    recordExpectations: (input) => {
+      recorded.push(input);
+      return expectationsReview(input);
+    },
+    submitVerdict: () => { throw new Error("unused"); },
+  };
+  const criteria = [{ taskId: "task_ui", criterionId: "criterion_ui" }];
+  const tool = createRecordVerificationExpectationsTool({
+    authority,
+    runId: "run_1",
+    reviewId: "review-1",
+    targetRevision: "a".repeat(40),
+    baselineRevision: "b".repeat(40),
+    runtimeId: "google:verifier",
+    sessionId: "session_expectations",
+    criteria,
+    clock: () => "2026-08-27T00:00:00.000Z",
+  });
+  assert.equal(tool.validate({
+    expectations: [{
+      taskId: "task_ui",
+      criterionId: "criterion_ui",
+      expectedBehaviors: ["renders"],
+      edgeCases: [],
+      regressionSurfaces: [],
+      requiredTests: [],
+    }],
+  }).ok, false);
+  const registry = new ToolRegistry();
+  registry.register(tool);
+  const model = new ScriptedModel([
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "exp_1",
+        name: "record_verification_expectations",
+        arguments: {
+          expectations: [{
+            taskId: "task_ui",
+            criterionId: "criterion_ui",
+            expectedBehaviors: ["The card renders the organization name."],
+            edgeCases: ["No memberships"],
+            regressionSurfaces: ["src/app.ts"],
+            requiredTests: ["MembershipCardRendersOrganization"],
+          }],
+        },
+      }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: {
+      runId: "run_1",
+      sessionId: "session_expectations",
+      actor: { role: "verifier", id: "google:verifier" },
+    },
+    initialMessages,
+  });
+  assert.equal(result.status, "verifier_expectations_recorded");
+  assert.equal(result.reviewId, "review-1");
+  assert.equal(result.turns, 1);
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.sessionId, "session_expectations");
+  assert.equal(recorded[0]?.baselineRevision, "b".repeat(40));
+  assert.equal(recorded[0]?.expectations[0]?.edgeCases[0], "No memberships");
+});
+
+test("a plan_critique_submitted lifecycle with no blocking findings still ends the loop", async () => {
+  const registry = new ToolRegistry();
+  registry.register(submitPlanCritiqueTool({
+    critiqueId: "critique-advisory",
+    blockingFindingCount: 0,
+  }));
+  const model = new ScriptedModel([
+    {
+      blocks: [{
+        type: "tool_call",
+        callId: "critique_advisory",
+        name: "submit_plan_critique",
+        arguments: { findings: [] },
+      }],
+      stopReason: "tool_calls",
+    },
+  ]);
+  const result = await runAgentLoop({
+    model,
+    registry,
+    context: {
+      ...context(),
+      actor: { role: "verifier", id: "critic_1" },
+    },
+    initialMessages,
+  });
+  assert.equal(result.status, "plan_critique_submitted");
+  assert.equal(result.critiqueId, "critique-advisory");
+  assert.equal(result.blockingFindingCount, 0);
+  assert.equal(result.turns, 1);
 });
 
 test("native tool results feed the next turn and only submit_task submits work", async () => {
@@ -1135,6 +1279,39 @@ test("working context keeps only the newest runner-owned state and resume snapsh
   assert.equal(messages.length, 5, "durable raw history is not mutated");
 });
 
+function expectationsReview(
+  input: RecordVerifierExpectationsInput,
+): VerifierReviewProjection {
+  return {
+    reviewId: input.reviewId,
+    targetRevision: input.targetRevision,
+    finalVerificationGenerationId: "generation",
+    runtime: {
+      runtimeId: input.actor.id,
+      providerId: "google",
+      modelId: "google/verifier-model",
+      modelIdentity: "verifier-model",
+      sessionId: "verdict-session",
+    },
+    excludedModels: [{
+      source: "architect",
+      runtimeId: "openai:architect",
+      modelIdentity: "architect-model",
+    }],
+    criteria: input.expectations.map((expectation) => ({
+      taskId: expectation.taskId,
+      criterionId: expectation.criterionId,
+    })),
+    status: "requested",
+    state: "current",
+    requestedAt: input.occurredAt,
+    twoPass: true,
+    baselineRevision: input.baselineRevision,
+    expectations: input.expectations,
+    expectationsSessionId: input.sessionId,
+  };
+}
+
 function context() {
   return {
     runId: "run_1",
@@ -1161,6 +1338,35 @@ function textTool(
       onExecute();
       return { content: [{ type: "text", text: output }], isError: false };
     },
+  };
+}
+
+function submitPlanCritiqueTool(signal: {
+  critiqueId: string;
+  blockingFindingCount: number;
+}): NativeTool<Record<string, unknown>> {
+  return {
+    definition: {
+      name: "submit_plan_critique",
+      description: "Submit the typed plan critique",
+      inputSchema: { type: "object" },
+      readOnly: true,
+      effect: "none",
+      lifecycle: true,
+    },
+    validate: (input) =>
+      typeof input === "object" && input !== null && !Array.isArray(input)
+        ? { ok: true, value: input as Record<string, unknown> }
+        : { ok: false, issues: ["findings are required"] },
+    execute: async () => ({
+      content: [{ type: "json", value: signal }],
+      isError: false,
+      lifecycle: {
+        type: "plan_critique_submitted",
+        critiqueId: signal.critiqueId,
+        blockingFindingCount: signal.blockingFindingCount,
+      },
+    }),
   };
 }
 

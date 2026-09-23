@@ -41,7 +41,7 @@ export async function runLateBirthFixture(fixture: LateBirthFixture): Promise<vo
   }
   fixture.removeRoot();
 }
-export const inspectWindowsFixtureBirth: NativeProcessOperations["inspectProcessBirth"] = (pid, platform, attemptDeadlineMs = 2_000) => {
+export const inspectWindowsFixtureBirth: NativeProcessOperations["inspectProcessBirth"] = (pid, platform, attemptDeadlineMs = 10_000) => {
   if (platform !== "windows" || !Number.isSafeInteger(pid) || pid <= 0) return { state: "unknown" };
   try {
     const output = childProcess.execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
@@ -49,7 +49,7 @@ export const inspectWindowsFixtureBirth: NativeProcessOperations["inspectProcess
       // protocol. A separate CIM provider roundtrip can outlive the supervisor's
       // initial holder-publication window and is not the launch observer seam.
       `$ErrorActionPreference='Stop';try{$p=Get-Process -Id ${pid} -ErrorAction Stop;$start=$p.StartTime;if($null-eq$start){throw 'PROCESS_BIRTH_UNAVAILABLE'};'PRESENT:'+$start.ToUniversalTime().ToString('o')}catch{$current=Get-Process -Id ${pid} -ErrorAction SilentlyContinue;if($null-eq$current){'ABSENT'}else{throw}}`,
-    ], { encoding: "utf8", windowsHide: true, timeout: Math.max(1, Math.min(2_000, attemptDeadlineMs)), maxBuffer: 64 * 1024 }).trim();
+    ], { encoding: "utf8", windowsHide: true, timeout: Math.max(1, Math.min(10_000, attemptDeadlineMs)), maxBuffer: 64 * 1024 }).trim();
     if (output === "ABSENT") return { state: "absent" };
     if (output.startsWith("PRESENT:") && output.length > "PRESENT:".length)
       return { state: "present", fingerprint: output.slice("PRESENT:".length).replace(/(\.\d{6})\d+(Z)$/, "$1$2") };

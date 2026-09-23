@@ -1,4 +1,9 @@
 import { hashExecutableDescriptor } from "./mcp-executable-digest.js";
+import {
+  freezeExecutionLifecycleRequirements,
+  lifecycleRequirementsDigest,
+  resolveRequiredLifecycleScope,
+} from "./execution-lifecycle-policy.js";
 import { createHash, randomUUID } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import type { PermissionProfile } from "./contracts.js";
@@ -36,8 +41,11 @@ export function createExecutionHostMcpTransportFactory(options: {
           !owner.context.actor?.id || !owner.context.callId || !owner.context.toolName?.startsWith("mcp."))
         throw new McpSessionError("mcp_authority_required", "MCP live launch requires the exact current run/call grant authority.");
       const launch = launches.get(request.server.name);
+      const lifecycleRequirements = freezeExecutionLifecycleRequirements(launch?.lifecycleRequirements);
+      const expectedLifecycleDigest = lifecycleRequirementsDigest(lifecycleRequirements);
       if (!launch || launch.command !== request.server.command || launch.configDigest !== mcpConfigurationDigest(request.server) ||
-          request.expected?.configDigest !== launch.configDigest || request.expected?.executableDigest !== launch.executableDigest)
+          request.expected?.configDigest !== launch.configDigest || request.expected?.executableDigest !== launch.executableDigest ||
+          (launch.lifecycleRequirementsDigest ?? lifecycleRequirementsDigest(undefined)) !== expectedLifecycleDigest)
         throw new McpSessionError("mcp_attestation_mismatch", "MCP server lacks its exact discovered runtime attestation.");
       const executable = await realpath(launch.executablePath);
       if (executable !== launch.executablePath || await hashExecutableDescriptor(executable) !== launch.executableDigest)
@@ -53,7 +61,10 @@ export function createExecutionHostMcpTransportFactory(options: {
         ...(launch.imageExecutable ? { imageExecutable: launch.imageExecutable } : {}),
         intent: { invocationId: launchId, runId: options.run.runId, sessionId: owner.context.sessionId,
           kind: "mcp_server", executable: launch.executablePath, arguments: launch.arguments, workingDirectory: projectDirectory,
-          requestedCapabilities: ["tree_termination", "verified_emptiness"] },
+          requiredLifecycleScope: resolveRequiredLifecycleScope({
+            permissionProfile: options.permissionProfile,
+            lifecycleRequirements,
+          }), requestedCapabilities: [] },
         verifyHandshake: (channel) => verifyMcpHandshake(channel, request),
       });
       return liveTransport({ run: options.run, facade, request, firstOwner: owner, binding, sessionId, permissionProfile: options.permissionProfile });
@@ -102,7 +113,6 @@ async function verifyMcpHandshake(
         available,
       })),
     ]);
-    if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "mcp.handshake.race", kind: outcome.kind, available: outcome.kind === "output" ? outcome.available : undefined, waitAborted: controller.signal.aborted })}\n`);
     if (outcome.kind === "handshake") return outcome.digest;
     if (outcome.kind === "failure") throw outcome.error;
     if (!outcome.available) {

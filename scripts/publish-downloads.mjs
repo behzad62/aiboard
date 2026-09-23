@@ -121,7 +121,7 @@ Runner V2 is the native process required by AI Board Build mode.
 
 ## Prerequisites
 
-- Node.js 22.x or 24.x (Node 22.x requires 22.13.0 or newer for unflagged \`node:sqlite\` support)
+- Node.js 24.x
 - Git installed and available on PATH
 
 ## Install and start
@@ -210,7 +210,7 @@ This bundle includes the Bench Runner and its managed Runner V2 source.
 
 ## Prerequisites
 
-- Node.js 22.x or 24.x (Node 22.x requires 22.13.0 or newer for unflagged \`node:sqlite\` support)
+- Node.js 24.x
 - Git installed and available on PATH
 
 ## Install and start

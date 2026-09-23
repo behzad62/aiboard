@@ -10,7 +10,7 @@ import JSZip from "jszip";
 const runnerRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = join(runnerRoot, "..");
 const publisher = join(repoRoot, "scripts", "publish-downloads.mjs");
-const expectedEngine = ">=22.13.0 <23 || >=24.0.0 <25";
+const expectedEngine = ">=24.0.0 <25";
 
 test("account-provider publishing stays dependency-isolated from Runner V2 optional dependencies", () => {
   const source = readFileSync(publisher, "utf8");

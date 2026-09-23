@@ -9,6 +9,8 @@ export interface LspTransportOpenRequest {
   readonly workspaceRoot: string;
   readonly attestedCommand?: LanguageServerExecutableIdentity;
   readonly explicitEnvironment?: Readonly<Record<string, string | undefined>>;
+  /** Trusted lifecycle requirements; never inferred from argv or model text. */
+  readonly lifecycleRequirements?: import("./execution-lifecycle-policy.js").ExecutionLifecycleRequirements;
   readonly invocation: LanguageInvocationContext;
   readonly initialize: (writer: LspProtocolWriter) => Promise<string>;
   readonly onOutput: (stream: "stdout" | "stderr", bytes: Uint8Array) => void | Promise<void>;

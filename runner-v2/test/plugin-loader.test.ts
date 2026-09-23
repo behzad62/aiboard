@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -6,6 +7,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -57,7 +59,7 @@ test("allowlisted local plugins preflight atomically, start in order, and close 
       projectDirectory: fixture.project,
       stateDirectory: fixture.state,
       reservedToolNames: ["filesystem.read"],
-      importModule: async (entryPath) => modules.get(entryPath),
+      importModule: async (entryPath) => lookupModule(modules, entryPath),
     }).load();
 
     assert.deepEqual(lifecycle, ["start:first", "start:second"]);
@@ -361,7 +363,7 @@ test("duplicate extension IDs and tool names reject before any plugin starts", a
         pluginDirectories: [first.directory, second.directory],
         projectDirectory: fixture.project,
         stateDirectory: fixture.state,
-        importModule: async (entryPath) => modules.get(entryPath),
+        importModule: async (entryPath) => lookupModule(modules, entryPath),
       }).load(),
       /duplicate extension id/i,
     );
@@ -379,7 +381,7 @@ test("duplicate extension IDs and tool names reject before any plugin starts", a
         pluginDirectories: [first.directory, second.directory],
         projectDirectory: fixture.project,
         stateDirectory: fixture.state,
-        importModule: async (entryPath) => modules.get(entryPath),
+        importModule: async (entryPath) => lookupModule(modules, entryPath),
       }).load(),
       /duplicate tool.*shared\.tool/i,
     );
@@ -422,6 +424,49 @@ test("plugins cannot register lifecycle tools or impersonate protected and built
     }
   } finally {
     fixture.close();
+  }
+});
+
+test("macOS plugin loader accepts only the fixed host-native /var alias", async (context) => {
+  if (process.platform !== "darwin") {
+    context.skip("macOS host-native path alias fixture requires Darwin.");
+    return;
+  }
+  const root = mkdtempSync(join("/var/tmp", "aiboard-plugin-darwin-host-alias-"));
+  const project = join(root, "project");
+  const state = join(root, "runner state");
+  const plugin = join(root, "plugin");
+  try {
+    mkdirSync(project);
+    mkdirSync(state);
+    mkdirSync(plugin);
+    writeFileSync(join(plugin, "index.mjs"), `
+      export function createExtension() {
+        return {
+          capabilities() { return { tools: [], contextContributors: [], languageProviders: [] }; },
+          async start() {},
+          async close() {}
+        };
+      }
+    `);
+    writeFileSync(join(plugin, "runner-extension.json"), JSON.stringify({
+      apiVersion: 1,
+      id: "fixture.darwin-loader",
+      name: "fixture.darwin-loader",
+      version: "1.0.0",
+      entry: "index.mjs",
+      capabilities: [],
+    }));
+    assert.notEqual(plugin, realpathSync(plugin), "fixture must enter LocalPluginLoader through /var -> /private/var");
+    const loaded = await new LocalPluginLoader({
+      pluginDirectories: [plugin],
+      projectDirectory: project,
+      stateDirectory: state,
+    }).load();
+    assert.deepEqual(loaded.registry.manifests().map((manifest) => manifest.id), ["fixture.darwin-loader"]);
+    await loaded.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -533,7 +578,7 @@ test("partial start failure closes the failing plugin and every earlier plugin i
         projectDirectory: fixture.project,
         stateDirectory: fixture.state,
         importModule: async (entryPath) =>
-          entryPath === first.entry
+          sameEntry(entryPath, first.entry)
             ? extensionModule("first", lifecycle, emptyCapabilities())
             : extensionModule("second", lifecycle, emptyCapabilities(), true),
       }).load(),
@@ -562,7 +607,7 @@ test("a failed close retains only the failed extension for an exact retry", asyn
       projectDirectory: fixture.project,
       stateDirectory: fixture.state,
       importModule: async (entryPath) =>
-        entryPath === first.entry
+        sameEntry(entryPath, first.entry)
           ? extensionModule("first", lifecycle, emptyCapabilities())
           : {
               createExtension: () => ({
@@ -603,8 +648,44 @@ function loaderFor(
   });
 }
 
+function hostNativeAliasDirectory(created: string): string {
+  if (process.platform !== "win32") return created;
+  try {
+    const short = execFileSync("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `$fso = New-Object -ComObject Scripting.FileSystemObject; $fso.GetFolder(${JSON.stringify(created)}).ShortPath`,
+    ], { encoding: "utf8" }).trim();
+    if (short && existsSync(short) && short.toLowerCase() !== created.toLowerCase()) return short;
+  } catch {
+    return created;
+  }
+  return created;
+}
+
+function canonicalPath(path: string): string {
+  return realpathSync.native(path);
+}
+
+function lookupModule<T>(modules: Map<string, T>, entryPath: string): T | undefined {
+  try {
+    return modules.get(canonicalPath(entryPath)) ?? modules.get(entryPath);
+  } catch {
+    return modules.get(entryPath);
+  }
+}
+
+function sameEntry(left: string, right: string): boolean {
+  try {
+    return canonicalPath(left) === canonicalPath(right);
+  } catch {
+    return left === right;
+  }
+}
+
 function createFixture(name: string) {
-  const root = mkdtempSync(join(tmpdir(), `aiboard-plugin-${name}-`));
+  const created = mkdtempSync(join(tmpdir(), `aiboard-plugin-${name}-`));
+  const root = hostNativeAliasDirectory(created);
   const project = join(root, "project");
   const state = join(root, "runner state");
   mkdirSync(project);
@@ -625,8 +706,9 @@ function createFixture(name: string) {
       const directory = join(root, options.directoryName ?? `plugin ${id}`);
       mkdirSync(directory, { recursive: true });
       const entryName = options.entry ?? "index.mjs";
+      const entry = join(directory, entryName);
       if (!entryName.includes("..") && !entryName.includes("linked/")) {
-        writeFileSync(join(directory, entryName), "export const fixture = true;\n");
+        writeFileSync(entry, "export const fixture = true;\n");
       }
       this.manifest(
         directory,
@@ -635,7 +717,7 @@ function createFixture(name: string) {
         options.apiVersion ?? 1,
         entryName,
       );
-      return { directory, entry: join(directory, entryName) };
+      return { directory, entry: existsSync(entry) ? canonicalPath(entry) : entry };
     },
     manifest(
       directory: string,

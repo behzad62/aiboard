@@ -30,9 +30,10 @@ import {
   parseRunnerExtensionManifest,
   type RunnerExtensionManifest,
 } from "./runner-extension.js";
-import type {
-  ConfiguredLanguageServer,
-  RunnerCapabilitiesConfig,
+import {
+  isTrustedRunnerHostAliasResolution,
+  type ConfiguredLanguageServer,
+  type RunnerCapabilitiesConfig,
 } from "./runner-capabilities-config.js";
 import {
   assertLanguageServerExecutableIdentity,
@@ -589,10 +590,15 @@ async function attestConfiguredOciExecutable(
   if (!metadata.isFile() || metadata.isSymbolicLink()) {
     throw new Error("Configured OCI executable must be a real file.");
   }
-  const actual = resolve(await realpath(candidate));
-  if (normalizePath(actual) !== normalizePath(candidate)) {
-    throw new Error("Configured OCI executable resolves through a symbolic path.");
+  try {
+    await assertNoSymbolicPathComponents(candidate, "Configured OCI executable");
+  } catch (error) {
+    if (error instanceof Error && /symbolic link/i.test(error.message)) {
+      throw new Error("Configured OCI executable resolves through a symbolic path.");
+    }
+    throw error;
   }
+  const actual = resolve(await realpath(candidate));
   return { path: actual, digest: digest(await readFile(actual)) };
 }
 
@@ -1075,11 +1081,15 @@ async function requiredRealDirectory(input: string): Promise<string> {
   }
   const candidate = resolve(input);
   await assertNoSymbolicPathComponents(candidate, "Runner capability extension directory");
-  const metadata = await lstat(candidate);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+  const requestedMetadata = await lstat(candidate);
+  if (!requestedMetadata.isDirectory() || requestedMetadata.isSymbolicLink()) {
     throw new Error(`Runner capability extension directory ${candidate} must be a real directory.`);
   }
-  return await realpath(candidate);
+  const actual = resolve(await realpath(candidate));
+  if (!(await lstat(actual)).isDirectory()) {
+    throw new Error(`Runner capability extension directory ${candidate} must be a real directory.`);
+  }
+  return actual;
 }
 
 async function requiredRealStateDirectory(input: string): Promise<string> {
@@ -1088,11 +1098,15 @@ async function requiredRealStateDirectory(input: string): Promise<string> {
   }
   const candidate = resolve(input);
   await assertNoSymbolicPathComponents(candidate, "Runner capability snapshot state directory");
-  const metadata = await lstat(candidate);
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+  const requestedMetadata = await lstat(candidate);
+  if (!requestedMetadata.isDirectory() || requestedMetadata.isSymbolicLink()) {
     throw new Error(`Runner capability snapshot state directory ${candidate} must be a real directory.`);
   }
-  return await realpath(candidate);
+  const actual = resolve(await realpath(candidate));
+  if (!(await lstat(actual)).isDirectory()) {
+    throw new Error(`Runner capability snapshot state directory ${candidate} must be a real directory.`);
+  }
+  return actual;
 }
 
 async function assertNoSymbolicPathComponents(candidate: string, label: string): Promise<void> {
@@ -1100,7 +1114,11 @@ async function assertNoSymbolicPathComponents(candidate: string, label: string):
   let current = root;
   for (const segment of relative(root, candidate).split(sep).filter(Boolean)) {
     current = join(current, segment);
-    if ((await lstat(current)).isSymbolicLink()) {
+    if (!(await lstat(current)).isSymbolicLink()) continue;
+    let actual: string;
+    try { actual = resolve(await realpath(current)); }
+    catch { throw new Error(`${label} ${candidate} contains a symbolic link at ${current}.`); }
+    if (!isTrustedRunnerHostAliasResolution(current, actual)) {
       throw new Error(`${label} ${candidate} contains a symbolic link at ${current}.`);
     }
   }

@@ -1,42 +1,37 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
-import type { FinalVerificationPlan } from "../src/final-verification-contracts.js";
-import {
-  BuildRuntime,
-  type ArchitectRuntimeDriver,
-  type IndependentVerifierDriver,
-} from "../src/build-runtime.js";
+import type { IndependentVerifierDriver } from "../src/build-runtime.js";
 import {
   buildCompletionReadiness,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
-  type SchedulerEventType,
 } from "../src/scheduler-store.js";
 import { assessBuildRisk, type BuildRiskAssessmentInput } from "../src/risk-policy.js";
-import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
-import type { VerifierCriterionVerdict } from "../src/verifier-contracts.js";
-import { SchedulerVerifierVerdictAuthority } from "../src/verifier-verdict-authority.js";
 import {
-  acceptFinalVerificationProfile,
-  emptyFinalVerificationProfile,
-} from "./support/final-verification-profile.js";
-
-const RUN_ID = "run-verifier-contract";
-const REVISION = "a".repeat(40);
-const FINAL_TASK_ID = "final-verification";
-const GENERATION_ID = "final-generation";
-const REVIEW_ID = "verifier-review-1";
-const SESSION_ID = "verifier:run-verifier-contract:session";
-const CRITERIA = [
-  { taskId: "task-api", criterionId: "shared" },
-  { taskId: "task-api", criterionId: "typed" },
-  { taskId: "task-ui", criterionId: "shared" },
-];
+  parseVerifierCriterionVerdicts,
+  parseVerifierExpectations,
+  parseVerifierReviewRequest,
+  parseVerifierVerdict,
+  type VerifierCriterionVerdict,
+  type VerifierReviewProjection,
+} from "../src/verifier-contracts.js";
+import { SchedulerVerifierVerdictAuthority } from "../src/verifier-verdict-authority.js";
+import { acceptFinalVerificationProfile } from "./support/final-verification-profile.js";
+import {
+  appendVerifierRequest,
+  createFixture,
+  createRuntime,
+  CRITERIA,
+  event,
+  GENERATION_ID,
+  REVIEW_ID,
+  REVISION,
+  RUN_ID,
+  SESSION_ID,
+  verifierRequestPayload,
+} from "./support/verifier-run-fixture.js";
 
 test("verifier request and criterion-complete verdict are durable and derive the overall result", () => {
   const fixture = createFixture("positive");
@@ -1066,215 +1061,485 @@ test("verifier repair kernel rejects incomplete, unrelated, duplicated, forged, 
   }
 });
 
-interface Fixture {
-  root: string;
-  database: string;
-  evidenceStore: SqliteEvidenceStore;
-  store: SqliteSchedulerStore;
-  evidenceIds: string[];
-  close(): void;
-}
+test("verifier expectations cover every criterion exactly once with concrete behaviors and edge cases", () => {
+  const criteria = [{ taskId: "task_ui", criterionId: "criterion_ui" }];
+  const parsed = parseVerifierExpectations([{
+    taskId: "task_ui", criterionId: "criterion_ui",
+    expectedBehaviors: ["The membership card renders the organization name."],
+    edgeCases: ["No memberships", "Two memberships with the same user id"],
+    regressionSurfaces: ["src/app.ts render path"],
+    requiredTests: ["MembershipCardRendersOrganization"],
+  }], criteria);
+  assert.equal(parsed.length, 1);
+  assert.throws(() => parseVerifierExpectations([], criteria), /must represent every build criterion exactly once/);
+  assert.throws(() => parseVerifierExpectations([{
+    taskId: "task_ui", criterionId: "criterion_ui", expectedBehaviors: [], edgeCases: ["x"], regressionSurfaces: [], requiredTests: [],
+  }], criteria), /expectedBehaviors requires at least one entry/);
+});
 
-function createFixture(
-  name: string,
-  options: { approveFinalReview?: boolean } = {},
-): Fixture {
-  const root = mkdtempSync(join(tmpdir(), `aiboard-verifier-contract-${name}-`));
-  const database = join(root, "scheduler.sqlite");
-  const evidenceStore = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
-  let store = new SqliteSchedulerStore(database, {
-    evidenceStore,
-    validateCleanupReceipt: () => undefined,
-    validateExecutionProfile: acceptFinalVerificationProfile,
-  });
-  store.append(event("run.initialized", "run:init", {}));
-  store.append(event("plan.created", "plan:1", {
-    revision: 1,
-    tasks: [
-      {
-        id: "task-api",
-        objective: "Implement the API",
-        dependencies: [],
-        status: "integrated",
-        requiredCapabilities: ["code"],
-        acceptanceCriteria: [
-          { id: "shared", text: "The API meets its user-visible behavior." },
-          { id: "typed", text: "The API rejects malformed input." },
-        ],
-        acceptanceCriteriaVersion: 1,
-        attempt: 1,
-      },
-      {
-        id: "task-ui",
-        objective: "Implement the UI",
-        dependencies: ["task-api"],
-        status: "integrated",
-        requiredCapabilities: ["code"],
-        acceptanceCriteria: [
-          { id: "shared", text: "The UI exposes the requested workflow." },
-        ],
-        acceptanceCriteriaVersion: 1,
-        attempt: 1,
-      },
-    ],
-  }, { role: "architect", id: "openai:architect" }));
-  store.append(event("integration.revision_advanced", "integration:1", {
-    integrationRevision: REVISION,
-  }));
-  store.append(event("final_verification.generation_created", "final:generation", {
-    taskId: FINAL_TASK_ID,
-    generationId: GENERATION_ID,
-    targetRevision: REVISION,
-    planVersion: 1,
-    plan: finalPlan(),
-    executionProfile: emptyFinalVerificationProfile(REVISION),
-  }));
-  for (const check of finalPlan().checks) {
-    store.append(event(
-      "final_verification.check_completed",
-      `final:check:${check.category}`,
-      {
-        taskId: FINAL_TASK_ID,
-        generationId: GENERATION_ID,
-        targetRevision: REVISION,
-        attempt: 1,
-        workspacePath: "C:/independent-final-verification",
-        startedAt: "2026-08-27T00:00:00.000Z",
-        finishedAt: "2026-08-27T00:00:01.000Z",
-        result: { ...check, green: true, evidenceIds: [], facts: [], issues: [] },
-      },
-    ));
+test("duplicate verifier expectations are rejected separately from a missing criterion", () => {
+  const criteria = [{ taskId: "task_ui", criterionId: "criterion_ui" }];
+  const entry = {
+    taskId: "task_ui", criterionId: "criterion_ui",
+    expectedBehaviors: ["renders the name"],
+    edgeCases: ["empty"],
+    regressionSurfaces: [],
+    requiredTests: [],
+  };
+  assert.throws(
+    () => parseVerifierExpectations([entry, { ...entry }], criteria),
+    /contains duplicate criteria/,
+  );
+  assert.throws(
+    () => parseVerifierExpectations([{
+      ...entry,
+      criterionId: "criterion_other",
+    }], criteria),
+    /must represent every build criterion exactly once/,
+  );
+});
+
+test("verifier expectations reject a missing edge case independently of behaviors", () => {
+  const criteria = [{ taskId: "task_ui", criterionId: "criterion_ui" }];
+  assert.throws(() => parseVerifierExpectations([{
+    taskId: "task_ui", criterionId: "criterion_ui",
+    expectedBehaviors: ["renders the name"],
+    edgeCases: [],
+    regressionSurfaces: [],
+    requiredTests: [],
+  }], criteria), /edgeCases requires at least one entry/);
+  const parsed = parseVerifierExpectations([{
+    taskId: "task_ui", criterionId: "criterion_ui",
+    expectedBehaviors: ["renders the name"],
+    edgeCases: ["empty"],
+    regressionSurfaces: [],
+    requiredTests: [],
+  }], criteria);
+  assert.deepEqual(parsed[0]?.regressionSurfaces, []);
+  assert.deepEqual(parsed[0]?.requiredTests, []);
+});
+
+test("an unsatisfied two-pass verdict carries a location and reproduction steps", () => {
+  const verdict = parseVerifierCriterionVerdicts([{
+    taskId: "task_ui", criterionId: "criterion_ui", verdict: "unsatisfied",
+    rationale: "Invalidation ignores the organization id.", evidenceIds: ["evidence_ui"],
+    location: { path: "src/membership-service.ts", lines: "118-132" },
+    reproduction: ["Create the same user in two organizations", "Remove membership in A", "Observe B's cache entry removed"],
+  }]);
+  assert.deepEqual(verdict[0]?.location, { path: "src/membership-service.ts", lines: "118-132" });
+  assert.equal(verdict[0]?.reproduction?.length, 3);
+  assert.throws(() => parseVerifierCriterionVerdicts([{
+    taskId: "task_ui", criterionId: "criterion_ui", verdict: "unsatisfied", rationale: "x", evidenceIds: ["e"],
+    location: { path: "" },
+  }]), /location path must be non-empty/);
+});
+
+test("a satisfied verdict may omit location and reproduction", () => {
+  const [verdict] = parseVerifierCriterionVerdicts([criterionVerdictInput()]);
+  assert.equal(verdict?.location, undefined);
+  assert.equal(verdict?.reproduction, undefined);
+  assert.equal(Object.hasOwn(verdict!, "location"), false);
+  assert.equal(Object.hasOwn(verdict!, "reproduction"), false);
+});
+
+test("location lines and reproduction entries are validated when present", () => {
+  const [verdict] = parseVerifierCriterionVerdicts([criterionVerdictInput({
+    location: { path: "src/app.ts" },
+  })]);
+  assert.deepEqual(verdict?.location, { path: "src/app.ts" });
+  assert.equal(Object.hasOwn(verdict!.location!, "lines"), false);
+  assert.throws(
+    () => parseVerifierCriterionVerdicts([criterionVerdictInput({
+      location: { path: "src/app.ts", lines: "abc" },
+    })]),
+    /location lines/,
+  );
+  assert.throws(
+    () => parseVerifierCriterionVerdicts([criterionVerdictInput({
+      reproduction: [""],
+    })]),
+    /reproduction/,
+  );
+});
+
+const BASELINE = "b".repeat(40);
+const EXPECTATIONS_SESSION = "verifier:expectations:pass-1";
+
+test("two-pass verifier verdicts require recorded expectations and reproduction", () => {
+  const fixture = createFixture("two-pass-expectations");
+  try {
+    fixture.store.append(event("verifier.policy_configured", "verifier:policy", {
+      mode: "risk_based",
+      candidateRuntimeIds: ["google:verifier"],
+      alwaysRequireIndependentVerifier: false,
+      twoPass: true,
+    }));
+    appendVerifierRequest(fixture.store, {
+      twoPass: true,
+      baselineRevision: BASELINE,
+    });
+    const requested = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(requested.verifierPolicy?.twoPass, true);
+    assert.equal(requested.verifier?.current?.twoPass, true);
+    assert.equal(requested.verifier?.current?.baselineRevision, BASELINE);
+
+    assert.throws(
+      () => fixture.store.append(verdictEvent({
+        criterionVerdicts: completeVerdicts(fixture.evidenceIds),
+      })),
+      /Two-pass verifier verdict requires recorded expectations\./,
+    );
+
+    assert.throws(
+      () => fixture.store.append(expectationsEvent(fixture, {
+        actor: { role: "architect", id: "openai:architect" },
+        idempotencyKey: "verifier:expectations:architect",
+      })),
+      /Only the selected verifier may record expectations\./,
+    );
+    assert.throws(
+      () => fixture.store.append(expectationsEvent(fixture, {
+        actor: { role: "verifier", id: "openai:foreign" },
+        idempotencyKey: "verifier:expectations:foreign",
+      })),
+      /does not match the selected runtime identity/,
+    );
+    assert.throws(
+      () => fixture.store.append(expectationsEvent(fixture, {
+        reviewId: "verifier-review-other",
+        idempotencyKey: "verifier:expectations:review",
+      })),
+      /stale or foreign to the current review/,
+    );
+    assert.throws(
+      () => fixture.store.append(expectationsEvent(fixture, {
+        targetRevision: "c".repeat(40),
+        idempotencyKey: "verifier:expectations:target",
+      })),
+      /stale or foreign to the current review/,
+    );
+    assert.throws(
+      () => fixture.store.append(expectationsEvent(fixture, {
+        baselineRevision: "d".repeat(40),
+        idempotencyKey: "verifier:expectations:baseline",
+      })),
+      /stale or foreign to the current review/,
+    );
+    assert.throws(
+      () => fixture.store.append(expectationsEvent(fixture, {
+        sessionId: "verifier:other-session",
+        expectations: expectationEntries().slice(0, -1),
+        idempotencyKey: "verifier:expectations:criteria",
+      })),
+      /must represent every build criterion exactly once/,
+    );
+
+    fixture.store.append(expectationsEvent(fixture, {
+      idempotencyKey: "verifier:expectations:first",
+    }));
+    const recorded = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(recorded.verifier?.current?.expectations?.length, CRITERIA.length);
+    assert.equal(recorded.verifier?.current?.expectationsSessionId, EXPECTATIONS_SESSION);
+
+    fixture.store.append(expectationsEvent(fixture, {
+      idempotencyKey: "verifier:expectations:repeat",
+    }));
+    assert.equal(
+      rebuildSchedulerProjection(fixture.store.readRun(RUN_ID))
+        .verifier?.current?.expectationsSessionId,
+      EXPECTATIONS_SESSION,
+    );
+    assert.throws(
+      () => fixture.store.append(expectationsEvent(fixture, {
+        sessionId: "verifier:other-session",
+        idempotencyKey: "verifier:expectations:conflict-session",
+      })),
+      /conflict with the recorded expectations/,
+    );
+
+    const unsatisfied = completeVerdicts(fixture.evidenceIds);
+    unsatisfied[0] = {
+      ...unsatisfied[0]!,
+      verdict: "unsatisfied",
+      rationale: "The organization cache is shared.",
+    };
+    assert.throws(
+      () => fixture.store.append(verdictEvent({ criterionVerdicts: unsatisfied })),
+      /Two-pass unsatisfied verdicts require reproduction steps\./,
+    );
+    unsatisfied[0] = {
+      ...unsatisfied[0]!,
+      location: { path: "src/membership-service.ts", lines: "118-132" },
+      reproduction: ["Create the user twice", "Remove membership in A"],
+    };
+    fixture.store.append(verdictEvent({ criterionVerdicts: unsatisfied }));
+    const submitted = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(submitted.verifier?.current?.status, "submitted");
+    assert.equal(submitted.verifier?.current?.verdict?.satisfied, false);
+    assert.equal(submitted.verifier?.current?.verdict?.criterionVerdicts[0]?.reproduction?.length, 2);
+  } finally {
+    fixture.close();
   }
-  store.append(event("final_verification.submitted", "final:submitted", {
-    taskId: FINAL_TASK_ID,
-    generationId: GENERATION_ID,
-    targetRevision: REVISION,
-    attempt: 1,
-    submissionId: "final-submission",
-    submissionResult: {
-      kind: "final_verification_submission",
-      generationId: GENERATION_ID,
+});
+
+test("a legacy review without twoPass accepts a verdict with no expectations", () => {
+  const fixture = createFixture("legacy-single-pass");
+  try {
+    appendVerifierPolicy(fixture.store);
+    appendVerifierRequest(fixture.store);
+    const requested = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(requested.verifierPolicy?.twoPass, false);
+    assert.equal(requested.verifier?.current?.twoPass, undefined);
+    assert.equal(requested.verifier?.current?.expectations, undefined);
+    fixture.store.append(verdictEvent({
+      criterionVerdicts: completeVerdicts(fixture.evidenceIds),
+    }));
+    const submitted = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+    assert.equal(submitted.verifier?.current?.status, "submitted");
+    assert.equal(submitted.verifier?.current?.verdict?.satisfied, true);
+    assert.equal(submitted.verifier?.current?.expectations, undefined);
+  } finally {
+    fixture.close();
+  }
+});
+
+test("recordExpectations persists a bound two-pass review through the verdict authority", () => {
+  const fixture = createFixture("authority-expectations");
+  try {
+    fixture.store.append(event("verifier.policy_configured", "verifier:policy", {
+      mode: "risk_based",
+      candidateRuntimeIds: ["google:verifier"],
+      alwaysRequireIndependentVerifier: false,
+      twoPass: true,
+    }));
+    const authority = new SchedulerVerifierVerdictAuthority(fixture.store);
+    const request = verifierRequestPayload({
+      twoPass: true,
+      baselineRevision: BASELINE,
+    });
+    authority.requestReview({
       runId: RUN_ID,
-      taskId: FINAL_TASK_ID,
-      attempt: 1,
+      reviewId: REVIEW_ID,
       targetRevision: REVISION,
-      plan: finalPlan(),
-      executionProfile: emptyFinalVerificationProfile(REVISION),
-      checks: finalPlan().checks.map((check) => ({
-        ...check,
-        green: true,
-        evidenceIds: [],
-        facts: [],
-      })),
-      evidenceIds: [],
-      submittedAt: "2026-08-27T00:00:01.000Z",
-      green: true,
-    },
-  }));
-  store.append(event("final_verification.cleanup_started", "final:cleanup:start", {
-    taskId: FINAL_TASK_ID,
-    generationId: GENERATION_ID,
-    targetRevision: REVISION,
-    attempt: 1,
-  }));
-  store.append(event("final_verification.cleanup_succeeded", "final:cleanup:done", {
-    taskId: FINAL_TASK_ID,
-    generationId: GENERATION_ID,
-    targetRevision: REVISION,
-    attempt: 1,
-  }));
-  store.append(event("final_verification.review_requested", "final:review:request", {
-    taskId: FINAL_TASK_ID,
-    generationId: GENERATION_ID,
-    targetRevision: REVISION,
-    attempt: 1,
-    submissionId: "final-submission",
-    reviewId: "final-review",
-  }));
-  if (options.approveFinalReview !== false) {
-    store.append(event("final_verification.review_decided", "final:review:approved", {
-      taskId: FINAL_TASK_ID,
-      generationId: GENERATION_ID,
+      finalVerificationGenerationId: GENERATION_ID,
+      runtime: request.runtime as {
+        runtimeId: string;
+        providerId: string;
+        modelId: string;
+        modelIdentity: string;
+        sessionId: string;
+      },
+      excludedModels: request.excludedModels as Array<{
+        source: "architect" | "accepted_change_author";
+        runtimeId: string;
+        modelIdentity: string;
+      }>,
+      criteria: CRITERIA,
+      twoPass: true,
+      baselineRevision: BASELINE,
+      occurredAt: "2026-08-27T00:00:04.000Z",
+    });
+    authority.recordExpectations({
+      runId: RUN_ID,
+      reviewId: REVIEW_ID,
       targetRevision: REVISION,
-      attempt: 1,
-      submissionId: "final-submission",
-      reviewId: "final-review",
-      decision: "approved",
-      summary: "Every final-verification category is approved.",
-      categoryReviews: finalPlan().checks.map((check) => ({
-        category: check.category,
-        verdict: "approved",
-        rationale: `${check.category} is current and green.`,
-        evidenceIds: [],
-      })),
-    }, { role: "architect", id: "openai:architect" }));
+      baselineRevision: BASELINE,
+      sessionId: EXPECTATIONS_SESSION,
+      actor: { role: "verifier", id: "google:verifier" },
+      expectations: expectationEntries(),
+      occurredAt: "2026-08-27T00:00:05.000Z",
+    });
+    const review = authority.currentReview(RUN_ID);
+    assert.equal(review?.expectations?.length, CRITERIA.length);
+    assert.equal(review?.expectationsSessionId, EXPECTATIONS_SESSION);
+    authority.recordExpectations({
+      runId: RUN_ID,
+      reviewId: REVIEW_ID,
+      targetRevision: REVISION,
+      baselineRevision: BASELINE,
+      sessionId: EXPECTATIONS_SESSION,
+      actor: { role: "verifier", id: "google:verifier" },
+      expectations: expectationEntries(),
+      occurredAt: "2026-08-27T00:00:06.000Z",
+    });
+    assert.throws(
+      () => authority.recordExpectations({
+        runId: RUN_ID,
+        reviewId: REVIEW_ID,
+        targetRevision: REVISION,
+        baselineRevision: BASELINE,
+        sessionId: "verifier:other-session",
+        actor: { role: "verifier", id: "google:verifier" },
+        expectations: expectationEntries(),
+        occurredAt: "2026-08-27T00:00:07.000Z",
+      }),
+      /conflict|idempotency/,
+    );
+  } finally {
+    fixture.close();
   }
+});
 
-  const evidenceIds = CRITERIA.map((criterion, index) => evidenceStore.record({
-    runId: RUN_ID,
-    taskId: criterion.taskId,
-    actor: { role: "verifier", id: "google:verifier" },
-    fact: {
-      kind: "browser_screenshot",
-      label: `${criterion.taskId}:${criterion.criterionId}`,
-      capturedAt: "2026-08-27T00:00:02.000Z",
-      screenshotArtifactHash: `${index + 1}`.repeat(64),
-      mediaType: "image/png",
-      byteLength: 16,
-    },
-    createdAt: "2026-08-27T00:00:02.000Z",
-    idempotencyKey: `verifier-evidence-${index}`,
-    attempt: 1,
-  }).id);
+test("two-pass review requests require a baseline revision that matches the revision pattern", () => {
+  const criteria = [{ taskId: "task_ui", criterionId: "criterion_ui" }];
+  const baseline = "b".repeat(40);
+  const parsed = parseVerifierReviewRequest(reviewRequestPayload({
+    twoPass: true,
+    baselineRevision: baseline,
+  }), criteria, "2026-08-27T00:00:00.000Z");
+  assert.equal(parsed.twoPass, true);
+  assert.equal(parsed.baselineRevision, baseline);
+  assert.throws(
+    () => parseVerifierReviewRequest(reviewRequestPayload({ twoPass: true }), criteria, "2026-08-27T00:00:00.000Z"),
+    /baseline revision/i,
+  );
+  assert.throws(
+    () => parseVerifierReviewRequest(reviewRequestPayload({
+      twoPass: true,
+      baselineRevision: "not-a-revision",
+    }), criteria, "2026-08-27T00:00:00.000Z"),
+    /baseline revision/i,
+  );
+  const legacy = parseVerifierReviewRequest(
+    reviewRequestPayload(),
+    criteria,
+    "2026-08-27T00:00:00.000Z",
+  );
+  assert.equal(legacy.twoPass, undefined);
+  assert.equal(legacy.baselineRevision, undefined);
+});
 
+function reviewRequestPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    root,
-    database,
-    evidenceStore,
-    get store() { return store; },
-    set store(value) { store = value; },
-    evidenceIds,
-    close: () => {
-      try { store.close(); } catch { /* already closed for replay check */ }
-      evidenceStore.close();
-      rmSync(root, { recursive: true, force: true });
+    reviewId: "review_ui",
+    targetRevision: "a".repeat(40),
+    finalVerificationGenerationId: "generation_ui",
+    runtime: {
+      runtimeId: "google:verifier",
+      providerId: "google",
+      modelId: "google/verifier-model",
+      modelIdentity: "verifier-model",
+      sessionId: "session_ui",
     },
+    excludedModels: [{
+      source: "architect",
+      runtimeId: "openai:architect",
+      modelIdentity: "architect-model",
+    }],
+    criteria: [{ taskId: "task_ui", criterionId: "criterion_ui" }],
+    ...overrides,
   };
 }
 
-function createRuntime(
-  store: SqliteSchedulerStore,
-  independentVerifier: IndependentVerifierDriver,
-  architectRun: ArchitectRuntimeDriver["run"],
-): BuildRuntime {
-  return new BuildRuntime({
-    runId: RUN_ID,
-    store,
-    workerDriver: {
-      run: async () => ({ type: "failed", reason: "unused" }),
-    },
-    architectDriver: { run: architectRun },
-    integrationDriver: {
-      integrate: async () => ({
-        status: "integrated",
-        integrationRevision: REVISION,
-      }),
-    },
-    independentVerifier,
-    maxConcurrency: 1,
-    workspaceFor: async () => "C:/unused",
-    clock: () => "2026-08-27T00:00:04.000Z",
-  });
+function criterionVerdictInput(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    taskId: "task-api",
+    criterionId: "shared",
+    verdict: "satisfied",
+    rationale: "The recorded evidence supports the criterion.",
+    evidenceIds: ["evidence-1"],
+    ...overrides,
+  };
 }
 
-function appendVerifierRequest(store: SqliteSchedulerStore): void {
-  store.append(event(
-    "verifier.review_requested",
-    "verifier:request",
-    verifierRequestPayload(),
-    { role: "runner", id: "native-verifier-runtime" },
-  ));
-}
+test("parseVerifierCriterionVerdicts omits acceptedFailures when the field is absent", () => {
+  const [verdict] = parseVerifierCriterionVerdicts([criterionVerdictInput()]);
+  assert.equal(verdict!.acceptedFailures, undefined);
+  assert.equal(Object.hasOwn(verdict!, "acceptedFailures"), false);
+});
+
+test("parseVerifierCriterionVerdicts keeps a valid acceptedFailures entry", () => {
+  const [verdict] = parseVerifierCriterionVerdicts([criterionVerdictInput({
+    acceptedFailures: [{ evidenceId: "red", rationale: "Intentional pre-fix failure." }],
+  })]);
+  assert.deepEqual(verdict!.acceptedFailures, [
+    { evidenceId: "red", rationale: "Intentional pre-fix failure." },
+  ]);
+});
+
+test("parseVerifierCriterionVerdicts trims acceptedFailures evidenceId and rationale", () => {
+  const [verdict] = parseVerifierCriterionVerdicts([criterionVerdictInput({
+    acceptedFailures: [{
+      evidenceId: "  red  ",
+      rationale: "  Intentional pre-fix failure.  ",
+    }],
+  })]);
+  assert.deepEqual(verdict!.acceptedFailures, [
+    { evidenceId: "red", rationale: "Intentional pre-fix failure." },
+  ]);
+});
+
+test("parseVerifierCriterionVerdicts rejects malformed acceptedFailures", () => {
+  const invalid = /acceptedFailures is invalid/;
+  const cases: Array<{ name: string; acceptedFailures: unknown }> = [
+    { name: "not-array", acceptedFailures: { evidenceId: "red", rationale: "no" } },
+    { name: "null-entry", acceptedFailures: [null] },
+    { name: "array-entry", acceptedFailures: [["red"]] },
+    { name: "non-object-entry", acceptedFailures: ["red"] },
+    { name: "missing-evidenceId", acceptedFailures: [{ rationale: "Intentional pre-fix failure." }] },
+    { name: "blank-evidenceId", acceptedFailures: [{ evidenceId: "   ", rationale: "Intentional pre-fix failure." }] },
+    { name: "missing-rationale", acceptedFailures: [{ evidenceId: "red" }] },
+    { name: "blank-rationale", acceptedFailures: [{ evidenceId: "red", rationale: "   " }] },
+    {
+      name: "duplicate-evidenceId",
+      acceptedFailures: [
+        { evidenceId: "red", rationale: "first" },
+        { evidenceId: "red", rationale: "second" },
+      ],
+    },
+  ];
+  for (const scenario of cases) {
+    assert.throws(
+      () => parseVerifierCriterionVerdicts([
+        criterionVerdictInput({ acceptedFailures: scenario.acceptedFailures }),
+      ]),
+      invalid,
+      scenario.name,
+    );
+  }
+});
+
+test("parseVerifierVerdict clones acceptedFailures so mutation cannot alias the source", () => {
+  const acceptedFailures = [
+    { evidenceId: "red", rationale: "Intentional pre-fix failure." },
+  ];
+  const payload = {
+    reviewId: REVIEW_ID,
+    targetRevision: REVISION,
+    sessionId: SESSION_ID,
+    criterionVerdicts: [criterionVerdictInput({ acceptedFailures })],
+  };
+  const review: VerifierReviewProjection = {
+    reviewId: REVIEW_ID,
+    targetRevision: REVISION,
+    finalVerificationGenerationId: GENERATION_ID,
+    runtime: {
+      runtimeId: "google:verifier",
+      providerId: "google",
+      modelId: "google/verifier-model",
+      modelIdentity: "verifier-model",
+      sessionId: SESSION_ID,
+    },
+    excludedModels: [],
+    criteria: [{ taskId: "task-api", criterionId: "shared" }],
+    status: "requested",
+    state: "current",
+    requestedAt: "2026-08-27T00:00:00.000Z",
+  };
+  const parsed = parseVerifierVerdict(payload, review, "2026-08-27T00:00:03.000Z");
+  const cloned = parsed.criterionVerdicts[0]!.acceptedFailures!;
+  assert.deepEqual(cloned, [
+    { evidenceId: "red", rationale: "Intentional pre-fix failure." },
+  ]);
+  assert.notEqual(cloned, acceptedFailures);
+  assert.notEqual(cloned[0], acceptedFailures[0]);
+  cloned[0]!.rationale = "mutated";
+  cloned.push({ evidenceId: "other", rationale: "extra" });
+  assert.equal(acceptedFailures[0]!.rationale, "Intentional pre-fix failure.");
+  assert.equal(acceptedFailures.length, 1);
+});
 
 function requestReviewFor(
   authority: SchedulerVerifierVerdictAuthority,
@@ -1366,34 +1631,6 @@ function lowRiskInput(): BuildRiskAssessmentInput {
   };
 }
 
-function verifierRequestPayload(): Record<string, unknown> {
-  return {
-    reviewId: REVIEW_ID,
-    targetRevision: REVISION,
-    finalVerificationGenerationId: GENERATION_ID,
-    runtime: {
-      runtimeId: "google:verifier",
-      providerId: "google",
-      modelId: "google/verifier-model",
-      modelIdentity: "verifier-model",
-      sessionId: SESSION_ID,
-    },
-    excludedModels: [
-      {
-        source: "architect",
-        runtimeId: "openai:architect",
-        modelIdentity: "architect-model",
-      },
-      {
-        source: "accepted_change_author",
-        runtimeId: "anthropic:author",
-        modelIdentity: "author-model",
-      },
-    ],
-    criteria: CRITERIA,
-  };
-}
-
 function completeVerdicts(
   evidenceIds = ["evidence-1", "evidence-2", "evidence-3"],
 ): VerifierCriterionVerdict[] {
@@ -1425,32 +1662,39 @@ function verdictEvent(input: {
   );
 }
 
-function finalPlan(): FinalVerificationPlan {
-  return {
-    checks: ["build", "tests", "runtime_smoke", "browser"].map((category) => ({
-      category: category as "build" | "tests" | "runtime_smoke" | "browser",
-      status: "not_applicable" as const,
-      rationale: `No ${category} fixture is configured.`,
-      repositoryInspection: {
-        paths: ["package.json"],
-        summary: `No ${category} fixture is configured.`,
-      },
-    })),
-  };
+function expectationEntries() {
+  return CRITERIA.map((criterion) => ({
+    taskId: criterion.taskId,
+    criterionId: criterion.criterionId,
+    expectedBehaviors: [`${criterion.taskId}:${criterion.criterionId} holds.`],
+    edgeCases: ["empty"],
+    regressionSurfaces: ["src/app.ts"],
+    requiredTests: [`${criterion.criterionId} test`],
+  }));
 }
 
-function event(
-  type: SchedulerEventType,
-  idempotencyKey: string,
-  payload: Record<string, unknown>,
-  actor: NewSchedulerEvent["actor"] = { role: "runner", id: "runner-test" },
+function expectationsEvent(
+  _fixture: { evidenceIds: string[] },
+  overrides: {
+    actor?: NewSchedulerEvent["actor"];
+    idempotencyKey?: string;
+    reviewId?: string;
+    targetRevision?: string;
+    baselineRevision?: string;
+    sessionId?: string;
+    expectations?: ReturnType<typeof expectationEntries>;
+  } = {},
 ): NewSchedulerEvent {
-  return {
-    runId: RUN_ID,
-    type,
-    occurredAt: "2026-08-27T00:00:00.000Z",
-    actor,
-    idempotencyKey,
-    payload,
-  };
+  return event(
+    "verifier.expectations_recorded",
+    overrides.idempotencyKey ?? "verifier:expectations",
+    {
+      reviewId: overrides.reviewId ?? REVIEW_ID,
+      targetRevision: overrides.targetRevision ?? REVISION,
+      baselineRevision: overrides.baselineRevision ?? BASELINE,
+      sessionId: overrides.sessionId ?? EXPECTATIONS_SESSION,
+      expectations: overrides.expectations ?? expectationEntries(),
+    },
+    overrides.actor ?? { role: "verifier", id: "google:verifier" },
+  );
 }

@@ -163,6 +163,7 @@ export function createExecutionHostStreamingGraph(
         const selected = await selectProcessBackend(
           options.registry,
           intent.requestedCapabilities,
+          intent.requiredLifecycleScope,
           fence,
         );
         const launch = parseProcessLaunchResult(await selected.backend.launch({
@@ -182,6 +183,7 @@ export function createExecutionHostStreamingGraph(
           attestationVersion: selected.attestation.attestationVersion,
           attestationDigest: selected.attestationDigest,
           capabilities: selected.attestation.capabilities,
+          lifecycle: selected.attestation.lifecycle,
           ...launch,
         });
       },
@@ -267,7 +269,8 @@ export function createExecutionHostStreamingGraph(
         intent: Object.freeze({
           ...request.intent,
           arguments: Object.freeze([...request.intent.arguments]),
-          requestedCapabilities: Object.freeze([...request.intent.requestedCapabilities]),
+          requiredLifecycleScope: request.intent.requiredLifecycleScope,
+      requestedCapabilities: Object.freeze([...request.intent.requestedCapabilities]),
         }),
         ...(request.imageExecutable
           ? { imageExecutable: request.imageExecutable }

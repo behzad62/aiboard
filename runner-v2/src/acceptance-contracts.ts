@@ -21,12 +21,72 @@ export interface CriterionEvidenceLink {
 
 export type CriterionReviewVerdictValue = "satisfied" | "unsatisfied";
 
+export interface AcceptedEvidenceFailure {
+  evidenceId: string;
+  rationale: string;
+}
+
 export interface CriterionReviewVerdict {
   criterionId: string;
   verdict: CriterionReviewVerdictValue;
   rationale: string;
   evidenceIds: string[];
   artifactHashes?: string[];
+  /** Explicit, audited acceptance of cited command evidence that did not succeed. */
+  acceptedFailures?: AcceptedEvidenceFailure[];
+}
+
+export interface GreenEvidenceVerdict {
+  verdict: string;
+  evidenceIds: readonly string[];
+  acceptedFailures?: readonly AcceptedEvidenceFailure[];
+}
+
+export function failingCommandEvidenceIds(
+  records: readonly EvidenceRecord[],
+): string[] {
+  return records
+    .filter((record) =>
+      record.fact.kind === "command" &&
+      (
+        record.fact.exitCode !== 0 ||
+        record.fact.signal !== null ||
+        record.fact.timedOut ||
+        record.fact.cancelled
+      ),
+    )
+    .map((record) => record.id);
+}
+
+export function assertSatisfiedVerdictsCiteGreenEvidence(
+  verdicts: readonly GreenEvidenceVerdict[],
+  records: readonly EvidenceRecord[],
+  label: string,
+): void {
+  const failing = new Set(failingCommandEvidenceIds(records));
+  for (const verdict of verdicts) {
+    const accepted = new Map(
+      (verdict.acceptedFailures ?? []).map((failure) => [failure.evidenceId, failure]),
+    );
+    for (const failure of accepted.values()) {
+      if (!failure.rationale.trim()) {
+        throw new Error(`${label} accepted failure ${failure.evidenceId} requires a rationale.`);
+      }
+      if (!failing.has(failure.evidenceId) || !verdict.evidenceIds.includes(failure.evidenceId)) {
+        throw new Error(
+          `${label} accepted failure ${failure.evidenceId} is not failing command evidence cited by that verdict.`,
+        );
+      }
+    }
+    if (verdict.verdict !== "satisfied") continue;
+    for (const evidenceId of verdict.evidenceIds) {
+      if (failing.has(evidenceId) && !accepted.has(evidenceId)) {
+        throw new Error(
+          `${label} cites failing command evidence ${evidenceId} for a satisfied verdict without an accepted failure.`,
+        );
+      }
+    }
+  }
 }
 
 export interface AcceptanceContractValidation {
@@ -333,6 +393,9 @@ export function validateCriterionReviewVerdicts(
         issues.push(`Review verdict for criterion ${criterionId} has invalid artifact hashes.`);
       }
     }
+    if (candidate.acceptedFailures !== undefined && !isAcceptedFailures(candidate.acceptedFailures)) {
+      issues.push(`criterion ${criterionId} acceptedFailures is malformed`);
+    }
     verdictByCriterion.set(criterionId, candidate as unknown as CriterionReviewVerdict);
   }
   for (const id of expectedIds) {
@@ -422,4 +485,16 @@ function nonEmpty(value: unknown): value is string {
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
+}
+
+function isAcceptedFailures(value: unknown): value is AcceptedEvidenceFailure[] {
+  if (!Array.isArray(value)) return false;
+  const evidenceIds: string[] = [];
+  for (const candidate of value) {
+    if (!isRecord(candidate) || !nonEmpty(candidate.evidenceId) || !nonEmpty(candidate.rationale)) {
+      return false;
+    }
+    evidenceIds.push(candidate.evidenceId);
+  }
+  return new Set(evidenceIds).size === evidenceIds.length;
 }

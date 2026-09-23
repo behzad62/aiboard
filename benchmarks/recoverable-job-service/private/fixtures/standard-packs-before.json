@@ -1,0 +1,234 @@
+{
+  "cases": [
+    {
+      "id": "workbench-large-normalizer-0001",
+      "caseHash": "workbench:1f945051"
+    },
+    {
+      "id": "workbench-contract-0001",
+      "caseHash": "workbench:2adcbe36"
+    },
+    {
+      "id": "workbench-contract-0002",
+      "caseHash": "workbench:0807ba48"
+    },
+    {
+      "id": "workbench-parser-0001",
+      "caseHash": "workbench:e450f04b"
+    },
+    {
+      "id": "workbench-parser-0002",
+      "caseHash": "workbench:c605c311"
+    },
+    {
+      "id": "workbench-react-a11y-0001",
+      "caseHash": "workbench:d174495a"
+    },
+    {
+      "id": "workbench-react-a11y-0002",
+      "caseHash": "workbench:85dd621c"
+    },
+    {
+      "id": "workbench-json-config-0001",
+      "caseHash": "workbench:d910af42"
+    },
+    {
+      "id": "workbench-no-rewrite-0001",
+      "caseHash": "workbench:e5b117a4"
+    },
+    {
+      "id": "workbench-pipeline-0001",
+      "caseHash": "workbench:9c00dad3"
+    },
+    {
+      "id": "workbench-pipeline-cache-0001",
+      "caseHash": "workbench:b2a84878"
+    },
+    {
+      "id": "workbench-pipeline-inventory-0001",
+      "caseHash": "workbench:53e57f76"
+    },
+    {
+      "id": "workbench-cs-email-0001",
+      "caseHash": "workbench:3328f1ce"
+    },
+    {
+      "id": "workbench-cs-role-0002",
+      "caseHash": "workbench:cac0a658"
+    },
+    {
+      "id": "workbench-cpp-clamp-0001",
+      "caseHash": "workbench:b4c57106"
+    },
+    {
+      "id": "workbench-cpp-port-0002",
+      "caseHash": "workbench:509c96ca"
+    },
+    {
+      "id": "workbench-go-retry-0001",
+      "caseHash": "workbench:ac45e1fe"
+    },
+    {
+      "id": "workbench-go-error-0002",
+      "caseHash": "workbench:88783dac"
+    },
+    {
+      "id": "workbench-rs-saturating-0001",
+      "caseHash": "workbench:6132e13e"
+    }
+  ],
+  "packs": [
+    {
+      "id": "workbench-current-all",
+      "caseIds": [
+        "workbench-large-normalizer-0001",
+        "workbench-contract-0001",
+        "workbench-contract-0002",
+        "workbench-parser-0001",
+        "workbench-parser-0002",
+        "workbench-react-a11y-0001",
+        "workbench-react-a11y-0002",
+        "workbench-json-config-0001",
+        "workbench-no-rewrite-0001",
+        "workbench-pipeline-0001",
+        "workbench-pipeline-cache-0001",
+        "workbench-pipeline-inventory-0001",
+        "workbench-cs-email-0001",
+        "workbench-cs-role-0002",
+        "workbench-cpp-clamp-0001",
+        "workbench-cpp-port-0002",
+        "workbench-go-retry-0001",
+        "workbench-go-error-0002",
+        "workbench-rs-saturating-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-language-javascript",
+      "caseIds": [
+        "workbench-large-normalizer-0001",
+        "workbench-no-rewrite-0001",
+        "workbench-pipeline-0001",
+        "workbench-pipeline-cache-0001",
+        "workbench-pipeline-inventory-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-language-typescript",
+      "caseIds": [
+        "workbench-contract-0001",
+        "workbench-contract-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-language-python",
+      "caseIds": [
+        "workbench-parser-0001",
+        "workbench-parser-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-language-react-ui",
+      "caseIds": [
+        "workbench-react-a11y-0001",
+        "workbench-react-a11y-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-language-json",
+      "caseIds": [
+        "workbench-json-config-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-language-csharp",
+      "caseIds": [
+        "workbench-cs-email-0001",
+        "workbench-cs-role-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-language-cpp",
+      "caseIds": [
+        "workbench-cpp-clamp-0001",
+        "workbench-cpp-port-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-language-go",
+      "caseIds": [
+        "workbench-go-retry-0001",
+        "workbench-go-error-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-language-rust",
+      "caseIds": [
+        "workbench-rs-saturating-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-large-file-surgical-patch",
+      "caseIds": [
+        "workbench-large-normalizer-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-multi-file-contract",
+      "caseIds": [
+        "workbench-contract-0001",
+        "workbench-contract-0002",
+        "workbench-pipeline-0001",
+        "workbench-pipeline-cache-0001",
+        "workbench-pipeline-inventory-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-parser-edge-case",
+      "caseIds": [
+        "workbench-parser-0001",
+        "workbench-parser-0002",
+        "workbench-cs-email-0001",
+        "workbench-cpp-port-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-react-accessibility",
+      "caseIds": [
+        "workbench-react-a11y-0001",
+        "workbench-react-a11y-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-large-json-config",
+      "caseIds": [
+        "workbench-json-config-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-no-whole-file-rewrite",
+      "caseIds": [
+        "workbench-no-rewrite-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-input-validation",
+      "caseIds": [
+        "workbench-cs-role-0002"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-numeric-safety",
+      "caseIds": [
+        "workbench-cpp-clamp-0001",
+        "workbench-rs-saturating-0001"
+      ]
+    },
+    {
+      "id": "workbench-current-kind-error-handling",
+      "caseIds": [
+        "workbench-go-retry-0001",
+        "workbench-go-error-0002"
+      ]
+    }
+  ]
+}

@@ -1392,6 +1392,23 @@ test("rejects unknown fields inside the exact backend binding", () => {
   );
 });
 
+test("streaming backend binding lifecycle scope is versioned fail-closed", () => {
+  const legacy = pendingTransferRecord().backendBinding as Record<string, unknown>;
+  assert.throws(() => parseStreamingSessionRecord(pendingTransferRecord({
+    backendBinding: { ...legacy, lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" } },
+  })), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_record");
+  assert.throws(() => parseStreamingSessionRecord(pendingTransferRecord({
+    backendBinding: { ...legacy, attestationVersion: 2 },
+  })), (error) => error instanceof StreamingSessionStoreError && error.code === "invalid_record");
+  assert.doesNotThrow(() => parseStreamingSessionRecord(pendingTransferRecord({
+    backendBinding: {
+      ...legacy,
+      attestationVersion: 2,
+      lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
+    },
+  })));
+});
+
 test("accepts a bounded path-sized opaque backend identity and rejects oversized durable input", () => {
   const binding = pendingTransferRecord().backendBinding as Record<string, unknown>;
   assert.doesNotThrow(() => parseStreamingSessionRecord(pendingTransferRecord({

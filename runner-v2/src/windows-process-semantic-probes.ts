@@ -663,7 +663,8 @@ function request(
       executable,
       arguments: [...args],
       workingDirectory: workspace,
-      requestedCapabilities: ["tree_termination", "verified_emptiness"],
+      requiredLifecycleScope: "process_group",
+      requestedCapabilities: [],
     },
     grant: { grantId: randomUUID(), runId: "windows-semantic-probe", invocationId, issuedAt: new Date().toISOString(), access: [] },
     environment: minimalWindowsSemanticProbeEnvironment(ambientEnvironment, extraEnvironment),
@@ -678,8 +679,9 @@ function bindingFor(launch: ReturnType<typeof parseProcessLaunchResult>): Proces
     backendId: "runner-windows-supervisor-v1",
     implementationGeneration: "probe",
     implementationDigest: "1".repeat(64),
-    attestationVersion: 1,
+    attestationVersion: 2,
     attestationDigest: "2".repeat(64),
+    lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" },
     ...launch,
   };
 }

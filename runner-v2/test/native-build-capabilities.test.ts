@@ -38,6 +38,7 @@ import type { NativeWorkerDriverOptions } from "../src/native-worker-driver.js";
 import { createLiveMcpStatusRegistry } from "../src/mcp-tools.js";
 import type { RunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import { runnerRunStateSegment } from "../src/run-state-identity.js";
+import { EXECUTION_SAFETY_CONTRACT_VERSION } from "../src/execution-safety-contracts.js";
 import {
   createRunnerCapabilityContractSnapshot,
   RunnerCapabilityContractError,
@@ -170,6 +171,7 @@ test("production composition settles its owned MCP and run binding while retaini
       "integration_workspace",
       "verification_workspace",
       "independent_verifier_workspace",
+      "independent_verifier_baseline_workspace",
       "memory_store",
       "managed_process_service",
       "subprocess_runtime",
@@ -655,7 +657,7 @@ test("NativeBuildFactory persists and validates a capability contract before rec
     });
     const prepared = await factory.prepareSpec(buildSpec("capability_recovery_contract"));
     assert.match(prepared.capabilityContract?.digest ?? "", /^[a-f0-9]{64}$/);
-    assert.equal(prepared.capabilityContract?.executionSafetyVersion, 1);
+    assert.equal(prepared.capabilityContract?.executionSafetyVersion, EXECUTION_SAFETY_CONTRACT_VERSION);
 
     await factory.validateRecoveryCapabilityContract(prepared);
     const structurallyTampered = structuredClone(prepared);
@@ -1002,6 +1004,7 @@ test("NativeBuildFactory reverses every acquired runtime resource after construc
     "integration_workspace",
     "verification_workspace",
     "independent_verifier_workspace",
+    "independent_verifier_baseline_workspace",
     "memory_store",
     "managed_process_service",
   ] as const;

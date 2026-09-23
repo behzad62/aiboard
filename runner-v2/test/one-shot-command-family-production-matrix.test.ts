@@ -235,8 +235,9 @@ function hangingTree(marker: string): string[] {
 }
 function outcomeUnknownBackend(): ProcessBackend {
   return {
-    probe: async () => ({ attestationVersion: 1, backendId: "fixture-outcome", verified: true, platformLabel: "fault-injected-beneath-runtime",
-      capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "unavailable" } }),
+    probe: async () => ({ attestationVersion: 2, backendId: "fixture-outcome", verified: true, platformLabel: "fault-injected-beneath-runtime",
+      capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "unavailable" },
+      lifecycle: { scope: "process_group", termination: "enforced", emptiness: "enforced" } }),
     launch: async () => ({ opaqueIdentity: `owned-${randomUUID()}`,
       birthFingerprint: { observedAt: new Date().toISOString(), discriminator: randomUUID() }, rootPid: 999_999, startedAt: new Date().toISOString() }),
     observe: async () => ({ state: "exited", exitCode: 0 }), signal: async () => ({ state: "exited" }),

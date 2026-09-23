@@ -2,7 +2,6 @@ import type { BuildRunPolicy } from "@/lib/db/schema";
 import type { NormalizedBuildSettings } from "@/lib/orchestrator/build-policy";
 import {
   NODE_RUNTIME_POLICY_DESCRIPTION,
-  NODE_SQLITE_MINIMUM_VERSION,
   SUPPORTED_NODE_LTS_LINES,
   supportsNodeVersion,
 } from "@/runner-v2/src/node-version";
@@ -14,7 +13,7 @@ export {
 
 export const NATIVE_RUNNER_NODE_POLICY_DESCRIPTION = NODE_RUNTIME_POLICY_DESCRIPTION;
 export const NATIVE_RUNNER_NODE_LTS_LINES = SUPPORTED_NODE_LTS_LINES;
-export const MINIMUM_NATIVE_RUNNER_NODE_VERSION = NODE_SQLITE_MINIMUM_VERSION;
+export const MINIMUM_NATIVE_RUNNER_NODE_VERSION = "24.0.0";
 
 export function nativeProviderBillingBasis(input: {
   hasApiPricing: boolean;

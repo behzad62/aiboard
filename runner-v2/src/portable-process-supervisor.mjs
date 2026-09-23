@@ -41,6 +41,9 @@ const posixBarrierWaiter = new Int32Array(new SharedArrayBuffer(4));
 const ATOMIC_REPLACEMENT_INITIAL_RETRY_MS = 1_000;
 const ATOMIC_WRITE_MAX_RETRY_MS = 1_000;
 const STATE_PUBLICATION_MAX_RETRY_MS = 15_000;
+const WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS = 15_000;
+const FENCE_HOLDER_READ_RETRY_MS = 250;
+const FENCE_HOLDER_READ_RETRY_DELAY_MS = 5;
 for (const directory of [channelDirectory, channelOutputDirectory, channelInputDirectory, channelAckDirectory]) mkdirSync(directory, { recursive: true });
 if (!existsSync(outputCheckpointPath)) writeAtomic(outputCheckpointPath, JSON.stringify({ nonce: config.nonce, stdout: { sequence: 0, endOffset: 0 }, stderr: { sequence: 0, endOffset: 0 } }));
 const replayCapacityChunks = config.replayCapacityChunks ?? 16;
@@ -53,6 +56,7 @@ const WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS = 2_000;
 const WINDOWS_BIRTH_INSPECTION_MAX_DEADLINE_MS = 15_000;
 const WINDOWS_BIRTH_INSPECTION_MAX_ATTEMPTS = 3;
 const POSIX_GROUP_INSPECTION_DEADLINE_MS = 15_000;
+const POSIX_CONTROL_INSPECTION_FAILURE_LIMIT = 3;
 const outputSequences = { stdout: 0, stderr: 0 };
 const outputOffsets = { stdout: 0, stderr: 0 };
 const retained = new Map();
@@ -81,6 +85,7 @@ let windowsTreeInspectionDeadlineMs = WINDOWS_TREE_INSPECTION_MIN_DEADLINE_MS;
 let windowsBirthInspectionAttempts = 0;
 let windowsBirthInspectionDeadlineMs = WINDOWS_BIRTH_INSPECTION_MIN_DEADLINE_MS;
 let launchEffect = config.platform === "windows" ? "prepared" : "prepared";
+let windowsLaunchUnknownDetail = "Initial Windows process identity was not captured before discovery.";
 let rootProcess = null;
 let posixSupervisorBirth = null;
 let posixWorkloadGroup = null;
@@ -91,6 +96,10 @@ let posixAnchorExitSignal = null;
 let posixAnchorReleaseRequested = false;
 let posixAnchorReleaseAuthority = null;
 let posixChildReleasedAnchorRelease = null;
+let posixControlInspectionDeferred = false;
+let posixControlInspectionFailures = 0;
+let posixControlInspectionDetail = "";
+let posixDeferredControlSignature = null;
 let posixForceControlApplied = false;
 const posixRecordedMembers = new Map();
 let posixChildStatusSignature;
@@ -143,20 +152,31 @@ if (!child.pid) {
   fail("Owned process has no PID.", "stopped");
 }
 if (config.platform === "windows") {
-  const inspection = inspectWindowsBirthWithRetry(child.pid);
-  if (inspection.state === "present") {
-    rootProcess = { pid: child.pid, birth: inspection.fingerprint };
-    knownProcesses.set(child.pid, inspection.fingerprint);
-    publish("preparing");
-    writeFileSync(childGoPath, config.nonce);
-    const startup = waitForChildStartup(5_000);
-    if (startup?.status === "started") launchEffect = "started";
-    else if (startup?.status === "error") {
-      launchEffect = "started";
-      fail(startup.error ?? "Owned process failed to start.", "stopped");
-    } else launchEffect = "unknown";
-  } else {
+  const holderReady = config.fence === undefined || waitForExactWindowsLockHolder(WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS);
+  if (!holderReady) {
     launchEffect = "unknown";
+    windowsLaunchUnknownDetail = "Windows supervisor fence-holder authority is unavailable before child startup.";
+    publish("outcome_unknown", windowsLaunchUnknownDetail);
+  } else {
+    const inspection = inspectWindowsBirthWithRetry(child.pid);
+    if (inspection.state === "present") {
+      rootProcess = { pid: child.pid, birth: inspection.fingerprint };
+      knownProcesses.set(child.pid, inspection.fingerprint);
+      publish("preparing");
+      writeFileSync(childGoPath, config.nonce);
+      const startup = waitForChildStartup(5_000);
+      if (startup?.status === "started") launchEffect = "started";
+      else if (startup?.status === "error") {
+        launchEffect = "started";
+        fail(startup.error ?? "Owned process failed to start.", "stopped");
+      } else {
+        launchEffect = "unknown";
+        windowsLaunchUnknownDetail = "Windows child startup did not complete before its deadline.";
+      }
+    } else {
+      launchEffect = "unknown";
+      windowsLaunchUnknownDetail = "Initial Windows process birth inspection was unavailable or the PID disappeared before discovery.";
+    }
   }
 } else initializePosixBootstrap();
 installOutput("stdout", child.stdout, stdoutPath);
@@ -179,7 +199,7 @@ child.once("exit", (code, signal) => {
   publish(launchEffect === "started" ? "running" : "outcome_unknown");
 });
 if (config.platform === "windows")
-  publish(launchEffect === "started" ? "running" : "outcome_unknown", launchEffect === "unknown" ? "Initial Windows process birth inspection was unavailable or the PID disappeared before discovery." : null);
+  publish(launchEffect === "started" ? "running" : "outcome_unknown", launchEffect === "unknown" ? windowsLaunchUnknownDetail : null);
 
 const timer = setInterval(tick, Math.max(10, config.pollIntervalMs ?? 25));
 process.stdin.resume();
@@ -193,7 +213,7 @@ function tick() {
       return;
     }
     if (launchEffect === "unknown") {
-      publish("outcome_unknown", "Initial Windows process identity was not captured before discovery.");
+      publish("outcome_unknown", windowsLaunchUnknownDetail);
       return;
     }
     handleChannelAcks();
@@ -284,11 +304,12 @@ function tickPosix() {
   drainOutput("stdout", child.stdout, stdoutPath);
   drainOutput("stderr", child.stderr, stderrPath);
   if (!posixWorkloadGroup || !posixSupervisorBirth) {
-    publish("outcome_unknown", "POSIX workload identity was not captured before executable release.");
+    publish("outcome_unknown", posixTerminalError ?? "POSIX workload identity was not captured before executable release.");
     return;
   }
-  refreshPosixChildStatus();
-  handleControl();
+  const childStatusRefresh = refreshPosixChildStatus();
+  // Retirement is authoritative for workload quiescence. Do not let a stale or
+  // newly published control request block terminal output settlement and exit.
   if (posixWorkloadRetirement.state === "retired") {
     const outputPipesDrained = posixOutputPipesDrained();
     publish(outputPipesDrained ? "stopped" : "running");
@@ -298,7 +319,22 @@ function tickPosix() {
     }
     return;
   }
+  posixControlInspectionDeferred = false;
+  handleControl();
+  if (!posixControlInspectionDeferred) {
+    posixControlInspectionFailures = 0;
+    posixControlInspectionDetail = "";
+    posixDeferredControlSignature = null;
+  }
+  const retryingControlInspection = posixControlInspectionDeferred &&
+    posixControlInspectionFailures < POSIX_CONTROL_INSPECTION_FAILURE_LIMIT;
+  const exhaustedControlInspection = posixControlInspectionDeferred &&
+    posixControlInspectionFailures >= POSIX_CONTROL_INSPECTION_FAILURE_LIMIT;
   if (posixAnchorExited) {
+    if (childStatusRefresh === "release_deferred") {
+      publish("running");
+      return;
+    }
     const members = listOwnedPosixGroupMembers(posixWorkloadGroup.groupId);
     if (members === undefined) {
       publish("outcome_unknown", "POSIX workload group could not be enumerated after anchor exit.");
@@ -312,6 +348,19 @@ function tickPosix() {
       retirePosixWorkload("force_terminate");
       return;
     }
+    if (launchEffect === "unknown") {
+      publish("outcome_unknown", "POSIX executable startup was never proven before anchor exit.");
+      return;
+    }
+    if (retryingControlInspection) {
+      publish("running");
+      return;
+    }
+    if (exhaustedControlInspection) {
+      publish("outcome_unknown", posixControlInspectionDetail ||
+        `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`);
+      return;
+    }
     publish("outcome_unknown", "POSIX anchor exited before an authenticated released-child record and clean causal exit were observed.");
     return;
   }
@@ -321,6 +370,24 @@ function tickPosix() {
     return;
   }
   if (anchor.state !== "ready") {
+    if (launchEffect === "unknown") {
+      publish("outcome_unknown", "POSIX executable startup was never proven.");
+      return;
+    }
+    if (retryingControlInspection) {
+      publish("running");
+      return;
+    }
+    if (exhaustedControlInspection) {
+      publish("outcome_unknown", posixControlInspectionDetail ||
+        `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`);
+      return;
+    }
+    if (!posixAnchorExited && (posixChildReleasedAnchorRelease ||
+        posixAnchorReleaseRequested && hasCurrentPosixAnchorReleaseAuthority())) {
+      publish("running");
+      return;
+    }
     publish("outcome_unknown", "POSIX workload anchor identity or group membership is unavailable.");
     return;
   }
@@ -334,12 +401,26 @@ function tickPosix() {
     return;
   }
   if (targetExited && anchor.members.length === 1 && anchor.members[0] === posixWorkloadGroup.leaderPid) {
-    if (!requestPosixAnchorRelease()) {
+    const release = requestPosixAnchorRelease();
+    if (release === "deferred") {
+      publish("running");
+      return;
+    }
+    if (release !== "requested") {
       publish("outcome_unknown", "POSIX anchor release could not be committed under the current fence.");
       return;
     }
   }
-  publish(launchEffect === "unknown" ? "outcome_unknown" : "running");
+  if (launchEffect === "unknown") {
+    publish("outcome_unknown", "POSIX executable startup was never proven.");
+    return;
+  }
+  if (exhaustedControlInspection) {
+    publish("outcome_unknown", posixControlInspectionDetail ||
+      `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`);
+    return;
+  }
+  publish("running");
 }
 
 function installOutput(stream, readable, evidencePath) {
@@ -363,11 +444,6 @@ function drainOutput(stream, readable, evidencePath) {
     }
     const bytes = readable.read(available);
     if (!bytes) break;
-    try {
-      const line = `${JSON.stringify({ t: Date.now(), event: "drain", pid: process.pid, dir: config.directory, stream, bytes: bytes.byteLength, seq: outputSequences[stream] + 1 })}\n`;
-      appendFileSync(join(config.directory, "task12-trace.log"), line);
-      appendFileSync("/tmp/task12-mcp-traces.log", line);
-    } catch {}
     appendFileSync(evidencePath, bytes);
     const sequence = ++outputSequences[stream];
     const startOffset = outputOffsets[stream];
@@ -389,19 +465,24 @@ function drainOutput(stream, readable, evidencePath) {
 }
 
 function handleChannelAcks() {
-  const current = readCurrentFence();
-  if (!current) throw new PortableAuthorityUnavailableError("Portable output retirement authority is unavailable.");
-  const resumed = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => resumePortableOutputRetirement({
-    channelDirectory,
-    nonce: config.nonce,
-    fence: { ownerId: current.ownerId, fencingToken: current.fencingToken },
-    atomicWrite: writeAtomic,
-  }));
-  if (resumed.status === "applied" && resumed.value) forgetRetiredOutput(resumed.value.name, resumed.value.metadata);
-  else if ((resumed.status === "unavailable" && resumed.cause === "authority") || resumed.status === "outcome_unknown")
-    throw resumed.error;
-  else if (resumed.status === "stale" || (resumed.status === "unavailable" && resumed.cause === "coordination")) return;
-  for (const name of readdirSync(channelAckDirectory).filter((entry) => entry.endsWith(".json"))) {
+  const retirementIntentPath = join(channelDirectory, "output-retirement.json");
+  const ackNames = readdirSync(channelAckDirectory).filter((entry) => entry.endsWith(".json"));
+  if (!existsSync(retirementIntentPath) && ackNames.length === 0) return;
+  if (existsSync(retirementIntentPath)) {
+    const current = readCurrentFence();
+    if (!current) throw new PortableAuthorityUnavailableError("Portable output retirement authority is unavailable.");
+    const resumed = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => resumePortableOutputRetirement({
+      channelDirectory,
+      nonce: config.nonce,
+      fence: { ownerId: current.ownerId, fencingToken: current.fencingToken },
+      atomicWrite: writeAtomic,
+    }));
+    if (resumed.status === "applied" && resumed.value) forgetRetiredOutput(resumed.value.name, resumed.value.metadata);
+    else if ((resumed.status === "unavailable" && resumed.cause === "authority") || resumed.status === "outcome_unknown")
+      throw resumed.error;
+    else if (resumed.status === "stale" || (resumed.status === "unavailable" && resumed.cause === "coordination")) return;
+  }
+  for (const name of ackNames) {
     let ack;
     try { ack = JSON.parse(readFileSync(join(channelAckDirectory, name), "utf8")); } catch { continue; }
     const key = name.slice(0, -5);
@@ -478,15 +559,7 @@ function handleChannelInput() {
         pendingChannelInput = pending;
         if (child.stdin.destroyed || !child.stdin.writable) pending.settled = true;
         else {
-          try { child.stdin.write(bytes, (error) => {
-            pending.status = error ? "failed" : "acknowledged";
-            pending.settled = true;
-            try {
-              const line = `${JSON.stringify({ t: Date.now(), event: "stdin.write", pid: process.pid, dir: config.directory, status: pending.status, bytes: bytes.byteLength, writable: child.stdin.writable, destroyed: child.stdin.destroyed, error: error ? String(error.message ?? error) : undefined })}\n`;
-              appendFileSync(join(config.directory, "task12-trace.log"), line);
-              appendFileSync("/tmp/task12-mcp-traces.log", line);
-            } catch {}
-          }); }
+          try { child.stdin.write(bytes, (error) => { pending.status = error ? "failed" : "acknowledged"; pending.settled = true; }); }
           catch { pending.settled = true; }
         }
         return;
@@ -534,6 +607,8 @@ function completeControl(request, apply) {
     apply: () => {
       if (!exactRequestStillPublished()) return { disposition: "deferred" };
       const value = apply();
+      if (value === Symbol.for("aiboard.runner-v2.posix-control-deferred"))
+        return { disposition: "deferred" };
       handledControl = request.sequence;
       return { disposition: "applied", value };
     },
@@ -561,10 +636,39 @@ function publishChannelInputAck(command, status, reason) {
   writeAtomic(join(channelAckDirectory, `input-${String(command.sequence).padStart(12, "0")}.json`), JSON.stringify({ nonce: config.nonce, ownerId: command.ownerId, fencingToken: command.fencingToken, sequence: command.sequence, status, ...(reason ? { reason } : {}) }));
 }
 
+function waitForExactWindowsLockHolder(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try {
+      const holder = JSON.parse(readFileSync(lockHolderPath, "utf8"));
+      return holder.nonce === config.nonce && holder.holderPid === process.pid &&
+        typeof holder.holderBirth === "string" && holder.holderBirth.length > 0;
+    } catch (error) {
+      if (!["ENOENT", "EBUSY", "EPERM", "EACCES"].includes(error?.code)) return false;
+    }
+    if (Date.now() >= deadline) return false;
+    Atomics.wait(waiter, 0, 0, Math.min(10, Math.max(0, deadline - Date.now())));
+  }
+}
+
+function readFenceHolderForEffect() {
+  const deadline = Date.now() + FENCE_HOLDER_READ_RETRY_MS;
+  const waiter = new Int32Array(new SharedArrayBuffer(4));
+  for (;;) {
+    try { return JSON.parse(readFileSync(lockHolderPath, "utf8")); }
+    catch (error) {
+      if (error?.code !== "EBUSY" || Date.now() >= deadline) throw error;
+      const remaining = Math.max(0, deadline - Date.now());
+      Atomics.wait(waiter, 0, 0, Math.min(FENCE_HOLDER_READ_RETRY_DELAY_MS, remaining));
+    }
+  }
+}
+
 function withCurrentFenceEffect(ownerId, fencingToken, effect) {
   const lock = join(config.directory, ".fence.lock");
   try {
-    const holder = JSON.parse(readFileSync(lockHolderPath, "utf8"));
+    const holder = readFenceHolderForEffect();
     if (holder.nonce !== config.nonce || holder.holderPid !== process.pid || typeof holder.holderBirth !== "string" || !holder.holderBirth)
       throw new Error("Portable fence holder identity is invalid.");
     return runPortableFenceEffectSync({
@@ -595,25 +699,28 @@ function waitForChildStartup(timeoutMs) {
   return undefined;
 }
 
+function publishPosixBootstrapUnknown(message) {
+  launchEffect = "unknown";
+  posixTerminalError = message;
+  publish("outcome_unknown", message);
+}
+
 function initializePosixBootstrap() {
   const supervisor = inspectPosixProcessIdentity(process.pid);
   if (supervisor.state !== "present") {
-    launchEffect = "unknown";
-    publish("outcome_unknown", "POSIX supervisor birth identity was unavailable before bootstrap release.");
+    publishPosixBootstrapUnknown("POSIX supervisor birth identity was unavailable before bootstrap release.");
     return;
   }
   posixSupervisorBirth = supervisor.value.birth;
   const prepared = waitForPosixPrepared(5_000);
   const workloadGroup = prepared && parsePosixBootstrapPrepared(prepared, config.nonce, child.pid);
   if (!workloadGroup) {
-    launchEffect = "unknown";
-    publish("outcome_unknown", "POSIX detached bootstrap did not publish an exact prepared workload identity.");
+    publishPosixBootstrapUnknown("POSIX detached bootstrap did not publish an exact prepared workload identity.");
     return;
   }
   const exactAnchor = reattestOwnedPosixAnchor(workloadGroup);
   if (exactAnchor.state !== "ready") {
-    launchEffect = "unknown";
-    publish("outcome_unknown", "POSIX detached bootstrap identity could not be independently re-attested before go.");
+    publishPosixBootstrapUnknown("POSIX detached bootstrap identity could not be independently re-attested before go.");
     return;
   }
   posixWorkloadGroup = workloadGroup;
@@ -629,20 +736,28 @@ function initializePosixBootstrap() {
     publish("outcome_unknown", "POSIX go barrier cannot be bound because the current fence is unavailable.");
     return;
   }
-  const outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
-    const currentAnchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
-    if (currentAnchor.state !== "ready") throw new Error("POSIX detached bootstrap identity changed before go.");
-    writeAtomic(childGoPath, JSON.stringify({
-      protocol: "aiboard-portable-process/v2-posix-go",
-      nonce: config.nonce,
-      supervisorPid: process.pid,
-      supervisorBirth: posixSupervisorBirth,
-      ownerId: current.ownerId,
-      fencingToken: current.fencingToken,
-      workloadGroup: posixWorkloadGroup,
-    }));
-  });
-  if (outcome.status !== "applied") {
+  const goDeadline = Date.now() + 5_000;
+  let outcome;
+  for (;;) {
+    outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
+      const currentAnchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
+      if (currentAnchor.state === "outcome_unknown") return "deferred";
+      if (currentAnchor.state !== "ready") throw new Error("POSIX detached bootstrap identity changed before go.");
+      writeAtomic(childGoPath, JSON.stringify({
+        protocol: "aiboard-portable-process/v2-posix-go",
+        nonce: config.nonce,
+        supervisorPid: process.pid,
+        supervisorBirth: posixSupervisorBirth,
+        ownerId: current.ownerId,
+        fencingToken: current.fencingToken,
+        workloadGroup: posixWorkloadGroup,
+      }));
+    });
+    if (outcome.status !== "applied" || outcome.value !== "deferred") break;
+    if (Date.now() >= goDeadline) break;
+    Atomics.wait(posixBarrierWaiter, 0, 0, 10);
+  }
+  if (outcome.status !== "applied" || outcome.value === "deferred") {
     launchEffect = "unknown";
     publish("outcome_unknown", "POSIX go barrier could not be committed under the current fence.");
     return;
@@ -702,40 +817,42 @@ function readPosixChildStatus() {
 
 function refreshPosixChildStatus() {
   const value = readPosixChildStatus();
-  if (!value) return;
+  if (!value) return "unchanged";
   const signature = JSON.stringify(value);
-  if (signature === posixChildStatusSignature) return;
+  if (signature === posixChildStatusSignature) return "unchanged";
+  if (value.status === "released") {
+    const release = recordCausalPosixAnchorRelease(value.anchorRelease);
+    if (release === "recorded") posixChildStatusSignature = signature;
+    return release === "deferred" ? "release_deferred" : release === "recorded" ? "updated" : "release_invalid";
+  }
   posixChildStatusSignature = signature;
   if (value.status === "started") {
     launchEffect = "started";
-    return;
+    return "updated";
   }
   if (value.status === "exited") {
     launchEffect = "started";
     targetExited = true;
     targetExitCode = value.exitCode;
     targetSignal = value.signal;
-    return;
-  }
-  if (value.status === "released") {
-    recordCausalPosixAnchorRelease(value.anchorRelease);
-    return;
+    return "updated";
   }
   if (value.status === "error") {
     launchEffect = "started";
     targetExited = true;
     posixTerminalError = value.error;
   }
+  return "updated";
 }
 
 function recordCausalPosixAnchorRelease(release) {
-  if (!posixAnchorReleaseRequested || !posixAnchorReleaseAuthority || !posixSupervisorBirth) return false;
+  if (!posixAnchorReleaseRequested || !posixAnchorReleaseAuthority || !posixSupervisorBirth) return "invalid";
   const expectedSupervisor = { supervisorPid: process.pid, supervisorBirth: posixSupervisorBirth };
   // This is observation of a previously fenced, consumed release, not a new
   // release effect. A higher-fence cleanup owner may join its exact receipt.
   const current = readCurrentFence();
   if (!current || current.fencingToken < posixAnchorReleaseAuthority.fencingToken ||
-      (current.fencingToken === posixAnchorReleaseAuthority.fencingToken && current.ownerId !== posixAnchorReleaseAuthority.ownerId)) return false;
+      (current.fencingToken === posixAnchorReleaseAuthority.fencingToken && current.ownerId !== posixAnchorReleaseAuthority.ownerId)) return "invalid";
   const outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
     const latestRelease = readJson(anchorReleasePath);
     if (!isExactPosixAnchorRelease(release, config.nonce, posixWorkloadGroup, expectedSupervisor, posixAnchorReleaseAuthority) ||
@@ -743,7 +860,9 @@ function recordCausalPosixAnchorRelease(release) {
     posixChildReleasedAnchorRelease = release;
     return true;
   });
-  return outcome.status === "applied" && outcome.value === true;
+  if (outcome.status === "applied") return outcome.value === true ? "recorded" : "invalid";
+  if (outcome.status === "stale" || outcome.status === "unavailable" && outcome.cause === "coordination") return "deferred";
+  return "invalid";
 }
 
 function hasCausalPosixAnchorRelease() {
@@ -752,10 +871,11 @@ function hasCausalPosixAnchorRelease() {
 
 function requestPosixAnchorRelease() {
   const current = readCurrentFence();
-  if (!current || !Number.isSafeInteger(current.fencingToken) || current.fencingToken < 1) return false;
-  if (samePosixFenceAuthority(posixAnchorReleaseAuthority, current)) return true;
+  if (!current || !Number.isSafeInteger(current.fencingToken) || current.fencingToken < 1) return "invalid";
+  if (samePosixFenceAuthority(posixAnchorReleaseAuthority, current)) return "requested";
   const outcome = withCurrentFenceEffect(current.ownerId, current.fencingToken, () => {
     const anchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
+    if (anchor.state === "outcome_unknown") return "deferred";
     if (anchor.state !== "ready" || anchor.members.length !== 1 || anchor.members[0] !== posixWorkloadGroup.leaderPid)
       throw new Error("POSIX workload no longer consists of its exact anchor alone.");
     writeAtomic(anchorReleasePath, JSON.stringify({
@@ -768,10 +888,14 @@ function requestPosixAnchorRelease() {
       workloadGroup: posixWorkloadGroup,
     }));
   });
-  if (outcome.status !== "applied") return false;
+  if (outcome.status === "applied" && outcome.value === "deferred") return "deferred";
+  if (outcome.status !== "applied")
+    return outcome.status === "stale" || outcome.status === "unavailable" && outcome.cause === "coordination"
+      ? "deferred"
+      : "invalid";
   posixAnchorReleaseRequested = true;
   posixAnchorReleaseAuthority = { ownerId: current.ownerId, fencingToken: current.fencingToken };
-  return true;
+  return "requested";
 }
 
 function hasCurrentPosixAnchorReleaseAuthority() {
@@ -849,6 +973,28 @@ function handleControl() {
     completeControl(request, () => undefined);
     return;
   }
+  // Once the POSIX anchor has actually exited there is no graceful group
+  // control left to apply. Only force may still target birth-attested surviving
+  // descendants; graceful requests are stale no-ops and must not block lifecycle
+  // retirement or terminal output settlement.
+  if (config.platform === "posix" && posixAnchorExited && request.action !== "force_terminate") {
+    completeControl(request, () => undefined);
+    return;
+  }
+  if (config.platform === "posix") {
+    const signature = `${request.ownerId}\0${request.fencingToken}\0${request.sequence}\0${request.action}`;
+    if (posixDeferredControlSignature !== signature) {
+      posixDeferredControlSignature = signature;
+      posixControlInspectionFailures = 0;
+      posixControlInspectionDetail = "";
+    }
+    if (posixControlInspectionFailures >= POSIX_CONTROL_INSPECTION_FAILURE_LIMIT) {
+      posixControlInspectionDeferred = true;
+      if (!posixControlInspectionDetail)
+        posixControlInspectionDetail = `POSIX destructive control inspection remained unavailable after ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT} attempts.`;
+      return;
+    }
+  }
   if (config.platform === "windows") {
     if (config.windowsControlInspector) refreshWindowsTree();
     if (ownershipInspectionUnknown) {
@@ -909,9 +1055,12 @@ function handleControl() {
         return;
       }
       if (observedDescendants.state === "outcome_unknown") {
-        // Refuse the numeric kill, but do not poison status. Output settlement
-        // only accepts running|stopping|stopped; a transient inspect race must
-        // retry on the next tick instead of making retained output unprovable.
+        // Refuse the numeric kill, but do not poison status during the bounded
+        // retry window. The same exact request stops launching host inspection
+        // tools after the limit and becomes durable outcome_unknown evidence.
+        posixControlInspectionDeferred = true;
+        posixControlInspectionFailures += 1;
+        posixControlInspectionDetail = `POSIX descendant ownership inspection is unavailable (attempt ${posixControlInspectionFailures} of ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT}).`;
         return;
       }
       if (observedDescendants.state !== "ready") {
@@ -924,6 +1073,12 @@ function handleControl() {
           posixForceControlApplied = true;
           return { state: "signalled" };
         }
+        if (current.state === "outcome_unknown") {
+          posixControlInspectionDeferred = true;
+          posixControlInspectionFailures += 1;
+          posixControlInspectionDetail = `POSIX descendant ownership inspection is unavailable inside the fence (attempt ${posixControlInspectionFailures} of ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT}).`;
+          return Symbol.for("aiboard.runner-v2.posix-control-deferred");
+        }
         if (current.state !== "ready") return { state: "anchor_unavailable" };
         signalOwnedPosixGroup(request.action, process.kill, posixWorkloadGroup.groupId);
         posixForceControlApplied = true;
@@ -934,12 +1089,24 @@ function handleControl() {
       return;
     }
     const observedAnchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
+    if (observedAnchor.state === "outcome_unknown") {
+      posixControlInspectionDeferred = true;
+      posixControlInspectionFailures += 1;
+      posixControlInspectionDetail = `POSIX anchor ownership inspection is unavailable (attempt ${posixControlInspectionFailures} of ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT}).`;
+      return;
+    }
     if (observedAnchor.state !== "ready") {
       publish("outcome_unknown", "POSIX workload anchor is unavailable at the control boundary; refusing numeric-only group control.");
       return;
     }
     const applied = completeControl(request, () => {
       const anchor = reattestOwnedPosixAnchor(posixWorkloadGroup);
+      if (anchor.state === "outcome_unknown") {
+        posixControlInspectionDeferred = true;
+        posixControlInspectionFailures += 1;
+        posixControlInspectionDetail = `POSIX anchor ownership inspection is unavailable inside the fence (attempt ${posixControlInspectionFailures} of ${POSIX_CONTROL_INSPECTION_FAILURE_LIMIT}).`;
+        return Symbol.for("aiboard.runner-v2.posix-control-deferred");
+      }
       if (anchor.state !== "ready") return { state: "anchor_unavailable" };
       signalOwnedPosixGroup(request.action, process.kill, posixWorkloadGroup.groupId);
       if (request.action === "force_terminate") posixForceControlApplied = true;
@@ -1147,6 +1314,7 @@ function activeOwnedPids() {
   if (!lastWindowsProcesses) return undefined;
   const active = [];
   for (const [pid, birth] of knownProcesses) {
+    if (targetExited && (pid === rootProcess?.pid || lastWindowsParents?.get(pid) === rootProcess?.pid)) continue;
     const observed = lastWindowsProcesses.get(pid);
     if (observed && sameBirth(observed, birth)) active.push(pid);
   }

@@ -4,9 +4,11 @@ import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 
 import type { PermissionProfile } from "./contracts.js";
-import type {
-  ExecutionInvocationIntent,
-  ExecutionSafetyCapabilities,
+import {
+  parseExecutionLifecycleAttestation,
+  type ExecutionInvocationIntent,
+  type ExecutionLifecycleAttestation,
+  type ExecutionSafetyCapabilities,
 } from "./execution-safety-contracts.js";
 import {
   assertRunnerConsumedExecutionGrantClaims,
@@ -36,12 +38,13 @@ export class ExecutionIsolationError extends Error {
 }
 
 export interface ExecutionIsolationAttestation {
-  readonly attestationVersion: 1;
+  readonly attestationVersion: 2;
   readonly providerId: string;
   readonly verified: boolean;
   readonly mechanism: string;
   readonly implementationDigest?: string;
   readonly exactGrantWriteConfinement: boolean;
+  readonly lifecycle: ExecutionLifecycleAttestation;
   /** Independently probed OCI create/start duplex support. */
   readonly interactiveAttach?: boolean;
   readonly expiresAt?: string;
@@ -341,7 +344,7 @@ export function createExecutionIsolationSelector(
     }): Promise<ExecutionIsolationSelection> {
       assertRunnerConsumedExecutionGrantClaims(input.grant);
       assertGrantMatches(input.intent, input.grant, input.permissionProfile, clock());
-      if (input.permissionProfile === "full") {
+      if (input.permissionProfile === "full" && input.intent.requiredLifecycleScope === "process_group") {
         reserveGrant(input.grant);
         await persist({
           occurredAt: clock().toISOString(), runId: input.intent.runId,
@@ -353,6 +356,9 @@ export function createExecutionIsolationSelector(
           enforcement: "unconfined_explicit_full" as const,
           disclosure: "unconfined_explicit_full" as const,
         });
+      }
+      if (input.permissionProfile !== "full" && input.intent.requiredLifecycleScope !== "contained_workload") {
+        throw new ExecutionIsolationError("isolation_capability_unavailable", "Strict execution requires contained-workload lifecycle scope before provider selection.");
       }
       for (const provider of providers) {
         let attestation: ExecutionIsolationAttestation;
@@ -429,6 +435,19 @@ export function createExecutionIsolationSelector(
           throw error;
         }
         return selection;
+      }
+      if (input.permissionProfile === "full") {
+        reserveGrant(input.grant);
+        await persist({
+          occurredAt: clock().toISOString(), runId: input.intent.runId,
+          invocationId: input.intent.invocationId, grantId: input.grant.grantId,
+          status: "unconfined_explicit_full", enforcement: "unconfined_explicit_full",
+          disclosure: "unconfined_explicit_full", access: input.grant.access,
+        });
+        return Object.freeze({
+          enforcement: "unconfined_explicit_full" as const,
+          disclosure: "unconfined_explicit_full" as const,
+        });
       }
       await persist({
         occurredAt: clock().toISOString(), runId: input.intent.runId, invocationId: input.intent.invocationId,
@@ -865,10 +884,10 @@ function isRecoveryAuditTransition(
 function parseAttestation(value: unknown): ExecutionIsolationAttestation {
   const input = exactObject(value, new Set([
     "attestationVersion", "providerId", "verified", "mechanism",
-    "implementationDigest", "exactGrantWriteConfinement", "expiresAt", "capabilities",
+    "implementationDigest", "exactGrantWriteConfinement", "lifecycle", "expiresAt", "capabilities",
     "executableIdentity", "imageIdentity", "interactiveAttach",
   ]));
-  if (input.attestationVersion !== 1 || typeof input.verified !== "boolean" ||
+  if (input.attestationVersion !== 2 || typeof input.verified !== "boolean" ||
       typeof input.exactGrantWriteConfinement !== "boolean" ||
       (input.interactiveAttach !== undefined && typeof input.interactiveAttach !== "boolean")) throw new Error();
   const capabilities = exactObject(input.capabilities, new Set([
@@ -877,13 +896,14 @@ function parseAttestation(value: unknown): ExecutionIsolationAttestation {
   const states = new Set(["enforced", "partial", "unavailable", "unverified"]);
   for (const state of Object.values(capabilities)) if (!states.has(state as string)) throw new Error();
   return deepFreeze({
-    attestationVersion: 1 as const,
+    attestationVersion: 2 as const,
     providerId: safeId(input.providerId),
     verified: input.verified,
     mechanism: safeText(input.mechanism),
     ...(input.implementationDigest === undefined
       ? {} : { implementationDigest: safeDigest(input.implementationDigest) }),
     exactGrantWriteConfinement: input.exactGrantWriteConfinement,
+    lifecycle: deepFreeze(parseExecutionLifecycleAttestation(input.lifecycle)),
     ...(input.interactiveAttach === undefined
       ? {} : { interactiveAttach: input.interactiveAttach }),
     ...(input.expiresAt === undefined ? {} : { expiresAt: dateText(input.expiresAt) }),
@@ -913,6 +933,9 @@ function qualifies(
     ociIdentity &&
     attestation.providerId === provider.providerId &&
     attestation.exactGrantWriteConfinement === true &&
+    attestation.lifecycle.scope === "contained_workload" &&
+    attestation.lifecycle.termination === "enforced" &&
+    attestation.lifecycle.emptiness === "enforced" &&
     attestation.capabilities.write_confinement === "enforced" &&
     (!attestation.implementationDigest ||
       attestation.implementationDigest === provider.implementationDigest) &&

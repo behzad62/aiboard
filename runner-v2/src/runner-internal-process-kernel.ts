@@ -16,6 +16,7 @@ import {
   parseProcessReconciliation,
   parseProcessReleaseResult,
   parseProcessSignalResult,
+  ProcessReleasePendingError,
   type ProcessBackend,
   type ProcessBackendBinding,
   type ProcessEffectFence,
@@ -103,6 +104,7 @@ export function createRunnerInternalProcessKernel(options: {
       });
       const invocationId = boundedIdentity(input.callId, "callId");
       const probe = parseProcessBackendProbe(await backend.probe(fence));
+      if (probe.attestationVersion !== 2) throw new Error("Runner internal process backend uses a legacy lifecycle attestation.");
       const rawLaunch = await backend.launch({
         intent: {
           invocationId,
@@ -111,10 +113,8 @@ export function createRunnerInternalProcessKernel(options: {
           executable: input.executable,
           arguments: Object.freeze([...input.arguments]),
           workingDirectory: input.workingDirectory,
-          requestedCapabilities: Object.freeze([
-            "tree_termination",
-            "verified_emptiness",
-          ]),
+          requiredLifecycleScope: "process_group",
+          requestedCapabilities: Object.freeze([]),
         },
         grant: {
           grantId: `internal-grant-${randomUUID()}`,
@@ -295,7 +295,16 @@ export function createRunnerInternalProcessKernel(options: {
             }
             unsubscribe();
             await channel.detach();
-            parseProcessReleaseResult(await backend.release(binding, fence));
+            const releaseDeadline = Date.now() + terminationTimeoutMs;
+            for (;;) {
+              try {
+                parseProcessReleaseResult(await backend.release(binding, fence));
+                break;
+              } catch (error) {
+                if (!(error instanceof ProcessReleasePendingError) || Date.now() >= releaseDeadline) throw error;
+                await delay(Math.min(POLL_INTERVAL_MS, Math.max(1, releaseDeadline - Date.now())));
+              }
+            }
             active.delete(owned);
             return disposition;
           })();

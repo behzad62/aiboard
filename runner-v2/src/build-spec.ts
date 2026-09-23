@@ -6,6 +6,10 @@ import {
   cloneRunnerCapabilityContract,
   type RunnerCapabilityContract,
 } from "./runner-capability-contract.js";
+import {
+  PLAN_CRITIQUE_MODES,
+  type PlanCritiqueMode,
+} from "./plan-critique-contracts.js";
 
 export type NativeBuildRunPolicy = "finish" | "budgeted" | "plan_only";
 
@@ -26,9 +30,17 @@ export interface NativeBuildSpec {
   verifierRuntimeIds: string[];
   /** Strengthens low-risk qualification; it never disables the high-risk gate. */
   alwaysRequireIndependentVerifier: boolean;
+  /** Kernel-counted repair plans per run; omitted means the runtime default. */
+  repairPlanLimit?: number;
   maxConcurrency: number;
   permissionProfile: PermissionProfile;
   runPolicy: NativeBuildRunPolicy;
+  /** Digest-only manifests by default; "full" also stores rendered pack text. */
+  contextRecording?: "manifest" | "full";
+  /** Plan-critique policy; omitted means the runtime default of risk_based. */
+  planCritique?: PlanCritiqueMode;
+  /** Two-pass independent verification; omitted on legacy specs, default true for new runs. */
+  verifierTwoPass?: boolean;
   budgetLimits: BudgetLimits;
   createdAt: string;
   idempotencyKey: string;
@@ -92,6 +104,12 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
       "Build spec independent verifier qualification must be a boolean."
     );
   }
+  if (
+    spec.repairPlanLimit !== undefined &&
+    (!Number.isSafeInteger(spec.repairPlanLimit) || spec.repairPlanLimit < 0)
+  ) {
+    throw new Error("Build spec repairPlanLimit must be a non-negative integer.");
+  }
   if (!Number.isSafeInteger(spec.maxConcurrency) || spec.maxConcurrency < 1) {
     throw new Error("Build spec maxConcurrency must be positive.");
   }
@@ -100,6 +118,22 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
   }
   if (!(["finish", "budgeted", "plan_only"] as unknown[]).includes(spec.runPolicy)) {
     throw new Error("Build spec run policy is invalid.");
+  }
+  if (
+    spec.contextRecording !== undefined &&
+    spec.contextRecording !== "manifest" &&
+    spec.contextRecording !== "full"
+  ) {
+    throw new Error("Build spec contextRecording must be manifest or full.");
+  }
+  if (
+    spec.planCritique !== undefined &&
+    !(PLAN_CRITIQUE_MODES as readonly string[]).includes(spec.planCritique)
+  ) {
+    throw new Error("Build spec planCritique must be risk_based, always, or off.");
+  }
+  if (spec.verifierTwoPass !== undefined && typeof spec.verifierTwoPass !== "boolean") {
+    throw new Error("Build spec verifierTwoPass must be a boolean.");
   }
   assertBudgetLimits(spec.budgetLimits);
   if (spec.capabilityContract !== undefined) {
@@ -192,6 +226,10 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
     ...(spec.capabilityContract
       ? { capabilityContract: cloneRunnerCapabilityContract(spec.capabilityContract) }
       : {}),
+    ...(spec.repairPlanLimit !== undefined ? { repairPlanLimit: spec.repairPlanLimit } : {}),
+    ...(spec.contextRecording !== undefined ? { contextRecording: spec.contextRecording } : {}),
+    ...(spec.planCritique !== undefined ? { planCritique: spec.planCritique } : {}),
+    ...(spec.verifierTwoPass !== undefined ? { verifierTwoPass: spec.verifierTwoPass } : {}),
     ...(spec.benchmark
       ? {
           benchmark: {

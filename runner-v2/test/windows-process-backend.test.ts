@@ -12,8 +12,164 @@ import test from "node:test";
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
+import vm from "node:vm";
+import ts from "typescript";
 import { inspectWindowsFixtureBirth, runLateBirthFixture } from "./support/late-birth-fixture.js";
 import { createLateBirthFixtureClock } from "./support/late-birth-clock.js";
+import { withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
+
+// Test-only outer guard. Several real Windows fixtures deliberately exercise
+// product-owned 15-30s bounds; the harness must outlive those bounds on hosted VMs.
+const WINDOWS_HOST_FIXTURE_TIMEOUT_MS = 90_000;
+
+test("Windows portable supervisor retries transient lock-holder read contention at the fence effect boundary", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let reads = 0;
+  let effects = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250,
+    FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
+    config: { directory: "root", nonce: "nonce" },
+    join,
+    lockHolderPath: "root/lock-holder.json",
+    process: { pid: 9001 },
+    PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
+    readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
+    readFileSync: (path: string) => {
+      assert.equal(path.replace(/\\/g, "/"), "root/lock-holder.json");
+      reads += 1;
+      if (reads === 1) throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      return JSON.stringify({ nonce: "nonce", holderPid: 9001, holderBirth: "birth" });
+    },
+    runPortableFenceEffectSync: (options: { effect: () => unknown }) => {
+      effects += 1;
+      return { status: "applied", value: options.effect() };
+    },
+  });
+  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  assert.deepEqual(vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'ok')", context), { status: "applied", value: "ok" });
+  assert.equal(reads, 2, "one transient Windows file-contention read must be retried");
+  assert.equal(effects, 1, "the protected effect runs only after exact holder identity is proven");
+});
+
+test("Windows portable supervisor bounds persistent lock-holder contention by wall clock", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let reads = 0;
+  let effects = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250, FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
+    config: { directory: "root", nonce: "nonce" }, join, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
+    readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
+    readFileSync: () => { reads += 1; throw Object.assign(new Error("busy"), { code: "EBUSY" }); },
+    runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
+  });
+  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  const started = Date.now();
+  const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
+  const elapsed = Date.now() - started;
+  assert.deepEqual({ status: result.status, cause: result.cause }, { status: "unavailable", cause: "authority" });
+  assert.ok(elapsed >= 200 && elapsed < 1_000, `persistent contention must stop near the 250ms wall budget, elapsed=${elapsed}`);
+  assert.ok(reads > 1);
+  assert.equal(effects, 0);
+});
+
+test("Windows portable supervisor does not classify a missing lock-holder as effect-level contention", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let reads = 0;
+  let effects = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250, FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
+    config: { directory: "root", nonce: "nonce" }, join, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
+    readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
+    readFileSync: () => { reads += 1; throw Object.assign(new Error("missing"), { code: "ENOENT" }); },
+    runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
+  });
+  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
+  assert.deepEqual({ status: result.status, cause: result.cause }, { status: "unavailable", cause: "authority" });
+  assert.equal(reads, 1, "missing holder is startup/readiness evidence, not effect-level lock contention");
+  assert.equal(effects, 0);
+});
+
+test("Windows portable supervisor waits for slow lock-holder publication before child startup and rejects a broken holder immediately", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const helper = extractOptionalNamedFunction(source, "waitForExactWindowsLockHolder");
+  assert.notEqual(helper, "", "Windows startup must have an explicit lock-holder readiness barrier");
+  assert.match(source, /const WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS = 15_000;/,
+    "the readiness budget must match the parent's bounded Windows supervisor birth-discovery window");
+  assert.match(source, /config\.fence === undefined \|\| waitForExactWindowsLockHolder\(WINDOWS_LOCK_HOLDER_READINESS_DEADLINE_MS\)/,
+    "the production parent-managed Windows launch path must cross the readiness barrier before child startup");
+  assert.match(source, /windowsLaunchUnknownDetail/,
+    "Windows startup must retain the specific ownership-readiness failure reason instead of overwriting it with a generic birth-inspection error");
+
+  let reads = 0;
+  const delayed = vm.createContext({
+    Atomics, Date, JSON, Int32Array, SharedArrayBuffer,
+    config: { nonce: "nonce" }, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    readFileSync: () => {
+      reads += 1;
+      if (reads <= 2) throw Object.assign(new Error("not published yet"), { code: "ENOENT" });
+      return JSON.stringify({ nonce: "nonce", holderPid: 9001, holderBirth: "birth" });
+    },
+  });
+  vm.runInContext(helper, delayed);
+  assert.equal(vm.runInContext("waitForExactWindowsLockHolder(100)", delayed), true);
+  assert.equal(reads, 3, "slow publication is retried only at startup readiness");
+
+  for (const code of ["EBUSY", "EPERM", "EACCES"] as const) {
+    let transientReads = 0;
+    const transient = vm.createContext({
+      Atomics, Date, JSON, Int32Array, SharedArrayBuffer,
+      config: { nonce: "nonce" }, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+      readFileSync: () => {
+        transientReads += 1;
+        if (transientReads === 1) throw Object.assign(new Error(code), { code });
+        return JSON.stringify({ nonce: "nonce", holderPid: 9001, holderBirth: "birth" });
+      },
+    });
+    vm.runInContext(helper, transient);
+    assert.equal(vm.runInContext("waitForExactWindowsLockHolder(100)", transient), true, `${code} is transient only during startup readiness`);
+    assert.equal(transientReads, 2, `${code} should retry once then accept the exact published holder`);
+  }
+
+  let mismatchReads = 0;
+  const broken = vm.createContext({
+    Atomics, Date, JSON, Int32Array, SharedArrayBuffer,
+    config: { nonce: "nonce" }, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    readFileSync: () => {
+      mismatchReads += 1;
+      return JSON.stringify({ nonce: "nonce", holderPid: 9002, holderBirth: "replacement" });
+    },
+  });
+  vm.runInContext(helper, broken);
+  assert.equal(vm.runInContext("waitForExactWindowsLockHolder(100)", broken), false);
+  assert.equal(mismatchReads, 1, "a published foreign holder is broken authority, not slow startup");
+});
+
+test("Windows portable supervisor never retries a mismatched readable lock-holder identity", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  let reads = 0;
+  let effects = 0;
+  const context = vm.createContext({
+    Atomics, Date, Error, JSON, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250, FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
+    config: { directory: "root", nonce: "nonce" }, join, lockHolderPath: "root/lock-holder.json", process: { pid: 9001 },
+    PortableAuthorityUnavailableError: class PortableAuthorityUnavailableError extends Error {},
+    readCurrentFenceStrict: () => ({ ownerId: "owner", fencingToken: 1 }),
+    readFileSync: () => { reads += 1; return JSON.stringify({ nonce: "nonce", holderPid: 9002, holderBirth: "replacement" }); },
+    runPortableFenceEffectSync: () => { effects += 1; return { status: "applied", value: "unexpected" }; },
+  });
+  vm.runInContext(`${extractNamedFunction(source, "readFenceHolderForEffect")}\n${extractNamedFunction(source, "withCurrentFenceEffect")}`, context);
+  const result = vm.runInContext("withCurrentFenceEffect('owner', 1, () => 'no')", context) as { status: string; cause?: string };
+  assert.deepEqual({ status: result.status, cause: result.cause }, { status: "unavailable", cause: "authority" });
+  assert.equal(reads, 1, "readable stale holder identity is terminal, not retryable contention");
+  assert.equal(effects, 0);
+});
 
 for (const mode of ["present", "absent", "recycled", "malformed", "inspection_error", "cancel"] as const) {
   test(`round4 default native birth observation preserves ${mode} and joins inspection close`, async (t) => {
@@ -497,7 +653,7 @@ test("Windows portable launch consumes the caller's shared absolute startup dead
   }
 });
 
-test("Windows portable launch rejects a birth result that arrives after its absolute deadline", { timeout: 30_000 }, async (t) => {
+test("Windows portable launch rejects a birth result that arrives after its absolute deadline", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-late-birth-deadline-"));
   console.log(`C5 round9 late-birth root created: ${root}`);
   const stateDirectory = join(root, "state");
@@ -517,7 +673,7 @@ test("Windows portable launch rejects a birth result that arrives after its abso
       // Capture a genuine identity first. The old pre-query sleep could let the
       // supervisor exit before observation and therefore tested a missing birth,
       // not a present birth result returned after its absolute deadline.
-      firstObservation = lateClock.observeBeforeExpiry(() => inspectWindowsFixtureBirth(pid, platform, 2_000));
+      firstObservation = lateClock.observeBeforeExpiry(() => inspectWindowsFixtureBirth(pid, platform, 10_000));
       t.diagnostic(`C5 late birth observed: ${JSON.stringify({ root, pid, state: firstObservation.state, wallAt: realNow(), deadlineAt: startupDeadlineAt, fixtureAt: lateClock.now() })}`);
       return firstObservation;
     },
@@ -749,6 +905,22 @@ test("unverified batch argv rejects Job batch targets without disabling native J
   assert.equal(launches, 1, "the batch fact must not disable a native executable");
 });
 
+test("Windows terminal membership ignores the exited bootstrap and direct workload while retaining a known descendant", () => {
+  const source = readFileSync(new URL("../src/portable-process-supervisor.mjs", import.meta.url), "utf8");
+  const context = vm.createContext({
+    Map,
+    config: { platform: "windows" },
+    targetExited: true,
+    rootProcess: { pid: 9001, birth: "root-birth" },
+    knownProcesses: new Map([[9001, "root-birth"], [9002, "workload-birth"], [9003, "descendant-birth"]]),
+    lastWindowsProcesses: new Map([[9001, "root-birth"], [9002, "workload-birth"], [9003, "descendant-birth"]]),
+    lastWindowsParents: new Map([[9001, 1], [9002, 9001], [9003, 9002]]),
+  });
+  vm.runInContext(`${extractNamedFunction(source, "normalizeBirth")}\n${extractNamedFunction(source, "sameBirth")}\n${extractNamedFunction(source, "activeOwnedPids")}`, context);
+  assert.deepEqual(Array.from(vm.runInContext("activeOwnedPids()", context)), [9003],
+    "stale rows for the exited bootstrap and its direct workload cannot hold terminal state open, while an exact known descendant remains live");
+});
+
 test("Windows portable supervisor reuses one birth-tagged tree snapshot per ownership tick", () => {
   const source = readFileSync(join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs"), "utf8");
   assert.equal(source.match(/Get-CimInstance Win32_Process/g)?.length, 1);
@@ -776,7 +948,7 @@ test("Windows portable supervisor reuses one birth-tagged tree snapshot per owne
     "transient Windows sharing conflicts must leave control pending for the next tick");
 });
 
-test("Windows portable supervisor preserves historical proof without traversing a PID replacement", { timeout: 30_000 }, async (t) => {
+test("Windows portable supervisor preserves historical proof without traversing a PID replacement", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows PID-reuse fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-recycled-tree-"));
   const directory = join(root, "owned-recycled-tree");
@@ -826,7 +998,7 @@ test("Windows portable supervisor preserves historical proof without traversing 
   }
 });
 
-test("Windows portable supervisor rejects a child edge whose birth predates its exact parent", { timeout: 30_000 }, async (t) => {
+test("Windows portable supervisor rejects a child edge whose birth predates its exact parent", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows stale-parent fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-stale-parent-edge-"));
   const directory = join(root, "owned-stale-parent-edge");
@@ -1208,7 +1380,7 @@ test("Windows supervisor treats unavailable CIM inspection as unknown and ignore
   }
 });
 
-test("Windows supervisor watchdog terminates a hung CIM inspector and reaches durable unknown", { timeout: 30_000 }, async (t) => {
+test("Windows supervisor watchdog terminates a hung CIM inspector and reaches durable unknown", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows CIM watchdog fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cim-watchdog-"));
   const directory = join(root, "owned-hung-query"); mkdirSync(directory);
@@ -1250,7 +1422,7 @@ test("Windows supervisor watchdog terminates a hung CIM inspector and reaches du
   }
 });
 
-test("Windows portable startup retries an exact birth inspection with an adaptive bounded budget", { timeout: 30_000 }, async (t) => {
+test("Windows portable startup retries an exact birth inspection with an adaptive bounded budget", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows adaptive birth fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-adaptive-birth-"));
   const directory = join(root, "owned-adaptive-birth"); mkdirSync(directory);
@@ -1299,7 +1471,7 @@ test("portable backend does not cap Windows supervisor birth discovery at the fo
   assert.match(source, /WINDOWS_SUPERVISOR_BIRTH_INSPECTION_DEADLINE_MS/);
 });
 
-test("Windows supervisor adapts its default inventory attempt budget to a slower host", { timeout: 30_000 }, async (t) => {
+test("Windows supervisor adapts its default inventory attempt budget to a slower host", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows adaptive CIM fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-adaptive-cim-"));
   const directory = join(root, "owned-adaptive-query"); mkdirSync(directory);
@@ -1344,7 +1516,7 @@ test("Windows supervisor adapts its default inventory attempt budget to a slower
   }
 });
 
-test("Windows destructive control bounds a hung fresh inspector and never signals under uncertainty", { timeout: 30_000 }, async (t) => {
+test("Windows destructive control bounds a hung fresh inspector and never signals under uncertainty", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows control inspector fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-control-watchdog-"));
   const directory = join(root, "owned-control-query"); mkdirSync(directory);
@@ -1361,12 +1533,7 @@ test("Windows destructive control bounds a hung fresh inspector and never signal
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const running = await waitForPortableState(directory, (value) => value.status === "running" && !!value.rootProcess);
-    writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
-      nonce,
-      holderPid: child.pid,
-      holderBirth: windowsBirth(child.pid!),
-    }));
-    writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
+    publishWindowsFixtureFenceAuthority(directory, nonce, child.pid);
     writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1, sequence: 1, action: "force_terminate" }));
     const unknown = await waitForPortableState(directory, (value) => value.handledControl === 0 && value.status === "outcome_unknown" && /timed out|ETIMEDOUT|inspection/i.test(String(value.error)));
     assert.match(String(unknown.error), /timed out|inspection|control/i);
@@ -1395,7 +1562,21 @@ function windowsBirth(pid: number): string {
   return output.replace(/(\.\d{6})\d+(Z)$/, "$1$2");
 }
 
-test("Windows destructive control bounds taskkill and treats timeout as durable uncertainty", { timeout: 30_000 }, async (t) => {
+function publishWindowsFixtureFenceAuthority(directory: string, nonce: string, holderPid: number): void {
+  const holderBirth = windowsBirth(holderPid);
+  writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({ nonce, holderPid, holderBirth }));
+  // Establish the same durable SQLite coordination protocol used by production.
+  // The no-op releases this setup acquisition while retaining active protocol metadata
+  // for the supervisor's later exact-holder effect acquisition.
+  withOwnedFenceLockSync(join(directory, ".fence.lock"), () => undefined, {
+    holderPid,
+    holderBirth,
+    inspectHolder: () => "same",
+  });
+  writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
+}
+
+test("Windows destructive control bounds taskkill and treats timeout as durable uncertainty", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows taskkill watchdog fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-taskkill-watchdog-"));
   const directory = join(root, "owned-taskkill"); mkdirSync(directory);
@@ -1412,12 +1593,7 @@ test("Windows destructive control bounds taskkill and treats timeout as durable 
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     const running = await waitForPortableState(directory, (value) => value.status === "running" && !!value.rootProcess);
-    writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
-      nonce,
-      holderPid: child.pid,
-      holderBirth: windowsBirth(child.pid!),
-    }));
-    writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
+    publishWindowsFixtureFenceAuthority(directory, nonce, child.pid);
     writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1, sequence: 1, action: "force_terminate" }));
     const unknown = await waitForPortableState(directory, (value) => value.handledControl === 1 && value.status === "outcome_unknown");
     assert.match(String(unknown.error), /taskkill|timed out|control/i);
@@ -1459,12 +1635,7 @@ test("Windows supervisor reattests exact live members before a higher-sequence f
   let hasPrimaryFailure = false; let primaryFailure: unknown;
   try {
     await waitForPortableState(directory, (value) => value.status === "running" && !!value.rootProcess, 10_000);
-    writeFileSync(join(directory, "lock-holder.json"), JSON.stringify({
-      nonce,
-      holderPid: child.pid,
-      holderBirth: windowsBirth(child.pid!),
-    }));
-    writeFileSync(join(directory, "fence.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1 }));
+    publishWindowsFixtureFenceAuthority(directory, nonce, child.pid);
     writeFileSync(join(directory, "control.json"), JSON.stringify({ nonce, ownerId: "control-owner", fencingToken: 1, sequence: 1, action: "terminate" }));
     await waitForPortableState(directory, (value) => value.handledControl === 1 && value.status === "outcome_unknown");
 
@@ -1486,7 +1657,7 @@ test("Windows supervisor reattests exact live members before a higher-sequence f
   }
 });
 
-test("Windows supervisor rejects successful empty CIM inventory as consecutive uncertainty", { timeout: 30_000 }, async (t) => {
+test("Windows supervisor rejects successful empty CIM inventory as consecutive uncertainty", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows CIM empty-inventory fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-cim-empty-")); const directory = join(root, "owned-empty-query"); mkdirSync(directory);
   const supervisor = join(process.cwd(), "runner-v2", "src", "portable-process-supervisor.mjs");
@@ -1670,7 +1841,7 @@ test("Windows portable launch failure verifies owned cleanup instead of killing 
   }
 });
 
-test("Windows launch rollback authenticates force termination at the real live supervisor seam", { timeout: 30_000 }, async (t) => {
+test("Windows launch rollback authenticates force termination at the real live supervisor seam", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows live rollback fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-live-rollback-"));
   const operations: NativeProcessOperations = {
@@ -1723,7 +1894,7 @@ test("Windows launch rollback authenticates force termination at the real live s
   }
 });
 
-test("Windows portable fixture supervisor argv excludes ambient credential sentinels", { timeout: 30_000 }, async (t) => {
+test("Windows portable fixture supervisor argv excludes ambient credential sentinels", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows supervisor argv fixture requires Windows."); return; }
   const key = "AIBOARD_FIXTURE_AMBIENT_SECRET"; const value = `sentinel-${Date.now()}-${Math.random()}`;
   const previous = process.env[key]; process.env[key] = value;
@@ -2075,7 +2246,7 @@ test("Windows Job terminal and release fail closed when owned output evidence di
   }
 });
 
-test("Windows Job output read fails closed when evidence disappears after attach re-attestation", { timeout: 30_000 }, async (t) => {
+test("Windows Job output read fails closed when evidence disappears after attach re-attestation", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows Job output read fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-read-missing-"));
   const stateDirectory = join(root, "state"); const workspace = join(root, "workspace"); mkdirSync(workspace);
@@ -2206,7 +2377,7 @@ test("Windows Job coalesced read acknowledges every exact retained chunk boundar
   }
 });
 
-test("Windows Job signal reports exact empty while retained output drains and exits after acknowledgement", { timeout: 30_000 }, async (t) => {
+test("Windows Job signal reports exact empty while retained output drains and exits after acknowledgement", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows Job retained signal fixture requires a Windows host."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-signal-retained-")); const stateDirectory = join(root, "state"); const workspace = join(root, "workspace"); mkdirSync(workspace);
   const host = createWindowsJobProcessHost({ stateDirectory, stopDeadlineMs: 500 }); const backend = new WindowsJobObjectProcessBackend(host);
@@ -2405,7 +2576,7 @@ test("Windows Job unsubscribe during held host acknowledgement never delivers th
   finally { resume(); await first.detach(); await second.detach(); }
 });
 
-test("Windows Job sink failure leaves a durable unknown terminal until retained output is acknowledged", { timeout: 30_000 }, async (t) => {
+test("Windows Job sink failure leaves a durable unknown terminal until retained output is acknowledged", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") {
     t.skip("Windows Job Object retained-output recovery requires a Windows host.");
     return;
@@ -2447,7 +2618,7 @@ test("Windows Job sink failure leaves a durable unknown terminal until retained 
   }
 });
 
-test("Windows Job acknowledgement failure cannot report clean terminal or release retained output", { timeout: 30_000 }, async (t) => {
+test("Windows Job acknowledgement failure cannot report clean terminal or release retained output", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") {
     t.skip("Windows Job Object retained-output recovery requires a Windows host.");
     return;
@@ -2834,7 +3005,7 @@ test("Windows Job backend restart activates an existing binding with the claimed
   assert.deepEqual(reconciledFences, [higher, higher]);
 });
 
-test("Windows Job host signal returns the post-effect stopped snapshot", { timeout: 30_000 }, async (t) => {
+test("Windows Job host signal returns the post-effect stopped snapshot", { timeout: WINDOWS_HOST_FIXTURE_TIMEOUT_MS }, async (t) => {
   if (process.platform !== "win32") { t.skip("Windows Job signal snapshot fixture requires Windows."); return; }
   const root = mkdtempSync(join(tmpdir(), "aiboard-windows-job-signal-snapshot-"));
   const workspace = join(root, "workspace"); mkdirSync(workspace);
@@ -2864,7 +3035,8 @@ function request(args: string[]) {
       executable: process.execPath,
       arguments: args,
       workingDirectory: process.cwd(),
-      requestedCapabilities: ["tree_termination", "verified_emptiness"] as const,
+      requiredLifecycleScope: "process_group" as const,
+      requestedCapabilities: [] as const,
     },
     grant: {
       grantId: "grant",
@@ -3066,4 +3238,18 @@ function stoppedJobSnapshot(processId: string) {
     stderr: "",
     ownershipReleased: true,
   };
+}
+
+function extractOptionalNamedFunction(source: string, name: string): string {
+  const file = ts.createSourceFile("portable-process-supervisor.mjs", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  const declaration = file.statements.find((statement): statement is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+  );
+  return declaration?.getText(file) ?? "";
+}
+
+function extractNamedFunction(source: string, name: string): string {
+  const declaration = extractOptionalNamedFunction(source, name);
+  if (!declaration) throw new Error(`missing production function ${name}`);
+  return declaration;
 }

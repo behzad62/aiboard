@@ -142,6 +142,7 @@ import {
   resolveNativeBuildRunId,
   selectNativeArchitectHandoff,
   selectNativeVerifierRuntime,
+  extendNativeRepairCycles,
   selectNativeProjectHandoff,
   type NativeProjectHandoffChoice,
   type NativeBuildObservability,
@@ -1122,6 +1123,13 @@ function DiscussionPageInner() {
                         ...(verdict.artifactHashes
                           ? { artifactHashes: [...verdict.artifactHashes] }
                           : {}),
+                        ...(verdict.acceptedFailures
+                          ? {
+                              acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+                                ...failure,
+                              })),
+                            }
+                          : {}),
                       },
                     }
                   : {}),
@@ -1354,6 +1362,33 @@ function DiscussionPageInner() {
         selectionError instanceof Error
           ? selectionError.message
           : "Could not select the independent verifier runtime."
+      );
+    }
+  };
+
+  const handleExtendRepairCycles = async (
+    additionalRepairPlans: number,
+    idempotencyKey: string,
+  ) => {
+    if (
+      !discussion?.runnerUrl ||
+      !discussion.runnerToken ||
+      !discussion.nativeBuildRunId
+    ) return;
+    try {
+      const projection = await extendNativeRepairCycles(
+        { url: discussion.runnerUrl, token: discussion.runnerToken },
+        discussion.nativeBuildRunId,
+        { additionalRepairPlans, idempotencyKey },
+      );
+      setNativeProjection(projection);
+      setError(null);
+      nativeAttachmentControllerRef.current?.wake();
+    } catch (extensionError) {
+      setError(
+        extensionError instanceof Error
+          ? extensionError.message
+          : "Could not extend the repair budget."
       );
     }
   };
@@ -2215,6 +2250,9 @@ function DiscussionPageInner() {
           projection={nativeProjection}
           onDownloadAudit={
             discussion.nativeBuildRunId ? () => void downloadNativeAudit() : undefined
+          }
+          onExtendRepairCycles={
+            discussion.nativeBuildRunId ? handleExtendRepairCycles : undefined
           }
         />
       )}

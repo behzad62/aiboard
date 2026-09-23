@@ -24,6 +24,27 @@ const supervisorSource = readFileSync(join(process.cwd(), "runner-v2", "src", "p
 const channelSource = readFileSync(join(process.cwd(), "runner-v2", "src", "portable-process-channel.ts"), "utf8");
 const nativeBackendSource = readFileSync(join(process.cwd(), "runner-v2", "src", "native-process-backend.ts"), "utf8");
 
+test("supervisor idle ACK polling does not contend for the writer fence", () => {
+  let fenceReads = 0;
+  let fenceEffects = 0;
+  const context = vm.createContext({
+    channelAckDirectory: "ack",
+    channelDirectory: "channel",
+    config: { nonce: "nonce" },
+    existsSync: () => false,
+    readdirSync: () => [],
+    join,
+    readCurrentFence: () => { fenceReads += 1; return oldFence; },
+    withCurrentFenceEffect: () => { fenceEffects += 1; throw new Error("idle polling must not claim the writer fence"); },
+    resumePortableOutputRetirement: () => undefined,
+    retirePortableOutputAcknowledgement: () => undefined,
+    PortableAuthorityUnavailableError,
+  });
+  vm.runInContext(`${extractFunction(supervisorSource, "handleChannelAcks")}`, context);
+  assert.doesNotThrow(() => vm.runInContext("handleChannelAcks()", context));
+  assert.deepEqual({ fenceReads, fenceEffects }, { fenceReads: 0, fenceEffects: 0 });
+});
+
 test("supervisor ACK takeover at the protected effect is a nonfatal stale no-op", () => {
   const expected = outputMetadata();
   let durableFence = { nonce: "nonce", ownerId: "owner-old", fencingToken: 3 };
@@ -34,6 +55,9 @@ test("supervisor ACK takeover at the protected effect is a nonfatal stale no-op"
   let lockCalls = 0;
   const reads: string[] = [];
   const context = vm.createContext({
+    Atomics, Date, Int32Array, SharedArrayBuffer,
+    FENCE_HOLDER_READ_RETRY_MS: 250,
+    FENCE_HOLDER_READ_RETRY_DELAY_MS: 5,
     channelAckDirectory: "ack",
     channelDirectory: "channel",
     channelOutputDirectory: "output",
@@ -66,7 +90,7 @@ test("supervisor ACK takeover at the protected effect is a nonfatal stale no-op"
     writeAtomic: () => { checkpointWrites += 1; },
     runPortableFenceEffectSync: (options: { readCurrentFence: () => typeof durableFence; expectedFence: typeof durableFence; effect: () => unknown }) => {
       lockCalls += 1;
-      if (lockCalls === 2) durableFence = { nonce: "nonce", ownerId: "owner-current", fencingToken: 4 };
+      if (lockCalls === 1) durableFence = { nonce: "nonce", ownerId: "owner-current", fencingToken: 4 };
       const current = options.readCurrentFence();
       return current.ownerId === options.expectedFence.ownerId && current.fencingToken === options.expectedFence.fencingToken
         ? { status: "applied", value: options.effect() }
@@ -78,6 +102,7 @@ test("supervisor ACK takeover at the protected effect is a nonfatal stale no-op"
   retained.delete = (key: string) => { retainedDeletes += 1; return originalDelete(key); };
   vm.runInContext(`${extractFunction(supervisorSource, "readCurrentFence")}
 ${extractFunction(supervisorSource, "readCurrentFenceStrict")}
+${extractFunction(supervisorSource, "readFenceHolderForEffect")}
 ${extractFunction(supervisorSource, "withCurrentFenceEffect")}
 ${extractFunction(supervisorSource, "forgetRetiredOutput")}
 ${extractFunction(supervisorSource, "handleChannelAcks")}`, context);
@@ -94,7 +119,7 @@ ${extractFunction(supervisorSource, "handleChannelAcks")}`, context);
     ackDeletes: 0,
     retainedDeletes: 0,
   });
-  assert.equal(lockCalls, 2, `the test must reach the ACK protected effect boundary; reads=${reads.join(",")}`);
+  assert.equal(lockCalls, 1, `idle polling must not take a preliminary writer lock before the ACK protected effect; reads=${reads.join(",")}`);
 });
 
 test("supervisor ACK pass defers without a second mutation attempt when intent coordination is unavailable", () => {
@@ -107,6 +132,7 @@ test("supervisor ACK pass defers without a second mutation attempt when intent c
     config: { nonce: "nonce" },
     retained: new Map([["stdout-000000000001", expected]]),
     readCurrentFence: () => oldFence,
+    existsSync: () => false,
     readdirSync: () => ["stdout-000000000001.json"],
     readFileSync: () => JSON.stringify({ nonce: "nonce", ...oldFence, metadata: expected }),
     join,
@@ -150,6 +176,7 @@ test("supervisor resume blocks a post-ACK intent whose filename is not bound to 
       resumePortableOutputRetirement,
       retirePortableOutputAcknowledgement: () => undefined,
       readdirSync: () => [],
+      existsSync,
       readFileSync,
       join,
       writeAtomic: () => undefined,
@@ -637,6 +664,7 @@ test("native empty verification performs final output validation inside its exis
     stateDirectory: fixture.root,
     platform: "windows",
     backendId: "runner-windows-supervisor-v1",
+    lifecycleScope: "process_group",
     capabilities: { tree_termination: "enforced", crash_cleanup: "enforced", verified_emptiness: "enforced", write_confinement: "unavailable" },
     operations: {
       inspectProcessBirth: () => ({ state: "absent" }),

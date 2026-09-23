@@ -10,7 +10,9 @@ import { buildArchitectContext } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createBrowserTools, type BrowserBackend } from "../src/browser-tools.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
+import { createArchitectTools, resolvePlanCritiqueTool } from "../src/architect-tools.js";
 import { BuildRuntime } from "../src/build-runtime.js";
+import { assessPlanRisk } from "../src/plan-critique-contracts.js";
 import { LanguageProviderRouter } from "../src/language-provider-router.js";
 import type { LanguageIntelligenceProvider } from "../src/language-intelligence.js";
 import { PlanOnlyInspectionRuntime, architectInspectionWorkspace, architectModelAttribution, loadArchitectReviewSubmission, prioritizedArchitectCapabilities } from "../src/native-architect-runtime.js";
@@ -24,6 +26,7 @@ import { SkillCatalog } from "../src/skill-catalog.js";
 import type { SkillMetadata } from "../src/skill-catalog.js";
 import { rankSkillsForTask } from "../src/skill-routing.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
+import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
@@ -243,6 +246,20 @@ test("Architect reviews inspect the submitted attempt workspace instead of the p
   assert.equal(
     architectInspectionWorkspace(
       { type: "final_verification_plan_required", integrationRevision: "a".repeat(40) },
+      projection,
+      "C:/project",
+      "C:/runner/integration/run",
+    ),
+    "C:/runner/integration/run",
+  );
+  assert.equal(
+    architectInspectionWorkspace(
+      {
+        type: "plan_critique_resolution_required",
+        critiqueId: "critique-1",
+        planRevision: 1,
+        blockingFindingIds: ["F-1"],
+      },
       projection,
       "C:/project",
       "C:/runner/integration/run",
@@ -1083,6 +1100,302 @@ test("resumed Architect action receives a fresh mechanical reminder", async () =
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("every Architect action records one context manifest for the reason, including taskId when present", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-native-architect-manifest-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  const artifacts = new ArtifactStore(join(state, "artifacts"));
+  const scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
+  const sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+  const evidence = new SqliteEvidenceStore(join(state, "evidence.sqlite"));
+  const memory = new SqliteProjectMemoryStore(join(state, "memory.sqlite"));
+  const contextManifests = new SqliteContextManifestStore(join(state, "context-manifests.sqlite"));
+  const objective = "Build the requested application.";
+  try {
+    scheduler.append({
+      runId: "run_manifest",
+      type: "run.initialized",
+      occurredAt: "2026-08-27T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "init",
+      payload: { objective },
+    });
+    scheduler.append({
+      runId: "run_manifest",
+      type: "plan.created",
+      occurredAt: "2026-08-27T00:00:01.000Z",
+      actor: { role: "architect", id: "architect" },
+      idempotencyKey: "plan",
+      payload: { revision: 1, tasks: [{
+        id: "task-a",
+        objective: "Implement A",
+        dependencies: [],
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "A is implemented." }],
+        acceptanceCriteriaVersion: 1,
+        status: "planned",
+        attempt: 0,
+      }] },
+    });
+    const candidate: AgentRuntimeCandidate = {
+      runtimeId: "test:architect",
+      providerId: "test",
+      modelId: "architect",
+      capabilities: ["code"],
+      priority: 1,
+    };
+    const health = new ProviderHealthRegistry();
+    const architect = new NativeArchitectRuntime({
+      schedulerStore: scheduler,
+      router: new RuntimeRouter({ candidates: [candidate], health }),
+      health,
+      candidates: [candidate],
+      models: new Map([[candidate.runtimeId, new ScriptedModel([
+        { blocks: [], stopReason: "cancelled" },
+        { blocks: [], stopReason: "cancelled" },
+      ])]]),
+      initialRuntimeId: candidate.runtimeId,
+      sessions,
+      artifacts,
+      skillCatalog: new SkillCatalog({ projectRoot: project }),
+      memoryStore: memory,
+      evidenceStore: evidence,
+      projectId: "project-manifest",
+      projectRoot: project,
+      objective,
+      contextManifests,
+      clock: () => "2026-08-27T00:00:00.000Z",
+    });
+    const projection = rebuildSchedulerProjection(scheduler.readRun("run_manifest"));
+    await architect.run({
+      runId: "run_manifest",
+      reason: { type: "plan_required" },
+      projection,
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run_manifest",
+        sessionId: "architect:run_manifest",
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const planned = contextManifests.listRun("run_manifest");
+    assert.equal(planned.length, 1);
+    assert.equal(planned[0]?.role, "architect");
+    assert.equal(planned[0]?.purpose, "architect:plan_required");
+    assert.equal(planned[0]?.sessionId, "architect:run_manifest");
+    assert.equal(planned[0]?.taskId, undefined);
+    assert.equal(planned[0]?.packArtifactHash, undefined);
+
+    await architect.run({
+      runId: "run_manifest",
+      reason: {
+        type: "task_failure_resolution_required",
+        taskId: "task-a",
+        attempt: 1,
+        failureReason: "tests failed",
+      },
+      projection: rebuildSchedulerProjection(scheduler.readRun("run_manifest")),
+      tools: new ToolRegistry(),
+      context: {
+        runId: "run_manifest",
+        sessionId: "architect:run_manifest",
+        actor: { role: "architect", id: "architect" },
+      },
+    });
+    const listed = contextManifests.listRun("run_manifest");
+    assert.equal(listed.length, 2);
+    const failed = listed.find((manifest) => manifest.purpose === "architect:task_failure_resolution_required");
+    assert.equal(failed?.role, "architect");
+    assert.equal(failed?.taskId, "task-a");
+    assert.equal(failed?.sessionId, "architect:run_manifest");
+  } finally {
+    contextManifests.close();
+    sessions.close();
+    scheduler.close();
+    evidence.close();
+    memory.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("resolve_plan_critique is option-gated, appends plan_critique.resolved, and rejects stale ids", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-architect-resolve-critique-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const clock = () => "2026-09-02T00:00:00.000Z";
+  const runId = "run-resolve-critique";
+  const architect = { role: "architect" as const, id: "architect-test" };
+  try {
+    seedSubmittedCritique(store, runId);
+    const absent = createArchitectTools({ store, clock });
+    assert.equal(absent.some((tool) => tool.definition.name === "resolve_plan_critique"), false);
+    const tool = resolvePlanCritiqueTool(store, clock);
+    assert.equal(tool.definition.name, "resolve_plan_critique");
+    const tools = createArchitectTools({ store, clock, planCritiqueResolutionAvailable: true });
+    const resolve = tools.find((candidate) => candidate.definition.name === "resolve_plan_critique");
+    assert.ok(resolve);
+    const stale = await resolve.execute({
+      critiqueId: "critique-stale",
+      planRevision: 1,
+      resolutions: [{ findingId: "F-1", resolution: "rejected", rationale: "The files are distinct." }],
+    }, {
+      runId,
+      sessionId: "architect:test",
+      actor: architect,
+    });
+    assert.equal(stale.isError, true);
+    assert.equal(stale.error?.code, "stale_plan_critique");
+    const staleRevision = await resolve.execute({
+      critiqueId: "critique-1",
+      planRevision: 2,
+      resolutions: [{ findingId: "F-1", resolution: "rejected", rationale: "The files are distinct." }],
+    }, {
+      runId,
+      sessionId: "architect:test",
+      actor: architect,
+    });
+    assert.equal(staleRevision.isError, true);
+    assert.equal(staleRevision.error?.code, "stale_plan_critique");
+    const differentFindings = await resolve.execute({
+      critiqueId: "critique-1",
+      planRevision: 1,
+      resolutions: [{ findingId: "F-other", resolution: "rejected", rationale: "The files are distinct." }],
+    }, {
+      runId,
+      sessionId: "architect:test",
+      actor: architect,
+    });
+    assert.equal(differentFindings.isError, true);
+    assert.equal(differentFindings.error?.code, "stale_plan_critique");
+    const workerDenied = await resolve.execute({
+      critiqueId: "critique-1",
+      planRevision: 1,
+      resolutions: [{ findingId: "F-1", resolution: "rejected", rationale: "The files are distinct." }],
+    }, {
+      runId,
+      sessionId: "architect:test",
+      actor: { role: "worker", id: "worker-1" },
+    });
+    assert.equal(workerDenied.isError, true);
+    assert.equal(workerDenied.error?.code, "architect_only");
+    const ok = await resolve.execute({
+      critiqueId: "critique-1",
+      planRevision: 1,
+      resolutions: [{ findingId: "F-1", resolution: "rejected", rationale: "The files are distinct." }],
+    }, {
+      runId,
+      sessionId: "architect:test",
+      actor: architect,
+    });
+    assert.equal(ok.isError, false, ok.error?.message ?? "resolve_plan_critique failed");
+    assert.deepEqual(ok.lifecycle, {
+      type: "architect_action",
+      action: "plan_critique_resolved",
+      referenceId: "critique-1",
+    });
+    const projection = rebuildSchedulerProjection(store.readRun(runId));
+    assert.equal(projection.planCritique?.current?.status, "resolved");
+    assert.equal(projection.lastArchitectActionEvent?.type, "plan_critique.resolved");
+    const resolved = store.readRun(runId).find((event) => event.type === "plan_critique.resolved");
+    assert.equal(resolved?.actor.role, "architect");
+    assert.equal(resolved?.payload.critiqueId, "critique-1");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("plan_tasks description requires a riskDeclaration", () => {
+  const store = new SqliteSchedulerStore(":memory:");
+  try {
+    const planTasks = createArchitectTools({ store, clock: () => "2026-09-02T00:00:00.000Z" })
+      .find((tool) => tool.definition.name === "plan_tasks");
+    assert.ok(planTasks);
+    assert.match(planTasks.definition.description, /declare riskDeclaration low or high with a rationale/);
+  } finally {
+    store.close();
+  }
+});
+
+function seedSubmittedCritique(store: SqliteSchedulerStore, runId: string): void {
+  const at = "2026-09-02T00:00:00.000Z";
+  const runner = { role: "runner" as const, id: "test" };
+  const architect = { role: "architect" as const, id: "architect-test" };
+  const tasks = ["A", "B"].map((id) => ({
+    id,
+    objective: `Do ${id}`,
+    dependencies: [],
+    status: "planned" as const,
+    requiredCapabilities: ["code"],
+    attempt: 0,
+    acceptanceCriteria: [{ id: "AC-1", text: `${id} works.` }],
+    acceptanceCriteriaVersion: 1,
+  }));
+  store.append({
+    runId, type: "run.initialized", occurredAt: at, actor: runner,
+    idempotencyKey: "init", payload: { objective: "Build the requested application." },
+  });
+  store.append({
+    runId, type: "plan.created", occurredAt: at, actor: architect,
+    idempotencyKey: "plan:1",
+    payload: { revision: 1, tasks, riskDeclaration: { risk: "low", rationale: "routine" } },
+  });
+  store.append({
+    runId, type: "plan_critique.policy_configured", occurredAt: at, actor: runner,
+    idempotencyKey: "critique-policy:always", payload: { mode: "always" },
+  });
+  const projection = rebuildSchedulerProjection(store.readRun(runId));
+  store.append({
+    runId, type: "plan_critique.risk_assessed", occurredAt: at, actor: runner,
+    idempotencyKey: "critique-risk",
+    payload: {
+      planRevision: 1,
+      architectDeclaration: "low",
+      stricterQualification: false,
+      assessment: assessPlanRisk({
+        architectDeclaration: "low",
+        stricterQualification: false,
+        tasks: Object.values(projection.tasks),
+      }),
+    },
+  });
+  store.append({
+    runId, type: "plan_critique.requested", occurredAt: at, actor: runner,
+    idempotencyKey: "critique:critique-1",
+    payload: {
+      critiqueId: "critique-1",
+      planRevision: 1,
+      runtime: {
+        runtimeId: "google:verifier",
+        providerId: "google",
+        modelId: "verifier",
+        modelIdentity: "verifier",
+        sessionId: "plan-critic:s1",
+      },
+      excludedModels: [{ source: "architect", runtimeId: "openai:architect", modelIdentity: "architect" }],
+    },
+  });
+  store.append({
+    runId, type: "plan_critique.submitted", occurredAt: at,
+    actor: { role: "verifier", id: "google:verifier" },
+    idempotencyKey: "critique:critique-1:submitted",
+    payload: {
+      critiqueId: "critique-1",
+      planRevision: 1,
+      sessionId: "plan-critic:s1",
+      findings: [{
+        findingId: "F-1",
+        severity: "blocking",
+        category: "overlapping_scope",
+        taskIds: ["A", "B"],
+        claim: "A and B both own src/cache.ts.",
+        evidence: ["A objective mentions src/cache.ts", "B objective mentions src/cache.ts"],
+      }],
+    },
+  });
+}
 
 function skillMetadata(name: string): SkillMetadata {
   return {

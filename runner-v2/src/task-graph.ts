@@ -231,7 +231,8 @@ export function applyTaskTransition(
     throw new Error("Criterion evidence links may only be recorded when submitting a task.");
   }
   const startsRetry =
-    status === "planned" && (task.status === "rejected" || task.status === "failed");
+    status === "planned" &&
+    (task.status === "rejected" || task.status === "failed" || task.status === "waiting_guidance");
   return {
     ...task,
     ...patch,

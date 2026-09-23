@@ -1,5 +1,9 @@
+import type { AcceptedEvidenceFailure } from "./acceptance-contracts.js";
 import type { BuildTask } from "./task-contracts.js";
 import { isFinalVerificationTask } from "./task-contracts.js";
+
+const REVISION_PATTERN = /^[a-f0-9]{40,64}$/;
+const LOCATION_LINES_PATTERN = /^\d+(-\d+)?$/;
 
 export interface VerifierCriterionReference {
   taskId: string;
@@ -20,10 +24,20 @@ export interface VerifierExcludedModel {
   modelIdentity: string;
 }
 
+export interface VerifierExpectation extends VerifierCriterionReference {
+  expectedBehaviors: string[];
+  edgeCases: string[];
+  regressionSurfaces: string[];
+  requiredTests: string[];
+}
+
 export interface VerifierCriterionVerdict extends VerifierCriterionReference {
   verdict: "satisfied" | "unsatisfied";
   rationale: string;
   evidenceIds: string[];
+  acceptedFailures?: AcceptedEvidenceFailure[];
+  location?: { path: string; lines?: string };
+  reproduction?: string[];
 }
 
 export interface VerifierVerdictProjection {
@@ -50,6 +64,10 @@ export interface VerifierReviewProjection {
   supersededByReviewId?: string;
   repairTaskIds?: string[];
   verdict?: VerifierVerdictProjection;
+  twoPass?: boolean;
+  baselineRevision?: string;
+  expectations?: VerifierExpectation[];
+  expectationsSessionId?: string;
 }
 
 export interface VerifierProjection {
@@ -97,6 +115,11 @@ export function parseVerifierReviewRequest(
       "Verifier model is not independent from the Architect or an accepted change author.",
     );
   }
+  const twoPass = payload.twoPass === true ? true : undefined;
+  const baselineRevision = parseOptionalBaselineRevision(payload.baselineRevision);
+  if (twoPass === true && !baselineRevision) {
+    throw new Error("Two-pass verifier review requires a baseline revision.");
+  }
   return {
     reviewId,
     targetRevision,
@@ -107,7 +130,34 @@ export function parseVerifierReviewRequest(
     status: "requested",
     state: "current",
     requestedAt,
+    ...(twoPass ? { twoPass } : {}),
+    ...(baselineRevision ? { baselineRevision } : {}),
   };
+}
+
+export function parseVerifierExpectations(
+  value: unknown,
+  expectedCriteria: readonly VerifierCriterionReference[],
+): VerifierExpectation[] {
+  if (!Array.isArray(value)) throw new Error("Verifier expectations must be an array.");
+  const parsed = value.map((candidate, index) => {
+    const record = requiredRecord(candidate, `Verifier expectation ${index}`);
+    const lists = (key: "expectedBehaviors" | "edgeCases" | "regressionSurfaces" | "requiredTests", min: number) => {
+      const items = requiredStringArray(record, key);
+      if (items.length < min) throw new Error(`Verifier expectation ${index} ${key} requires at least one entry.`);
+      return items;
+    };
+    return {
+      taskId: requiredString(record, "taskId"),
+      criterionId: requiredString(record, "criterionId"),
+      expectedBehaviors: lists("expectedBehaviors", 1),
+      edgeCases: lists("edgeCases", 1),
+      regressionSurfaces: lists("regressionSurfaces", 0),
+      requiredTests: lists("requiredTests", 0),
+    };
+  });
+  assertExactVerifierCriteria(parsed, expectedCriteria, "Verifier expectations");
+  return parsed;
 }
 
 export function parseVerifierVerdict(
@@ -188,6 +238,18 @@ export function cloneVerifierReview(
     ...(review.repairTaskIds
       ? { repairTaskIds: [...review.repairTaskIds] }
       : {}),
+    ...(review.expectations
+      ? {
+          expectations: review.expectations.map((expectation) => ({
+            taskId: expectation.taskId,
+            criterionId: expectation.criterionId,
+            expectedBehaviors: [...expectation.expectedBehaviors],
+            edgeCases: [...expectation.edgeCases],
+            regressionSurfaces: [...expectation.regressionSurfaces],
+            requiredTests: [...expectation.requiredTests],
+          })),
+        }
+      : {}),
     ...(review.verdict
       ? {
           verdict: {
@@ -208,7 +270,7 @@ export function sameVerifierReview(
   return canonicalJson(left) === canonicalJson(right);
 }
 
-function parseRuntimeBinding(value: unknown): VerifierRuntimeBinding {
+export function parseRuntimeBinding(value: unknown): VerifierRuntimeBinding {
   const runtime = requiredRecord(value, "Verifier runtime binding");
   const binding = {
     runtimeId: requiredString(runtime, "runtimeId"),
@@ -224,7 +286,7 @@ function parseRuntimeBinding(value: unknown): VerifierRuntimeBinding {
   return binding;
 }
 
-function parseExcludedModels(value: unknown): VerifierExcludedModel[] {
+export function parseExcludedModels(value: unknown): VerifierExcludedModel[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error("Verifier request requires excluded model identities.");
   }
@@ -287,12 +349,20 @@ function parseCriterionVerdict(
       `Verifier criterion verdict ${index} requires unique durable evidence IDs.`,
     );
   }
+  const acceptedFailures = parseAcceptedFailures(record.acceptedFailures, index);
+  const location = parseVerdictLocation(record.location, index);
+  const reproduction = record.reproduction === undefined
+    ? undefined
+    : requiredStringArray(record, "reproduction");
   return {
     taskId: requiredString(record, "taskId"),
     criterionId: requiredString(record, "criterionId"),
     verdict,
     rationale: requiredString(record, "rationale").trim(),
     evidenceIds: [...evidenceIds],
+    ...(acceptedFailures ? { acceptedFailures } : {}),
+    ...(location ? { location } : {}),
+    ...(reproduction ? { reproduction } : {}),
   };
 }
 
@@ -320,7 +390,73 @@ export function assertExactVerifierCriteria(
 function cloneCriterionVerdict(
   verdict: VerifierCriterionVerdict,
 ): VerifierCriterionVerdict {
-  return { ...verdict, evidenceIds: [...verdict.evidenceIds] };
+  return {
+    ...verdict,
+    evidenceIds: [...verdict.evidenceIds],
+    ...(verdict.acceptedFailures
+      ? {
+          acceptedFailures: verdict.acceptedFailures.map((failure) => ({
+            ...failure,
+          })),
+        }
+      : {}),
+    ...(verdict.location ? { location: { ...verdict.location } } : {}),
+    ...(verdict.reproduction ? { reproduction: [...verdict.reproduction] } : {}),
+  };
+}
+
+function parseOptionalBaselineRevision(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !REVISION_PATTERN.test(value)) {
+    throw new Error("Verifier baseline revision is invalid.");
+  }
+  return value;
+}
+
+function parseVerdictLocation(
+  value: unknown,
+  index: number,
+): { path: string; lines?: string } | undefined {
+  if (value === undefined) return undefined;
+  const record = requiredRecord(value, `Verifier criterion verdict ${index} location`);
+  const path = record.path;
+  if (typeof path !== "string" || path.length === 0) {
+    throw new Error(`Verifier criterion verdict ${index} location path must be non-empty.`);
+  }
+  const location: { path: string; lines?: string } = { path };
+  if (record.lines !== undefined) {
+    if (typeof record.lines !== "string" || !LOCATION_LINES_PATTERN.test(record.lines)) {
+      throw new Error(`Verifier criterion verdict ${index} location lines are invalid.`);
+    }
+    location.lines = record.lines;
+  }
+  return location;
+}
+
+function parseAcceptedFailures(
+  value: unknown,
+  index: number,
+): AcceptedEvidenceFailure[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`Verifier criterion verdict ${index} acceptedFailures is invalid.`);
+  }
+  const failures: AcceptedEvidenceFailure[] = [];
+  const evidenceIds = new Set<string>();
+  for (const candidate of value) {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+      throw new Error(`Verifier criterion verdict ${index} acceptedFailures is invalid.`);
+    }
+    const record = candidate as Record<string, unknown>;
+    const evidenceId = typeof record.evidenceId === "string" ? record.evidenceId.trim() : "";
+    const rationale = typeof record.rationale === "string" ? record.rationale.trim() : "";
+    if (!evidenceId || !rationale || evidenceIds.has(evidenceId)) {
+      throw new Error(`Verifier criterion verdict ${index} acceptedFailures is invalid.`);
+    }
+    evidenceIds.add(evidenceId);
+    failures.push({ evidenceId, rationale });
+  }
+  return failures;
 }
 
 function compareCriterionReferences(

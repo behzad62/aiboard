@@ -70,15 +70,16 @@ Targeted validation: session authorization, lease/fencing, streaming-session sto
 
 ---
 
-## Gate B — POSIX ownership and destructive control
+## Gate B — POSIX process-group ownership and destructive control
 
-**Invariant:** Runner V2 must never signal a POSIX process/group after ownership continuity can no longer be proven. A numeric PGID alone is not proof.
+**Invariant:** Runner V2 may signal a POSIX process group only while authenticated process-group ownership continuity can still be proven. A numeric PGID alone is not proof. Known recorded group-member witnesses after anchor exit remain valid continuity evidence for that owned group. PPID/ancestry discovery must never authorize destructive control or universal descendant-cleanup claims.
 Implementation requirements:
-- after anchor/launcher exit, re-attest surviving owned descendants before any group signal;
+- after anchor/launcher exit, re-attest surviving known group members before any group signal;
 - verify continuity using recorded member identity plus the strongest available birth/identity witness;
 - classify results as owned+ready, owned+empty, temporarily unprovable, or identity mismatch/reuse;
-- signal only owned+ready; empty is a no-op; unprovable/mismatch never permits blind signal;
-- audit every negative-PGID/group-control call for the same proof chain.
+- signal only owned+ready; empty group is a no-op; unprovable/mismatch never permits blind signal;
+- audit every negative-PGID/group-control call for the same proof chain;
+- do not invent ownership from PPID/ancestry reconstruction, authorize per-PID kill of escaped processes, or claim arbitrary-descendant containment from group evidence.
 
 Membership parsing requirements:
 - malformed or nonpositive rows fail closed;
@@ -86,16 +87,17 @@ Membership parsing requirements:
 - PID 0 with positive PGID, negatives, malformed numbers, and structurally invalid rows must not be silently discarded as if the group were empty.
 
 Required tests:
-- anchor exited + cannot re-attest => no signal;
+- anchor exited + cannot re-attest known group members => no signal;
 - recycled PGID now owned by unrelated group => no signal;
-- exact owned descendants re-attest => signal allowed;
+- exact owned group members re-attest => signal allowed;
 - formerly owned group now empty => no destructive syscall;
 - transient inspection failure => bounded retry/uncertain, never blind kill;
-- parser cases for PID0/PGID+, PID+/PGID0, negative, nonnumeric, and malformed rows.
+- parser cases for PID0/PGID+, PID+/PGID0, negative, nonnumeric, and malformed rows;
+- negative proof that PPID/ancestry reconstruction is not used as control or cleanup authority.
 
-Targeted validation: POSIX backend, portable supervisor POSIX tests, launcher-exit descendant fixtures, focused Linux/macOS native fixtures.
+Targeted validation: POSIX backend, portable supervisor POSIX tests, launcher-exit surviving-group-member fixtures, focused Linux/macOS native fixtures.
 
-**DoD:** no stale-PGID kill path; every group signal has fresh ownership proof; malformed evidence cannot become false empty-group evidence; reviewer searches all group-signal sites and confirms the proof chain.
+**DoD:** no stale-PGID kill path; every group signal has fresh authenticated group-membership proof; malformed evidence cannot become false empty-group evidence; reviewer searches all group-signal sites and confirms the proof chain without ancestry-derived authority.
 
 ---
 
@@ -152,23 +154,25 @@ Targeted validation: capabilities-config tests, capability-contract tests, CLI c
 
 ## Gate E — Lifecycle settlement and real Docker/OCI
 
-**Invariant:** workload stopped, destructive-control settlement, supervisor terminal state, output settlement, evidence durability, and resource release are separate conditions. `reconcile: exited` must never imply all of them automatically.
+**Invariant:** workload stopped, destructive-control settlement, supervisor terminal state, output settlement, evidence durability, and resource release are separate conditions. `reconcile: exited` must never imply all of them automatically. Lifecycle proof is scoped: `process_group` emptiness is authenticated owned-group emptiness only; `contained_workload` emptiness is emptiness inside the recorded Job/OCI (or future optional cgroup) boundary. POSIX group emptiness must never be displayed or accepted as all-descendant emptiness.
 
 Required actions:
 - audit every caller that consumes workload reconciliation/exited state;
 - preserve later output/supervisor/evidence/release checks even when workload retirement is durable;
 - verify real Docker lifecycle semantics rather than container-exit alone;
+- keep OCI workload containment and the host attach/control process lifecycle as separate boundaries;
 - preserve diagnostic evidence when a terminal supervisor witness remains unexpectedly alive.
 Required tests:
 - workload exits while supervisor remains alive for valid settlement work => workload may reconcile exited, final release does not;
 - output unsettled after workload exit => caller waits/fails according to output contract;
 - unexpected live terminal supervisor witness => release blocked with diagnostic evidence;
 - normal lifecycle progresses in order: workload exit -> control settlement -> output settlement -> supervisor settlement -> evidence durability -> release;
-- crash/recovery during settlement reconstructs state without false release.
+- crash/recovery during settlement reconstructs state without false release;
+- process_group release evidence remains scoped to the owned group; contained_workload cases use Job/OCI boundary proof, not POSIX group emptiness.
 
 Targeted validation: reconciliation/lifecycle tests, output settlement tests, release tests, then real Docker OCI integration.
 
-**DoD:** no caller conflates workload quiescence with complete release; Docker lifecycle passes; retained output/evidence ordering is explicit; release cannot precede required settlement.
+**DoD:** no caller conflates workload quiescence with complete release; scope-honest emptiness claims; Docker lifecycle passes; retained output/evidence ordering is explicit; release cannot precede required settlement.
 
 ---
 
@@ -196,19 +200,23 @@ A threshold change requires evidence that semantics are unchanged, the old thres
 Gate G contains validation, not exploratory development. A newly discovered architectural defect returns to its owning earlier gate.
 Precondition: Gates A-F independently accepted.
 
+For this release, the supported Node matrix is Node.js 24.x only.
+
 Final matrix must cover:
 - package parity on supported OS/Node combinations;
 - cross-host package reproducibility;
 - portable contracts on Windows/Linux/macOS and supported Node versions;
 - native adapters on Windows/Linux/macOS and supported Node versions;
 - ownership/fencing and stale-authority safety;
-- POSIX PID/PGID reuse safety and process containment;
-- Windows cleanup/containment;
-- output settlement, crash/recovery, and resource release;
+- POSIX PID/PGID reuse safety and authenticated process-group ownership/control (not arbitrary-descendant containment);
+- Windows Job cleanup/containment where Job is the selected contained-workload provider;
+- output settlement, crash/recovery, and resource release with scope-honest emptiness claims;
 - configuration confinement and macOS host aliases;
-- real Docker/OCI lifecycle;
+- real Docker/OCI lifecycle (workload lease distinct from host attach process);
 - certified benchmark checks;
 - the broader/full P6 regression suite required for final acceptance.
+
+Strong detached-descendant containment for Gate G is Job and/or configured OCI. A future Linux cgroup adapter is optional follow-up and is not a Gate G prerequisite. Native POSIX process-group operation remains ordinary scoped lifecycle, not containment/security isolation.
 
 Final review maps each invariant to implementation commit, regression test, platform evidence, and PASS/FAIL status.
 

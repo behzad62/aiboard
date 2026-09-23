@@ -65,7 +65,6 @@ export function createStreamingOutputController(options: {
   };
 
   const accept = async (metadataInput: StreamingOutputMetadata, input: Uint8Array): Promise<StreamingOutputMetadata> => {
-    if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "output.accept.start", sessionId: options.sessionId, stream: metadataInput.stream, sequence: metadataInput.sequence })}\n`);
     if (outcome !== "active") throw new StreamingOutputError("outcome_unknown", "Output delivery outcome is unknown.");
     const owned = Buffer.from(input);
     try {
@@ -109,10 +108,8 @@ export function createStreamingOutputController(options: {
     const item = { ready: false, metadata, acknowledgement: delivery, resolve: resolveDelivery, reject: rejectDelivery }; pending.push(item);
     try {
       await options.queue.push(owned);
-      if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "output.accept.queued", sessionId: options.sessionId })}\n`);
       const evidence = await options.writeEvidence(metadata.stream, owned, metadata); evidenceLossy ||= evidence.evidenceLossy;
       item.ready = true;
-      if (process.env.TASK12_MCP_TRACE === "1") process.stderr.write(`${JSON.stringify({ t: Date.now(), event: "output.accept.ready", sessionId: options.sessionId })}\n`);
       settlePendingWaiters(true);
       owned.fill(0);
       return await delivery;

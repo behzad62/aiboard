@@ -65,10 +65,12 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
       verified: boolean;
       mechanism: string;
       exactGrantWriteConfinement: boolean;
+      lifecycle: { scope: string; termination: string; emptiness: string };
     };
     assert.equal(attestation.verified, true);
     assert.equal(attestation.mechanism, "docker-compatible-oci");
     assert.equal(attestation.exactGrantWriteConfinement, true);
+    assert.deepEqual(attestation.lifecycle, { scope: "contained_workload", termination: "enforced", emptiness: "enforced" });
 
     const lease = await provider.acquire({
       providerId: "oci-fixture",
@@ -102,6 +104,7 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
     const launch = await provider.prepareExecution!(lease as never, fixture.intent);
     assert.equal(launch.executable, fixture.cli);
     assert.equal(launch.invocationId, fixture.intent.invocationId);
+    assert.equal(launch.requiredLifecycleScope, "process_group");
     assert.deepEqual(launch.arguments.slice(0, 2), ["start", "--attach"]);
     assert.match(launch.arguments[2]!, /^container-fixture-/);
     assert.equal(
@@ -113,6 +116,48 @@ test("OCI provider attests explicit identities and creates exact labelled mounts
     await provider.release(lease as never);
     assert.equal(calls.some((call) => call.args[0] === "rm" && call.args.includes("--force")), true);
     assert.deepEqual(await provider.recoverOwned(), { cleaned: 0, blockers: [], transitions: [] });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("host attach completion leaves the container lease until isolation.release", async () => {
+  const fixture = await ociFixture();
+  try {
+    const calls: OciCliInvocation[] = [];
+    const cli = fakeCli(calls);
+    const providerId = "oci-attach-lease";
+    const provider = createOciExecutionIsolationProvider({
+      providerId,
+      cliPath: fixture.cli,
+      image: "fixture/image:configured",
+      stateDirectory: fixture.state,
+      cli,
+    });
+    await provider.attest();
+    const lease = await provider.acquire({
+      providerId,
+      implementationDigest: "a".repeat(64),
+      intent: fixture.intent,
+      grant: fixture.claims,
+    });
+    const launch = await provider.prepareExecution!(lease as never, fixture.intent);
+    assert.equal(launch.requiredLifecycleScope, "process_group");
+    assert.equal(launch.executable, fixture.cli);
+    assert.deepEqual(launch.arguments.slice(0, 2), ["start", "--attach"]);
+    const attach = await cli.run({
+      executable: launch.executable,
+      args: launch.arguments,
+      environment: {},
+      timeoutMs: 5_000,
+    });
+    assert.equal(attach.exitCode, 0, attach.stderr);
+    assert.equal(durableLeaseCount(fixture.state, providerId), 1);
+    assert.equal(workloadRemoves(calls).length, 0);
+    await provider.release(lease as never);
+    assert.equal(workloadRemoves(calls).length, 1);
+    assert.equal(workloadRemoves(calls)[0]!.args.includes("--force"), true);
+    assert.equal(durableLeaseCount(fixture.state, providerId), 0);
   } finally {
     await fixture.close();
   }
@@ -1472,6 +1517,12 @@ function fakeCli(
         }
         return { exitCode: 0, stdout: runner.psOutput, stderr: "" };
       }
+      if (command === "start") {
+        const id = invocation.args.at(-1)!;
+        return labelsByContainer.has(id)
+          ? { exitCode: 0, stdout: "", stderr: "" }
+          : { exitCode: 1, stdout: "", stderr: "not found" };
+      }
       if (command === "inspect") {
         if (invocation.args.includes("{{.Id}}")) {
           const id = idByName.get(invocation.args.at(-1)!);
@@ -1574,6 +1625,7 @@ async function ociFixture(networkApproved = false) {
         join(external, "input.txt"),
       ],
       workingDirectory: workspace,
+      requiredLifecycleScope: "contained_workload" as const,
       requestedCapabilities: ["write_confinement" as const],
     },
     close: async () => await rm(root, { recursive: true, force: true }),

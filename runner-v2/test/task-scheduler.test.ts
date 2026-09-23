@@ -211,6 +211,54 @@ test("an aborted active worker cannot persist a stale outcome or consume another
   }
 });
 
+test("tick dispatches nothing while a plan critique is pending and resumes after it is skipped", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-task-scheduler-critique-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const driver = new DeferredDriver();
+  try {
+    store.append({
+      runId: "run_1",
+      type: "run.initialized",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "init",
+      payload: { runId: "run_1" },
+    });
+    store.append(planEvent("run_1", [task("a"), task("b"), task("c"), task("d")]));
+    store.append({
+      runId: "run_1",
+      type: "plan_critique.policy_configured",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "critique-policy",
+      payload: { mode: "always" },
+    });
+    const scheduler = new TaskScheduler({
+      runId: "run_1",
+      store,
+      driver,
+      maxConcurrency: 2,
+      workspaceFor: async (taskValue, attempt) => `C:/work/${taskValue.id}/${attempt}`,
+      clock: () => "2026-07-12T00:00:00.000Z",
+    });
+    await scheduler.tick();
+    assert.equal(driver.assignments.length, 0, "tick() must wait while planCritiquePending is true");
+    store.append({
+      runId: "run_1",
+      type: "plan_critique.skipped",
+      occurredAt: "2026-07-12T00:00:00.000Z",
+      actor: { role: "runner", id: "test" },
+      idempotencyKey: "critique-skipped",
+      payload: { planRevision: 1, reason: "critic_failed" },
+    });
+    await scheduler.tick();
+    assert.ok(driver.assignments.length > 0, "tick() dispatches after the critique is no longer pending");
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function planEvent(runId: string, tasks: BuildTask[]) {
   return {
     runId,

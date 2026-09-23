@@ -33,7 +33,7 @@ for (let index = 0; index < count; index += 1) {
     intent: {
       invocationId: `invocation-${writer}-${index}`, runId: binding.runId, taskId: "task",
       sessionId: binding.sessionId, kind: "command", executable: "node", arguments: [],
-      workingDirectory: workspace, requestedCapabilities: [],
+      workingDirectory: workspace, requiredLifecycleScope: "process_group", requestedCapabilities: [],
     },
   });
 }

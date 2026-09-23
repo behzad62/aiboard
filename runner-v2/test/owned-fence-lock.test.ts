@@ -4,12 +4,14 @@ import { createHash } from "node:crypto";
 import fs, { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
+import vm from "node:vm";
+import ts from "typescript";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { inspectGenericPosixProcessBirth, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
+import { inspectGenericPosixProcessBirth, isOwnedFenceLockContention, OwnedFenceContentionError, OwnedFenceLockUnavailableError, recoverRevokedOwnedFenceLock, retryRetiredOwnedFenceCleanup, withOwnedFenceLock, withOwnedFenceLockSync } from "../src/owned-fence-lock.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-holder.mjs", import.meta.url));
 const contendedInitializerFixture = fileURLToPath(new URL("./fixtures/owned-fence-lock-contended-initializer.mjs", import.meta.url));
@@ -39,6 +41,30 @@ test("generic POSIX holder inspection distinguishes exact absence from uncertain
     });
     assert.deepEqual(result, fixtureCase.expected, fixtureCase.name);
   }
+});
+
+test("current holder birth retries after a transient self-inspection failure instead of poisoning later fence claims", () => {
+  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
+  let inspections = 0;
+  const context = vm.createContext({
+    process: { pid: 4242 },
+    inspectProcessBirth: () => {
+      inspections += 1;
+      return inspections === 1
+        ? { state: "unknown" }
+        : { state: "same", fingerprint: "birth-recovered" };
+    },
+    OwnedFenceLockUnavailableError,
+  });
+  vm.runInContext("let cachedCurrentBirth;", context);
+  vm.runInContext(extractNamedJsFunction(source, "currentProcessBirthFingerprint").replace(/^export\s+/, ""), context);
+
+  assert.throws(
+    () => vm.runInContext("currentProcessBirthFingerprint()", context),
+    /Current owned fence holder birth identity is unavailable/,
+  );
+  assert.equal(vm.runInContext("currentProcessBirthFingerprint()", context), "birth-recovered");
+  assert.equal(inspections, 2, "a transient unknown self-birth result must be retried on the next acquisition");
 });
 
 test("a single-link legacy coordination database migrates to immutable exact-path authority", () => {
@@ -132,11 +158,57 @@ test("an exact live holder is never stolen through the full contention window", 
     const startedAt = Date.now();
     assert.throws(
       () => withOwnedFenceLockSync(lockPath, () => { effects += 1; }, { deadlineMs: 150 }),
-      /live holder|unavailable/i,
+      /live holder|unavailable|contended/i,
     );
     assert.ok(Date.now() - startedAt >= 100, "live contention must remain protected through the bounded wait");
     assert.equal(effects, 0);
     assert.equal(readDurableHolder(lockPath).holderPid, holder.pid);
+  } finally {
+    await stop(holder);
+    rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
+  }
+});
+
+test("protocol observation identity replacement remains terminal instead of retryable contention", () => {
+  const source = readFileSync(new URL("../src/owned-fence-lock.mjs", import.meta.url), "utf8");
+  const identityError = new OwnedFenceLockUnavailableError("Owned fence coordination path identity was replaced or disappeared.");
+  let identityChecks = 0;
+  const context = vm.createContext({
+    OwnedFenceProtocolObservationChangedError: class OwnedFenceProtocolObservationChangedError extends OwnedFenceContentionError {},
+    assertCoordinationPathSnapshot: () => { throw identityError; },
+    assertCoordinationPathIdentity: () => { identityChecks += 1; throw identityError; },
+    assertNoProtocolSidecars: () => undefined,
+  });
+  vm.runInContext(extractNamedJsFunction(source, "assertProtocolObservation"), context);
+  let caught: unknown;
+  try { vm.runInContext("assertProtocolObservation('effect.sqlite', {}, 'during test')", context); }
+  catch (error) { caught = error; }
+  assert.ok(caught instanceof Error);
+  assert.equal(isOwnedFenceLockContention(caught), false,
+    "a replaced coordination-file identity is terminal authority loss, not transient contention");
+  assert.ok(identityChecks >= 1, "a failed protocol snapshot must recheck exact path identity before classifying retryability");
+});
+
+test("contention classification never lets one busy member hide a terminal fence error", { timeout: 15_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-owned-fence-classifier-"));
+  const lockPath = join(root, "effect.sqlite");
+  const holder = startHolder(lockPath, undefined, 2_000, 60_000);
+  try {
+    assert.equal((await nextMessage(holder)).state, "acquired");
+    let contention: unknown;
+    try { withOwnedFenceLockSync(lockPath, () => undefined, { deadlineMs: 100 }); }
+    catch (error) { contention = error; }
+    assert.ok(contention instanceof Error);
+    assert.equal(isOwnedFenceLockContention(contention), true, "exact live-holder contention must be classified retryable");
+    const terminal = new OwnedFenceLockUnavailableError("Owned fence protocol canonical schema is incomplete.");
+    assert.equal(isOwnedFenceLockContention(new AggregateError([contention, terminal])), false,
+      "mixed contention + terminal evidence must stay terminal");
+    assert.equal(isOwnedFenceLockContention(new OwnedFenceLockUnavailableError("effect failed", {
+      cause: Object.assign(new Error("permission"), { code: "EACCES" }),
+    })), false, "effect-body permission errors are not lock contention");
+    assert.equal(isOwnedFenceLockContention(new OwnedFenceLockUnavailableError("effect failed", {
+      cause: Object.assign(new Error("busy"), { code: "EBUSY" }),
+    })), false, "raw effect-body EBUSY is not enough to prove owned-fence contention");
   } finally {
     await stop(holder);
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
@@ -852,6 +924,15 @@ test("a contender retains its caller deadline while an exclusive winner initiali
     rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 50 });
   }
 });
+
+function extractNamedJsFunction(source: string, name: string): string {
+  const file = ts.createSourceFile("owned-fence-lock.mjs", source, ts.ScriptTarget.ES2022, true, ts.ScriptKind.JS);
+  const declaration = file.statements.find((statement): statement is ts.FunctionDeclaration =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+  );
+  if (!declaration) throw new Error(`missing production function ${name}`);
+  return declaration.getText(file);
+}
 
 function startHolder(lockPath: string, effectPath?: string, deadlineMs = 2_000, holdMs = 60_000, mode = "hold"): ChildProcess {
   return spawn(process.execPath, [fixture, mode, lockPath, effectPath ?? "", String(deadlineMs), String(holdMs)], {

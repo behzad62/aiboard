@@ -54,7 +54,7 @@ export function parsePosixPsIdentity(pid, row) {
 export function listOwnedPosixGroupMembers(groupId) {
   if (!positivePid(groupId)) return undefined;
   try {
-    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid="], {
+    return parsePosixGroupMembers(execFileSync("ps", ["-e", "-o", "pid=,pgid=,stat="], {
       encoding: "utf8",
       timeout: POSIX_INSPECTION_DEADLINE_MS,
     }), groupId);
@@ -66,20 +66,36 @@ export function listOwnedPosixGroupMembers(groupId) {
 export function parsePosixGroupMembers(output, groupId) {
   if (!positivePid(groupId) || typeof output !== "string") return undefined;
   const members = [];
+  let sawSnapshotRow = false;
   for (const line of output.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    const match = /^(-?\d+)\s+(-?\d+)$/.exec(trimmed);
+    const match = /^(-?\d+)\s+(-?\d+)\s+(\S+)$/.exec(trimmed);
     if (!match) return undefined;
+    sawSnapshotRow = true;
     const pid = Number(match[1]);
     const pgid = Number(match[2]);
+    const state = match[3];
+    // The first ps state character is the execution state; remaining BSD
+    // modifiers describe priority/session/foreground attributes. Linux extra
+    // flags are <NLsl+; Darwin also documents >AESVWX. Darwin first-state
+    // letters come from Apple ps mach_state_table " RUSITH?" (R,U,S,I,T,H,?)
+    // plus BSD SSTOP/SZOMB T/Z. Refuse an unknown token rather than guessing
+    // whether that process can execute. A foreign documented Mach/BSD state
+    // must not void an otherwise exact owned-group snapshot.
+    if (!/^[DRSTtXxIZUH?][<NLsl+>AESVWX]*$/.test(state)) return undefined;
     // Linux kernel threads report a positive PID with pgid 0. Only that row
     // is skipped; pid 0 or any other non-positive identity fails closed.
     if (positivePid(pid) && pgid === 0) continue;
     if (!positivePid(pid) || !positivePid(pgid)) return undefined;
+    // A zombie has already exited and cannot execute or receive a signal. Its
+    // unreaped pid/pgid row is not live workload membership.
+    if (state.startsWith("Z")) continue;
     if (pgid === groupId) members.push(pid);
   }
-  return members;
+  // A successful `ps -e` snapshot necessarily contains at least its own row.
+  // Blank output is therefore unavailable evidence, never exact emptiness.
+  return sawSnapshotRow ? members : undefined;
 }
 
 export function reattestOwnedPosixAnchor(workloadGroup, inspect = inspectPosixProcessIdentity, listMembers = listOwnedPosixGroupMembers) {

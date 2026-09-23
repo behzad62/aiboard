@@ -27,6 +27,7 @@ import {
   type RunnerExtensionClosure,
   type RunnerExtensionExecutionCopy,
 } from "./runner-capability-contract.js";
+import { isTrustedRunnerHostAliasResolution } from "./runner-capabilities-config.js";
 
 export interface LocalPluginLoaderOptions {
   pluginDirectories: readonly string[];
@@ -324,7 +325,11 @@ async function assertNoSymbolicPathComponents(
   let current = root;
   for (const segment of relative(root, candidate).split(sep).filter(Boolean)) {
     current = join(current, segment);
-    if ((await lstat(current)).isSymbolicLink()) {
+    if (!(await lstat(current)).isSymbolicLink()) continue;
+    let actual: string;
+    try { actual = resolve(await realpath(current)); }
+    catch { throw new Error(`${label} ${candidate} contains a symbolic link at ${current}.`); }
+    if (!isTrustedRunnerHostAliasResolution(current, actual)) {
       throw new Error(`${label} ${candidate} contains a symbolic link at ${current}.`);
     }
   }

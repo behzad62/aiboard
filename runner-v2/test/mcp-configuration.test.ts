@@ -1,12 +1,13 @@
 import filesystem from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import * as configuration from "../src/mcp-configuration.js";
-const { configureMcpServers, fixedMcpEnvelope } = configuration;
+const { configureMcpServers, fixedMcpEnvelope, mcpConfigurationDigest, snapshotMcpServerSpec } = configuration;
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import test, { type TestContext } from "node:test";
+import { lifecycleRequirementsDigest } from "../src/execution-lifecycle-policy.js";
 import { createRunnerInternalExecutionContext } from "../src/runner-internal-execution-context.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { McpServerSpec } from "../src/mcp-tools.js";
@@ -63,6 +64,75 @@ test("MCP config digest binds the fixed envelope rather than only name and comma
   const network = await attest({ ...base, envelope: { network: true } } as McpServerSpec);
   const credential = await attest({ ...base, envelope: { credentialNames: ["DECLARED_TOKEN"] } } as McpServerSpec);
   assert.equal(new Set([legacy, paths, network, credential].map((entry) => entry.configDigest)).size, 4);
+}));
+
+test("MCP config digest binds trusted lifecycle requirements into exact configuration identity", () => {
+  const base = { name: "docs", command };
+  const legacy = mcpConfigurationDigest(base);
+  const cleanup = mcpConfigurationDigest({ ...base, lifecycleRequirements: { requireCompleteCleanup: true } });
+  const detachment = mcpConfigurationDigest({ ...base, lifecycleRequirements: { knownUnavoidableDetachment: true } });
+  const both = mcpConfigurationDigest({
+    ...base,
+    lifecycleRequirements: { requireCompleteCleanup: true, knownUnavoidableDetachment: true },
+  });
+  assert.equal(new Set([legacy, cleanup, detachment, both]).size, 4);
+  assert.equal(
+    mcpConfigurationDigest({ ...base, lifecycleRequirements: { requireCompleteCleanup: false } }),
+    legacy,
+  );
+});
+
+test("MCP snapshot canonicalizes true lifecycle flags and omits false-only requirements", () => {
+  const snapshotted = snapshotMcpServerSpec({
+    name: "docs",
+    command,
+    lifecycleRequirements: {
+      requireCompleteCleanup: true,
+      knownUnavoidableDetachment: false,
+    },
+  });
+  assert.deepEqual(snapshotted.lifecycleRequirements, { requireCompleteCleanup: true });
+  assert.equal(Object.isFrozen(snapshotted.lifecycleRequirements), true);
+  assert.equal(Object.hasOwn(snapshotMcpServerSpec({
+    name: "docs",
+    command,
+    lifecycleRequirements: { requireCompleteCleanup: false, knownUnavoidableDetachment: false },
+  }), "lifecycleRequirements"), false);
+  assert.equal(Object.hasOwn(snapshotMcpServerSpec({ name: "docs", command }), "lifecycleRequirements"), false);
+});
+
+for (const lifecycleRequirements of [
+  { unknown: true },
+  { requireCompleteCleanup: "yes" },
+  { requireCompleteCleanup: true, extra: false },
+  [],
+  null,
+  "complete",
+] as const) {
+  test(`MCP snapshot rejects malformed lifecycleRequirements ${JSON.stringify(lifecycleRequirements)}`, () => {
+    assert.throws(
+      () => snapshotMcpServerSpec({ name: "docs", command, lifecycleRequirements } as McpServerSpec),
+      (error: unknown) => error instanceof Error &&
+        ((error as { code?: string }).code === "mcp_command_invalid" || /lifecycle|invalid|configuration/i.test(error.message)),
+    );
+  });
+}
+
+test("MCP resolve preserves frozen lifecycle requirements and digest on the runtime launch descriptor", async (t) => fixture(t, async (context) => {
+  const lifecycleRequirements = { requireCompleteCleanup: true as const };
+  const servers = [{ name: "docs", command, lifecycleRequirements }];
+  const attested = await context.attestConfiguredCapabilities({ mcpServers: servers, capabilitiesConfig });
+  const launches = await context.resolveMcpRuntimeLaunches({ servers, attestation: attested.mcp });
+  assert.deepEqual(launches[0]!.lifecycleRequirements, { requireCompleteCleanup: true });
+  assert.equal(launches[0]!.lifecycleRequirementsDigest, lifecycleRequirementsDigest(lifecycleRequirements));
+  assert.equal(launches[0]!.configDigest, mcpConfigurationDigest(servers[0]!));
+  assert.equal(Object.hasOwn((await context.resolveMcpRuntimeLaunches({
+    servers: [{ name: "docs", command }],
+    attestation: (await context.attestConfiguredCapabilities({
+      mcpServers: [{ name: "docs", command }],
+      capabilitiesConfig,
+    })).mcp,
+  }))[0]!, "lifecycleRequirements"), false);
 }));
 
 test("MCP config replacement cannot reuse the trusted old attestation even when argv is unchanged", async (t) => fixture(t, async (context) => {

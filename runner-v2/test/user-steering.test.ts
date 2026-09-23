@@ -5,14 +5,185 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { rebuildSchedulerProjection, type NewSchedulerEvent } from "../src/scheduler-store.js";
+import {
+  architectLifecycleEventMatchesReason,
+  rebuildSchedulerProjection,
+  type NewSchedulerEvent,
+  type SchedulerEvent,
+} from "../src/scheduler-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import type { EvidenceStore } from "../src/evidence-store.js";
 import { TaskScheduler, type WorkerOutcome } from "../src/task-scheduler.js";
+import { assessPlanRisk } from "../src/plan-critique-contracts.js";
+import { parseArchitectActionReason, type ArchitectActionReason } from "../src/user-steering-contracts.js";
 import { workerSessionId } from "../src/worker-identity.js";
 
 const RUN_ID = "run_user_steering";
+
+test("plan_critique_resolution_required parses, rejects empty findings, and rejects extra keys", () => {
+  const reason = {
+    type: "plan_critique_resolution_required" as const,
+    critiqueId: "critique-1",
+    planRevision: 1,
+    blockingFindingIds: ["F-1"],
+  };
+  assert.deepEqual(parseArchitectActionReason(reason), reason);
+  assert.throws(
+    () => parseArchitectActionReason({ ...reason, blockingFindingIds: [] }),
+    /Plan critique resolution reason requires blocking findings/,
+  );
+  assert.throws(
+    () => parseArchitectActionReason({ ...reason, extra: true }),
+    /Unknown user-steering payload field\(s\): extra/,
+  );
+});
+
+test("plan_critique.resolved matches the Architect resolution reason and rejects distinct cases", () => {
+  const reason = {
+    type: "plan_critique_resolution_required" as const,
+    critiqueId: "critique-1",
+    planRevision: 1,
+    blockingFindingIds: ["F-1"],
+  };
+  const event = {
+    type: "plan_critique.resolved",
+    actor: ARCHITECT,
+    payload: { critiqueId: "critique-1", planRevision: 1, resolutions: [] },
+  } as Pick<SchedulerEvent, "type" | "actor" | "payload">;
+  assert.equal(architectLifecycleEventMatchesReason(event, reason), true);
+  assert.equal(architectLifecycleEventMatchesReason({
+    ...event,
+    payload: { ...event.payload, critiqueId: "critique-stale" },
+  }, reason), false);
+  assert.equal(architectLifecycleEventMatchesReason({
+    ...event,
+    actor: { role: "runner", id: "build-runtime" },
+  }, reason), false);
+});
+
+test("plan_critique_resolution_required stays applicable only for the matching submitted critique", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    seedPlanWithCritiqueTasks(store);
+    configureSubmittedCritique(store, {
+      critiqueId: "critique-1",
+      planRevision: 1,
+      findings: [blockingFinding("F-1", ["A", "B"])],
+    });
+    const matching = {
+      type: "plan_critique_resolution_required" as const,
+      critiqueId: "critique-1",
+      planRevision: 1,
+      blockingFindingIds: ["F-1"],
+    };
+    askAndAnswer(store, "question-match", matching);
+    acknowledgeCancelC(store, "guidance-keep-critique");
+    assert.notEqual(
+      rebuildSchedulerProjection(store.readRun(RUN_ID)).architectQuestions["question-match"].resumeStatus,
+      "superseded",
+    );
+  });
+});
+
+test("plan_critique_resolution_required is inapplicable when the critique is no longer submitted", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    seedPlanWithCritiqueTasks(store);
+    configureSubmittedCritique(store, {
+      critiqueId: "critique-1",
+      planRevision: 1,
+      findings: [blockingFinding("F-1", ["A", "B"])],
+    });
+    const matching = {
+      type: "plan_critique_resolution_required" as const,
+      critiqueId: "critique-1",
+      planRevision: 1,
+      blockingFindingIds: ["F-1"],
+    };
+    askAndAnswer(store, "question-resolved", matching);
+    append(store, "plan_critique.resolved", ARCHITECT, "critique:1:resolved", {
+      critiqueId: "critique-1",
+      planRevision: 1,
+      resolutions: [{ findingId: "F-1", resolution: "rejected", rationale: "The files are distinct." }],
+    });
+    acknowledgeCancelC(store, "guidance-after-resolve");
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun(RUN_ID)).architectQuestions["question-resolved"].resumeStatus,
+      "superseded",
+    );
+  });
+});
+
+test("plan_critique_resolution_required is inapplicable for a stale critiqueId", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    seedPlanWithCritiqueTasks(store);
+    configureSubmittedCritique(store, {
+      critiqueId: "critique-1",
+      planRevision: 1,
+      findings: [blockingFinding("F-1", ["A", "B"])],
+    });
+    askAndAnswer(store, "question-stale-id", {
+      type: "plan_critique_resolution_required",
+      critiqueId: "critique-stale",
+      planRevision: 1,
+      blockingFindingIds: ["F-1"],
+    });
+    acknowledgeCancelC(store, "guidance-stale-id");
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun(RUN_ID)).architectQuestions["question-stale-id"].resumeStatus,
+      "superseded",
+    );
+  });
+});
+
+test("plan_critique_resolution_required is inapplicable for a stale planRevision", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    seedPlanWithCritiqueTasks(store);
+    configureSubmittedCritique(store, {
+      critiqueId: "critique-1",
+      planRevision: 1,
+      findings: [blockingFinding("F-1", ["A", "B"])],
+    });
+    askAndAnswer(store, "question-stale-rev", {
+      type: "plan_critique_resolution_required",
+      critiqueId: "critique-1",
+      planRevision: 2,
+      blockingFindingIds: ["F-1"],
+    });
+    acknowledgeCancelC(store, "guidance-stale-rev");
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun(RUN_ID)).architectQuestions["question-stale-rev"].resumeStatus,
+      "superseded",
+    );
+  });
+});
+
+test("plan_critique_resolution_required is inapplicable for a different blockingFindingIds set", () => {
+  withStore((store) => {
+    initialize(store, "Build the requested application.");
+    seedPlanWithCritiqueTasks(store);
+    configureSubmittedCritique(store, {
+      critiqueId: "critique-1",
+      planRevision: 1,
+      findings: [blockingFinding("F-1", ["A", "B"])],
+    });
+    askAndAnswer(store, "question-findings", {
+      type: "plan_critique_resolution_required",
+      critiqueId: "critique-1",
+      planRevision: 1,
+      blockingFindingIds: ["F-other"],
+    });
+    acknowledgeCancelC(store, "guidance-findings");
+    assert.equal(
+      rebuildSchedulerProjection(store.readRun(RUN_ID)).architectQuestions["question-findings"].resumeStatus,
+      "superseded",
+    );
+  });
+});
+
 const USER = { role: "user" as const, id: "local-user" };
 const ARCHITECT = { role: "architect" as const, id: "architect-1" };
 const FIXTURE_EVIDENCE_STORE: EvidenceStore = {
@@ -1226,6 +1397,118 @@ test("the append boundary rejects unversioned guidance and a new acknowledgement
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+function critiqueTask(id: string, dependencies: string[] = []) {
+  return {
+    id,
+    objective: `Do ${id}`,
+    dependencies,
+    status: "planned" as const,
+    requiredCapabilities: ["code"],
+    attempt: 0,
+    acceptanceCriteria: [{ id: "AC-1", text: `${id} works.` }],
+    acceptanceCriteriaVersion: 1,
+  };
+}
+
+function blockingFinding(findingId: string, taskIds: string[]) {
+  return {
+    findingId,
+    severity: "blocking" as const,
+    category: "overlapping_scope" as const,
+    taskIds,
+    claim: `${taskIds.join(" and ")} overlap.`,
+    evidence: taskIds.map((taskId) => `${taskId} mentions the same file.`),
+  };
+}
+
+function seedPlanWithCritiqueTasks(store: SqliteSchedulerStore): void {
+  append(store, "plan.created", ARCHITECT, "plan:1", {
+    revision: 1,
+    tasks: [critiqueTask("A"), critiqueTask("B"), critiqueTask("C")],
+    riskDeclaration: { risk: "low", rationale: "routine" },
+  });
+}
+
+function configureSubmittedCritique(
+  store: SqliteSchedulerStore,
+  options: {
+    critiqueId: string;
+    planRevision: number;
+    findings: ReturnType<typeof blockingFinding>[];
+  },
+): void {
+  const runner = { role: "runner" as const, id: "test" };
+  append(store, "plan_critique.policy_configured", runner, "critique-policy:always", { mode: "always" });
+  const projection = rebuildSchedulerProjection(store.readRun(RUN_ID));
+  append(store, "plan_critique.risk_assessed", runner, "critique-risk", {
+    planRevision: options.planRevision,
+    architectDeclaration: "low",
+    stricterQualification: false,
+    assessment: assessPlanRisk({
+      architectDeclaration: "low",
+      stricterQualification: false,
+      tasks: Object.values(projection.tasks),
+    }),
+  });
+  append(store, "plan_critique.requested", runner, `critique:${options.critiqueId}`, {
+    critiqueId: options.critiqueId,
+    planRevision: options.planRevision,
+    runtime: {
+      runtimeId: "google:verifier",
+      providerId: "google",
+      modelId: "verifier",
+      modelIdentity: "verifier",
+      sessionId: "plan-critic:s1",
+    },
+    excludedModels: [{ source: "architect", runtimeId: "openai:architect", modelIdentity: "architect" }],
+  });
+  append(store, "plan_critique.submitted", { role: "verifier", id: "google:verifier" }, `critique:${options.critiqueId}:submitted`, {
+    critiqueId: options.critiqueId,
+    planRevision: options.planRevision,
+    sessionId: "plan-critic:s1",
+    findings: options.findings,
+  });
+}
+
+function askAndAnswer(store: SqliteSchedulerStore, questionId: string, reason: ArchitectActionReason): void {
+  append(store, "architect.question_requested", ARCHITECT, `question:${questionId}`, {
+    questionId,
+    version: 1,
+    decisionKind: "requirement_conflict",
+    question: "Should this plan critique still be resolved?",
+    checkpoint: {
+      reason,
+      sequence: rebuildSchedulerProjection(store.readRun(RUN_ID)).lastSequence,
+    },
+  });
+  append(store, "architect.question_answered", USER, `question:${questionId}:answer`, {
+    questionId,
+    expectedVersion: 1,
+    answer: "Apply the newer guidance first.",
+  });
+}
+
+function acknowledgeCancelC(store: SqliteSchedulerStore, guidanceId: string): void {
+  append(store, "user.guidance_submitted", USER, `guidance:${guidanceId}`, {
+    guidanceId,
+    text: "Cancel task C.",
+    version: 1,
+  });
+  append(store, "user.guidance_acknowledged", ARCHITECT, `guidance:${guidanceId}:ack`, {
+    guidanceId,
+    expectedVersion: 1,
+    resolution: {
+      type: "plan_reconciled",
+      rationale: "The newer guidance cancels unused work.",
+      planReconciliation: {
+        revision: 2,
+        summary: "Cancel C.",
+        taskUpdates: [{ taskId: "C", action: "cancel" }],
+      },
+    },
+  });
+}
 
 function initialize(store: SqliteSchedulerStore, objective: string): void {
   append(store, "run.initialized", { role: "runner", id: "runner" }, "initialized", { objective });

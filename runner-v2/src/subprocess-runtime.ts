@@ -6,7 +6,9 @@ import type {
   OutputStream,
 } from "./bounded-output-spool.js";
 import type { ChildEnvironmentFactory } from "./child-environment.js";
+import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
 import {
+  lifecycleScopeSatisfies,
   parseExecutionInvocationIntent,
   parseProcessOutputDisposition,
   type ExactPathAccess,
@@ -39,6 +41,7 @@ import {
   parseProcessReconciliation,
   parseProcessReleaseResult,
   parseProcessSignalResult,
+  ProcessReleasePendingError,
   reattestProcessBackend,
   selectProcessBackend,
   type ConsumedExecutionGrant,
@@ -345,6 +348,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         outputPrepared: false,
         state: "prepared",
         history: [{ state: "prepared", at: this.now() }],
+        requiredLifecycleScope: request.intent.requiredLifecycleScope,
         requiredCapabilities: [...request.intent.requestedCapabilities],
         environmentAudit: {
           inheritedNames: [],
@@ -536,14 +540,14 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     try { selected = await this.fencedEffect(record.invocationId, fence => { check(); return reattestProcessBackend(this.options.registry, binding, fence); }); }
     catch { check(); selected = await this.fencedEffect(record.invocationId, fence => { check(); return adoptProcessBackendAfterRestart(this.options.registry, binding, fence); }); }
     check();
-    if (request.action === "terminate" && (selected.attestation.capabilities.tree_termination !== "enforced" || selected.attestation.capabilities.verified_emptiness !== "enforced"))
+    if (request.action === "terminate" && (selected.attestation.lifecycle.termination !== "enforced" || selected.attestation.lifecycle.emptiness !== "enforced"))
       throw new SubprocessRuntimeError("backend_unavailable", "Required recovery capabilities are not enforced.");
     if (selected.registryId !== binding.registryId || selected.implementationGeneration !== binding.implementationGeneration || selected.attestationDigest !== binding.attestationDigest) {
       const current = this.current(record.invocationId);
       record = this.mutate({ type: "adopt_backend", invocationId: record.invocationId, expectedRevision: current.revision, at: this.now(),
         binding: { ...binding, registryId: selected.registryId, implementationGeneration: selected.implementationGeneration,
           implementationDigest: selected.implementationDigest, attestationVersion: selected.attestation.attestationVersion,
-          attestationDigest: selected.attestationDigest, capabilities: selected.attestation.capabilities } });
+          attestationDigest: selected.attestationDigest, capabilities: selected.attestation.capabilities, lifecycle: selected.attestation.lifecycle } });
       binding = requiredBinding(record);
     }
     const identityProof = durableBackendIdentityFingerprint(binding);
@@ -679,6 +683,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         selectProcessBackend(
           this.options.registry,
           request.intent.requestedCapabilities,
+          request.intent.requiredLifecycleScope,
           fence,
         ),
       );
@@ -775,6 +780,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       attestationVersion: selected.attestation.attestationVersion,
       attestationDigest: selected.attestationDigest,
       capabilities: selected.attestation.capabilities,
+      lifecycle: selected.attestation.lifecycle,
       ...launch,
     };
     record = this.current(record.invocationId);
@@ -877,6 +883,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       attestationVersion: selected.attestation.attestationVersion,
       attestationDigest: selected.attestationDigest,
       capabilities: selected.attestation.capabilities,
+      lifecycle: selected.attestation.lifecycle,
       ...blocked.launch,
     };
     record = this.current(record.invocationId);
@@ -998,6 +1005,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
               implementationDigest: backend.implementationDigest,
               attestationVersion: backend.attestation.attestationVersion,
               attestationDigest: backend.attestationDigest,
+              capabilities: backend.attestation.capabilities,
+              lifecycle: backend.attestation.lifecycle,
             },
           });
           binding = requiredBinding(record);
@@ -1066,13 +1075,25 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     assertAuthority();
     let releaseEffectId: string;
     try {
-      const fresh = await this.fencedEffect(record.invocationId, (fence) =>
+      let fresh = await this.fencedEffect(record.invocationId, (fence) =>
         reattestProcessBackend(this.options.registry, binding, fence),
       );
       const released = await this.journaledEffect(
         record.invocationId,
         "backend_release",
-        (fence) => { assertAuthority(); return fresh.backend.release(binding, fence); },
+        async (fence) => {
+          assertAuthority();
+          const deadline = this.options.clock.now().getTime() + AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS;
+          for (;;) {
+            try { return await fresh.backend.release(binding, fence); }
+            catch (error) {
+              if (!(error instanceof ProcessReleasePendingError) || this.options.clock.now().getTime() >= deadline) throw error;
+              await this.options.clock.sleep(Math.min(25, Math.max(1, deadline - this.options.clock.now().getTime())));
+              assertAuthority();
+              fresh = await reattestProcessBackend(this.options.registry, binding, fence);
+            }
+          }
+        },
       );
       parseProcessReleaseResult(released.result);
       releaseEffectId = released.effectId;
@@ -1171,23 +1192,25 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       let detail: string | undefined;
       let signalEffectId: string | undefined;
       let selected: SelectedProcessBackend | undefined;
+      let binding: ProcessBackendBinding | undefined;
       try {
+        binding = requiredBinding(record);
         selected = await this.fencedEffect(record.invocationId, (fence) =>
           reattestProcessBackend(
             this.options.registry,
-            record.backendBinding!,
+            binding!,
             fence,
           ),
         );
       } catch (error) {
         detail = error instanceof Error ? error.message : "Signal failed";
       }
-      if (selected) {
+      if (selected && binding) {
         const signalled = await this.journaledEffect(
           record.invocationId,
           "backend_signal",
           (fence) =>
-            selected.backend.signal(record.backendBinding!, action, fence),
+            selected.backend.signal(binding!, action, fence),
         );
         const parsedOutcome = parseProcessSignalResult(signalled.result).state;
         signalEffectId = signalled.effectId;
@@ -1359,12 +1382,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
         "identity_mismatch",
         "Recoverable process lacks durable identity.",
       );
+    let binding = requiredBinding(record);
     let selected: SelectedProcessBackend;
     try {
       selected = await this.fencedEffect(record.invocationId, (fence) =>
         reattestProcessBackend(
           this.options.registry,
-          record.backendBinding!,
+          binding,
           fence,
         ),
       );
@@ -1372,11 +1396,11 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       selected = await this.fencedEffect(record.invocationId, (fence) =>
         adoptProcessBackendAfterRestart(
           this.options.registry,
-          record.backendBinding!,
+          binding,
           fence,
         ),
       );
-      const prior = record.backendBinding;
+      const prior = binding;
       record = this.mutate({
         type: "adopt_backend",
         invocationId: record.invocationId,
@@ -1389,10 +1413,13 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           implementationDigest: selected.implementationDigest,
           attestationVersion: selected.attestation.attestationVersion,
           attestationDigest: selected.attestationDigest,
+          capabilities: selected.attestation.capabilities,
+          lifecycle: selected.attestation.lifecycle,
         },
       });
+      binding = requiredBinding(record);
     }
-    const activeBinding = record.backendBinding!;
+    const activeBinding = binding;
     const reconciliation = await this.reconcileBackend(
       record.invocationId,
       selected,
@@ -1499,6 +1526,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
           implementationDigest: selected.implementationDigest,
           attestationVersion: selected.attestation.attestationVersion,
           attestationDigest: selected.attestationDigest,
+          capabilities: selected.attestation.capabilities,
+          lifecycle: selected.attestation.lifecycle,
         },
       });
       binding = requiredBinding(record);
@@ -2360,6 +2389,20 @@ function requiredBinding(
     throw new SubprocessRuntimeError(
       "identity_mismatch",
       "Durable backend identity is missing.",
+    );
+  const requiredScope = record.requiredLifecycleScope;
+  const lifecycle = record.backendBinding.lifecycle;
+  if (
+    !requiredScope ||
+    record.backendBinding.attestationVersion !== 2 ||
+    !lifecycle ||
+    !lifecycleScopeSatisfies(lifecycle.scope, requiredScope) ||
+    lifecycle.termination !== "enforced" ||
+    lifecycle.emptiness !== "enforced"
+  )
+    throw new SubprocessRuntimeError(
+      "backend_unavailable",
+      "Durable lifecycle scope is unavailable or cannot be re-proven.",
     );
   return record.backendBinding;
 }

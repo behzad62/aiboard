@@ -1,7 +1,7 @@
 /** Closed recovery commands and redacted durable facts. No model or OS effects. */
 import { createHash } from "node:crypto";
 import { types } from "node:util";
-import type { ExecutionSafetyCapabilities, ExecutionSafetyCapabilityName, ProcessCleanupStatus } from "./execution-safety-contracts.js";
+import type { ExecutionLifecycleAttestation, ExecutionLifecycleScope, ExecutionSafetyCapabilities, ExecutionSafetyCapabilityName, ProcessCleanupStatus } from "./execution-safety-contracts.js";
 
 export const EXCEPTIONAL_PROCESS_STATES = ["orphaned", "identity_mismatch", "backend_unavailable", "outcome_unknown"] as const;
 export type RecoveryAction = "inspect" | "terminate" | "remove_owned_artifact";
@@ -13,6 +13,10 @@ export interface RecoveryScope {
 export interface RecoveryTarget {
   scope: RecoveryScope; owned: boolean; pendingEffects: boolean;
   capabilities: ExecutionSafetyCapabilities; cleanup: ProcessCleanupStatus;
+  /** Explicit lifecycle evidence; absent only on legacy/ambiguous ownership. */
+  lifecycle?: ExecutionLifecycleAttestation;
+  /** Original subprocess requirement when durably available. */
+  requiredLifecycleScope?: ExecutionLifecycleScope;
   backend?: Readonly<{ backendId: string; implementationDigest: string; providerId?: string }>;
   leaseExpiresAt?: string;
   requiredCapabilities?: readonly ExecutionSafetyCapabilityName[];
