@@ -1,6 +1,6 @@
 # Runner V2 — Agent capability model (execution plan)
 
-**Revision 10.** The filename is kept for reference stability; change critique and coverage
+**Revision 11.** The filename is kept for reference stability; change critique and coverage
 review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this plan.
 **Execution has not started.** Verdict in §11.
 
@@ -17,7 +17,7 @@ review moved to P6.6 by owner amendment (2026-09-22) and are no longer in this p
 | PROJECT_RULES | `CLAUDE.md`, `AGENTS.md`, the Runner V2 Task 12 mandate |
 | MAX_WORKERS | 4 permitted; **this plan derives 2** — see §5 |
 | REPAIR_BUDGET | 3 evidence-backed cycles per tracked blocking issue; ESC-1 granted one extra cycle (used by revision 6); **ESC-3 grants one final cycle each to B-1 `abort` and to A5** (used by revision 7) |
-| Planning history | eight independent reviews of revisions 1–9: `evidence/plan-review-r1.md` … `-r8.md` |
+| Planning history | nine independent reviews of revisions 1–10: `evidence/plan-review-r1.md` … `-r9.md` |
 
 ### 0.1 Host capabilities — observed
 
@@ -287,12 +287,19 @@ check (`:1552-1566`), and `integration-manager.ts` is already a registered files
 5. **Handoff accounting — the fix for review r7 A5-2.** A document commit does **not** call
    `advanceIntegrationRevision` and does not touch final verification. The projection keeps a
    **document tip**: set by `project_doc.committed` when its `parent` equals the current
-   integration revision or the current document tip. It is cleared when a task integrates
-   **only if** the newly recorded integration revision is HEAD — that is, equal to or a
-   descendant of the current document tip. `integrate` can also return an older applied ref
-   (`alreadyApplied` / `findIntegratedRevision`, `integration-manager.ts:489-518`, `:1606-1633`);
-   the runner then records it with an `isDescendantOfDocumentTip: false` fact, obtained with
-   `git merge-base --is-ancestor` inside `serialized`, and the tip is **kept** (review r8, N1). The rule wherever the
+   integration revision or the current document tip. When a document tip exists and a task
+   integrates, the runner classifies the returned revision against the tip inside `serialized`,
+   with `git merge-base --is-ancestor`, as one of:
+   - `strict_descendant` — a new task commit on top of the tip (the cherry-pick path). The tip is
+     cleared and the canonical revision advances as today.
+   - `equal_to_tip` — `integrate` returned the tip itself, which happens for an empty change set
+     (`integration-manager.ts:479-486`, from `NoTaskChangesError`, `worker-runtime.ts:331-338`).
+   - `ancestor` — an older applied ref (`alreadyApplied` / `findIntegratedRevision`,
+     `:489-518`, `:1606-1633`).
+   For `equal_to_tip` and `ancestor` the task is recorded `integrated` **at the current canonical
+   integration revision**, the tip is **kept**, and `advanceIntegrationRevision` is not moved, so
+   a current final verification stays current (SOURCE D6.8; reviews r8 N1, r9 N1). `build-runtime.ts`
+   passes the canonical revision into the `task.transitioned` payload for those two cases. The rule wherever the
    code compares a handed-off or verified revision with `integrationRevision` — `project.handoff_selected`
    (`scheduler-store.ts:2777-2783`), and the final-verification currency test inside readiness
    (`:876-878`) — accepts either `integrationRevision` or the document tip, and nothing else. The
@@ -330,10 +337,19 @@ check (`:1552-1566`), and `integration-manager.ts` is already a registered files
      `docs/project/STATE.md`.";
    - **how to update** — "Keep specs, plans and decisions current as they change; update
      `STATE.md` last, with where things stand and the next action."
-   The entry-point fact for `AGENTS.md` is true only when the marked section contains the three
-   marker lines `<!-- aiboard:docs:holds -->`, `<!-- aiboard:docs:read-first -->` and
-   `<!-- aiboard:docs:update -->`, each followed by non-empty text. A4 puts the templates in the
-   Architect prompt; the runner never writes documentation content itself.
+   The exported body **contains** the three marker lines, each followed by its statement:
+   `<!-- aiboard:docs:holds -->` then the layout list, `<!-- aiboard:docs:read-first -->` then the
+   read-first sentence, `<!-- aiboard:docs:update -->` then the update sentence. So writing the
+   template verbatim satisfies the check. The entry-point fact for `AGENTS.md` is true only when
+   the marked section contains all three markers **and** the text after each carries the
+   statement's required content, checked mechanically (the Architect may add prose, but cannot
+   pass with placeholders — review r9, N3):
+   - after `holds`: each of `README.md`, `STATE.md`, `specs/`, `plans/`, `decisions.md`,
+     `evidence/`;
+   - after `read-first`: both `docs/project/README.md` and `docs/project/STATE.md`;
+   - after `update`: `STATE.md` and the word `last`.
+   A4 puts the templates in the Architect prompt; the runner never writes documentation content
+   itself.
 
 **Acceptance.** Per AC-7 (link case), AC-17 and AC-25, plus:
 - `write_project_doc` then `complete_run` **in the same Architect turn** completes (A5-1);
@@ -342,9 +358,12 @@ check (`:1552-1566`), and `integration-manager.ts` is already a registered files
 - a brand-new run's first event is the stamp; a legacy log replays unstamped and completes as
   before; a crash after the stamp and before `run.initialized` still leaves a stamped run; an
   empty log after a crash before the stamp is stamped on the next construction (A5-3);
-- a retried `integrate` returning an older applied ref keeps the document tip, and handoff still
-  succeeds (N1);
-- an `AGENTS.md` section missing any of the three marker lines leaves the run not ready (N3);
+- after a document commit, a retried `integrate` returning an older applied ref, and an empty
+  change set returning the tip itself, each keep the document tip, leave the canonical revision
+  and a current final verification unchanged, and handoff still succeeds; a real task commit on
+  top clears the tip (N1);
+- the verbatim template section makes the `AGENTS.md` fact true; a section missing a marker, or
+  with `x` / `y` / `z` placeholder text after the markers, leaves the run not ready (N3);
 - a `plan_only` run cannot complete without `STATE.md` and the entry point (A5-4);
 - the restart test: request appended, commit made, crash before `project_doc.committed` → exactly
   one commit after recovery;
@@ -359,7 +378,7 @@ log → the legacy replay test reddens; remove the `lstat` check → the link te
 the request-id lookup → the restart test finds two commits.
 
 **Budget.** Review r7 findings A5-1..A5-6 used cycle 1; review r8 confirmed all but A5-3. A5-3
-is now on cycle 2 of 3; N1–N3 are on cycle 1.
+used cycle 2 and was confirmed fixed by review r9; N2 is fixed; N1 and N3 are now on cycle 2 of 3.
 
 ### B1 — Retry, typed error and recording suspension
 
@@ -608,7 +627,7 @@ waits for A3 and A5. Do not commit, stage or stash.
 
 ## 11. Verdict
 
-**PLAN BLOCKED — revision 10 not yet independently re-reviewed.**
+**PLAN BLOCKED — revision 11 not yet independently re-reviewed.**
 
 | Change | Reason |
 |---|---|
@@ -625,8 +644,10 @@ waits for A3 and A5. Do not commit, stage or stash.
 - **Revision 10** answers review r8 (`evidence/plan-review-r8.md`: A5-1, A5-2, A5-4..A5-8
   FIXED): A5-3 stamp moved before `initializeRun`; N1 tip kept for an ancestor return; N2
   fixture updates named; N3 section body specified with marker lines.
-- **Unblock action:** one independent re-review of A5 steps 5, 6 and 8 and their acceptance
-  lines, against the repository. Everything else found clean in `plan-review-r6.md` and `-r7.md` is
+- **Revision 11** answers review r9 (`evidence/plan-review-r9.md`: A5-3 and N2 FIXED): N1
+  three-way classification keeps the tip for the empty-change-set return; N3 template contains
+  the markers and the fact checks required content.
+- **Unblock action:** one independent re-review of A5 steps 5 and 8 and their acceptance lines. Everything else found clean in `plan-review-r6.md` and `-r7.md` is
   reused.
 
 **Execution has not started. Planning readiness does not authorize execution.**
