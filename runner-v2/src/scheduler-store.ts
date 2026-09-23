@@ -527,6 +527,16 @@ export function latestUnresolvedContextRecordingNote(
   return undefined;
 }
 
+function rejectCompletionWhileContextRecordingUnresolved(
+  projection: SchedulerProjection,
+): void {
+  if (latestUnresolvedContextRecordingNote(projection)) {
+    throw new Error(
+      "Context recording failure must be resolved before completion or handoff.",
+    );
+  }
+}
+
 export interface RepairCyclesProjection {
   limit: number;
   used: number;
@@ -2921,6 +2931,7 @@ export function reduceSchedulerEvent(
       delete next.pauseReason;
       break;
     case "run.completed":
+      rejectCompletionWhileContextRecordingUnresolved(current);
       if (recoveryBlocksRun(current.processRecovery)) throw new Error("Unresolved exceptional recovery prevents completion.");
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may complete a scheduler run.");
@@ -2941,6 +2952,7 @@ export function reduceSchedulerEvent(
       delete next.pauseReason;
       break;
     case "project.handoff_requested": {
+      rejectCompletionWhileContextRecordingUnresolved(current);
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may request final project handoff.");
       }
@@ -2965,6 +2977,7 @@ export function reduceSchedulerEvent(
       break;
     }
     case "project.handoff_selected": {
+      rejectCompletionWhileContextRecordingUnresolved(current);
       if (event.actor.role !== "user" && event.actor.role !== "runner") {
         throw new Error("Final project handoff selection requires the user or runner.");
       }

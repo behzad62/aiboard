@@ -1705,6 +1705,53 @@ test("aborting context recording fails the run and refuses resume or dispatch", 
   }
 });
 
+test("completion and handoff are refused while a context recording note is unresolved", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-scheduler-recording-completion-"));
+  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+  const message = /Context recording failure must be resolved before completion or handoff\./;
+  try {
+    const noted = pauseForContextRecording(store, "run_recording_completion");
+    const before = store.readRun("run_recording_completion").length;
+    assert.throws(
+      () => store.append({
+        ...event("run_recording_completion", "project.handoff_requested", "handoff-unresolved", {
+          summary: "Done.",
+        }),
+        actor: { role: "architect", id: "architect_1" },
+      }),
+      message,
+    );
+    assert.throws(
+      () => store.append({
+        ...event("run_recording_completion", "run.completed", "completed-unresolved", {}),
+        actor: { role: "architect", id: "architect_1" },
+      }),
+      message,
+    );
+    assert.throws(
+      () => store.append({
+        ...event("run_recording_completion", "project.handoff_selected", "selected-unresolved", {
+          choice: "keep_integration_branch",
+          integrationRevision: "a".repeat(40),
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        actor: { role: "user", id: "local-user" },
+      }),
+      message,
+    );
+    assert.equal(store.readRun("run_recording_completion").length, before);
+    const projection = rebuildSchedulerProjection(store.readRun("run_recording_completion"));
+    assert.equal(projection.status, "paused");
+    assert.equal(projection.pauseReason?.reason, "context_recording_failed");
+    assert.equal(latestUnresolvedContextRecordingNote(projection)?.sequence, noted.sequence);
+    assert.equal(projection.projectHandoff, undefined);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function retryResolutionEventCount(
   notes: ReadonlyArray<{ resolution?: { sequence: number; resolution: string } }>,
 ): number {

@@ -3313,6 +3313,58 @@ test("the pump runs a context recording decision before reporting a supervisor p
   }
 });
 
+test("the pump reports a non-recording pause after the context recording decision", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recording-left-state-"));
+  const results: BuildStepResult[] = [];
+  let manager: NativeBuildManager | undefined;
+  try {
+    const projection: ReturnType<BuildRuntime["projection"]> = {
+      ...fakeRuntime(spec.runId).projection(),
+      status: "paused",
+      pauseReason: { reason: "context_recording_failed" },
+    };
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(root, "builds.sqlite")),
+      onPumpResult: (_runId, result) => {
+        results.push(result);
+      },
+      createRuntime: async () => ({
+        ...handleProjections(spec.runId),
+        runtime: {
+          ...fakeRuntime(spec.runId),
+          id: spec.runId,
+          projection: () => projection,
+          runUntilBlocked: async () => ({ status: "paused" as const, action: "context_recording_failed" }),
+          resolveContextRecordingFailure: async () => {
+            projection.status = "paused";
+            projection.pauseReason = { reason: "acceptance_contract_upgrade_required" };
+            return "unresolved" as const;
+          },
+        } as BuildRuntime,
+        usage: () => emptyBudget(spec.runId),
+        observability: async () => emptyObservability(spec.runId),
+        projectHandoff: async () => ({
+          integrationRevision: "revision_final",
+          integrationBranch: "aiboard/run/integration",
+          appliedToProject: false,
+        }),
+        cleanup: async () => undefined,
+        close: async () => undefined,
+      }),
+    });
+    await manager.create(spec);
+    manager.activate(spec.runId);
+    await manager.awaitIdle(spec.runId);
+    assert.deepEqual(results, [{
+      status: "paused",
+      action: "acceptance_contract_upgrade_required",
+    }]);
+  } finally {
+    await manager?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a plain error during the context recording decision surfaces through onPumpError", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-manager-recording-decision-error-"));
   const schedulerPath = join(root, "scheduler.sqlite");

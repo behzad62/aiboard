@@ -33,7 +33,11 @@ import {
   spliceMarkedArchitectSection,
 } from "../src/project-docs.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
-import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
+import {
+  buildCompletionReadiness,
+  latestUnresolvedContextRecordingNote,
+  rebuildSchedulerProjection,
+} from "../src/scheduler-store.js";
 import { RuntimeRouter } from "../src/runtime-router.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -47,6 +51,12 @@ import {
   acceptFinalVerificationProfile,
   emptyFinalVerificationProfile,
 } from "./support/final-verification-profile.js";
+import {
+  createFixture,
+  event as verifierEvent,
+  REVISION,
+  RUN_ID,
+} from "./support/verifier-run-fixture.js";
 
 function planOnlyDocumentPort(): ProjectDocsPort {
   const tree = new Map<string, string>();
@@ -1319,6 +1329,139 @@ test("architect context recording failure pauses with one note and no worker dis
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a completion-ready finish run refuses complete_run until the context recording note is resolved", async () => {
+  const fixture = createFixture("recording-completion");
+  const failure = new ContextManifestRecordingError({
+    runId: RUN_ID,
+    sessionId: "architect:completion",
+    purpose: "architect:completion_decision_required",
+    attempts: 3,
+  }, new Error("disk full"));
+  const docHash = "a".repeat(64);
+  const docCommit = "b".repeat(40);
+  fixture.store.append(verifierEvent(
+    "project_docs.policy_configured",
+    "project-docs-policy",
+    { version: 1 },
+  ));
+  fixture.store.append(verifierEvent(
+    "project_doc.requested",
+    "project-doc:state",
+    {
+      requestId: "project-doc:state",
+      path: "docs/project/STATE.md",
+      contentArtifactHash: docHash,
+      contentBytes: 24,
+      summary: "Record the run state.",
+    },
+    { role: "architect", id: "architect_1" },
+  ));
+  fixture.store.append(verifierEvent(
+    "project_doc.committed",
+    "project-doc-committed:project-doc:state",
+    {
+      requestId: "project-doc:state",
+      path: "docs/project/STATE.md",
+      commit: docCommit,
+      parent: REVISION,
+      head: docCommit,
+      readme: true,
+      agentsMarkedSection: true,
+      claudePointer: true,
+    },
+  ));
+  let completionCalls = 0;
+  try {
+    const runtime = new BuildRuntime({
+      runId: RUN_ID,
+      runPolicy: "finish",
+      store: fixture.store,
+      workerDriver: { run: async () => ({ type: "paused", reason: "unused" }) },
+      architectDriver: {
+        run: async (request) => {
+          if (request.reason.type === "completion_decision_required") {
+            completionCalls += 1;
+            if (completionCalls === 1) throw failure;
+            const completed = await request.tools.invoke({
+              type: "tool_call",
+              callId: "complete-after-recording-retry",
+              name: "complete_run",
+              arguments: { summary: "All intended work is accepted." },
+            }, request.context);
+            assert.equal(completed.isError, false, completed.error?.message ?? "complete_run failed after retry");
+            return;
+          }
+          assert.equal(request.reason.type, "context_recording_decision_required");
+          const refused = await request.tools.invoke({
+            type: "tool_call",
+            callId: "complete-during-recording",
+            name: "complete_run",
+            arguments: { summary: "All intended work is accepted." },
+          }, request.context);
+          const during = rebuildSchedulerProjection(fixture.store.readRun(RUN_ID));
+          const unresolved = latestUnresolvedContextRecordingNote(during);
+          assert.deepEqual(
+            {
+              handoff: during.projectHandoff?.status,
+              pause: during.pauseReason?.reason,
+              unresolved: unresolved?.sequence,
+            },
+            {
+              handoff: undefined,
+              pause: "context_recording_failed",
+              unresolved: during.contextRecording?.notes.at(-1)?.sequence,
+            },
+          );
+          assert.equal(refused.isError, true);
+          assert.match(
+            refused.error?.message ?? "",
+            /Context recording failure must be resolved before completion or handoff\./,
+          );
+          const resolved = await request.tools.invoke({
+            type: "tool_call",
+            callId: "retry-recording",
+            name: "resolve_context_recording",
+            arguments: { resolution: "retry", rationale: "Retry the manifest." },
+          }, request.context);
+          assert.equal(resolved.isError, false, resolved.error?.message ?? "retry failed");
+        },
+      },
+      integrationDriver: {
+        integrate: async () => ({ status: "integrated", integrationRevision: REVISION }),
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: () => "2026-09-23T00:00:00.000Z",
+    });
+    const ready = buildCompletionReadiness(runtime.projection());
+    assert.equal(ready.ready, true, ready.issues.join(" "));
+    assert.equal(runtime.projection().projectDocsPolicyVersion, 1);
+    const committed = runtime.projection().projectDocs?.committed ?? [];
+    assert.equal(
+      committed.some((commit) =>
+        commit.path === "docs/project/STATE.md" &&
+        commit.readme &&
+        commit.agentsMarkedSection &&
+        commit.claudePointer
+      ),
+      true,
+    );
+    const paused = await runtime.step();
+    assert.deepEqual(paused, { status: "paused", action: "context_recording_failed" });
+    const decision = await runtime.resolveContextRecordingFailure();
+    assert.equal(decision, "resumed");
+    assert.equal(runtime.projection().status, "running");
+    assert.equal(latestUnresolvedContextRecordingNote(runtime.projection()), undefined);
+    const handedOff = await runtime.step();
+    assert.equal(handedOff.status, "paused");
+    assert.equal(runtime.projection().projectHandoff?.status, "requested");
+    assert.equal(completionCalls, 2);
+  } finally {
+    clearContextRecordingSuspension(RUN_ID);
+    fixture.close();
   }
 });
 

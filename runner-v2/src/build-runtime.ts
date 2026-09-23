@@ -235,6 +235,25 @@ export interface BuildStepResult {
   action?: string;
 }
 
+/** Mechanical step shape of a projection after a context-recording decision turn. */
+export function buildStepResultForProjection(
+  projection: SchedulerProjection,
+): BuildStepResult {
+  if (projection.status === "completed") return { status: "completed" };
+  if (projection.status === "failed") {
+    return {
+      status: "failed",
+      action: projection.failureReason ?? "context_recording_aborted",
+    };
+  }
+  if (projection.status === "paused" || projection.status === "stopped") {
+    return projection.pauseReason?.reason
+      ? { status: "paused", action: projection.pauseReason.reason }
+      : { status: "paused" };
+  }
+  return { status: "progressed" };
+}
+
 export class BuildRuntime {
   readonly id: string;
   private readonly runId: string;

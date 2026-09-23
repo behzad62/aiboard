@@ -1,4 +1,8 @@
-import type { BuildRuntime, BuildStepResult } from "./build-runtime.js";
+import {
+  buildStepResultForProjection,
+  type BuildRuntime,
+  type BuildStepResult,
+} from "./build-runtime.js";
 import type {
   BuildObservabilitySnapshot,
   BuildTranscriptPage,
@@ -724,6 +728,12 @@ export class NativeBuildManager implements BuildControlPlane {
             await eventLoopYield();
             result = await handle.runtime.runUntilBlocked();
             continue;
+          }
+          if (
+            projection.status !== "paused" ||
+            projection.pauseReason?.reason !== "context_recording_failed"
+          ) {
+            result = buildStepResultForProjection(projection);
           }
           break;
         }
