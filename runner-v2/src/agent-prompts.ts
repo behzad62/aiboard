@@ -13,6 +13,12 @@ import type {
   AcceptanceCriterion,
   CriterionEvidenceLink,
 } from "./acceptance-contracts.js";
+import {
+  CLAUDE_POINTER_LINE,
+  DEFAULT_AGENTS_SECTION_BODY,
+  DEFAULT_README_TEMPLATE,
+  DEFAULT_STATE_TEMPLATE,
+} from "./project-docs.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -20,6 +26,21 @@ export const RUNNER_KERNEL_INVARIANTS = [
   "The Architect owns task meaning, review decisions, integration intent, and completion.",
   "The kernel enforces mechanics and permissions only; it does not reinterpret intent.",
   "Inspect current repository state before editing and preserve unrelated user changes.",
+].join("\n");
+
+export const ARCHITECT_PROJECT_DOCS_INSTRUCTIONS = [
+  "At the start of every build, read `docs/project/README.md` and `docs/project/STATE.md` if present.",
+  "If the entry point is missing (`docs/project/README.md`, the marked AGENTS.md section, the marked CLAUDE.md pointer), write it first from the templates.",
+  "Keep the folder current as the plan changes.",
+  "Write `docs/project/STATE.md` as the last thing before completing or handing off.",
+  "AGENTS.md section body:",
+  DEFAULT_AGENTS_SECTION_BODY,
+  "CLAUDE.md pointer:",
+  CLAUDE_POINTER_LINE,
+  "docs/project/README.md:",
+  DEFAULT_README_TEMPLATE,
+  "docs/project/STATE.md:",
+  DEFAULT_STATE_TEMPLATE,
 ].join("\n");
 
 export const VERIFIER_AUTHORITY_INVARIANTS = [
@@ -265,6 +286,7 @@ export function architectContextSections(
 ): ContextSection[] {
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    required("project-documentation", "system", ARCHITECT_PROJECT_DOCS_INSTRUCTIONS),
     required("build-objective", "user-intent", input.objective),
     required("architect-action", "architect", JSON.stringify(input.reason, null, 2)),
     required(

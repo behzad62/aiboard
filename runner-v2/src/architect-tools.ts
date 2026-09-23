@@ -31,6 +31,12 @@ import {
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type { ArtifactStore } from "./artifact-store.js";
+import {
+  PROJECT_DOC_MAX_BYTES,
+  projectDocRequestId,
+  validateProjectDocPath,
+} from "./project-docs.js";
 import { validateTaskGraph } from "./task-graph.js";
 import {
   FINAL_VERIFICATION_CATEGORIES,
@@ -65,6 +71,8 @@ export interface ArchitectToolsOptions {
     sequence: number;
   };
   planCritiqueResolutionAvailable?: boolean;
+  /** When set, every Architect turn — including plan_only — can request project docs. */
+  artifacts?: ArtifactStore;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   discardFinalVerificationProfile?: (profile: FinalVerificationExecutionProfile) => Promise<void>;
 }
@@ -182,6 +190,13 @@ interface PlanVerifierRepairsInput {
   reviewId: string;
   targetRevision: string;
   tasks: VerifierRepairTaskInput[];
+}
+
+interface WriteProjectDocInput {
+  path: string;
+  content: string;
+  summary: string;
+  contentBytes: number;
 }
 
 interface ResolvePlanCritiqueInput {
@@ -311,6 +326,113 @@ function resolveContextRecordingTool(
   });
 }
 
+function writeProjectDocTool(
+  store: SchedulerStore,
+  clock: () => string,
+  artifacts: ArtifactStore,
+): NativeTool<WriteProjectDocInput> {
+  return lifecycleTool({
+    name: "write_project_doc",
+    description: "Request a project document write for docs/project/** or the marked AGENTS.md or CLAUDE.md section. Stores the content and records the request. It does not change any project file.",
+    schema: objectSchema({
+      path: { type: "string", minLength: 1 },
+      content: { type: "string" },
+      summary: { type: "string", minLength: 1 },
+    }, ["path", "content", "summary"]),
+    validate: validateWriteProjectDoc,
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const contentBytes = Buffer.byteLength(input.content, "utf8");
+      if (contentBytes !== input.contentBytes || contentBytes > PROJECT_DOC_MAX_BYTES) {
+        return errorOutput(
+          "project_doc_too_large",
+          `Project document content exceeds ${PROJECT_DOC_MAX_BYTES} bytes.`,
+        );
+      }
+      let record;
+      try {
+        record = await artifacts.put(
+          Buffer.from(input.content, "utf8"),
+          "text/markdown",
+          input.path,
+        );
+      } catch (error) {
+        return errorOutput(
+          "project_doc_artifact_failed",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      if (record.hash !== digestBytes(input.content) || record.byteLength !== contentBytes) {
+        return errorOutput(
+          "project_doc_artifact_failed",
+          "Project document artifact does not match the requested content.",
+        );
+      }
+      let requestId: string;
+      try {
+        const events = store.readRun(context.runId);
+        const projection = events.length > 0 ? rebuildSchedulerProjection(events) : undefined;
+        // Next log position, read immediately before append. Append is
+        // synchronous and the store transaction is serialized, so two writes
+        // in one Architect turn get different ids. A replay of an id already
+        // on the pending list is still rejected by the reducer.
+        requestId = projectDocRequestId((projection?.lastSequence ?? 0) + 1, input.path);
+        const event = {
+          runId: context.runId,
+          type: "project_doc.requested" as const,
+          occurredAt: clock(),
+          actor: { role: "architect" as const, id: context.actor.id },
+          idempotencyKey: requestId,
+          payload: {
+            requestId,
+            path: input.path,
+            contentArtifactHash: record.hash,
+            contentBytes,
+            summary: input.summary,
+          },
+        };
+        if (projection) {
+          assertPendingUserGuidanceAllowsEvent(projection, event);
+          assertOpenArchitectQuestionAllowsEvent(projection, event);
+        }
+        store.append(event);
+      } catch (error) {
+        return errorOutput(
+          "mechanical_transition_rejected",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      return {
+        content: [{ type: "text", text: `Project document requested: ${requestId}` }],
+        isError: false,
+      };
+    },
+  });
+}
+
+function validateWriteProjectDoc(input: unknown): ValidationResult<WriteProjectDocInput> {
+  return validateObject(input, (value) => {
+    if (typeof value.path !== "string" || typeof value.content !== "string" || !nonEmpty(value.summary)) {
+      return null;
+    }
+    const checked = validateProjectDocPath(value.path);
+    if (!checked.ok) return null;
+    const contentBytes = Buffer.byteLength(value.content, "utf8");
+    if (contentBytes > PROJECT_DOC_MAX_BYTES) return null;
+    return {
+      path: checked.path,
+      content: value.content,
+      summary: value.summary.trim(),
+      contentBytes,
+    };
+  }, "Project document write is invalid.");
+}
+
+function digestBytes(content: string): string {
+  return createHash("sha256").update(content, "utf8").digest("hex");
+}
+
 export function createArchitectTools(
   options: ArchitectToolsOptions
 ): NativeTool<unknown>[] {
@@ -363,17 +485,25 @@ export function createArchitectTools(
   const critiqueResolution = options.planCritiqueResolutionAvailable
     ? [...verifierRepairPlanning, resolvePlanCritiqueTool(options.store, clock)]
     : verifierRepairPlanning;
-  if (options.runPolicy === "plan_only") {
-    return options.planOnlyCompletionAvailable
+  const tools = options.runPolicy === "plan_only"
+    ? options.planOnlyCompletionAvailable
       ? [...critiqueResolution, completeRunTool(options.store, clock, "plan_only")]
-      : critiqueResolution;
-  }
+      : critiqueResolution
+    : [
+        ...critiqueResolution,
+        reconcilePlanTool(options.store, clock),
+        reviewTaskTool(options.store, clock, options.evidenceStore),
+        requestIntegrationTool(options.store, clock),
+        completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
+      ];
+  if (!options.artifacts) return tools;
   return [
-    ...critiqueResolution,
-    reconcilePlanTool(options.store, clock),
-    reviewTaskTool(options.store, clock, options.evidenceStore),
-    requestIntegrationTool(options.store, clock),
-    completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
+    ...tools,
+    writeProjectDocTool(
+      options.store,
+      clock,
+      options.artifacts,
+    ),
   ];
 }
 

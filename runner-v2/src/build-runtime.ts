@@ -1611,6 +1611,7 @@ export class BuildRuntime {
         ? { discardFinalVerificationProfile: this.discardFinalVerificationProfile }
         : {}),
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
+      ...(this.artifacts ? { artifacts: this.artifacts } : {}),
     });
     const registered = this.architectLifecycleProbe
       ? this.architectLifecycleProbe(created)
@@ -2009,6 +2010,7 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "review_task",
   "revise_task",
   "upgrade_acceptance_contract",
+  "write_project_doc",
 ]);
 
 const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store" | "clock">[] = [
@@ -2117,7 +2119,12 @@ export function architectLifecycleUniverseNames(
 ): readonly string[] {
   const names = new Set<string>();
   for (const options of ARCHITECT_LIFECYCLE_UNIVERSE) {
-    for (const tool of createArchitectTools({ store, clock, ...options })) {
+    for (const tool of createArchitectTools({
+      store,
+      clock,
+      ...options,
+      artifacts: ARCHITECT_LIFECYCLE_UNIVERSE_ARTIFACTS,
+    })) {
       names.add(tool.definition.name);
     }
   }
@@ -2164,3 +2171,6 @@ function sortedNamesEqual(left: readonly string[], right: readonly string[]): bo
 function compareToolNames(left: string, right: string): number {
   return left.localeCompare(right);
 }
+
+/** Present only so universe derivation lists write_project_doc. Never executed. */
+const ARCHITECT_LIFECYCLE_UNIVERSE_ARTIFACTS = {} as ArtifactStore;

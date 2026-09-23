@@ -1,5 +1,6 @@
 import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
 import { createHash } from "node:crypto";
+import { PROJECT_DOC_MAX_BYTES, validateProjectDocPath } from "./project-docs.js";
 
 import {
   isFinalVerificationTask,
@@ -170,7 +171,8 @@ export type SchedulerEventType =
   | "plan_critique.resolved"
   | "plan_critique.skipped"
   | "context_manifest.recording_failed"
-  | "context_manifest.recording_resolved";
+  | "context_manifest.recording_resolved"
+  | "project_doc.requested";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -271,6 +273,20 @@ export interface RuntimeProjection {
 export type ProjectHandoffChoice =
   | "keep_integration_branch"
   | "apply_to_project";
+
+export interface ProjectDocRequestProjection {
+  requestId: string;
+  path: string;
+  contentArtifactHash: string;
+  contentBytes: number;
+  summary: string;
+  sequence: number;
+}
+
+/** Pending Architect document requests. A5 records `project_doc.committed`. */
+export interface ProjectDocsProjection {
+  pending: ProjectDocRequestProjection[];
+}
 
 export interface ProjectHandoffProjection {
   status: "requested" | "selected";
@@ -562,6 +578,7 @@ export interface SchedulerProjection {
   planCritique?: PlanCritiqueState;
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
+  projectDocs?: ProjectDocsProjection;
   lastArchitectActionEvent?: {
     sequence: number;
     type: SchedulerEventType;
@@ -1729,6 +1746,13 @@ export function reduceSchedulerEvent(
             ...handoff,
             options: [...handoff.options],
           })),
+        }
+      : {}),
+    ...(current.projectDocs
+      ? {
+          projectDocs: {
+            pending: current.projectDocs.pending.map((request) => ({ ...request })),
+          },
         }
       : {}),
     runtime: {
@@ -3038,6 +3062,10 @@ export function reduceSchedulerEvent(
     }
     case "context_manifest.recording_resolved": {
       applyContextRecordingResolved(next, event);
+      break;
+    }
+    case "project_doc.requested": {
+      applyProjectDocRequested(next, event);
       break;
     }
   }
@@ -5567,6 +5595,55 @@ function applyContextRecordingFailed(
         ...(taskId ? { taskId } : {}),
         ...(attempt !== undefined ? { attempt } : {}),
         ...(revision ? { revision } : {}),
+      },
+    ],
+  };
+}
+
+const PROJECT_DOC_ARTIFACT_HASH = /^[a-f0-9]{64}$/;
+
+function applyProjectDocRequested(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "architect") {
+    throw new Error("Only the Architect may request a project document write.");
+  }
+  const path = requiredString(event.payload, "path");
+  const checked = validateProjectDocPath(path);
+  if (!checked.ok) {
+    throw new Error(`Project document path is refused: ${checked.reason}.`);
+  }
+  const requestId = requiredString(event.payload, "requestId");
+  const contentArtifactHash = requiredString(event.payload, "contentArtifactHash");
+  if (!PROJECT_DOC_ARTIFACT_HASH.test(contentArtifactHash)) {
+    throw new Error("Project document content hash is invalid.");
+  }
+  const summary = requiredString(event.payload, "summary");
+  if (summary.trim().length === 0) {
+    throw new Error("Project document summary is required.");
+  }
+  const contentBytes = event.payload.contentBytes;
+  if (!Number.isSafeInteger(contentBytes) || (contentBytes as number) < 0) {
+    throw new Error("Project document content size is invalid.");
+  }
+  if ((contentBytes as number) > PROJECT_DOC_MAX_BYTES) {
+    throw new Error(`Project document content exceeds ${PROJECT_DOC_MAX_BYTES} bytes.`);
+  }
+  const pending = projection.projectDocs?.pending ?? [];
+  if (pending.some((request) => request.requestId === requestId)) {
+    throw new Error(`Project document request ${requestId} is already recorded.`);
+  }
+  projection.projectDocs = {
+    pending: [
+      ...pending,
+      {
+        requestId,
+        path: checked.path,
+        contentArtifactHash,
+        contentBytes: contentBytes as number,
+        summary,
+        sequence: event.sequence,
       },
     ],
   };
