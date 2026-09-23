@@ -18,6 +18,12 @@ const setupNodeIndex = workflow.indexOf("actions/setup-node@v4");
 const acquireIndex = workflow.indexOf(acquireCommand);
 const installIndex = workflow.indexOf("npm ci");
 const publishIndex = workflow.indexOf("npm run publish-downloads");
+const portableWorkflow = readFileSync(".github/workflows/runner-v2-portable-execution.yml", "utf8");
+for (const job of ["portable-contract", "package-gate"]) {
+  const block = portableWorkflow.split(`  ${job}:`)[1]?.split(/\n  [a-z][a-z-]*:/)[0] ?? "";
+  check(`${job} acquires the pinned Runner before package tests`,
+    block.includes(acquireCommand) && block.indexOf(acquireCommand) < block.indexOf("npm ci"));
+}
 
 check(
   "benchmark CI acquires the pinned RJS Runner exactly once before install and publication",
