@@ -1110,6 +1110,11 @@ test("resumed Architect action receives a fresh mechanical reminder", async () =
         message.content.includes("Earlier mechanical tool errors may have been resolved")
     );
     assert.ok(reminder, "resume must add a fresh current-action reminder");
+    const reminderText = typeof reminder?.content === "string" ? reminder.content : "";
+    assert.match(reminderText, /End each action with exactly one decision tool/);
+    assert.match(reminderText, /write_project_doc does not end the action/);
+    assert.doesNotMatch(reminderText, /one native lifecycle tool/);
+    assert.doesNotMatch(reminderText, /exactly one semantically appropriate lifecycle tool/);
     assert.equal(runtime.projection().planRevision, 1);
   } finally {
     sessions.close();
@@ -1554,6 +1559,10 @@ test("review_required commands see the worker change and other turns see the int
         const system = model.requests[0]?.messages.find((message) => message.role === "system");
         assert.match(String(system?.content), /submission's taskRevision/);
         assert.match(String(system?.content), /integration revision/);
+        assert.match(String(system?.content), /End each action with exactly one decision tool/);
+        assert.match(String(system?.content), /write_project_doc does not end the action/);
+        assert.doesNotMatch(String(system?.content), /one native lifecycle tool/);
+        assert.doesNotMatch(String(system?.content), /exactly one semantically appropriate lifecycle tool/);
         const results = toolResults(model, 1);
         assert.equal(results.length, 1);
         assert.equal(results[0]?.isError, false, JSON.stringify(results[0]));

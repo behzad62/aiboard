@@ -11,8 +11,11 @@ import type {
 } from "../src/agent-contracts.js";
 import type { AgentLoopCheckpoint } from "../src/agent-loop.js";
 import {
+  buildVerifierContext,
   buildVerifierExpectationsContext,
   VERIFIER_ADVERSARIAL_STANCE,
+  VERIFIER_AUTHORITY_INVARIANTS,
+  verifierSystemPrompt,
 } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { NativeVerifierRuntime } from "./support/git-fixture.js";
@@ -241,10 +244,20 @@ test("verifier receives complete revision-bound context in a separate read-only 
       assert.equal(toolNames.includes(forbidden), false, forbidden);
     }
 
+    const system = request.messages.find((message) => message.role === "system");
+    assert.equal(system?.content, verifierSystemPrompt("inspection"));
+    assert.match(String(system?.content), /inspection-only mode, finish with a concise evidence-grounded summary/);
+    assert.equal(request.tools.some((tool) => tool.name === "submit_verifier_verdict"), false);
+    assert.equal(
+      request.messages.filter((message) => message.role === "system" && String(message.content).includes(VERIFIER_AUTHORITY_INVARIANTS)).length,
+      1,
+    );
     const context = request.messages
       .filter((message) => message.role === "user")
       .map((message) => message.content)
       .join("\n");
+    assert.equal(context.includes(VERIFIER_AUTHORITY_INVARIANTS), false);
+    assert.equal(context.includes("verifier-authority"), false);
     for (const required of [
       "Build the audited application.",
       "criterion_ui",
@@ -609,6 +622,58 @@ test("buildVerifierExpectationsContext names the baseline and omits implementati
   assert.doesNotMatch(pack.text, /final build passed/);
   assert.doesNotMatch(pack.text, /Assume the integrated change contains at least one defect/);
   assert.match(VERIFIER_ADVERSARIAL_STANCE, /Assume the integrated change contains at least one defect/);
+  assert.equal(pack.sections.some((section) => section.id === "verifier-authority"), false);
+  assert.equal(pack.sections.some((section) => section.id === "expectations-stage"), false);
+  assert.equal(pack.text.includes(VERIFIER_AUTHORITY_INVARIANTS), false);
+  assert.match(verifierSystemPrompt("expectations"), /inspecting the BASELINE revision before this build's changes/);
+  assert.match(verifierSystemPrompt("expectations"), /read-only tools only/);
+  assert.match(verifierSystemPrompt("expectations"), /record_verification_expectations exactly once/);
+  assert.doesNotMatch(verifierSystemPrompt("expectations"), /where you may run commands/);
+  assert.doesNotMatch(verifierSystemPrompt("expectations"), /inspection-only mode/);
+  assert.match(verifierSystemPrompt("verdict"), /exact integrated revision/);
+  assert.match(verifierSystemPrompt("verdict"), /submit_verifier_verdict exactly once/);
+  assert.doesNotMatch(verifierSystemPrompt("verdict"), /inspection-only mode/);
+});
+
+test("verifier contexts do not repeat authority invariants", () => {
+  const limits = { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 };
+  const expectations = buildVerifierExpectationsContext({
+    limits,
+    objective: "Build the audited application.",
+    baselineRevision: BASELINE_REVISION,
+    targetRevision: TARGET_REVISION,
+    criteria: [],
+    guidance: [],
+    riskReasons: [],
+  });
+  assert.equal(expectations.sections.some((section) => section.id === "verifier-authority"), false);
+  assert.equal(expectations.sections.some((section) => section.id === "expectations-stage"), false);
+  assert.equal(expectations.text.includes(VERIFIER_AUTHORITY_INVARIANTS), false);
+  assert.equal(
+    expectations.text.includes(
+      "You have no authority to edit files, create commits, integrate changes, alter the plan, review worker tasks, or complete the run.",
+    ),
+    false,
+  );
+  const verdict = buildVerifierContext({
+    limits,
+    objective: "Build the audited application.",
+    targetRevision: TARGET_REVISION,
+    criteria: [],
+    reviews: [],
+    guidance: [],
+    changes: [],
+    finalVerification: { generationId: "generation-1" },
+    riskReasons: [],
+  });
+  assert.equal(verdict.sections.some((section) => section.id === "verifier-authority"), false);
+  assert.equal(verdict.text.includes(VERIFIER_AUTHORITY_INVARIANTS), false);
+  assert.equal(
+    verdict.text.includes(
+      "You have no authority to edit files, create commits, integrate changes, alter the plan, review worker tasks, or complete the run.",
+    ),
+    false,
+  );
 });
 
 test("two-pass verification records expectations on the baseline before it can see the implementation", async () => {
@@ -629,6 +694,25 @@ test("two-pass verification records expectations on the baseline before it can s
     assert.equal(result.status, "verdict_submitted");
     assert.deepEqual(fixture.baselineRequests, [BASELINE_REVISION]);
     assert.deepEqual(fixture.workspaceRequests, [TARGET_REVISION]);
+    const passOneSystem = fixture.model.requests[0]!.messages.find((message) => message.role === "system");
+    assert.equal(passOneSystem?.content, verifierSystemPrompt("expectations"));
+    assert.match(String(passOneSystem?.content), /read-only tools only/);
+    assert.match(String(passOneSystem?.content), /record_verification_expectations exactly once/);
+    assert.doesNotMatch(String(passOneSystem?.content), /where you may run commands/);
+    assert.doesNotMatch(String(passOneSystem?.content), /inspection-only mode/);
+    assert.equal(fixture.model.requests[0]!.tools.some((tool) => tool.name === "submit_verifier_verdict"), false);
+    const passOneUser = fixture.model.requests[0]!.messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content))
+      .join("\n");
+    assert.equal(passOneUser.includes(VERIFIER_AUTHORITY_INVARIANTS), false);
+    assert.doesNotMatch(passOneUser, /expectations-stage/);
+    assert.equal(
+      fixture.model.requests[0]!.messages.filter(
+        (message) => typeof message.content === "string" && message.content.includes(VERIFIER_AUTHORITY_INVARIANTS),
+      ).length,
+      1,
+    );
     const passOne = JSON.stringify(fixture.model.requests[0]!.messages);
     for (const forbidden of ["accepted-change-history", "accepted-reviews", HASH, "FINAL-VERIFICATION"]) {
       assert.doesNotMatch(passOne, new RegExp(escapeRegExp(forbidden)), forbidden);
@@ -640,6 +724,23 @@ test("two-pass verification records expectations on the baseline before it can s
     assert.deepEqual(sortedToolNames(fixture.model.requests[0]!), PASS_1_TOOLS);
     assert.equal(fixture.model.requests[0]!.tools.some((tool) => tool.name === "record_verification_expectations"), true);
     assert.equal(fixture.model.requests[0]!.tools.some((tool) => tool.name === "submit_verifier_verdict"), false);
+    const passTwoSystem = fixture.model.requests[1]!.messages.find((message) => message.role === "system");
+    assert.equal(passTwoSystem?.content, verifierSystemPrompt("verdict"));
+    assert.match(String(passTwoSystem?.content), /where you may run commands/);
+    assert.match(String(passTwoSystem?.content), /submit_verifier_verdict exactly once/);
+    assert.doesNotMatch(String(passTwoSystem?.content), /inspection-only mode/);
+    assert.equal(fixture.model.requests[1]!.tools.some((tool) => tool.name === "submit_verifier_verdict"), true);
+    const passTwoUser = fixture.model.requests[1]!.messages
+      .filter((message) => message.role === "user")
+      .map((message) => String(message.content))
+      .join("\n");
+    assert.equal(passTwoUser.includes(VERIFIER_AUTHORITY_INVARIANTS), false);
+    assert.equal(
+      fixture.model.requests[1]!.messages.filter(
+        (message) => typeof message.content === "string" && message.content.includes(VERIFIER_AUTHORITY_INVARIANTS),
+      ).length,
+      1,
+    );
     const passTwo = JSON.stringify(fixture.model.requests[1]!.messages);
     assert.match(passTwo, /recorded-expectations/);
     assert.match(passTwo, /integration-revision/);

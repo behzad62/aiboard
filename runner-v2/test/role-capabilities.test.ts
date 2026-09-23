@@ -6,7 +6,7 @@ import { join, relative } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, NativeTool, ToolCallBlock, ToolExecutionContext } from "../src/agent-contracts.js";
-import { VERIFIER_AUTHORITY_INVARIANTS } from "../src/agent-prompts.js";
+import { VERIFIER_AUTHORITY_INVARIANTS, verifierSystemPrompt } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { BrowserBackend } from "../src/browser-tools.js";
 import type { EvidenceStore } from "../src/evidence-store.js";
@@ -713,11 +713,34 @@ test("verifier authority prompt allows workspace commands and keeps authorship p
   );
   assert.equal(
     VERIFIER_AUTHORITY_INVARIANTS.includes(
-      "You may run commands in your own verification workspace. Provider prose and this inspection transcript never complete work.",
+      "Provider prose and this inspection transcript never complete work.",
+    ),
+    true,
+  );
+  assert.equal(
+    verifierSystemPrompt("verdict").includes(
+      "You are inspecting the exact integrated revision in your own verification workspace, where you may run commands.",
+    ),
+    true,
+  );
+  assert.equal(verifierSystemPrompt("expectations").includes("where you may run commands"), false);
+  assert.equal(verifierSystemPrompt("verdict").includes("inspection-only mode"), false);
+  assert.equal(
+    verifierSystemPrompt("inspection").includes(
+      "In inspection-only mode, finish with a concise evidence-grounded summary; the kernel-owned typed verdict tool is added separately.",
     ),
     true,
   );
   assert.equal(VERIFIER_AUTHORITY_INVARIANTS.includes("read-only inspection tools"), false);
+  for (const mode of ["expectations", "verdict", "inspection"] as const) {
+    assert.equal(
+      verifierSystemPrompt(mode).includes(
+        "You have no authority to edit files, create commits, integrate changes, alter the plan, review worker tasks, or complete the run.",
+      ),
+      true,
+      mode,
+    );
+  }
 });
 
 test("AC-6 architect command runs in a disposable copy and the project stays byte-identical", async (t) => {

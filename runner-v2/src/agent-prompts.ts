@@ -49,12 +49,42 @@ export const CONTEXT_RECORDING_DECISION_GUIDANCE = [
 ].join("\n");
 
 export const VERIFIER_AUTHORITY_INVARIANTS = [
-  "You are an independent AIBoard verifier inspecting one exact integrated revision.",
+  "You are an independent AIBoard verifier.",
   "Treat the immutable objective, criterion identities, guidance, accepted change history, reviews, risk reasons, and final-verification facts as protected input.",
   "You have no authority to edit files, create commits, integrate changes, alter the plan, review worker tasks, or complete the run.",
-  "You may run commands in your own verification workspace. Provider prose and this inspection transcript never complete work.",
-  "In inspection-only mode, finish with a concise evidence-grounded summary; the kernel-owned typed verdict tool is added separately.",
+  "Provider prose and this inspection transcript never complete work.",
 ].join("\n");
+
+/** Pass 1: baseline inspection. Read-only; one expectations call. */
+export const VERIFIER_EXPECTATIONS_PASS_INSTRUCTIONS = [
+  "You are inspecting the BASELINE revision before this build's changes; read-only tools only; derive expectations and call record_verification_expectations exactly once.",
+  "No diff, review, or verification result is available yet.",
+].join("\n");
+
+/** Pass 2: the exact integrated revision, where commands are allowed. */
+export const VERIFIER_VERDICT_PASS_INSTRUCTIONS =
+  "You are inspecting the exact integrated revision in your own verification workspace, where you may run commands.";
+
+/** Sent only when no verdict tool is registered. */
+export const VERIFIER_INSPECTION_ONLY_FINISH =
+  "In inspection-only mode, finish with a concise evidence-grounded summary; the kernel-owned typed verdict tool is added separately.";
+
+const VERIFIER_VERDICT_FINISH =
+  "Inspect the exact revision, then finish by calling submit_verifier_verdict exactly once with every protected task/criterion pair, a satisfied or unsatisfied verdict, a non-empty rationale, and durable evidence IDs. The kernel derives the overall result.";
+
+export type VerifierSystemPromptMode = "expectations" | "verdict" | "inspection";
+
+/** Authority invariants once, plus the line for this pass. Inspection-only finish only when no verdict tool is registered. */
+export function verifierSystemPrompt(mode: VerifierSystemPromptMode): string {
+  if (mode === "expectations") {
+    return [VERIFIER_AUTHORITY_INVARIANTS, VERIFIER_EXPECTATIONS_PASS_INSTRUCTIONS].join("\n");
+  }
+  return [
+    VERIFIER_AUTHORITY_INVARIANTS,
+    VERIFIER_VERDICT_PASS_INSTRUCTIONS,
+    mode === "verdict" ? VERIFIER_VERDICT_FINISH : VERIFIER_INSPECTION_ONLY_FINISH,
+  ].join("\n");
+}
 
 export interface PromptEvidence {
   id: string;
@@ -198,8 +228,6 @@ export function buildVerifierExpectationsContext(
 ): ContextPack {
   return new ContextAssembler(input.limits).assemble([
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
-    required("verifier-authority", "system", VERIFIER_AUTHORITY_INVARIANTS),
-    required("expectations-stage", "system", "You are inspecting the BASELINE revision: the repository as it was before this build's changes. No diff, review, or verification result is available yet. Derive expectations from the criteria and the existing code and tests, then call record_verification_expectations exactly once."),
     required("build-objective", "user-intent", input.objective),
     required("baseline-revision", "revision", input.baselineRevision),
     required("build-criteria", "criteria", JSON.stringify(input.criteria, null, 2)),
@@ -226,7 +254,6 @@ export function buildVerifierContext(
 ): ContextPack {
   return new ContextAssembler(input.limits).assemble([
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
-    required("verifier-authority", "system", VERIFIER_AUTHORITY_INVARIANTS),
     ...(input.expectations !== undefined
       ? [required("verifier-adversarial-stance", "system", VERIFIER_ADVERSARIAL_STANCE)]
       : []),
@@ -255,7 +282,7 @@ export function buildVerifierContext(
 export const PLAN_CRITIC_INVARIANTS = [
   "You are an independent AIBoard plan critic inspecting one task graph before any worker starts.",
   "The repository you can read is the exact baseline revision; nothing has been implemented yet.",
-  "Assume the plan contains at least one defect. For every task ask: is each criterion objectively testable; do tasks overlap in file ownership; are dependencies complete and acyclic in meaning, not just in graph shape; which failure modes are omitted; which assumptions about the repository are unproven (check them with the read-only tools); is any task too large for one worker; can each task be verified independently; is integration explicitly owned by a task.",
+  "Assume the plan contains at least one defect. For every task ask: is each criterion objectively testable; do tasks overlap in file ownership; are dependencies complete and acyclic in meaning, not just in graph shape; which failure modes are omitted; which assumptions about the repository are unproven (check them with the read-only tools); is any task too large for one worker; can each task be verified independently; is the wiring that connects separately built parts (registration, entry points, configuration) owned by some task? (Merging branches is the runner's job, not a task.)",
   "A blocking finding must cite concrete evidence: a criterion text, a file path, a symbol, or a dependency pair. Advisory findings record concerns that do not stop implementation.",
   "You have no authority to edit files, change the plan, assign work, or complete the run. Finish by calling submit_plan_critique exactly once.",
 ].join("\n");
@@ -273,7 +300,6 @@ export interface BuildPlanCritiqueContextInput {
 export function buildPlanCritiqueContext(input: BuildPlanCritiqueContextInput): ContextPack {
   return new ContextAssembler(input.limits).assemble([
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
-    required("critic-authority", "system", PLAN_CRITIC_INVARIANTS),
     required("build-objective", "user-intent", input.objective),
     required("baseline-revision", "revision", `${input.baselineRevision} (plan revision ${input.planRevision})`),
     required("task-graph", "task-graph", JSON.stringify(input.tasks, null, 2)),

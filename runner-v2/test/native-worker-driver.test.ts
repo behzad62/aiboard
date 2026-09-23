@@ -10,7 +10,7 @@ import { ProviderTransportError } from "../src/account-runner-model.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { CapabilityRegistry } from "../src/capability-registry.js";
 import { captureGitBaseline } from "./support/git-fixture.js";
-import { recoverableWorkerSuspension, workerContinuationMessages, shouldFailoverWorkerFailure, shouldAutoContinueWorker, workerModelAttribution, guidanceOutcomeFromProjection } from "../src/native-worker-driver.js";
+import { buildWorkerSystemPrompt, recoverableWorkerSuspension, workerContinuationMessages, shouldFailoverWorkerFailure, shouldAutoContinueWorker, workerModelAttribution, guidanceOutcomeFromProjection } from "../src/native-worker-driver.js";
 import { NativeWorkerDriver } from "./support/git-fixture.js";
 import { rankSkillsForTask } from "../src/skill-routing.js";
 import type { SkillMetadata } from "../src/skill-catalog.js";
@@ -45,6 +45,17 @@ class ScriptedModel implements AgentModel {
     return turn;
   }
 }
+
+test("worker system prompt keeps docs/project architect-only", () => {
+  const prompt = buildWorkerSystemPrompt(["criterion_a"]);
+  assert.match(prompt, /`docs\/project\/\*\*` is maintained only by the Architect/);
+  assert.match(prompt, /Do not edit it; a change there makes your submission fail integration/);
+  assert.match(prompt, /Put decisions or state worth recording in your submit_task summary/);
+  assert.match(prompt, /criterion_a/);
+  assert.doesNotMatch(prompt, /Keep specs, plans and decisions current/);
+  assert.doesNotMatch(prompt, /update `STATE\.md`/);
+  assert.equal(buildWorkerSystemPrompt().includes("criterionEvidenceLinks"), false);
+});
 
 test("worker model calls carry direct durable role and task attribution", () => {
   assert.deepEqual(
@@ -424,6 +435,10 @@ test("native worker fails over with the same session, context, tools, and eviden
     const contextText = fallback.requests[0].messages.map((message) =>
       typeof message.content === "string" ? message.content : ""
     ).join("\n");
+    assert.match(contextText, /`docs\/project\/\*\*` is maintained only by the Architect/);
+    assert.match(contextText, /Do not edit it; a change there makes your submission fail integration/);
+    assert.match(contextText, /Put decisions or state worth recording in your submit_task summary/);
+    assert.doesNotMatch(contextText, /Keep specs, plans and decisions current/);
     assert.match(contextText, /Batch independent read-only tool calls/i);
     assert.match(contextText, /Keep command output narrow/i);
     assert.match(contextText, /Before every submit_task/i);

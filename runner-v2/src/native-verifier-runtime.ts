@@ -14,7 +14,7 @@ import { runAgentLoop } from "./agent-loop.js";
 import {
   buildVerifierContext,
   buildVerifierExpectationsContext,
-  VERIFIER_AUTHORITY_INVARIANTS,
+  verifierSystemPrompt,
 } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { createArtifactTools } from "./artifact-tools.js";
@@ -417,12 +417,7 @@ export class NativeVerifierRuntime {
     const systemMessage: AgentMessage = {
       id: "verifier-system",
       role: "system",
-      content: durableReview
-        ? [
-            VERIFIER_AUTHORITY_INVARIANTS,
-            "Inspect the exact revision, then finish by calling submit_verifier_verdict exactly once with every protected task/criterion pair, a satisfied or unsatisfied verdict, a non-empty rationale, and durable evidence IDs. The kernel derives the overall result.",
-          ].join("\n")
-        : VERIFIER_AUTHORITY_INVARIANTS,
+      content: verifierSystemPrompt(durableReview ? "verdict" : "inspection"),
     };
     const contextMessage: AgentMessage = {
       id: `verifier-context:${context.digest}`,
@@ -713,11 +708,7 @@ export class NativeVerifierRuntime {
     const systemMessage: AgentMessage = {
       id: "verifier-expectations-system",
       role: "system",
-      content: [
-        "You are inspecting the BASELINE revision: the repository as it was before this build's changes.",
-        "No diff, review, or verification result is available yet.",
-        "Derive expectations from the criteria and the existing code and tests, then call record_verification_expectations exactly once.",
-      ].join("\n"),
+      content: verifierSystemPrompt("expectations"),
     };
     const contextMessage: AgentMessage = {
       id: `verifier-context:${context.digest}`,

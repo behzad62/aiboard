@@ -10,6 +10,7 @@ import type {
   ModelTurn,
   ToolExecutionContext,
 } from "../src/agent-contracts.js";
+import { PLAN_CRITIC_INVARIANTS, buildPlanCritiqueContext } from "../src/agent-prompts.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { NativePlanCriticRuntime } from "../src/native-plan-critic-runtime.js";
 import { createSubmitPlanCritiqueTool } from "../src/plan-critique-tools.js";
@@ -70,6 +71,24 @@ const DEFAULT_VERIFIER_RUNTIME_IDS = [
   "fallback:verifier",
 ] as const;
 
+test("plan critic context does not repeat critic invariants", () => {
+  const pack = buildPlanCritiqueContext({
+    limits: { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 },
+    objective: "Build it",
+    planRevision: 1,
+    baselineRevision: BASELINE_REVISION,
+    tasks: [],
+    riskReasons: [],
+    guidance: [],
+  });
+  assert.equal(pack.sections.some((section) => section.id === "critic-authority"), false);
+  assert.equal(pack.text.includes(PLAN_CRITIC_INVARIANTS), false);
+  assert.doesNotMatch(pack.text, /is integration explicitly owned by a task/);
+  assert.match(PLAN_CRITIC_INVARIANTS, /wiring that connects separately built parts/);
+  assert.match(PLAN_CRITIC_INVARIANTS, /Merging branches is the runner's job, not a task/);
+  assert.doesNotMatch(PLAN_CRITIC_INVARIANTS, /is integration explicitly owned by a task/);
+});
+
 test("critic receives the task graph at the baseline revision with read-only tools plus submit_plan_critique", async () => {
   const fixture = createFixture("context", [{
     blocks: [{ type: "text", text: "Inspection complete." }],
@@ -117,7 +136,22 @@ test("critic receives the task graph at the baseline revision with read-only too
     assert.equal(submit.effect, "none");
     assert.equal(submit.lifecycle, true);
 
+    const system = request.messages.find((message) => message.role === "system");
+    assert.equal(system?.content, PLAN_CRITIC_INVARIANTS);
+    assert.match(
+      String(system?.content),
+      /is the wiring that connects separately built parts \(registration, entry points, configuration\) owned by some task\?/,
+    );
+    assert.match(String(system?.content), /Merging branches is the runner's job, not a task/);
+    assert.doesNotMatch(String(system?.content), /is integration explicitly owned by a task/);
+    assert.equal(
+      JSON.stringify(request.messages).split("You are an independent AIBoard plan critic").length - 1,
+      1,
+    );
     const context = userContext(request);
+    assert.equal(context.includes(PLAN_CRITIC_INVARIANTS), false);
+    assert.doesNotMatch(context, /critic-authority/);
+    assert.doesNotMatch(context, /is integration explicitly owned by a task/);
     for (const required of [
       "task_ui",
       "The UI matches the request.",
@@ -420,7 +454,7 @@ test("every plan critique records one context manifest bound to the baseline rev
     assert.equal(manifest.sessionId, result.sessionId);
     assert.equal(manifest.repositoryRevision, BASELINE_REVISION);
     assert.equal(manifest.sections.some((section) => section.id === "task-graph"), true);
-    assert.equal(manifest.sections.some((section) => section.id === "critic-authority"), true);
+    assert.equal(manifest.sections.some((section) => section.id === "critic-authority"), false);
   } finally {
     fixture.close();
   }

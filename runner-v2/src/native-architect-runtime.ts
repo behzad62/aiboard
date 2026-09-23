@@ -216,7 +216,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         id: "architect-system",
         role: "system",
         content: [
-          "You are the AIBoard Architect. Use one native lifecycle tool for the requested decision.",
+          "You are the AIBoard Architect. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool.",
           "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision.",
           "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
           "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.",
@@ -259,7 +259,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         content: [
           "Resume the current Architect action from the runner's current durable state.",
           "Earlier mechanical tool errors may have been resolved since the prior attempt.",
-          "Re-evaluate the requested action and invoke exactly one semantically appropriate lifecycle tool; do not substitute prose or an unrelated lifecycle operation.",
+          "Re-evaluate the requested action. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool. Do not substitute prose or an unrelated lifecycle operation.",
           `Current action: ${JSON.stringify(request.reason)}`,
         ].join("\n"),
       };
