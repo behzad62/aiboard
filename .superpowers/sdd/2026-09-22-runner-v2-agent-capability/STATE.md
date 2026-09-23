@@ -9,8 +9,8 @@
 | Moved scope | D4, D5, D7 → P6.6 owner amendment `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md` |
 | Base revision | `6c166f97` on `main` |
 | Planning branch | `docs/agent-capability-and-change-critique` |
-| Program state | **PLANNING — revision 12. PLAN BLOCKED on independent re-review of revision 12.** |
-| Execution | **NOT STARTED.** No implementation worker has been launched. |
+| Program state | **PLAN READY — SOURCE COVERAGE VERIFIED** (revision 12, `evidence/plan-review-r11.md`). **Execution authorized by the owner 2026-09-23** ("when done if all good and you dont need me, start the implementation"; workers `grok-4.7-high`). |
+| Execution | **STARTED 2026-09-23** on branch `codex/runner-v2-agent-capability` (from `edbb8ef6`; code base `6c166f97` = `origin/main`). |
 | Last updated | 2026-09-22 |
 
 ---
@@ -41,18 +41,14 @@
 | Revision 11 | N1 and N3, cycle 2 of 3 |
 | Re-review of revision 11 | INSUFFICIENT (`evidence/plan-review-r10.md`): N1 FIXED; N3 NOT FIXED (token check, not the statements) |
 | Revision 12 | N3 final cycle 3 of 3 |
-| **Independent re-review of revision 12** | **OUTSTANDING — blocks PLAN READY** |
+| Re-review of revision 12 | **PLAN COVERAGE VERIFIED** (`evidence/plan-review-r11.md`): N1, N3 FIXED; no finding |
 
 ---
 
 ## 2. Next eligible action
 
-**One action:** an independent re-review of revision 12, scoped to A5 step 8 and its acceptance
-line. Everything found clean in `plan-review-r6.md` to `-r10.md` is reused. N3 is on its final
-cycle: if unsound, escalate to the owner. After a sufficient verdict the next action is **A0** (execution still needs the
-owner's instruction to start).
-
-Nothing else is eligible. Planning readiness does not authorize execution.
+**A0** (Lane B) — RUNNING. Every other source packet waits for A0 to integrate (§2). After A0:
+A1 (Lane A) and B1 (Lane B) may run in parallel.
 
 ---
 
@@ -61,7 +57,7 @@ Nothing else is eligible. Planning readiness does not authorize execution.
 | Lane | Worker / session | Base | Worktree | Ownership |
 |---|---|---|---|---|
 | Lane A | — | — | — | unassigned |
-| Lane B | — | — | — | unassigned |
+| Lane B | Cursor CLI `grok-4.7-high`, packet A0 | `edbb8ef6` | this worktree, branch `codex/runner-v2-agent-capability` | A0 writable files only (controller-serialized) |
 
 No atomic claim primitive exists on this host. The controller serializes every assignment and
 records it here before a worker starts. Before reassigning a stale claim, verify the previous
@@ -109,7 +105,7 @@ Empty.
 | ESC-3 | — | **DECIDED:** option A for both — one final cycle each for B-1 `abort` and A5 | owner | applied in revision 7 |
 | BL-7 | — | CLOSED — revision 7 re-reviewed (`plan-review-r6.md`) | controller | — |
 | ESC-4 | — | A5's commit step addresses the wrong workspace; the reviewer's own fix is to commit the `TaskWorkspace` object via `commitWorkspace` (`workspace-manager.ts:136`); ESC-3's last cycle is spent | owner | **DECIDED:** mechanism replaced (SOURCE D6 revision 4) |
-| **BL-8** | PLAN READY | revision 12 (A5 step 8) not re-reviewed | controller | dispatch one scoped re-review |
+| BL-8 | — | CLOSED — revision 12 verified | controller | — |
 
 ---
 
