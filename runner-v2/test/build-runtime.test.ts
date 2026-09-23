@@ -5,11 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { ToolCallBlock } from "../src/agent-contracts.js";
+import { ArtifactStore } from "../src/artifact-store.js";
 import {
   BuildRuntime,
   type ArchitectActionRequest,
   type ArchitectRuntimeDriver,
   type IntegrationRuntimeDriver,
+  type ProjectDocsPort,
 } from "../src/build-runtime.js";
 import {
   clearContextRecordingSuspension,
@@ -21,8 +23,17 @@ import {
   type ContextManifestInput,
   type ContextManifestStore,
 } from "../src/context-manifest-store.js";
-import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
+import {
+  CLAUDE_POINTER_LINE,
+  DEFAULT_AGENTS_SECTION_BODY,
+  DEFAULT_README_TEMPLATE,
+  DEFAULT_STATE_TEMPLATE,
+  agentsMarkedSectionSatisfies,
+  claudePointerSatisfies,
+  spliceMarkedArchitectSection,
+} from "../src/project-docs.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
+import { rebuildSchedulerProjection } from "../src/scheduler-store.js";
 import { RuntimeRouter } from "../src/runtime-router.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -36,6 +47,38 @@ import {
   acceptFinalVerificationProfile,
   emptyFinalVerificationProfile,
 } from "./support/final-verification-profile.js";
+
+function planOnlyDocumentPort(): ProjectDocsPort {
+  const tree = new Map<string, string>();
+  let head = "baseline_revision";
+  let commitCount = 0;
+  return {
+    commit: async (input) => {
+      const parent = head;
+      for (const write of input.writes) {
+        if (write.path === "AGENTS.md" || write.path === "CLAUDE.md") {
+          tree.set(write.path, spliceMarkedArchitectSection(tree.get(write.path) ?? "", write.content));
+        } else {
+          tree.set(write.path, write.content);
+        }
+      }
+      commitCount += 1;
+      const commit = `doc-${commitCount}`;
+      head = commit;
+      return {
+        commit,
+        parent,
+        head,
+        entryPoint: {
+          readme: tree.has("docs/project/README.md"),
+          agentsMarkedSection: agentsMarkedSectionSatisfies(tree.get("AGENTS.md") ?? ""),
+          claudePointer: claudePointerSatisfies(tree.get("CLAUDE.md") ?? ""),
+        },
+      };
+    },
+    relateRevision: async () => "strict_descendant",
+  };
+}
 
 test("build runtime plans final verification after ordinary integration across restarts", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-build-runtime-"));
@@ -247,6 +290,7 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
                 "plan_tasks",
                 "revise_task",
                 "upgrade_acceptance_contract",
+                "write_project_doc",
               ]
             );
             for (const name of [
@@ -298,6 +342,7 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
               "plan_tasks",
               "revise_task",
               "upgrade_acceptance_contract",
+              "write_project_doc",
             ]
           );
           for (const name of ["review_task", "request_integration"]) {
@@ -320,6 +365,26 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
             });
             return;
           }
+          await invoke("write_project_doc", {
+            path: "docs/project/README.md",
+            content: DEFAULT_README_TEMPLATE,
+            summary: "Write the project README",
+          });
+          await invoke("write_project_doc", {
+            path: "AGENTS.md",
+            content: DEFAULT_AGENTS_SECTION_BODY,
+            summary: "Write the AGENTS.md documentation section",
+          });
+          await invoke("write_project_doc", {
+            path: "CLAUDE.md",
+            content: CLAUDE_POINTER_LINE,
+            summary: "Write the CLAUDE.md documentation pointer",
+          });
+          await invoke("write_project_doc", {
+            path: "docs/project/STATE.md",
+            content: DEFAULT_STATE_TEMPLATE,
+            summary: "Write the project state",
+          });
           await invoke("complete_run", {
             summary: "The implementation plan is ready for handoff.",
           });
@@ -340,6 +405,8 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
         return "C:/forbidden-workspace";
       },
       clock: () => "2026-07-13T00:00:00.000Z",
+      artifacts: new ArtifactStore(join(root, "artifacts")),
+      projectDocs: planOnlyDocumentPort(),
     });
 
     assert.equal((await runtime.step()).action, "plan_required");
@@ -372,6 +439,14 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
       "handoff:plan-only:keep"
     );
     assert.equal(selected.status, "completed");
+    const types = runtime.events().map((event) => event.type);
+    const stateCommit = [...runtime.events()].reverse().find((event) =>
+      event.type === "project_doc.committed" && event.payload.path === "docs/project/STATE.md"
+    );
+    assert.equal(stateCommit?.payload.readme, true);
+    assert.equal(stateCommit?.payload.agentsMarkedSection, true);
+    assert.equal(stateCommit?.payload.claudePointer, true);
+    assert.ok(types.indexOf("project_doc.committed") < types.indexOf("project.handoff_requested"));
   } finally {
     TaskScheduler.prototype.tick = originalTick;
     store.close();
@@ -531,7 +606,7 @@ test("Architect prose or no-op return cannot fabricate scheduler progress", asyn
     await assert.rejects(() => runtime.step(), /without a typed action/i);
     assert.deepEqual(
       store.readRun("run_noop").map((event) => event.type),
-      ["run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured"]
+      ["project_docs.policy_configured", "run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured"]
     );
   } finally {
     store.close();
@@ -565,7 +640,7 @@ test("fresh native Builds expose an empty projection and obey durable user pause
     assert.equal(resumed.pauseReason, undefined);
     assert.deepEqual(
       runtime.events().map((event) => event.type),
-      ["run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured", "run.paused", "run.resumed"]
+      ["project_docs.policy_configured", "run.initialized", "run.policy_configured", "repair.policy_configured", "plan_critique.policy_configured", "run.paused", "run.resumed"]
     );
   } finally {
     store.close();

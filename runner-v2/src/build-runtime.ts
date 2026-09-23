@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type {
   AgentToolRuntime,
 } from "./tool-registry.js";
@@ -28,6 +30,11 @@ import {
 } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type {
+  DocumentTipRelation,
+  ProjectDocCommitRequest,
+  ProjectDocCommitResult,
+} from "./project-docs.js";
 import type {
   FinalVerificationCategory,
   FinalVerificationPlan,
@@ -203,6 +210,8 @@ export interface BuildRuntimeOptions {
   providerRetryDeadlineMs?: () => number | undefined;
   evidenceStore?: EvidenceStore;
   artifacts?: ArtifactStore;
+  /** Commits Architect project documents on the integration branch. */
+  projectDocs?: ProjectDocsPort;
   finalVerificationDriver?: FinalVerificationCheckDriver;
   finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
@@ -214,6 +223,11 @@ export interface BuildRuntimeOptions {
   architectLifecycleProbe?: (
     tools: readonly NativeTool<unknown>[],
   ) => readonly NativeTool<unknown>[];
+}
+
+export interface ProjectDocsPort {
+  commit(input: ProjectDocCommitRequest): Promise<ProjectDocCommitResult>;
+  relateRevision(input: { revision: string; tip: string }): Promise<DocumentTipRelation>;
 }
 
 export interface BuildStepResult {
@@ -237,6 +251,7 @@ export class BuildRuntime {
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
   private readonly evidenceStore?: EvidenceStore;
   private readonly artifacts?: ArtifactStore;
+  private readonly projectDocs?: ProjectDocsPort;
   private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
   private readonly finalVerificationCleanupDriver?: FinalVerificationCleanupDriver;
   private readonly finalVerificationProfileFor?: BuildRuntimeOptions["finalVerificationProfileFor"];
@@ -268,6 +283,7 @@ export class BuildRuntime {
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
     this.evidenceStore = options.evidenceStore;
     this.artifacts = options.artifacts;
+    this.projectDocs = options.projectDocs;
     this.finalVerificationDriver = options.finalVerificationDriver;
     this.finalVerificationCleanupDriver = options.finalVerificationCleanupDriver;
     this.finalVerificationProfileFor = options.finalVerificationProfileFor;
@@ -316,6 +332,7 @@ export class BuildRuntime {
         );
       }
     }
+    this.configureProjectDocsPolicy();
     this.initializeRun();
     this.configureRunPolicy();
     this.configureVerifierPolicy();
@@ -629,7 +646,7 @@ export class BuildRuntime {
 
   private async dispatchStep(): Promise<BuildStepResult> {
     this.recordingFailureContext = {};
-    const events = this.store.readRun(this.runId);
+    let events = this.store.readRun(this.runId);
     if (events.length === 0) {
       await this.runArchitect({ type: "plan_required" }, emptyProjection(this.runId));
       return this.afterArchitect("plan_required");
@@ -643,6 +660,11 @@ export class BuildRuntime {
     if (projection.status === "paused") {
       return { status: "paused", action: projection.pauseReason?.reason };
     }
+    await this.recoverPendingProjectDocs();
+    events = this.store.readRun(this.runId);
+    projection = events.length === 0
+      ? emptyProjection(this.runId)
+      : rebuildSchedulerProjection(events);
     const pendingInterruption = Object.values(projection.userGuidance)
       .filter((guidance) => guidance.interruptionStatus !== "completed")
       .sort((left, right) => left.version - right.version)[0];
@@ -768,6 +790,25 @@ export class BuildRuntime {
         taskId: integrating.id,
         changeSetId: integrating.changeSetId,
       });
+      let integrationRevision = result.integrationRevision;
+      if (result.status === "integrated") {
+        const tip = projection.projectDocs?.documentTip;
+        if (tip) {
+          if (!this.projectDocs) {
+            throw new Error("Document tip classification requires the project document port.");
+          }
+          const relation = await this.projectDocs.relateRevision({
+            revision: result.integrationRevision,
+            tip,
+          });
+          if (relation === "equal_to_tip" || relation === "ancestor") {
+            if (!projection.integrationRevision) {
+              throw new Error("Document tip has no canonical integration revision.");
+            }
+            integrationRevision = projection.integrationRevision;
+          }
+        }
+      }
       this.store.append({
         runId: this.runId,
         type: "task.transitioned",
@@ -781,7 +822,7 @@ export class BuildRuntime {
               ? "integrated"
               : "integration_resolution",
           patch: {
-            integrationRevision: result.integrationRevision,
+            integrationRevision,
             ...(result.status === "conflict"
               ? { conflictPaths: result.conflictPaths }
               : {}),
@@ -1443,7 +1484,8 @@ export class BuildRuntime {
 
   private initializeRun(): void {
     const events = this.store.readRun(this.runId);
-    if (events.length > 0) {
+    const durable = events.filter((event) => event.type !== "project_docs.policy_configured");
+    if (durable.length > 0) {
       const durableObjective = rebuildSchedulerProjection(events).initialObjective;
       if (
         durableObjective !== undefined &&
@@ -1466,6 +1508,134 @@ export class BuildRuntime {
         ...(this.initialObjective !== undefined
           ? { objective: this.initialObjective }
           : {}),
+      },
+    });
+  }
+
+  private configureProjectDocsPolicy(): void {
+    const events = this.store.readRun(this.runId);
+    if (events.length > 0) return;
+    this.store.append({
+      runId: this.runId,
+      type: "project_docs.policy_configured",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: "project-docs-policy",
+      payload: { version: 1 },
+    });
+  }
+
+  private bindProjectDocCommit(
+    tools: readonly NativeTool<unknown>[],
+  ): NativeTool<unknown>[] {
+    if (!this.projectDocs) return [...tools];
+    return tools.map((tool) => {
+      if (tool.definition.name !== "write_project_doc") return tool;
+      return {
+        definition: tool.definition,
+        validate: (input: unknown) => tool.validate(input),
+        ...(tool.assessAccess
+          ? { assessAccess: (input: unknown, context: ToolExecutionContext) => tool.assessAccess!(input, context) }
+          : {}),
+        execute: async (input: unknown, context: ToolExecutionContext) => {
+          const output = await tool.execute(input, context);
+          if (output.isError) return output;
+          await this.commitRequestedProjectDoc(input);
+          return output;
+        },
+      };
+    });
+  }
+
+  private async commitRequestedProjectDoc(input: unknown): Promise<void> {
+    if (!this.projectDocs) return;
+    if (!isProjectDocToolInput(input)) {
+      throw new Error("Project document commit input is invalid.");
+    }
+    const events = this.store.readRun(this.runId);
+    const requested = [...events].reverse().find((event) =>
+      event.type === "project_doc.requested" && event.payload.path === input.path
+    );
+    const requestId = requested?.payload.requestId;
+    if (!requested || typeof requestId !== "string") {
+      throw new Error("Project document request was not recorded.");
+    }
+    if (events.some((event) =>
+      event.type === "project_doc.committed" && event.payload.requestId === requestId
+    )) {
+      return;
+    }
+    const result = await this.projectDocs.commit({
+      writes: [{ path: input.path, content: input.content }],
+      summary: input.summary,
+      runId: this.runId,
+      requestId,
+    });
+    this.appendProjectDocCommitted(requestId, input.path, result);
+  }
+
+  private async recoverPendingProjectDocs(): Promise<void> {
+    if (!this.projectDocs || !this.artifacts) return;
+    const events = this.store.readRun(this.runId);
+    const committed = new Set(
+      events.flatMap((event) =>
+        event.type === "project_doc.committed" && typeof event.payload.requestId === "string"
+          ? [event.payload.requestId]
+          : []
+      ),
+    );
+    const pending = events.filter((event) =>
+      event.type === "project_doc.requested" &&
+      typeof event.payload.requestId === "string" &&
+      !committed.has(event.payload.requestId)
+    );
+    for (const event of pending) {
+      const requestId = event.payload.requestId;
+      const path = event.payload.path;
+      const summary = event.payload.summary;
+      const hash = event.payload.contentArtifactHash;
+      if (
+        typeof requestId !== "string" ||
+        typeof path !== "string" ||
+        typeof summary !== "string" ||
+        typeof hash !== "string"
+      ) {
+        throw new Error("Project document request is incomplete.");
+      }
+      const bytes = await this.artifacts.get(hash);
+      if (createHash("sha256").update(bytes).digest("hex") !== hash) {
+        throw new Error(`Project document artifact ${hash} does not match its request.`);
+      }
+      const result = await this.projectDocs.commit({
+        writes: [{ path, content: bytes.toString("utf8") }],
+        summary,
+        runId: this.runId,
+        requestId,
+      });
+      this.appendProjectDocCommitted(requestId, path, result);
+    }
+  }
+
+  private appendProjectDocCommitted(
+    requestId: string,
+    path: string,
+    result: ProjectDocCommitResult,
+  ): void {
+    this.store.append({
+      runId: this.runId,
+      type: "project_doc.committed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `project-doc-committed:${requestId}`,
+      payload: {
+        requestId,
+        path,
+        commit: result.commit,
+        parent: result.parent,
+        head: result.head,
+        readme: result.entryPoint.readme,
+        agentsMarkedSection: result.entryPoint.agentsMarkedSection,
+        claudePointer: result.entryPoint.claudePointer,
       },
     });
   }
@@ -1582,7 +1752,7 @@ export class BuildRuntime {
     const sequenceBefore = this.store.readRun(this.runId).at(-1)?.sequence ?? 0;
     const providerRetryDeadlineMs = this.providerRetryDeadlineMs?.();
     const tools = new ToolRegistry();
-    const created = createArchitectTools({
+    const created = this.bindProjectDocCommit(createArchitectTools({
       store: this.store,
       clock: this.clock,
       runPolicy: this.runPolicy,
@@ -1612,7 +1782,7 @@ export class BuildRuntime {
         : {}),
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
       ...(this.artifacts ? { artifacts: this.artifacts } : {}),
-    });
+    }));
     const registered = this.architectLifecycleProbe
       ? this.architectLifecycleProbe(created)
       : created;
@@ -1986,6 +2156,18 @@ function emptyProjection(runId: string): SchedulerProjection {
 function boundedCleanupError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return redactSensitiveText(message, 4_096) || "Final verification cleanup failed.";
+}
+
+function isProjectDocToolInput(input: unknown): input is {
+  path: string;
+  content: string;
+  summary: string;
+} {
+  if (typeof input !== "object" || input === null) return false;
+  const value = input as Record<string, unknown>;
+  return typeof value.path === "string" &&
+    typeof value.content === "string" &&
+    typeof value.summary === "string";
 }
 
 /**

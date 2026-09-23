@@ -172,7 +172,9 @@ export type SchedulerEventType =
   | "plan_critique.skipped"
   | "context_manifest.recording_failed"
   | "context_manifest.recording_resolved"
-  | "project_doc.requested";
+  | "project_doc.requested"
+  | "project_doc.committed"
+  | "project_docs.policy_configured";
 
 export interface SchedulerEvent {
   eventId: string;
@@ -283,9 +285,24 @@ export interface ProjectDocRequestProjection {
   sequence: number;
 }
 
-/** Pending Architect document requests. A5 records `project_doc.committed`. */
+/** Pending Architect document requests and commits on the integration branch. */
 export interface ProjectDocsProjection {
   pending: ProjectDocRequestProjection[];
+  committed?: ProjectDocCommitProjection[];
+  /** Document-only commits ahead of the canonical integration revision. */
+  documentTip?: string;
+}
+
+export interface ProjectDocCommitProjection {
+  requestId: string;
+  path: string;
+  commit: string;
+  parent: string;
+  head: string;
+  readme: boolean;
+  agentsMarkedSection: boolean;
+  claudePointer: boolean;
+  sequence: number;
 }
 
 export interface ProjectHandoffProjection {
@@ -579,6 +596,10 @@ export interface SchedulerProjection {
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
   projectDocs?: ProjectDocsProjection;
+  /** Set when this run was stamped `project_docs.policy_configured`. Legacy runs omit it. */
+  projectDocsPolicyVersion?: number;
+  /** Sequence of the latest integration that advanced the canonical revision. */
+  latestIntegratedTaskSequence?: number;
   lastArchitectActionEvent?: {
     sequence: number;
     type: SchedulerEventType;
@@ -672,6 +693,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "final_verification.cleanup_started" ||
     event.type === "final_verification.cleanup_succeeded" ||
     event.type === "final_verification.cleanup_failed" ||
+    (event.type === "project_doc.committed" && event.actor.role === "runner") ||
     (event.type === "plan.created" && current.planRevision === 0) ||
     (event.type === "task.transitioned" &&
       (taskStatus === "integrated" || taskStatus === "integration_resolution"));
@@ -699,7 +721,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "provider.health_changed" ||
     event.type === "architect.runtime_assigned" ||
     event.type === "architect.handoff_required" ||
-    event.type === "architect.handoff_selected";
+    event.type === "architect.handoff_selected" ||
+    (event.type === "project_doc.committed" && event.actor.role === "runner");
   if (!allowed) {
     throw new Error(
       `Blocking Architect question ${current.blockingArchitectQuestionId} must be answered before ${event.type} may advance the run.`
@@ -924,6 +947,7 @@ export function buildCompletionReadiness(
 ): BuildCompletionReadiness {
   const issues: string[] = [];
   if (projection.runPolicy === "plan_only") {
+    issues.push(...projectDocumentationReadiness(projection));
     if (projection.planRevision <= 0) issues.push("Plan-only completion requires a valid plan.");
     return { ready: issues.length === 0, issues };
   }
@@ -942,12 +966,13 @@ export function buildCompletionReadiness(
   const current = projection.finalVerification?.current;
   if (!current || current.state !== "current") {
     issues.push("A current final-verification generation is required.");
+    issues.push(...projectDocumentationReadiness(projection));
     return { ready: false, issues };
   }
   if (projection.finalVerification?.history.some((generation) => generation.state === "current")) {
     issues.push("Final-verification history contains a second current generation.");
   }
-  if (current.targetRevision !== integrationRevision) {
+  if (!revisionMatchesIntegrationOrDocumentTip(projection, current.targetRevision)) {
     issues.push("Current final-verification target does not match the canonical integration revision.");
   }
   const task = projection.tasks[current.taskId];
@@ -1108,6 +1133,7 @@ export function buildCompletionReadiness(
       }
     }
   }
+  issues.push(...projectDocumentationReadiness(projection));
   return { ready: issues.length === 0, issues };
 }
 
@@ -1116,6 +1142,53 @@ export function assertBuildCompletionReady(projection: SchedulerProjection): voi
   if (!readiness.ready) {
     throw new Error(`Build completion is not ready: ${readiness.issues.join(" ")}`);
   }
+}
+
+function revisionMatchesIntegrationOrDocumentTip(
+  projection: SchedulerProjection,
+  revision: string,
+): boolean {
+  return revision === projection.integrationRevision ||
+    (projection.projectDocs?.documentTip !== undefined &&
+      revision === projection.projectDocs.documentTip);
+}
+
+function projectDocumentationReadiness(projection: SchedulerProjection): string[] {
+  if (projection.projectDocsPolicyVersion !== 1) return [];
+  const issues: string[] = [];
+  const stateCommit = latestProjectStateCommit(projection);
+  if (!stateCommit) {
+    issues.push("docs/project/STATE.md has not been committed.");
+    return issues;
+  }
+  if (
+    projection.runPolicy !== "plan_only" &&
+    projection.latestIntegratedTaskSequence !== undefined &&
+    stateCommit.sequence <= projection.latestIntegratedTaskSequence
+  ) {
+    issues.push("docs/project/STATE.md is older than the latest integrated change.");
+  }
+  if (!stateCommit.readme) {
+    issues.push("Project documentation entry point is missing docs/project/README.md.");
+  }
+  if (!stateCommit.agentsMarkedSection) {
+    issues.push("Project documentation entry point is missing the marked AGENTS.md section.");
+  }
+  if (!stateCommit.claudePointer) {
+    issues.push("Project documentation entry point is missing the marked CLAUDE.md pointer.");
+  }
+  return issues;
+}
+
+function latestProjectStateCommit(
+  projection: SchedulerProjection,
+): ProjectDocCommitProjection | undefined {
+  let latest: ProjectDocCommitProjection | undefined;
+  for (const commit of projection.projectDocs?.committed ?? []) {
+    if (commit.path !== "docs/project/STATE.md") continue;
+    if (!latest || commit.sequence > latest.sequence) latest = commit;
+  }
+  return latest;
 }
 
 export function rebuildSchedulerProjection(
@@ -1650,6 +1723,18 @@ export function reduceSchedulerEvent(
         runPolicy: requiredRunPolicy(event.payload),
       };
     }
+    if (event.type === "project_docs.policy_configured") {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure project document policy.");
+      }
+      if (event.payload.version !== 1) {
+        throw new Error("Project document policy version is invalid.");
+      }
+      return {
+        ...emptySchedulerProjection(event),
+        projectDocsPolicyVersion: 1,
+      };
+    }
     if (event.type !== "plan.created") {
       throw new Error(
         `Scheduler run ${event.runId} must begin with run.initialized, run.policy_configured, or plan.created.`
@@ -1752,6 +1837,12 @@ export function reduceSchedulerEvent(
       ? {
           projectDocs: {
             pending: current.projectDocs.pending.map((request) => ({ ...request })),
+            ...(current.projectDocs.committed
+              ? { committed: current.projectDocs.committed.map((commit) => ({ ...commit })) }
+              : {}),
+            ...(current.projectDocs.documentTip
+              ? { documentTip: current.projectDocs.documentTip }
+              : {}),
           },
         }
       : {}),
@@ -1789,8 +1880,23 @@ export function reduceSchedulerEvent(
       }
       break;
     }
-    case "run.initialized":
+    case "run.initialized": {
+      if (event.actor.role !== "runner" && event.actor.role !== "user") {
+        throw new Error("Only the runner or user may initialize a scheduler run.");
+      }
+      // The new-run document stamp is sequence 1. run.initialized follows it once.
+      if (
+        current.projectDocsPolicyVersion === 1 &&
+        current.lastSequence === 1 &&
+        current.planRevision === 0 &&
+        current.runPolicy === undefined
+      ) {
+        const initialObjective = event.payload.objective;
+        if (typeof initialObjective === "string") next.initialObjective = initialObjective;
+        break;
+      }
       throw new Error("A scheduler run cannot be initialized twice.");
+    }
     case "run.policy_configured": {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may configure a scheduler run policy.");
@@ -2280,7 +2386,17 @@ export function reduceSchedulerEvent(
       if (status === "integrated") {
         const integrationRevision = next.tasks[taskId].integrationRevision;
         if (integrationRevision) {
+          const before = next.integrationRevision;
           advanceIntegrationRevision(next, integrationRevision);
+          if (next.integrationRevision !== before) {
+            if (next.projectDocs?.documentTip) {
+              const { documentTip: _tip, ...remaining } = next.projectDocs;
+              next.projectDocs = remaining;
+            }
+            if (next.projectDocsPolicyVersion === 1) {
+              next.latestIntegratedTaskSequence = event.sequence;
+            }
+          }
         }
       }
       break;
@@ -2834,6 +2950,7 @@ export function reduceSchedulerEvent(
         if (current.planRevision <= 0) {
           throw new Error("Plan-only final project handoff requires a valid plan.");
         }
+        assertBuildCompletionReady(current);
       } else {
         assertBuildCompletionReady(current);
       }
@@ -2876,7 +2993,7 @@ export function reduceSchedulerEvent(
       );
       if (
         current.runPolicy !== "plan_only" &&
-        selectedIntegrationRevision !== current.integrationRevision
+        !revisionMatchesIntegrationOrDocumentTip(current, selectedIntegrationRevision)
       ) {
         throw new Error(
           "Final project handoff selection does not match the verified integration revision.",
@@ -3066,6 +3183,26 @@ export function reduceSchedulerEvent(
     }
     case "project_doc.requested": {
       applyProjectDocRequested(next, event);
+      break;
+    }
+    case "project_doc.committed": {
+      applyProjectDocCommitted(next, event);
+      break;
+    }
+    case "project_docs.policy_configured": {
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may configure project document policy.");
+      }
+      if (event.payload.version !== 1) {
+        throw new Error("Project document policy version is invalid.");
+      }
+      if (
+        next.projectDocsPolicyVersion !== undefined &&
+        next.projectDocsPolicyVersion !== 1
+      ) {
+        throw new Error("Project document policy is already configured differently.");
+      }
+      next.projectDocsPolicyVersion = 1;
       break;
     }
   }
@@ -5646,7 +5783,73 @@ function applyProjectDocRequested(
         sequence: event.sequence,
       },
     ],
+    ...(projection.projectDocs?.committed
+      ? { committed: projection.projectDocs.committed.map((commit) => ({ ...commit })) }
+      : {}),
+    ...(projection.projectDocs?.documentTip
+      ? { documentTip: projection.projectDocs.documentTip }
+      : {}),
   };
+}
+
+function applyProjectDocCommitted(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may commit a project document.");
+  }
+  const requestId = requiredString(event.payload, "requestId");
+  const path = requiredString(event.payload, "path");
+  const checked = validateProjectDocPath(path);
+  if (!checked.ok) {
+    throw new Error(`Project document path is refused: ${checked.reason}.`);
+  }
+  const pending = projection.projectDocs?.pending ?? [];
+  const request = pending.find((item) => item.requestId === requestId);
+  if (!request) {
+    throw new Error(`Project document request ${requestId} is not pending.`);
+  }
+  if (request.path !== checked.path) {
+    throw new Error(`Project document commit path does not match request ${requestId}.`);
+  }
+  const committed = projection.projectDocs?.committed ?? [];
+  if (committed.some((item) => item.requestId === requestId)) {
+    throw new Error(`Project document request ${requestId} is already committed.`);
+  }
+  const record: ProjectDocCommitProjection = {
+    requestId,
+    path: checked.path,
+    commit: requiredString(event.payload, "commit"),
+    parent: requiredString(event.payload, "parent"),
+    head: requiredString(event.payload, "head"),
+    readme: requiredBoolean(event.payload, "readme"),
+    agentsMarkedSection: requiredBoolean(event.payload, "agentsMarkedSection"),
+    claudePointer: requiredBoolean(event.payload, "claudePointer"),
+    sequence: event.sequence,
+  };
+  const canonical = projection.integrationRevision;
+  const currentTip = projection.projectDocs?.documentTip;
+  const continuesDocuments =
+    (typeof canonical === "string" && record.parent === canonical) ||
+    (typeof currentTip === "string" && record.parent === currentTip);
+  projection.projectDocs = {
+    pending: pending.filter((item) => item.requestId !== requestId),
+    committed: [...committed, record],
+    ...(continuesDocuments
+      ? { documentTip: record.commit }
+      : currentTip
+        ? { documentTip: currentTip }
+        : {}),
+  };
+}
+
+function requiredBoolean(payload: Record<string, unknown>, key: string): boolean {
+  const value = payload[key];
+  if (typeof value !== "boolean") {
+    throw new Error(`Project document commit ${key} must be a boolean.`);
+  }
+  return value;
 }
 
 function applyContextRecordingResolved(

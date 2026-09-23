@@ -1241,6 +1241,10 @@ export class NativeBuildFactory {
       },
       evidenceStore,
       artifacts: this.artifacts,
+      projectDocs: {
+        commit: (input) => integrationManager.commitProjectDocuments(input),
+        relateRevision: (input) => integrationManager.relateToDocumentTip(input),
+      },
     });
     let closed = false;
     let closing: Promise<void> | undefined;

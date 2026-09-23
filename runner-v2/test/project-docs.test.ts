@@ -28,7 +28,10 @@ import {
   DOCS_UPDATE_SENTENCE,
   PROJECT_DOC_MAX_BYTES,
   PROJECT_DOCS_ROOT,
+  agentsMarkedSectionSatisfies,
+  claudePointerSatisfies,
   projectDocRequestId,
+  spliceMarkedArchitectSection,
   validateProjectDocPath,
   type ProjectDocPathRefusal,
 } from "../src/project-docs.js";
@@ -100,6 +103,82 @@ test("project doc templates restate the layout, read-first rule, and update rule
   assert.match(DEFAULT_STATE_TEMPLATE, /## Where things stand/);
   assert.match(DEFAULT_STATE_TEMPLATE, /## Next action/);
   assert.equal(CLAUDE_POINTER_LINE, "See AGENTS.md for this project's documentation rules.");
+  assert.equal(
+    agentsMarkedSectionSatisfies(spliceMarkedArchitectSection("", DEFAULT_AGENTS_SECTION_BODY)),
+    true,
+  );
+  assert.equal(claudePointerSatisfies(spliceMarkedArchitectSection("", CLAUDE_POINTER_LINE)), true);
+});
+
+test("AGENTS.md entry-point fact accepts extra prose and rejects each unsound variant", () => {
+  const surrounding = `alpha\n${AGENTS_SECTION_START}\nold body\n${AGENTS_SECTION_END}\nomega`;
+  const spliced = spliceMarkedArchitectSection(surrounding, DEFAULT_AGENTS_SECTION_BODY);
+  assert.equal(
+    spliced,
+    `alpha\n${AGENTS_SECTION_START}\n${DEFAULT_AGENTS_SECTION_BODY}\n${AGENTS_SECTION_END}\nomega`,
+  );
+  assert.equal(agentsMarkedSectionSatisfies(spliced), true);
+  const withProse = spliceMarkedArchitectSection("", [
+    DOCS_MARKER_HOLDS,
+    "Intro.",
+    ...DOCS_LAYOUT_LINES,
+    "More.",
+    DOCS_MARKER_READ_FIRST,
+    `Note. ${DOCS_READ_FIRST_SENTENCE}`,
+    DOCS_MARKER_UPDATE,
+    `Also ${DOCS_UPDATE_SENTENCE} thanks.`,
+  ].join("\n"));
+  assert.equal(agentsMarkedSectionSatisfies(withProse), true);
+  const missingMarker = spliceMarkedArchitectSection("", [
+    DOCS_MARKER_HOLDS,
+    ...DOCS_LAYOUT_LINES,
+    DOCS_MARKER_READ_FIRST,
+    DOCS_READ_FIRST_SENTENCE,
+    DOCS_UPDATE_SENTENCE,
+  ].join("\n"));
+  assert.equal(agentsMarkedSectionSatisfies(missingMarker), false);
+  const placeholders = spliceMarkedArchitectSection("", [
+    DOCS_MARKER_HOLDS,
+    "x",
+    DOCS_MARKER_READ_FIRST,
+    "y",
+    DOCS_MARKER_UPDATE,
+    "z",
+  ].join("\n"));
+  assert.equal(agentsMarkedSectionSatisfies(placeholders), false);
+  const tokensOnly = spliceMarkedArchitectSection("", [
+    DOCS_MARKER_HOLDS,
+    "README.md STATE.md specs/ plans/ decisions.md evidence/",
+    DOCS_MARKER_READ_FIRST,
+    "docs/project/README.md docs/project/STATE.md",
+    DOCS_MARKER_UPDATE,
+    "STATE.md last",
+  ].join("\n"));
+  assert.equal(agentsMarkedSectionSatisfies(tokensOnly), false);
+  const moved = spliceMarkedArchitectSection("", [
+    DOCS_MARKER_HOLDS,
+    ...DOCS_LAYOUT_LINES,
+    DOCS_MARKER_READ_FIRST,
+    DOCS_UPDATE_SENTENCE,
+    DOCS_MARKER_UPDATE,
+    DOCS_READ_FIRST_SENTENCE,
+  ].join("\n"));
+  assert.equal(agentsMarkedSectionSatisfies(moved), false);
+  const missingLine = spliceMarkedArchitectSection("", [
+    DOCS_MARKER_HOLDS,
+    ...DOCS_LAYOUT_LINES.slice(1),
+    DOCS_MARKER_READ_FIRST,
+    DOCS_READ_FIRST_SENTENCE,
+    DOCS_MARKER_UPDATE,
+    DOCS_UPDATE_SENTENCE,
+  ].join("\n"));
+  assert.equal(agentsMarkedSectionSatisfies(missingLine), false);
+  const outside = `pointer outside\n${AGENTS_SECTION_START}\ninterior\n${AGENTS_SECTION_END}\n`;
+  assert.equal(claudePointerSatisfies(outside), false);
+  assert.equal(
+    claudePointerSatisfies(spliceMarkedArchitectSection("preface\n", CLAUDE_POINTER_LINE)),
+    true,
+  );
 });
 
 test("validateProjectDocPath admits only exact documentation targets", () => {

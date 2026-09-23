@@ -1,6 +1,7 @@
 /**
- * Architect project-documentation constants and templates.
- * A5 adds filesystem, git, and marker splice on this module.
+ * Architect project-documentation constants, templates, marker splice,
+ * and entry-point statement checks. Filesystem and git stay in
+ * IntegrationManager so this module does not become a filesystem owner.
  */
 
 export const PROJECT_DOCS_ROOT = "docs/project/";
@@ -142,4 +143,107 @@ function isProjectDocFileRemainder(remainder: string): boolean {
 
 function isAbsoluteProjectDocPath(path: string): boolean {
   return path.startsWith("/") || path.startsWith("\\") || /^[A-Za-z]:/.test(path);
+}
+
+export interface ProjectDocWrite {
+  path: string;
+  content: string;
+}
+
+export interface ProjectDocCommitRequest {
+  writes: readonly ProjectDocWrite[];
+  summary: string;
+  runId: string;
+  requestId: string;
+}
+
+export interface ProjectDocEntryPointFacts {
+  readme: boolean;
+  agentsMarkedSection: boolean;
+  claudePointer: boolean;
+}
+
+export interface ProjectDocCommitResult {
+  commit: string;
+  parent: string;
+  head: string;
+  entryPoint: ProjectDocEntryPointFacts;
+}
+
+export type DocumentTipRelation = "strict_descendant" | "equal_to_tip" | "ancestor";
+
+const DOC_STATEMENT_MARKERS = [
+  DOCS_MARKER_HOLDS,
+  DOCS_MARKER_READ_FIRST,
+  DOCS_MARKER_UPDATE,
+] as const;
+
+/**
+ * Replace the marked Architect section, or append one when the file has no
+ * start/end pair. Bytes outside the markers are unchanged.
+ */
+export function spliceMarkedArchitectSection(existing: string, body: string): string {
+  const start = existing.indexOf(AGENTS_SECTION_START);
+  const end = start < 0
+    ? -1
+    : existing.indexOf(AGENTS_SECTION_END, start + AGENTS_SECTION_START.length);
+  if (start >= 0 && end > start) {
+    return existing.slice(0, start + AGENTS_SECTION_START.length)
+      + "\n"
+      + body
+      + "\n"
+      + existing.slice(end);
+  }
+  const separator = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+  return `${existing}${separator}${AGENTS_SECTION_START}\n${body}\n${AGENTS_SECTION_END}\n`;
+}
+
+/** True when the marked AGENTS.md section contains each statement under its own marker. */
+export function agentsMarkedSectionSatisfies(content: string): boolean {
+  const section = architectSectionBody(content);
+  if (section === null) return false;
+  if (DOC_STATEMENT_MARKERS.some((marker) => !section.includes(marker))) return false;
+  const holds = statementSpan(section, DOCS_MARKER_HOLDS);
+  const readFirst = statementSpan(section, DOCS_MARKER_READ_FIRST);
+  const update = statementSpan(section, DOCS_MARKER_UPDATE);
+  if (holds === null || readFirst === null || update === null) return false;
+  if (!DOCS_LAYOUT_LINES.every((line) => containsNormalized(holds, line))) return false;
+  if (!containsNormalized(readFirst, DOCS_READ_FIRST_SENTENCE)) return false;
+  if (!containsNormalized(update, DOCS_UPDATE_SENTENCE)) return false;
+  return true;
+}
+
+/** True when the marked CLAUDE.md section contains the documentation pointer. */
+export function claudePointerSatisfies(content: string): boolean {
+  const section = architectSectionBody(content);
+  if (section === null) return false;
+  return containsNormalized(section, CLAUDE_POINTER_LINE);
+}
+
+function architectSectionBody(content: string): string | null {
+  const start = content.indexOf(AGENTS_SECTION_START);
+  if (start < 0) return null;
+  const end = content.indexOf(AGENTS_SECTION_END, start + AGENTS_SECTION_START.length);
+  if (end < 0) return null;
+  return content.slice(start + AGENTS_SECTION_START.length, end);
+}
+
+function statementSpan(section: string, marker: string): string | null {
+  const at = section.indexOf(marker);
+  if (at < 0) return null;
+  const from = at + marker.length;
+  let next = section.length;
+  for (const other of DOC_STATEMENT_MARKERS) {
+    const pos = section.indexOf(other, from);
+    if (pos >= 0 && pos < next) next = pos;
+  }
+  return section.slice(from, next);
+}
+
+function containsNormalized(span: string, statement: string): boolean {
+  return normalizeDocWhitespace(span).includes(normalizeDocWhitespace(statement));
+}
+
+function normalizeDocWhitespace(value: string): string {
+  return value.replace(/[ \t\r\n]+/g, " ").trim();
 }
