@@ -9,6 +9,8 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import type { BrowserBackend } from "../src/browser-tools.js";
 import type { EvidenceStore } from "../src/evidence-store.js";
 import type { ManagedProcessService } from "../src/managed-process.js";
+import type { McpManager } from "../src/mcp-tools.js";
+import type { SqlitePermissionStore } from "../src/permission-store.js";
 import {
   createArchitectInspectionBroker,
   PlanOnlyInspectionRuntime,
@@ -27,6 +29,7 @@ import {
   ARCHITECT_LIFECYCLE_TOOLS,
   READER_AUTHORITY_FORBIDDEN_TOOLS,
   ROLE_CAPABILITY_BROKERS,
+  assertArchitectInspectionMcpClass,
   assertRoleToolSurface,
   isCatalogToolName,
   isMcpToolName,
@@ -359,11 +362,17 @@ test("MCP admission is an explicit policy separate from the static allow-list", 
   assert.equal(isMcpToolName("fs.read"), false);
   assert.equal(mcpToolAdmitted("all", { readOnly: false, effect: "external" }), true);
   assert.equal(mcpToolAdmitted("none", { readOnly: true, effect: "none" }), false);
-  assert.equal(mcpToolAdmitted("read-only-non-workspace", { readOnly: true, effect: "external" }), true);
-  assert.equal(mcpToolAdmitted("read-only-non-workspace", { readOnly: false, effect: "external" }), false);
-  assert.equal(mcpToolAdmitted("read-only-non-workspace", { readOnly: true, effect: "workspace" }), false);
-  assert.equal(roleToolSurface("architect", "inspection").mcpPolicy, "all");
-  assert.equal(roleToolSurface("architect", "planOnly").mcpPolicy, "read-only-non-workspace");
+  assert.equal(mcpToolAdmitted("read-only-non-workspace", { name: "mcp.audit.read", readOnly: true, effect: "external" }), true);
+  assert.equal(mcpToolAdmitted("read-only-non-workspace", { name: "mcp.audit.read", readOnly: false, effect: "external" }), false);
+  assert.equal(mcpToolAdmitted("read-only-non-workspace", { name: "mcp.audit.read", readOnly: true, effect: "workspace" }), false);
+  assert.equal(mcpToolAdmitted("read-only-non-workspace", { name: "mcp.audit.read", readOnly: true, effect: "none" }), true);
+  assert.equal(mcpToolAdmitted("read-only-class", { name: "mcp.docs.read_only", readOnly: true, effect: "external" }), true);
+  assert.equal(mcpToolAdmitted("read-only-class", { name: "mcp.docs.hint_only", readOnly: false, effect: "external" }), false);
+  assert.equal(mcpToolAdmitted("read-only-class", { name: "mcp.docs.read_only", readOnly: true, effect: "none" }), false);
+  assert.equal(mcpToolAdmitted("read-only-class", { name: "fs.read", readOnly: true, effect: "external" }), false);
+  assert.equal(mcpToolAdmitted("read-only-class", { readOnly: true, effect: "external" }), false);
+  assert.equal(roleToolSurface("architect", "inspection").mcpPolicy, "read-only-class");
+  assert.equal(roleToolSurface("architect", "planOnly").mcpPolicy, "read-only-class");
   assert.equal(roleToolSurface("verifier", "inspection").mcpPolicy, "none");
   assert.equal(roleToolSurface("verifier", "expectations").mcpPolicy, "none");
   assert.equal(roleToolSurface("plan-critic", "inspection").mcpPolicy, "none");
@@ -376,6 +385,32 @@ test("MCP admission is an explicit policy separate from the static allow-list", 
   assert.throws(
     () => assertRoleToolSurface("plan-critic", "inspection", [...PLAN_CRITIC, "mcp.audit.read"]),
     /policy none/,
+  );
+  assert.doesNotThrow(() => assertArchitectInspectionMcpClass([{
+    name: "mcp.docs.read_only",
+    readOnly: true,
+    effect: "external",
+  }]));
+  assert.doesNotThrow(() => assertArchitectInspectionMcpClass([{
+    name: "research.fetch",
+    readOnly: true,
+    effect: "external",
+  }]));
+  assert.throws(
+    () => assertArchitectInspectionMcpClass([{
+      name: "mcp.docs.destructive",
+      readOnly: false,
+      effect: "external",
+    }]),
+    /Architect inspection tool mcp\.docs\.destructive has external effect outside the read-only MCP class\./,
+  );
+  assert.throws(
+    () => assertArchitectInspectionMcpClass([{
+      name: "custom.external",
+      readOnly: true,
+      effect: "external",
+    }]),
+    /Architect inspection tool custom\.external has external effect outside the read-only MCP class\./,
   );
 });
 
@@ -526,22 +561,169 @@ test("constructed brokers match the derived surfaces and an unlisted probe fails
   }
 });
 
+test("Architect inspection admits only the read-only MCP class from a three-shape stub", async () => {
+  const root = mkdtempSync(join(tmpdir(), "a2-mcp-class-"));
+  const approvals: string[] = [];
+  try {
+    const artifacts = new ArtifactStore(join(root, "artifacts"));
+    const manager = classShapeMcpManager();
+    const inspection = createArchitectInspectionBroker({
+      ...architectInput(root, artifacts),
+      permissionProfile: "full",
+      mcpManager: manager,
+      permissions: {
+        requestTool: async () => {
+          approvals.push("called");
+          return false;
+        },
+      } as unknown as SqlitePermissionStore,
+    });
+    assert.deepEqual(
+      names(inspection).filter((name) => name.startsWith("mcp.")),
+      ["mcp.docs.read_only"],
+    );
+    assert.deepEqual(
+      names(inspection),
+      [...ARCHITECT_INSPECTION_REQUIRED, "mcp.docs.read_only"].sort((left, right) => left.localeCompare(right)),
+    );
+    assert.equal(
+      inspection.definitions().find((definition) => definition.name === "mcp.docs.read_only")?.readOnly,
+      true,
+    );
+    assert.equal(
+      inspection.definitions().find((definition) => definition.name === "mcp.docs.read_only")?.effect,
+      "external",
+    );
+    assert.deepEqual(
+      names(new PlanOnlyInspectionRuntime(inspection)).filter((name) => name.startsWith("mcp.")),
+      ["mcp.docs.read_only"],
+    );
+    const invoked = await inspection.invoke({
+      type: "tool_call",
+      callId: "mcp_read",
+      name: "mcp.docs.read_only",
+      arguments: {},
+    }, {
+      runId: "run",
+      sessionId: "architect:run",
+      actor: { role: "architect", id: "architect" },
+      workspacePath: root,
+    });
+    assert.equal(invoked.isError, false, JSON.stringify(invoked));
+    assert.deepEqual(approvals, []);
+    assert.equal(inspection.auditRecords().at(-1)?.decision, "allowed");
+    assert.equal(inspection.auditRecords().at(-1)?.toolName, "mcp.docs.read_only");
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("Architect inspection class assert throws for an external tool outside the read-only MCP class", () => {
+  const root = mkdtempSync(join(tmpdir(), "a2-mcp-class-assert-"));
+  try {
+    const artifacts = new ArtifactStore(join(root, "artifacts"));
+    assert.throws(
+      () => createArchitectInspectionBroker({
+        ...architectInput(root, artifacts),
+        probeTools: [probeTool("mcp.injected.external", { readOnly: false, effect: "external" })],
+      }),
+      /Architect inspection tool mcp\.injected\.external has external effect outside the read-only MCP class\./,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
+test("verifier and critic brokers stay MCP-free when a manager is configured, and the worker admits every stub shape", async () => {
+  const root = mkdtempSync(join(tmpdir(), "a2-mcp-roles-"));
+  try {
+    const artifacts = new ArtifactStore(join(root, "artifacts"));
+    const manager = classShapeMcpManager();
+    const verifier = createVerifierReviewBroker(attachUnusedManager(inspectionInput(root, artifacts), manager));
+    assert.deepEqual(names(verifier).filter((name) => name.startsWith("mcp.")), []);
+    const expectations = createVerifierExpectationsBroker(attachUnusedManager({
+      ...inspectionInput(root, artifacts),
+      excludeToolNames: ["git.diff", "git.log", "git.show"],
+      lifecycleTool: createRecordVerificationExpectationsTool({
+        authority: {} as VerifierVerdictAuthority,
+        runId: "run",
+        reviewId: "review",
+        targetRevision: "a".repeat(40),
+        baselineRevision: "b".repeat(40),
+        runtimeId: "verifier",
+        sessionId: "session",
+        criteria: [],
+      }),
+    }, manager));
+    assert.deepEqual(names(expectations).filter((name) => name.startsWith("mcp.")), []);
+    const critic = createPlanCriticInspectionBroker(attachUnusedManager({
+      ...inspectionInput(root, artifacts),
+      evidenceStore: undefined,
+      lifecycleTool: createSubmitPlanCritiqueTool({
+        authority: {} as PlanCritiqueAuthority,
+        runId: "run",
+        critiqueId: "critique",
+        planRevision: 1,
+        runtimeId: "critic",
+        sessionId: "session",
+        tasks: {},
+      }),
+    }, manager));
+    assert.deepEqual(names(critic).filter((name) => name.startsWith("mcp.")), []);
+    assert.deepEqual(
+      (await workerNames(root, artifacts, false, [], manager)).filter((name) => name.startsWith("mcp.")),
+      ["mcp.docs.destructive", "mcp.docs.hint_only", "mcp.docs.read_only"],
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+});
+
 function names(runtime: { definitions(): readonly { name: string }[] }): string[] {
   return runtime.definitions().map((definition) => definition.name).sort((left, right) => left.localeCompare(right));
 }
 
-function probeTool(name: string): NativeTool<unknown> {
+function probeTool(
+  name: string,
+  overrides: { readonly readOnly?: boolean; readonly effect?: "none" | "workspace" | "external" } = {},
+): NativeTool<unknown> {
   return {
     definition: {
       name,
       description: "Unlisted registration probe",
       inputSchema: { type: "object", additionalProperties: false },
-      readOnly: true,
-      effect: "none",
+      readOnly: overrides.readOnly ?? true,
+      effect: overrides.effect ?? "none",
     },
     validate: () => ({ ok: true, value: {} }),
     execute: async () => ({ content: [], isError: false }),
   };
+}
+
+function classShapeMcpManager(): McpManager {
+  const entry = (
+    name: string,
+    annotations: { readonly readOnlyHint?: boolean; readonly destructiveHint?: boolean },
+  ) => ({
+    client: {
+      spec: { name: "docs", command: "unused" },
+      call: async () => ({ structuredContent: { ok: true } }),
+      access: () => ({ capability: `mcp.docs.${name}`, external: true }),
+    },
+    tool: { name, annotations },
+  });
+  return {
+    toolEntries: () => [
+      entry("hint_only", { readOnlyHint: true }),
+      entry("read_only", { readOnlyHint: true, destructiveHint: false }),
+      entry("destructive", { readOnlyHint: true, destructiveHint: true }),
+    ],
+    closeAgent: async () => undefined,
+  } as unknown as McpManager;
+}
+
+function attachUnusedManager<T extends object>(input: T, mcpManager: McpManager): T {
+  return { ...input, mcpManager } as T;
 }
 
 function architectInput(root: string, artifacts: ArtifactStore) {
@@ -591,6 +773,7 @@ async function workerNames(
   artifacts: ArtifactStore,
   full: boolean,
   probe: readonly NativeTool<unknown>[] = [],
+  mcpManager?: McpManager,
 ): Promise<string[]> {
   const seen: string[] = [];
   const model: AgentModel = {
@@ -626,6 +809,7 @@ async function workerNames(
     } as unknown as SqliteAgentSessionStore,
     initialMessages: [{ id: "task", role: "user", content: "Inspect." }],
     ...(probe.length > 0 ? { toolSurfaceProbe: probe } : {}),
+    ...(mcpManager ? { mcpManager } : {}),
     ...(full
       ? {
           browserBackend: browserStub(),

@@ -1,21 +1,27 @@
 import type { ToolEffect } from "./agent-contracts.js";
 
 /**
- * Explicit per-role tool allow-lists. A1 records today's static surfaces and
- * admits against them. It does not add tools. Server-named MCP tools are not
- * static entries; `mcpPolicy` is the dynamic group A2 can tighten.
+ * Explicit per-role tool allow-lists. A1 records the static surfaces and
+ * admits against them. Server-named MCP tools are not static entries;
+ * `mcpPolicy` admits that dynamic group. A2 limits the Architect to the
+ * read-only MCP class.
  */
 export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker";
 
 export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "task";
 
 /**
- * `all` registers every MCP tool the manager exposes (Architect inspection and
- * the worker, as today). `none` registers none (verifier and plan critic).
- * `read-only-non-workspace` is today's Plan-only predicate for dynamic tools:
- * `readOnly && effect !== "workspace"`. It is not A2's MCP class filter.
+ * `all` registers every MCP tool the manager exposes (the worker).
+ * `none` registers none (verifier and plan critic).
+ * `read-only-class` admits a tool only when `readOnly === true`,
+ * `effect === "external"`, and the name is an MCP tool name. That is the
+ * shape `createMcpTools` produces for `readOnlyHint === true &&
+ * destructiveHint === false`.
+ * `read-only-non-workspace` is the pre-A2 Plan-only predicate
+ * `readOnly && effect !== "workspace"`. It admits a read-only MCP definition
+ * whose effect is `none`, which the class refuses, so no surface selects it.
  */
-export type McpPolicy = "all" | "none" | "read-only-non-workspace";
+export type McpPolicy = "all" | "none" | "read-only-class" | "read-only-non-workspace";
 
 export interface RoleToolSurface {
   readonly role: RoleCapabilityRole;
@@ -58,7 +64,7 @@ const ARCHITECT_PLAN_ONLY_BROWSER_TOOLS = [
 ] as const;
 
 const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
-  "architect:inspection": surface("architect", "inspection", "all", [
+  "architect:inspection": surface("architect", "inspection", "read-only-class", [
     "archive_project_memory",
     "artifact.read",
     "code.definition",
@@ -86,7 +92,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "research.fetch",
     "search_session_history",
   ], ARCHITECT_INSPECTION_BROWSER_TOOLS),
-  "architect:planOnly": surface("architect", "planOnly", "read-only-non-workspace", [
+  "architect:planOnly": surface("architect", "planOnly", "read-only-class", [
     "artifact.read",
     "code.definition",
     "code.diagnostics",
@@ -271,18 +277,50 @@ export function isMcpToolName(name: string): boolean {
 
 export function mcpToolAdmitted(
   policy: McpPolicy,
-  definition: { readonly readOnly: boolean; readonly effect: ToolEffect },
+  definition: { readonly name?: string; readonly readOnly: boolean; readonly effect: ToolEffect },
 ): boolean {
   if (policy === "none") return false;
   if (policy === "all") return true;
+  if (policy === "read-only-class") return isReadOnlyMcpClass(definition);
   return definition.readOnly === true && definition.effect !== "workspace";
+}
+
+/**
+ * External effect on the Architect inspection broker is accepted only for the
+ * read-only MCP class. Static allow-list tools are skipped: A1 already names
+ * them, including `research.fetch` and `browser.*`, which are external.
+ * Every other external-effect definition throws.
+ */
+export function assertArchitectInspectionMcpClass(
+  definitions: readonly { readonly name: string; readonly readOnly: boolean; readonly effect: ToolEffect }[],
+): void {
+  for (const definition of definitions) {
+    if (staticToolAdmitted("architect", "inspection", definition.name)) continue;
+    if (isReadOnlyMcpClass(definition)) continue;
+    if (definition.effect === "external") {
+      throw new Error(
+        `Architect inspection tool ${definition.name} has external effect outside the read-only MCP class.`,
+      );
+    }
+  }
+}
+
+function isReadOnlyMcpClass(definition: {
+  readonly name?: string;
+  readonly readOnly: boolean;
+  readonly effect: ToolEffect;
+}): boolean {
+  return definition.readOnly === true
+    && definition.effect === "external"
+    && typeof definition.name === "string"
+    && isMcpToolName(definition.name);
 }
 
 /**
  * Fails closed when a registered static name is not allow-listed, when a
  * required name is absent, or when MCP policy is `none` and an MCP name appears.
- * MCP names under `all` or `read-only-non-workspace` are dynamic and are not
- * static allow-list entries; callers admit those definitions with `mcpToolAdmitted`.
+ * MCP names under any other policy are dynamic and are not static allow-list
+ * entries; callers admit those definitions with `mcpToolAdmitted`.
  */
 export function assertRoleToolSurface(
   role: RoleCapabilityRole,

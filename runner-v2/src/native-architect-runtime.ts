@@ -67,6 +67,7 @@ import { createResearchTools } from "./research-tools.js";
 import { RepositoryIntelligence } from "./repository-intelligence.js";
 import { createSessionTools } from "./session-tools.js";
 import {
+  assertArchitectInspectionMcpClass,
   assertRoleToolSurface,
   isCatalogToolName,
   isMcpToolName,
@@ -749,6 +750,7 @@ export function createArchitectInspectionBroker(input: ArchitectInspectionBroker
     }
   }
   for (const tool of input.probeTools ?? []) broker.register(tool);
+  assertArchitectInspectionMcpClass(broker.definitions());
   assertRoleToolSurface(
     "architect",
     "inspection",
