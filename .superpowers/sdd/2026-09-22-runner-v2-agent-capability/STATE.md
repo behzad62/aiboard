@@ -9,7 +9,7 @@
 | Moved scope | D4, D5, D7 → P6.6 owner amendment `docs/superpowers/specs/2026-09-22-runner-v2-p6-6-owner-amendment.md` |
 | Base revision | `6c166f97` on `main` |
 | Planning branch | `docs/agent-capability-and-change-critique` |
-| Program state | **PLAN READY — SOURCE COVERAGE VERIFIED** (revision 12, `evidence/plan-review-r11.md`). **Execution authorized by the owner 2026-09-23** ("when done if all good and you dont need me, start the implementation"; workers `grok-4.7-high`). |
+| Program state | **PLAN VERIFIED COMPLETE — ALL APPLICABLE MANDATORY REQUIREMENTS AND FINAL GATES PASSED** (`evidence/D1g.md`). Awaiting owner approval to open the PR to `main`. |
 | Execution | **STARTED 2026-09-23** on branch `codex/runner-v2-agent-capability` (from `edbb8ef6`; code base `6c166f97` = `origin/main`). |
 | Last updated | 2026-09-22 |
 
@@ -47,9 +47,8 @@
 
 ## 2. Next eligible action
 
-A0 ACCEPTED and integrated at `e18eb6c6` (`evidence/A0.md`). **A1** (Lane A) and **B1** (Lane B)
-RUNNING in parallel. Integration branch: `codex/runner-v2-agent-capability`; Lane A merges into it
-after acceptance.
+Program complete on `codex/runner-v2-agent-capability`. **Owner decision:** push, open the PR to
+`main`, and merge. After merge the next program is P6.6 (PLAN READY; its T1 inspects the merged tree).
 
 ---
 
