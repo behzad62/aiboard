@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { exec, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -911,46 +911,61 @@ function runCommand(command, cwd, timeoutSeconds, environment, signal) {
   const started = Date.now();
   return new Promise((resolveCommand, rejectCommand) => {
     let settled = false;
+    let stopping = false;
     let aborted = false;
-    const child = exec(
-      command,
-      {
-        cwd,
-        timeout: Math.max(1, timeoutSeconds ?? 30) * 1000,
-        windowsHide: true,
-        maxBuffer: MAX_OUTPUT_BYTES * 4,
-        ...(environment ? { env: environment } : {}),
-      },
-      (error, stdout, stderr) => {
-        if (aborted) return;
-        settled = true;
-        signal?.removeEventListener("abort", onAbort);
-        const exitCode =
-          error && typeof error.code === "number"
-            ? error.code
-            : error
-              ? 1
-              : 0;
-        const cappedStdout = capOutput(String(stdout ?? ""));
-        const cappedStderr = capOutput(String(stderr ?? ""));
-        resolveCommand({
-          exitCode,
-          stdout: cappedStdout.text,
-          stderr: cappedStderr.text,
-          durationMs: Date.now() - started,
-          truncated: cappedStdout.truncated || cappedStderr.truncated,
-        });
-      }
-    );
-    const onAbort = () => {
-      if (settled || aborted) return;
-      aborted = true;
-      void terminateChild(child).finally(() => {
-        settled = true;
-        signal?.removeEventListener("abort", onAbort);
+    let failed = false;
+    const chunks = { stdout: [], stderr: [] };
+    const sizes = { stdout: 0, stderr: 0 };
+    // A separate POSIX process group lets cancellation stop the shell and its children.
+    const processGroup = process.platform !== "win32";
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      detached: processGroup,
+      windowsHide: true,
+      ...(environment ? { env: environment } : {}),
+    });
+    const finish = (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      if (aborted) {
         rejectCommand(Object.assign(new Error("Bench command cancelled."), { name: "AbortError" }));
+        return;
+      }
+      const stdout = capOutput(Buffer.concat(chunks.stdout).toString("utf8"));
+      const stderr = capOutput(Buffer.concat(chunks.stderr).toString("utf8"));
+      resolveCommand({
+        exitCode: failed ? 1 : (code ?? 1),
+        stdout: stdout.text,
+        stderr: stderr.text,
+        durationMs: Date.now() - started,
+        truncated: stdout.truncated || stderr.truncated,
       });
     };
+    const stop = () => {
+      if (stopping || settled) return;
+      stopping = true;
+      failed = true;
+      void terminateChild(child, processGroup).then(() => finish(1), rejectCommand);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      aborted = true;
+      stop();
+    };
+    const timeout = setTimeout(stop, Math.max(1, timeoutSeconds ?? 30) * 1000);
+    for (const stream of ["stdout", "stderr"]) {
+      child[stream].on("data", (chunk) => {
+        const remaining = MAX_OUTPUT_BYTES * 4 - sizes[stream];
+        if (remaining > 0) chunks[stream].push(chunk.subarray(0, remaining));
+        sizes[stream] += chunk.length;
+        if (sizes[stream] > MAX_OUTPUT_BYTES * 4) stop();
+      });
+    }
+    child.once("error", () => { failed = true; });
+    child.once("close", (code) => { if (!stopping) finish(code); });
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) onAbort();
   });
@@ -1401,7 +1416,25 @@ function waitForRunnerV2Startup(child, timeoutMs) {
   });
 }
 
-function terminateChild(child) {
+function terminateChild(child, processGroup = false) {
+  if (processGroup && child.pid) {
+    // This group was created exclusively for this command. Kill descendants even
+    // when the shell has already exited, then join its stdio closure.
+    return new Promise((resolveStop, rejectStop) => {
+      child.once("close", resolveStop);
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") {
+          child.removeListener("close", resolveStop);
+          rejectStop(error);
+          return;
+        }
+        child.removeListener("close", resolveStop);
+        resolveStop();
+      }
+    });
+  }
   if (process.platform === "win32" && child.pid && child.exitCode === null) {
     return new Promise((resolveStop) => {
       const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {

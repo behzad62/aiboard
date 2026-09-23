@@ -408,6 +408,7 @@ try {
     files: {
       "slow-verifier.mjs": [
         "import { writeFile } from 'node:fs/promises';",
+        "await writeFile('started.txt', 'verifier running');",
         "await new Promise(resolve => setTimeout(resolve, 1500));",
         "await writeFile('completed.txt', 'late verifier completion');",
         "await writeFile('verifier-result.json', JSON.stringify({passed:true,score:1,assertions:[{passed:true}]}));",
@@ -425,7 +426,13 @@ try {
     body: JSON.stringify({ attemptId: abortAttemptId }),
     signal: abortController.signal,
   });
-  await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  let verifierStarted = false;
+  for (let poll = 0; poll < 100; poll++) {
+    const started = await request("/bench/artifact", { attemptId: abortAttemptId, path: "started.txt" });
+    if (started.status === 200) { verifierStarted = true; break; }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  assert.equal(verifierStarted, true, "abort test must reach a running verifier");
   abortController.abort();
   await assert.rejects(abortedVerifier, /abort/i);
   await new Promise((resolveWait) => setTimeout(resolveWait, 1700));
