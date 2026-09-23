@@ -233,9 +233,14 @@ runner Build keeps those only in its private database, so a different tool start
 6. **The database stays the truth for gates.** A document saying "tests passed" approves
    nothing; acceptance still needs recorded evidence. Documents guide models; they cannot fake a
    result.
-7. **Completion check (hard).** A new run cannot complete until the Architect has written
-   `docs/project/STATE.md` **after** the run's latest integrated change. Runs created before this
-   change are exempt.
+7. **Completion check (hard).** A new run cannot complete or hand off until the Architect has
+   written `docs/project/STATE.md` **after** the run's latest integrated change, and the tree at
+   that write holds the entry point: `docs/project/README.md`, the marked `AGENTS.md` section
+   and the marked `CLAUDE.md` pointer. This includes `plan_only` runs, whose whole product is
+   the plan. Runs created before this change are exempt.
+8. **Documents do not reopen verification.** A document commit changes only `docs/project/**`
+   and the marked sections, so it cannot change what the verifier checked. The verified
+   revision stays verified; handoff delivers it plus the document commits on top.
 
 **Why the old limit does not apply here.** The Architect must not author project code because it
 also reviews code. Documentation is not code under review. The isolation reason is met by (4).
@@ -312,7 +317,7 @@ silently reusing an existing session (that is the anchoring the rule exists to r
 | AC-9b | The Architect retains `review_task`, `request_integration` and `complete_run`. | D2 |
 | AC-10 | The Architect admits only MCP tools the mapper marks `readOnly`, as an asserted class. | D3 |
 | AC-17 | An Architect document write is committed on the integration branch with Architect attribution, with no task, change set, worker session or model call; the `AGENTS.md`/`CLAUDE.md` splice changes only the marked section; a worker change touching `docs/project/**` is refused at integration. | D6 |
-| AC-25 | A new run cannot complete until `docs/project/STATE.md` was written after its latest integrated change; legacy runs are exempt. | D6 |
+| AC-25 | A new run — including a `plan_only` run — cannot complete or hand off until `docs/project/STATE.md` was written after its latest integrated change (for `plan_only`, at any point in the run) **and** the tree at that write holds `docs/project/README.md`, the marked `AGENTS.md` section and the marked `CLAUDE.md` pointer; runs created before this change are exempt. | D6 |
 | AC-18 | Runs created before this change keep current semantics and remain replayable. | compat |
 | AC-24 | Verifier and plan-critic selection prefer a distinct model and otherwise fall back to the same model in a fresh session with an empty event list; the choice is recorded as `distinct_model` or `fresh_context` and shown; the run pauses only when no eligible candidate exists. | D8 |
 
