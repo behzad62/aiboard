@@ -253,7 +253,8 @@ try {
     await copyFile(join(root, relativePath), destination);
   }
   execFileSync("git", ["-C", fixtureSource, "add", "--all"], { stdio: "pipe" });
-  execFileSync("git", ["-C", fixtureSource, "-c", "user.name=RJS Test", "-c", "user.email=rjs@test.invalid", "commit", "-m", "fixture descendant"], { stdio: "pipe" });
+  // The fixture needs a descendant commit even when the source checkout is clean.
+  execFileSync("git", ["-C", fixtureSource, "-c", "user.name=RJS Test", "-c", "user.email=rjs@test.invalid", "commit", "--allow-empty", "-m", "fixture descendant"], { stdio: "pipe" });
   execFileSync("git", ["clone", "--bare", fixtureSource, fixtureOrigin], { stdio: "pipe" });
   const originUrl = pathToFileURL(fixtureOrigin).href;
   execFileSync("git", ["clone", "--depth=1", "--branch", "fixture-head", originUrl, shallowClone], { stdio: "pipe" });
