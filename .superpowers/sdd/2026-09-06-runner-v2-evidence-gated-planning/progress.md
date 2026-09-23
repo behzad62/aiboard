@@ -2,7 +2,7 @@
 
 ## Current revision — 2026-09-22 owner amendment, revision 2
 
-**PLAN BLOCKED — OA-18 / EP52 / T10 (deferred prompt findings, added 2026-09-23 by owner direction) not yet independently reviewed.** Unblock: one scoped review of that delta.
+**PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED.** OA-18 / EP52 / T10 (deferred prompt findings, added 2026-09-23 by owner direction) verified by `t10-review-r2.md` after one fix (`t10-review-r1.md` B1: T8 starts only from accepted T10).
 
 Before this addition: **PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED**
 
