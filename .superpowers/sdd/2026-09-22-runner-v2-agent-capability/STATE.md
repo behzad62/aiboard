@@ -47,8 +47,9 @@
 
 ## 2. Next eligible action
 
-**A0** (Lane B) — RUNNING. Every other source packet waits for A0 to integrate (§2). After A0:
-A1 (Lane A) and B1 (Lane B) may run in parallel.
+A0 ACCEPTED and integrated at `e18eb6c6` (`evidence/A0.md`). **A1** (Lane A) and **B1** (Lane B)
+RUNNING in parallel. Integration branch: `codex/runner-v2-agent-capability`; Lane A merges into it
+after acceptance.
 
 ---
 
@@ -56,8 +57,8 @@ A1 (Lane A) and B1 (Lane B) may run in parallel.
 
 | Lane | Worker / session | Base | Worktree | Ownership |
 |---|---|---|---|---|
-| Lane A | — | — | — | unassigned |
-| Lane B | Cursor CLI `grok-4.7-high`, packet A0 | `edbb8ef6` | this worktree, branch `codex/runner-v2-agent-capability` | A0 writable files only (controller-serialized) |
+| Lane A | Cursor CLI `grok-4.7-high`, packet **A1** RUNNING | `e18eb6c6` | `D:/repos/ai-discussion-board/.worktrees/cap-lane-a`, branch `codex/cap-lane-a` | A1 writable files only |
+| Lane B | Cursor CLI `grok-4.7-high`, packet **B1** RUNNING (A0 ACCEPTED `e18eb6c6`) | `e18eb6c6` | this worktree, branch `codex/runner-v2-agent-capability` (also the integration branch) | B1 writable files only |
 
 No atomic claim primitive exists on this host. The controller serializes every assignment and
 records it here before a worker starts. Before reassigning a stale claim, verify the previous
