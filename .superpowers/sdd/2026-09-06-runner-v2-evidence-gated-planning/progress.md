@@ -2,7 +2,13 @@
 
 ## Current revision — 2026-09-22 owner amendment, revision 2
 
-**PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED.** OA-18 / EP52 / T10 (deferred prompt findings, added 2026-09-23 by owner direction) verified by `t10-review-r2.md` after one fix (`t10-review-r1.md` B1: T8 starts only from accepted T10).
+**EXECUTION STARTED 2026-09-23** (owner: "after merge start P6.6"). Plan status stays PLAN READY — SOURCE COVERAGE VERIFIED.
+Prerequisite met: the agent-capability program is merged to `main` at `3cae2b70` (PR #101, all 11 CI checks green on Windows/Linux/macOS).
+Worktree `D:/repos/ai-discussion-board/.worktrees/runner-v2-p6-6`, branch `codex/runner-v2-p6-6`, base `3cae2b70`.
+Workers: local sub-agents on Sonnet 5 (owner: Cursor usage near its end); controller Opus 5.5 reviews each task; larger checks use a fresh-context sub-agent.
+Controller decision EX-1: T1 runs as **T1a** (read-only inspection: symbol-level compatibility map, host capabilities, reuse/gaps, proposed downstream contract updates) then **T1b** (implementation), because T1's own contract says its inspection output must update T2–T10 before they are assigned.
+
+Earlier status line: **PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED.** OA-18 / EP52 / T10 (deferred prompt findings, added 2026-09-23 by owner direction) verified by `t10-review-r2.md` after one fix (`t10-review-r1.md` B1: T8 starts only from accepted T10).
 
 Before this addition: **PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION NOT STARTED**
 
