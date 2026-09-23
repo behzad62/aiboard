@@ -6,6 +6,9 @@ import type {
   AgentMessage,
   AgentModel,
   NativeTool,
+  ToolCallBlock,
+  ToolExecutionContext,
+  ToolResult,
 } from "./agent-contracts.js";
 import { runAgentLoop } from "./agent-loop.js";
 import {
@@ -30,7 +33,10 @@ import {
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
+import type { PermissionProfile } from "./contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import type { SqlitePermissionStore } from "./permission-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import type { FinalVerificationCheckResult } from "./final-verification-runtime.js";
 import { createGitTools } from "./git-tools.js";
@@ -52,6 +58,10 @@ import {
   type RoleCapabilityRole,
 } from "./role-capabilities.js";
 import { ToolBroker } from "./tool-broker.js";
+import {
+  AgentProtocolError,
+  type AgentToolRuntime,
+} from "./tool-registry.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { VerificationWorkspace } from "./verification-workspace.js";
 import {
@@ -194,6 +204,9 @@ export interface NativeVerifierRuntimeOptions {
   recordContextPackText?: boolean;
   maxTurns?: number;
   clock?: () => string;
+  permissionProfile?: PermissionProfile;
+  permissions?: SqlitePermissionStore;
+  execution?: OneShotCommandExecutor;
 }
 
 export class NativeVerifierRuntime {
@@ -463,10 +476,14 @@ export class NativeVerifierRuntime {
     const broker = createVerifierReviewBroker({
       git: this.options.git, executionGrants: this.options.executionGrants,
       workspacePath: workspace.path,
+      projectRoot: workspace.repositoryRoot,
+      permissionProfile: this.options.permissionProfile ?? "guarded",
       artifacts: this.options.artifacts,
       evidenceStore: this.options.evidenceStore,
       runId: request.runId,
       clock: this.clock,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      ...(this.options.execution ? { execution: this.options.execution } : {}),
       ...(durableReview && this.options.verdictAuthority
         ? {
             lifecycleTool: createSubmitVerifierVerdictTool({
@@ -862,22 +879,72 @@ export interface InspectionToolsInput {
   capabilityRole: RoleCapabilityRole;
   capabilityBroker: RoleCapabilityBroker;
   probeTools?: readonly NativeTool<unknown>[];
+  projectRoot?: string;
+  permissionProfile?: PermissionProfile;
+  permissions?: SqlitePermissionStore;
+  execution?: OneShotCommandExecutor;
+  /** Test double. Production uses `run_evidence_command` from `createEvidenceTools`. */
+  commandTool?: NativeTool<unknown>;
+}
+
+/** Correct wiring returns the verification workspace. `projectRoot` is the prove-red target. */
+export function verifierCommandWorkspacePath(workspacePath: string, projectRoot: string): string {
+  void projectRoot;
+  return workspacePath;
+}
+
+export function createVerifierCommandBroker(
+  input: Omit<InspectionToolsInput, "capabilityRole" | "capabilityBroker">,
+): ToolBroker {
+  const workspacePath = verifierCommandWorkspacePath(
+    input.workspacePath,
+    input.projectRoot ?? input.workspacePath,
+  );
+  const broker = new ToolBroker({
+    ...(input.git ? { git: input.git } : {}),
+    ...(input.executionGrants ? { executionGrants: input.executionGrants } : {}),
+    permissionProfile: input.permissionProfile ?? "guarded",
+    workspacePath,
+    artifacts: input.artifacts,
+    clock: input.clock,
+    ...(input.ledger ? { ledger: input.ledger } : {}),
+    ...(input.permissions
+      ? { approve: (approval) => input.permissions!.requestTool(approval) }
+      : {}),
+  });
+  const tool = input.commandTool ?? evidenceCommandTool(input.evidenceStore
+    ? createEvidenceTools({
+        ...(input.git ? { git: input.git } : {}),
+        store: input.evidenceStore,
+        artifacts: input.artifacts,
+        taskId: "verifier",
+        clock: input.clock,
+        ...(input.execution ? { execution: input.execution } : {}),
+      })
+    : []);
+  if (tool.definition.name !== "run_evidence_command") {
+    throw new Error("Verifier command broker only registers run_evidence_command.");
+  }
+  broker.register(tool);
+  return broker;
 }
 
 export function createVerifierReviewBroker(
   input: Omit<InspectionToolsInput, "capabilityRole" | "capabilityBroker">,
-): ToolBroker {
+): AgentToolRuntime {
   const broker = createInspectionTools({
     ...input,
     capabilityRole: "verifier",
     capabilityBroker: "inspection",
   });
+  const command = createVerifierCommandBroker(input);
+  const composed = new LayeredToolRuntime(broker, command);
   assertRoleToolSurface(
     "verifier",
     "inspection",
-    broker.definitions().map((definition) => definition.name),
+    composed.definitions().map((definition) => definition.name),
   );
-  return broker;
+  return composed;
 }
 
 export function createVerifierExpectationsBroker(
@@ -925,6 +992,7 @@ export function createInspectionTools(input: InspectionToolsInput): ToolBroker {
       : []),
   ];
   for (const tool of tools) {
+    if (tool.definition.name === "run_evidence_command") continue;
     if (excludedToolNames.has(tool.definition.name)) continue;
     if (staticToolAdmitted(input.capabilityRole, input.capabilityBroker, tool.definition.name)) {
       broker.register(tool);
@@ -933,6 +1001,63 @@ export function createInspectionTools(input: InspectionToolsInput): ToolBroker {
   if (input.lifecycleTool) broker.register(input.lifecycleTool);
   for (const tool of input.probeTools ?? []) broker.register(tool);
   return broker;
+}
+
+function evidenceCommandTool(tools: readonly NativeTool<unknown>[]): NativeTool<unknown> {
+  const tool = tools.find((candidate) => candidate.definition.name === "run_evidence_command");
+  if (!tool) throw new Error("Evidence tools did not include run_evidence_command.");
+  return tool;
+}
+
+class LayeredToolRuntime implements AgentToolRuntime {
+  private readonly owner = new Map<string, AgentToolRuntime>();
+
+  constructor(...layers: AgentToolRuntime[]) {
+    for (const layer of layers) {
+      for (const definition of layer.definitions()) {
+        if (this.owner.has(definition.name)) {
+          throw new Error(`Duplicate layered tool ${definition.name}.`);
+        }
+        this.owner.set(definition.name, layer);
+      }
+    }
+  }
+
+  definitions() {
+    return [...this.owner.entries()]
+      .map(([name, owner]) => owner.definitions().find((item) => item.name === name)!)
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return this.owner.get(name)?.isLifecycleTool(name) ?? false;
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.owner.get(name)?.isReadOnlyTool(name) ?? false;
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    const current = new Set<string>();
+    for (const call of calls) {
+      if (!call.callId || seen.has(call.callId) || current.has(call.callId)) {
+        throw new AgentProtocolError("duplicate_call_id", `Tool call ID ${call.callId} was already used.`);
+      }
+      current.add(call.callId);
+    }
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    const owner = this.owner.get(call.name);
+    if (owner) return await owner.invoke(call, context);
+    return {
+      callId: call.callId,
+      toolName: call.name,
+      content: [{ type: "text", text: `Tool ${call.name} is not registered.` }],
+      isError: true,
+      error: { code: "unknown_tool", message: `Tool ${call.name} is not registered.` },
+    };
+  }
 }
 
 function assertInspectionRequest(request: NativeVerifierInspectionRequest): void {

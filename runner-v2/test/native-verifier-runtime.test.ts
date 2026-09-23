@@ -61,6 +61,7 @@ const PASS_2_TOOLS = [
   "git.show",
   "git.status",
   "inspect_evidence",
+  "run_evidence_command",
   "submit_verifier_verdict",
 ];
 
@@ -183,12 +184,16 @@ test("verifier receives complete revision-bound context in a separate read-only 
     const request = fixture.model.requests[0]!;
     assert.equal(request.sessionId, result.sessionId);
     assert.equal(request.tools.length > 0, true);
+    const command = request.tools.find((definition) => definition.name === "run_evidence_command");
+    assert.equal(command?.readOnly, false);
+    assert.equal(command?.effect, "external");
     assert.equal(
       request.tools.every(
         (definition) =>
-          definition.readOnly &&
-          definition.effect === "none" &&
-          definition.lifecycle !== true
+          definition.name === "run_evidence_command" ||
+          (definition.readOnly &&
+            definition.effect === "none" &&
+            definition.lifecycle !== true)
       ),
       true
     );
