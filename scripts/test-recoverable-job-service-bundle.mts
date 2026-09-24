@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFileSync, spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -62,6 +62,29 @@ function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
     child.kill();
     setTimeout(() => child.exitCode === null && child.kill("SIGKILL"), 2_000).unref();
   });
+}
+
+async function reportStartupEvidence(directory: string): Promise<void> {
+  for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) { await reportStartupEvidence(path); continue; }
+    if (!/\.(?:json|jsonl|log)$/.test(entry.name)) continue;
+    const content = await readFile(path, "utf8").catch(() => "");
+    if (entry.name === "stdout.log" || entry.name === "stderr.log") {
+      console.error("Startup process output", path, content.slice(-4000));
+      continue;
+    }
+    const records = content.trim().split("\n").flatMap((line) => {
+      try { return [JSON.parse(line)]; } catch { return []; }
+    });
+    for (const record of records.slice(-3)) {
+      // Never print credentials, environment values, or ownership tokens.
+      const summary = Object.fromEntries(["status", "error", "exitCode", "signal", "pid", "command",
+        "backendStarted", "jobEmptyProof", "rootExited", "closeObserved", "outputClosed"]
+        .filter((key) => record[key] !== undefined).map((key) => [key, record[key]]));
+      console.error("Startup process state", path, JSON.stringify(summary));
+    }
+  }
 }
 
 async function request(baseUrl: string, token: string, pathname: string, body?: unknown) {
@@ -234,6 +257,7 @@ try {
     assert.equal((await request(baseUrl, token, "/bench/cleanup", { attemptId: "extracted_rjs_health" })).status, 200);
     } catch (error) {
       console.error("Extracted package execution failed:", error);
+      await reportStartupEvidence(join(extraction, "test-runs", ".runner-v2-state"));
       throw error;
     } finally {
       await request(baseUrl, token, "/bench/attempt-runner/stop", { attemptId: "extracted_rjs_health" }).catch(() => {});
