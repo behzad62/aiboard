@@ -82,6 +82,11 @@ import {
   type CoverageReviewDriver,
 } from "./planning-review.js";
 import {
+  NativeAnswerReviewRuntime,
+  SchedulerAnswerReviewAuthority,
+  type AnswerReviewDriver,
+} from "./request-triage.js";
+import {
   NativePlanCriticRuntime,
   type NativePlanCritiqueRequest,
 } from "./native-plan-critic-runtime.js";
@@ -949,6 +954,9 @@ export class NativeBuildFactory {
         create: (targetRevision: string) => architectCommandWorkspace.create(targetRevision),
         cleanup: () => architectCommandWorkspace.cleanup(),
       },
+      // T9 (EP41): answer-path command base revision — the integration
+      // baseline, since answered runs have no integration revision yet.
+      answerCommandRevision: integrationManager.revision,
       execution: commandExecution,
     });
     const verifierWorkspaceProvider = {
@@ -1158,6 +1166,61 @@ export class NativeBuildFactory {
         return result;
       },
     };
+    // T9 (OA-5): the opt-in independent answer review, a sibling of the
+    // coverage reviewer with the same model/router/session/budget wiring.
+    // The BuildRuntime consults it only for triage-`answer` runs with a
+    // recorded user opt-in and no verdict yet.
+    const nativeAnswerReview = new NativeAnswerReviewRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      answerRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      projectRoot: this.options.projectRoot,
+      authority: new SchedulerAnswerReviewAuthority(schedulerStore),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const answerReviewDriver: AnswerReviewDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      review: async (input) => {
+        const result = await nativeAnswerReview.review({
+          ...input,
+          providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+            spec.budgetLimits.maxActiveMs,
+            budgetLedger.snapshot(spec.runId).effective.activeMs,
+            Date.now(),
+          ),
+        });
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find(
+            (item) => item.runtimeId === result.runtimeId,
+          );
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `answer:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
         const projection = rebuildSchedulerProjection(
@@ -1274,6 +1337,7 @@ export class NativeBuildFactory {
       independentVerifier,
       planCritic: planCriticDriver,
       coverageReview: coverageReviewDriver,
+      answerReview: answerReviewDriver,
       planningHostCapabilities: () => buildCoverageHostCapabilities({
         coverageCandidateRuntimeIds: spec.verifierRuntimeIds,
         recordedAt: new Date().toISOString(),

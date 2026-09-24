@@ -135,6 +135,13 @@ export interface NativeArchitectRuntimeOptions {
   recordContextPackText?: boolean;
   /** Disposable copy for `run_evidence_command`. Absent means the tool is absent. */
   commandWorkspace?: ArchitectCommandWorkspaceProvider;
+  /**
+   * T9 (EP41): the base revision for Architect command execution on the
+   * answer path, where no integration revision exists yet. Production wires
+   * the integration baseline; without it answer turns list no command tool.
+   * Never used for plan_only runs (no execution there, before or after T9).
+   */
+  answerCommandRevision?: string;
   execution?: OneShotCommandExecutor;
 }
 
@@ -211,6 +218,12 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       pack: context,
       recordedAt: this.clock(),
     });
+    // T9 repair cycle 3 (NOTE-1): folded_into_planning exists only on
+    // new-policy runs. Legacy runs keep the legacy sentence, so a legacy
+    // Architect never wastes a call on a resolution the kernel refuses.
+    const userGuidanceSentence = projection.planningPolicyVersion === 1
+      ? "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. While the run has no ready plan (planning state or the answer path), use folded_into_planning so the guidance folds into the plan or answer still being drafted. Once a ready plan exists, use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope."
+      : "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.";
     let messages: AgentMessage[] = [
       {
         id: "architect-system",
@@ -219,7 +232,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           "You are the AIBoard Architect. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool.",
           "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision.",
           "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
-          "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.",
+          userGuidanceSentence,
           "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
           "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",
           "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
@@ -448,7 +461,25 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     request: ArchitectActionRequest,
     projection: ReturnType<typeof rebuildSchedulerProjection>,
   ): Promise<string | undefined> {
-    if (request.reason.type !== "review_required") return projection.integrationRevision;
+    if (request.reason.type !== "review_required") {
+      if (projection.integrationRevision) return projection.integrationRevision;
+      // T9 (EP41 positive half): once triage is `answer` (not a planning
+      // state), command execution is admitted against the answer-path base
+      // revision — in a lazily created disposable copy only. Under `build`
+      // without a ready plan and under `clarify` the run is in planning
+      // state, so the inspection runtime refuses commands before this
+      // matters; plan_only never reaches execution (architectCommandRevision
+      // returns undefined there, before and after T9).
+      if (
+        projection.planningPolicyVersion === 1 &&
+        projection.planningTriageDecision === "answer"
+      ) {
+        return this.options.answerCommandRevision?.trim()
+          ? this.options.answerCommandRevision
+          : undefined;
+      }
+      return undefined;
+    }
     const submission = await loadArchitectReviewSubmission(
       this.options.sessions,
       request.runId,

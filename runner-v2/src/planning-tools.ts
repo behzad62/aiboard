@@ -21,6 +21,7 @@ import {
   assertPendingUserGuidanceAllowsEvent,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
+  type SchedulerProjection,
   type SchedulerStore,
 } from "./scheduler-store.js";
 import {
@@ -68,6 +69,12 @@ export interface PlanningToolsOptions {
   artifacts?: ArtifactStore;
   readSource?: PlanningSourceReader;
   clock?: () => string;
+  /**
+   * T9 repair cycle 1 (N5): when true, the turn is on the answer path and
+   * only the durable read tool is registered — every plan-progressing
+   * planning tool always refuses there.
+   */
+  answerPath?: boolean;
 }
 
 interface ReadSourceSectionInput {
@@ -106,6 +113,10 @@ export function createPlanningTools(
   // `planning.source_section_read` event bound to the manifest revision and
   // section digest. Checkpoint coverage and readiness read the durable
   // projection — there is no in-memory receipt set anymore.
+  // T9 repair cycle 1 (N5): answer turns keep only the durable read.
+  if (options.answerPath === true) {
+    return [readSourceSectionTool(options.store, readSource, clock)];
+  }
   return [
     readSourceSectionTool(options.store, readSource, clock),
     persistLedgerTool(options.store, clock),
@@ -353,6 +364,8 @@ function persistLedgerTool(
           "The requirement ledger requires a new-policy run with a registered approved source.",
         );
       }
+      const triage = triageBuildRequired(projection);
+      if (triage) return triage;
       const planning = projection.planning;
       if (planning.ledger) {
         return errorOutput(
@@ -448,6 +461,8 @@ function recordCheckpointTool(
           "Planning checkpoints require a new-policy run with a registered approved source.",
         );
       }
+      const triage = triageBuildRequired(projection);
+      if (triage) return triage;
       const planning = projection.planning;
       if (!planning.ledger) {
         return errorOutput(
@@ -538,6 +553,8 @@ function draftPlanTool(
           "Plan drafts require a new-policy run with a registered approved source.",
         );
       }
+      const triage = triageBuildRequired(projection);
+      if (triage) return triage;
       const planning = projection.planning;
       if (!planning.ledger) {
         return errorOutput(
@@ -622,6 +639,8 @@ function revisePlanTool(
           "Plan revisions require a new-policy run with a registered approved source.",
         );
       }
+      const triage = triageBuildRequired(projection);
+      if (triage) return triage;
       const planning = projection.planning;
       if (!planning.ledger) {
         return errorOutput(
@@ -758,6 +777,22 @@ function architectOnly(context: ToolExecutionContext): ToolExecutionOutput | nul
   return context.actor.role === "architect"
     ? null
     : errorOutput("architect_only", "Only the Architect may use this tool.");
+}
+
+/**
+ * T9 triage-first ordering (per-tool half): plan-progressing planning tools
+ * require a durable triage decision of `build`. The durable read tool is
+ * exempt — triage and answer turns may inspect the source. The reducer
+ * refuses forged events as well.
+ */
+function triageBuildRequired(projection: SchedulerProjection): ToolExecutionOutput | null {
+  if (projection.planningTriageDecision !== "build") {
+    return errorOutput(
+      "triage_required",
+      "Planning requires a durable triage decision of build; record triage first."
+    );
+  }
+  return null;
 }
 
 function errorOutput(code: string, message: string, issues?: string[]): ToolExecutionOutput {

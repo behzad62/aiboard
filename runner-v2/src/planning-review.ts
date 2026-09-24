@@ -1274,6 +1274,14 @@ export function createRequestCoverageReviewTool(
           "Coverage review requires a new-policy run with a registered approved source.",
         );
       }
+      // T9 triage-first ordering (per-tool half): coverage review requires a
+      // durable triage decision of `build`. The reducer refuses forged events.
+      if (projection.planningTriageDecision !== "build") {
+        return toolError(
+          "triage_required",
+          "Coverage review requires a durable triage decision of build; record triage first.",
+        );
+      }
       const planning = projection.planning;
       if (!planning.plan) {
         return toolError(
@@ -1977,6 +1985,13 @@ export class NativeCoverageReviewRuntime {
       pack = buildCoverageVerdictContext({
         limits: contextLimits,
         obligationsJson: JSON.stringify(obligations, null, 2),
+        // T9 repair cycle 3 (B4-r3): the verdict pass sees the acknowledged
+        // guidance snapshot (the blind deriving pass stays unchanged). A
+        // review requested after a folded acknowledgement therefore judges
+        // the plan with the folded guidance in context.
+        ...(request.guidance.length > 0
+          ? { guidance: request.guidance.map((item) => ({ ...item })) }
+          : {}),
         planRevisionJson: JSON.stringify(request.planRevision, null, 2),
         ledgerJson: JSON.stringify(request.ledger, null, 2),
       });
@@ -2172,6 +2187,13 @@ export class NativeCoverageReviewRuntime {
       pack = buildCoverageVerdictContext({
         limits: contextLimits,
         obligationsJson: JSON.stringify(obligations, null, 2),
+        // T9 repair cycle 3 (B4-r3): the verdict pass sees the acknowledged
+        // guidance snapshot (the blind deriving pass stays unchanged). A
+        // review requested after a folded acknowledgement therefore judges
+        // the plan with the folded guidance in context.
+        ...(request.guidance.length > 0
+          ? { guidance: request.guidance.map((item) => ({ ...item })) }
+          : {}),
         planRevisionJson: JSON.stringify(request.planRevision, null, 2),
         ledgerJson: JSON.stringify(request.ledger, null, 2),
         ...(isReReview

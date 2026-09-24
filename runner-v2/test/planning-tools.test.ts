@@ -173,6 +173,15 @@ function seedNewPolicySource(
       payload: { manifest },
     });
   }
+  // T9: the Architect's first action — triage to build precedes all plan progress.
+  store.append({
+    runId,
+    type: "request.triaged",
+    occurredAt: CLOCK,
+    actor: { role: "architect", id: "architect_1" },
+    idempotencyKey: "triage:build",
+    payload: { decision: "build", rationale: "Seed triage: the fixture request changes the project." },
+  });
 }
 
 /** Fixture scenario with the amendment's recorded impact scoped (T2 pattern), so retirements validate. */
@@ -392,9 +401,9 @@ test("T3a source read covers every section in full over the complete inventory",
     assert.equal(texts.join(""), text);
     // T3b (N2): reads are still not lifecycle decisions (no lifecycle
     // signal), but each full verified read appends one durable read record.
-    assert.equal(store.readRun(runId).length, 6);
+    assert.equal(store.readRun(runId).length, 7);
     assert.deepEqual(
-      store.readRun(runId).slice(3).map((entry) => entry.type),
+      store.readRun(runId).slice(4).map((entry) => entry.type),
       ["planning.source_section_read", "planning.source_section_read", "planning.source_section_read"],
     );
   } finally {
@@ -744,7 +753,7 @@ test("T3a planning-state predicate: legacy never, new-policy until ready or tria
   const runId = "run_t3a_predicate";
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
   try {
-    // No triage decision yet (T9 has not landed): planning state.
+    // Seeded triage to build: planning state.
     assert.equal(isPlanningState(projectionOf(store, runId)), true);
 
     store.append({
@@ -771,8 +780,9 @@ test("T3a planning-state predicate: legacy never, new-policy until ready or tria
     const drafted = projectionOf(store, runId);
     assert.equal(isPlanningState(drafted), true);
     assert.equal(readyPlanIdentity(drafted), undefined);
-    // Triage build/clarify stay in planning state; answer leaves it (T9 seam:
-    // the decision field is set directly until T9's triage events land).
+    // Triage build/clarify stay in planning state; answer leaves it
+    // (clarify/answer via the predicate directly: this run durably triaged
+    // to build, which the reducer refuses to re-triage).
     assert.equal(
       isPlanningState({ ...drafted, planningTriageDecision: "build" }),
       true,

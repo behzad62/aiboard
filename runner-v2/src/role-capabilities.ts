@@ -10,7 +10,7 @@ import type { ToolEffect } from "./agent-contracts.js";
  */
 export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker";
 
-export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "task";
+export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "answer" | "task";
 
 /**
  * `all` registers every MCP tool the manager exposes (the worker).
@@ -41,6 +41,7 @@ export const ROLE_CAPABILITY_BROKERS = [
   { role: "verifier", broker: "inspection" },
   { role: "verifier", broker: "expectations" },
   { role: "verifier", broker: "coverage" },
+  { role: "verifier", broker: "answer" },
   { role: "plan-critic", broker: "inspection" },
   { role: "worker", broker: "task" },
 ] as const satisfies readonly { role: RoleCapabilityRole; broker: RoleCapabilityBroker }[];
@@ -161,6 +162,23 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.status",
     "inspect_evidence",
   ], ["record_coverage_correction_view", "record_coverage_obligations", "submit_coverage_verdict"]),
+  // T9 (OA-5/OA-10 #2): the opt-in independent answer reviewer. Read-only
+  // inspection only: no run_evidence_command, no process control, no
+  // filesystem mutation, no MCP. The findings pass registers
+  // record_answer_review_findings, the verdict pass
+  // submit_answer_review_verdict — each pass registers exactly one.
+  "verifier:answer": surface("verifier", "answer", "none", [
+    "artifact.read",
+    "fs.list",
+    "fs.read",
+    "fs.search",
+    "fs.stat",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "inspect_evidence",
+  ], ["record_answer_review_findings", "submit_answer_review_verdict"]),
   "plan-critic:inspection": surface("plan-critic", "inspection", "none", [
     "artifact.read",
     "fs.list",
@@ -258,6 +276,19 @@ export const ARCHITECT_LIFECYCLE_TOOLS = Object.freeze([
   "complete_run",
   "request_integration",
   "review_task",
+]);
+
+/**
+ * T9 (EP39): the required lifecycle core on triage-`answer` turns, which
+ * omit the mutation tools by design. Every answer turn offers questions,
+ * completion, and the triage tools.
+ */
+export const ANSWER_PATH_LIFECYCLE_TOOLS = Object.freeze([
+  "ask_user",
+  "complete_run",
+  "convert_to_build",
+  "record_answer",
+  "record_triage",
 ]);
 
 export function roleToolSurface(

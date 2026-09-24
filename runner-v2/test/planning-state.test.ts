@@ -65,7 +65,7 @@ class MemorySchedulerStore implements SchedulerStore {
 }
 
 function event(
-  type: PlanningEventType | "run.policy_configured" | "planning.policy_configured" | "plan.created",
+  type: PlanningEventType | "run.policy_configured" | "planning.policy_configured" | "plan.created" | "request.triaged",
   idempotencyKey: string,
   actor: { role: PlanningActorRole | SchedulerActorRole; id: string },
   payload: Record<string, unknown>,
@@ -112,6 +112,11 @@ function planningInputs(fixture: PlanningFixtureScenario & { manifest: ApprovedS
     event("planning.policy_configured", "planning-policy:1", { role: "runner", id: "runner" }, { version: 1 }),
     event("planning.source_registered", "source:base", { role: "user", id: "owner" }, { manifest: fixture.priorManifest }),
     event("planning.source_amended", "source:amend-1", { role: "user", id: "owner" }, { manifest: fixture.manifest }),
+    // T9: the Architect's first action — triage to build precedes all plan progress.
+    event("request.triaged", "triage:build", { role: "architect", id: "architect" }, {
+      decision: "build",
+      rationale: "Seed triage: the fixture request changes the project.",
+    }),
     event("planning.ledger_persisted", "ledger:1", { role: "architect", id: "architect" }, {
       id: "ledger-1",
       requirements: fixture.requirements,
@@ -457,7 +462,7 @@ test("T2 R-1: amendment recorded impact rejects out-of-scope section and require
   };
   const wrongRequirementInputs = planningInputs({ ...fixture, manifest: wrongRequirementImpact });
   assert.throws(
-    () => planningStateAfter(wrongRequirementInputs.slice(0, 5)),
+    () => planningStateAfter(wrongRequirementInputs.slice(0, 6)),
     /does not (cover|retire)/,
   );
 
@@ -472,7 +477,7 @@ test("T2 R-1: amendment recorded impact rejects out-of-scope section and require
     }],
     createdAt: "2026-09-24T00:02:00.000Z",
   });
-  const state = planningStateAfter(planningInputs(fixture).slice(0, 5));
+  const state = planningStateAfter(planningInputs(fixture).slice(0, 6));
   assert.throws(
     () => reducePlanningProjection(state, event(
       "planning.plan_drafted",
@@ -513,7 +518,7 @@ test("T2 B1: plan draft cannot drop a ledger requirement without retirement hist
     phases,
     tasks,
   });
-  const state = planningStateAfter(planningInputs(fixture).slice(0, 5));
+  const state = planningStateAfter(planningInputs(fixture).slice(0, 6));
   assert.throws(
     () => reducePlanningProjection(state, event(
       "planning.plan_drafted",
@@ -545,14 +550,14 @@ test("T2 I7: ledger persistence enforces amendment retirement scope", () => {
       }
     : requirement);
   const inputs = planningInputs(fixture);
-  inputs[4] = event("planning.ledger_persisted", "ledger:out-of-scope", { role: "architect", id: "architect" }, {
+  inputs[5] = event("planning.ledger_persisted", "ledger:out-of-scope", { role: "architect", id: "architect" }, {
     id: "ledger-1",
     requirements,
     phases: fixture.phases,
     nonNormativeSections: [],
   });
   assert.throws(
-    () => planningStateAfter(inputs.slice(0, 5)),
+    () => planningStateAfter(inputs.slice(0, 6)),
     /Amendment amend-1 does not retire requirement REQ-SECURITY/,
   );
 });
@@ -930,7 +935,7 @@ test("T2 R3-M2: reference recording requires a plan and a non-empty payload", ()
   const fixture = fixtureWithScopedAmendment();
   const noPlan = new MemorySchedulerStore();
   try {
-    appendAll(noPlan, planningInputs(fixture).slice(0, 4));
+    appendAll(noPlan, planningInputs(fixture).slice(0, 5));
     assert.throws(
       () => noPlan.append(event("planning.reference_recorded", "reference:before-plan", { role: "runner", id: "runner" }, {
         references: { "integration-early": { kind: "integration", id: "integration-early" } },
@@ -1241,7 +1246,7 @@ test("T2 guard: stale plan revision cannot advance planning", () => {
 
 test("T2 guard: changed artifact digest prevents planning advancement", () => {
   const fixture = fixtureWithScopedAmendment();
-  const state = planningStateAfter(planningInputs(fixture).slice(0, 5));
+  const state = planningStateAfter(planningInputs(fixture).slice(0, 6));
   const changed = rebuildRevision(fixture, {
     revisionId: "revision-drift",
     sourceManifestDigest: "b".repeat(64),
@@ -1378,7 +1383,7 @@ test("T2 interrupt after ledger resumes the first uncovered section without infe
   let store: SqliteSchedulerStore | undefined;
   try {
     const fixture = fixtureWithScopedAmendment();
-    const inputs = planningInputs(fixture).slice(0, 5);
+    const inputs = planningInputs(fixture).slice(0, 6);
     store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
     appendAll(store, inputs);
     store.close();
@@ -1401,8 +1406,8 @@ test("T2 interrupt after one covered section resumes the exact next section with
   try {
     const fixture = fixtureWithScopedAmendment();
     store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
-    // T3b: ledger (index 4) plus 8 durable reads plus the checkpoint.
-    appendAll(store, planningInputs(fixture).slice(0, 5 + fixture.manifest.sections.length + 1));
+    // T3b: ledger (index 5 after the T9 seed triage) plus 8 durable reads plus the checkpoint.
+    appendAll(store, planningInputs(fixture).slice(0, 6 + fixture.manifest.sections.length + 1));
     store.close();
     store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
     const resumed = rebuildSchedulerProjection(store.readRun(RUN_ID)).planning!;

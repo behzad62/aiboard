@@ -5,7 +5,7 @@ import type {
 } from "./tool-registry.js";
 import type { NativeTool, ToolExecutionContext } from "./agent-contracts.js";
 import { createArchitectTools, type ArchitectToolsOptions } from "./architect-tools.js";
-import { ARCHITECT_LIFECYCLE_TOOLS } from "./role-capabilities.js";
+import { ANSWER_PATH_LIFECYCLE_TOOLS, ARCHITECT_LIFECYCLE_TOOLS } from "./role-capabilities.js";
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
   BuildRiskAssessmentProjection,
@@ -22,12 +22,17 @@ import {
 } from "./context-manifest-store.js";
 import {
   architectLifecycleEventMatchesReason,
+  buildCompletionReadiness,
   contextRecordingRetriesRemaining,
+  currentAnswerReviewVerdict,
   DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
+  isAnsweredRun,
   isPlanningState,
+  latestAnswerReviewVerdict,
   latestUnresolvedContextRecordingNote,
   newPolicyStaleTasksRequireArchitect,
+  nextAnswerReviewId,
   readyPlanIdentity,
   rebuildSchedulerProjection,
   repairCyclesExhausted,
@@ -41,6 +46,11 @@ import {
   type NativeCoverageReviewRequest,
   type PlanningHostCapabilitiesProvider,
 } from "./planning-review.js";
+import {
+  SchedulerAnswerReviewAuthority,
+  type AnswerReviewAuthority,
+  type AnswerReviewDriver,
+} from "./request-triage.js";
 import { computePlanReadiness, coverageReviewHoldsReadiness } from "./planning-contracts.js";
 import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./planning-projection.js";
 import type { BuildTask } from "./task-contracts.js";
@@ -251,6 +261,13 @@ export interface BuildRuntimeOptions {
    */
   coverageReview?: CoverageReviewDriver;
   /**
+   * T9 (OA-5): drives the opt-in independent answer review as a sibling of
+   * the other reviewer drivers. Consulted only for triage-`answer` runs with
+   * a recorded user opt-in and no verdict yet; every other run ignores it.
+   * When set, candidateRuntimeIds must be unique and non-empty.
+   */
+  answerReview?: AnswerReviewDriver;
+  /**
    * T3b: supplies host capabilities for the plan_ready transition. Required
    * before a bound non-blocking review can become ready.
    */
@@ -292,6 +309,14 @@ export function buildStepResultForProjection(
   return { status: "progressed" };
 }
 
+/**
+ * T9 (OA-5): the first answer-review id the pump drives per run. Repair
+ * cycle 1 (B1): a re-recorded answer after a verdict drives a re-review as
+ * `answer_review_{n}` (see `nextAnswerReviewId`) with the latest verdict
+ * attached as the prior review (OA-10 #2).
+ */
+export const ANSWER_REVIEW_ID = "answer_review_1";
+
 export class BuildRuntime {
   readonly id: string;
   private readonly runId: string;
@@ -319,6 +344,8 @@ export class BuildRuntime {
   private readonly architectLifecycleProbe?: BuildRuntimeOptions["architectLifecycleProbe"];
   private readonly planningSourceReader?: PlanningSourceReader;
   private readonly coverageReview?: CoverageReviewDriver;
+  private readonly answerReview?: AnswerReviewDriver;
+  private readonly answerAuthority: AnswerReviewAuthority;
   private readonly planningHostCapabilities?: PlanningHostCapabilitiesProvider;
   private readonly coverageSuspendedRetryLimit: number;
   private lifecycleController = new AbortController();
@@ -355,6 +382,8 @@ export class BuildRuntime {
     this.architectLifecycleProbe = options.architectLifecycleProbe;
     this.planningSourceReader = options.planningSourceReader;
     this.coverageReview = options.coverageReview;
+    this.answerReview = options.answerReview;
+    this.answerAuthority = new SchedulerAnswerReviewAuthority(options.store);
     this.planningHostCapabilities = options.planningHostCapabilities;
     this.coverageSuspendedRetryLimit = options.coverageSuspendedRetryLimit ?? DEFAULT_COVERAGE_SUSPENDED_RETRY_LIMIT;
     if (!Number.isSafeInteger(this.coverageSuspendedRetryLimit) || this.coverageSuspendedRetryLimit < 0) {
@@ -371,6 +400,19 @@ export class BuildRuntime {
     ) {
       throw new Error(
         "Coverage review requires unique non-empty candidate runtime IDs.",
+      );
+    }
+    if (
+      this.answerReview &&
+      (
+        this.answerReview.candidateRuntimeIds.length === 0 ||
+        new Set(this.answerReview.candidateRuntimeIds).size !==
+          this.answerReview.candidateRuntimeIds.length ||
+        this.answerReview.candidateRuntimeIds.some((runtimeId) => !runtimeId.trim())
+      )
+    ) {
+      throw new Error(
+        "Answer review requires unique non-empty candidate runtime IDs.",
       );
     }
     if (
@@ -777,7 +819,14 @@ export class BuildRuntime {
         (question.resumeStatus === "pending" || question.resumeStatus === "started")
       )
       .sort((left, right) => left.version - right.version)[0];
-    if (projection.planRevision > 0) {
+    // T9 repair cycle 1 (B3): pending user guidance routes to the Architect
+    // whenever the run is new-policy and non-terminal — regardless of
+    // planRevision, which stays 0 on new-policy runs until tasks exist (and
+    // answered runs never get tasks). The T3 seam this closes predates T9.
+    // Legacy routing is unchanged.
+    const guidanceRoutes = projection.planRevision > 0 ||
+      (projection.planningPolicyVersion === 1 && projection.status !== "stopped");
+    if (guidanceRoutes) {
       const pendingGuidance = firstPendingUserGuidance(projection);
       if (pendingGuidance) {
         const resumeReason = pendingQuestionResume?.checkpoint?.reason;
@@ -831,11 +880,19 @@ export class BuildRuntime {
       );
       return this.afterArchitect("acceptance_contract_upgrade_required");
     }
+    // T9 (EP39/OA-5): the answer path owns triage-`answer` runs outright —
+    // before planning, critique, workers, integration, and final
+    // verification. Answered runs complete with no plan, no critic, no
+    // coverage review, and no verifier except the opted-in answer review.
+    if (projection.planningPolicyVersion === 1 && isAnsweredRun(projection)) {
+      return this.advanceAnswerPath(projection);
+    }
     if (projection.planningPolicyVersion === 1) {
       // T3a/T3b: new-policy runs plan through the planning tools, not
       // plan_tasks, so legacy planRevision stays 0; planning continues until
       // the ready plan identity exists. A requested coverage review is driven
-      // here; otherwise the Architect plans.
+      // here; otherwise the Architect plans. (T9: triage precedes all of
+      // this — the planning tools and events refuse until triage is `build`.)
       if (!readyPlanIdentity(projection)) {
         const coverage = await this.advanceCoverageReview(projection);
         if (coverage) return coverage;
@@ -1903,7 +1960,10 @@ export class BuildRuntime {
         this.runPolicy === "plan_only" &&
         reason.type === "completion_decision_required" &&
         (projection.planningPolicyVersion === 1
-          ? readyPlanIdentity(projection) !== undefined
+          // T9 (EP39): a plan_only run given a pure question is answered —
+          // complete_run is offered on the answer path too. The tool still
+          // enforces full completion readiness (answer plus the STATE.md gate).
+          ? readyPlanIdentity(projection) !== undefined || isAnsweredRun(projection)
           : projection.planRevision > 0),
       finalVerificationPlanAvailable:
         reason.type === "final_verification_plan_required",
@@ -1926,11 +1986,24 @@ export class BuildRuntime {
                 ? { readSource: this.planningSourceReader }
                 : {}),
             },
+            // T9 (EP39): triage tools ride every new-policy turn; each tool
+            // refuses when its decision does not apply.
+            triageTools: true,
           }
         : {}),
       // T3a repair (B1b): in planning state the legacy plan/task tools are
       // not offered. False for legacy runs and once a plan is ready.
       ...(isPlanningState(projection) ? { planningState: true as const } : {}),
+      // T9 (EP39): on the answer path no mutation lifecycle tool is offered.
+      ...(isAnsweredRun(projection) ? { answerPath: true as const } : {}),
+      // T9 repair cycle 1 (B3): a new-policy triage/answer/planning turn with
+      // guidance pending also offers the acknowledgement, so the gate's
+      // refusal is actionable in the same turn. Legacy turns are untouched.
+      ...(reason.type === "plan_required" &&
+        projection.planningPolicyVersion === 1 &&
+        firstPendingUserGuidance(projection)
+        ? { acknowledgeGuidanceAvailable: true as const }
+        : {}),
       ...(this.finalVerificationProfileFor
         ? { finalVerificationProfileFor: this.finalVerificationProfileFor }
         : {}),
@@ -1943,11 +2016,20 @@ export class BuildRuntime {
     const registered = this.architectLifecycleProbe
       ? this.architectLifecycleProbe(created)
       : created;
+    // T9 (EP39): answer turns omit the mutation lifecycle tools by design,
+    // so they require the answer-path core instead of the standard core.
+    const standardTurn = this.runPolicy !== "plan_only" &&
+      reason.type !== "context_recording_decision_required" &&
+      !isAnsweredRun(projection);
+    const answerTurn = this.runPolicy !== "plan_only" &&
+      reason.type !== "context_recording_decision_required" &&
+      isAnsweredRun(projection);
     assertArchitectLifecycleRegistration(
       registered.map((tool) => tool.definition.name),
-      this.runPolicy !== "plan_only" && reason.type !== "context_recording_decision_required",
+      standardTurn,
       this.store,
       this.clock,
+      answerTurn ? ANSWER_PATH_LIFECYCLE_TOOLS : undefined,
     );
     for (const tool of registered) {
       tools.register(tool);
@@ -2200,6 +2282,17 @@ export class BuildRuntime {
       return this.pauseForCoverageGate(gateForCurrent.reviewId ?? "none", gateForCurrent.reason);
     }
     if (bound) {
+      // T9 repair cycle 3 (B4-r3): a bound review requested at or before the
+      // latest folded acknowledgement never saw the folded guidance. It goes
+      // back to the Architect as plan_required — with the guidance in context
+      // — instead of making the plan ready. The kernel refuses plan_ready on
+      // the same condition; this is the pump mirror so the run visibly waits
+      // for a planning turn and a new review instead of stalling or throwing.
+      const folded = projection.latestFoldedIntoPlanningAck;
+      if (folded) {
+        const requestedSequence = planning.coverageRequests[bound.id]?.requestedSequence ?? 0;
+        if (requestedSequence <= folded.sequence) return undefined;
+      }
       // Blocking verdicts, blocking findings, or cumulative outstanding
       // blocking prior findings: the Architect resolves by revising
       // (planning-status shows them with text and rationale).
@@ -2370,6 +2463,104 @@ export class BuildRuntime {
     return { status: "paused", action: "coverage_reviewer_unavailable" };
   }
 
+  /**
+   * T9 (EP39/OA-5): advance a triage-`answer` run. The answer turn records the
+   * answer; the opted-in review runs via the answer review driver until a
+   * verdict covers the CURRENT answer (repair cycle 1 B1: a re-recorded
+   * answer after a verdict drives a re-review with the prior review attached,
+   * OA-10 #2); anything else missing (normally the STATE.md docs gate) gets an
+   * Architect turn to fix; then the normal completion decision completes the
+   * run through the explicit handoff. No critic, coverage, worker,
+   * integration, or final-verification step is reachable from here.
+   */
+  private async advanceAnswerPath(projection: SchedulerProjection): Promise<BuildStepResult> {
+    const answer = projection.requestAnswer;
+    if (!answer) {
+      await this.runArchitect({ type: "plan_required" }, projection);
+      return this.afterArchitect("plan_required");
+    }
+    // Repair cycle 1 (B1): readiness binds the verdict to the current answer,
+    // so the pump re-reviews while no verdict covers it — with the latest
+    // verdict attached as the prior review when one exists.
+    if (projection.answerReviewOptIn && !currentAnswerReviewVerdict(projection)) {
+      const review = this.answerReview;
+      const reviewId = nextAnswerReviewId(projection);
+      const priorReview = latestAnswerReviewVerdict(projection);
+      if (!review) {
+        // No review driver configured: record the explicit gate and pause
+        // for the owner — never silently skip an opted-in review.
+        this.answerAuthority.recordUnavailable({
+          runId: this.runId,
+          reviewId,
+          reason: "no_answer_review_driver",
+          occurredAt: this.clock(),
+        });
+        return this.pauseForAnswerReviewGate(reviewId, "no_answer_review_driver");
+      }
+      const result = await review.review({
+        runId: this.runId,
+        reviewId,
+        architectRuntimeId: projection.runtime.architect.runtimeId ?? this.architectId,
+        question: this.initialObjective?.trim()
+          ? this.initialObjective
+          : (projection.requestTriage?.rationale ?? this.runId),
+        answerText: answer.answerText,
+        addressedParts: answer.addressedParts,
+        answerSequence: answer.sequence,
+        // T9 repair cycle 3 (N-C): the answer review sees every acknowledged
+        // guidance text — including guidance folded after the answer — so a
+        // re-answer driven by folded guidance is reviewed against it.
+        guidance: acknowledgedUserGuidanceSnapshots(projection),
+        ...(priorReview ? { priorReview } : {}),
+        signal: this.activeLifecycleSignal(),
+      });
+      if (result.status === "reviewed") return { status: "progressed", action: "answer_review_recorded" };
+      if (result.status === "suspended") {
+        // A suspension is transient: record the visible gate and pause for
+        // the owner; the owner's normal resume re-drives the retry.
+        this.answerAuthority.recordUnavailable({
+          runId: this.runId,
+          reviewId,
+          reason: "answer_review_suspended",
+          detail: result.reason,
+          occurredAt: this.clock(),
+        });
+        return this.pauseForAnswerReviewGate(reviewId, "answer_review_suspended");
+      }
+      return this.pauseForAnswerReviewGate(reviewId, result.reason);
+    }
+    const readiness = buildCompletionReadiness(this.projection());
+    if (!readiness.ready) {
+      await this.runArchitect({ type: "plan_required" }, projection);
+      return this.afterArchitect("plan_required");
+    }
+    // Repair cycle 1 (B2): the handoff is already requested (the opt-in
+    // arrived at the handoff pause and the review has since run): the request
+    // is durable, so wait for the owner's selection instead of driving a
+    // second completion turn whose complete_run would dedup to a no-op and
+    // throw. Idempotent: no event is appended; repeatable until selected.
+    if (this.projection().projectHandoff?.status === "requested") {
+      return { status: "paused", action: "project_handoff_requested" };
+    }
+    const completionReason = projection.runPolicy === "plan_only"
+      ? { type: "completion_decision_required", runPolicy: "plan_only" } as const
+      : { type: "completion_decision_required" } as const;
+    await this.runArchitect(completionReason, projection);
+    return this.afterArchitect("completion_decision_required");
+  }
+
+  private pauseForAnswerReviewGate(reviewId: string, reason: string): BuildStepResult {
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `answer-paused:${reviewId}:${reason}:${this.projection().lastSequence}`,
+      payload: { reason: "answer_reviewer_unavailable" },
+    });
+    return { status: "paused", action: "answer_reviewer_unavailable" };
+  }
+
   private async advancePlanCritique(projection: SchedulerProjection): Promise<BuildStepResult | undefined> {
     const driver = this.planCritic;
     const state = projection.planCritique;
@@ -2505,6 +2696,23 @@ function firstPendingUserGuidance(projection: SchedulerProjection) {
     .sort((left, right) => left.version - right.version)[0];
 }
 
+/**
+ * T9 repair cycle 3 (N-C): every acknowledged user guidance as an
+ * id-and-text snapshot for reviewer inputs. The reviewer that re-checks an
+ * answer after folded guidance must see the guidance text.
+ */
+function acknowledgedUserGuidanceSnapshots(
+  projection: SchedulerProjection,
+): { id: string; text: string }[] {
+  return Object.values(projection.userGuidance)
+    .filter((guidance) => guidance.status === "acknowledged")
+    .sort((left, right) => left.version - right.version)
+    .map((guidance) => ({
+      id: `${guidance.guidanceId}:v${guidance.version}`,
+      text: guidance.text,
+    }));
+}
+
 function emptyProjection(runId: string): SchedulerProjection {
   return {
     runId,
@@ -2559,6 +2767,7 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "answer_guidance",
   "ask_user",
   "complete_run",
+  "convert_to_build",
   "draft_planning_plan",
   "persist_planning_ledger",
   "plan_final_verification",
@@ -2567,7 +2776,9 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "plan_verifier_repairs",
   "read_planning_source_section",
   "reconcile_plan",
+  "record_answer",
   "record_planning_checkpoint",
+  "record_triage",
   "request_coverage_review",
   "request_integration",
   "resolve_context_recording",
@@ -2691,6 +2902,24 @@ const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store"
     planningState: true,
     architectAction: { reason: { type: "plan_required" }, sequence: 0 },
   },
+  {
+    // T9: the new-policy triage turn registers the triage tools alongside
+    // the planning tools.
+    runPolicy: "finish",
+    planningTools: {},
+    triageTools: true,
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    // T9: the answer-path registration shape. It registers a subset of the
+    // universe (no mutation lifecycle tools), so the surface assert still
+    // holds; the entry keeps future shapes inside the surface.
+    runPolicy: "finish",
+    planningTools: {},
+    triageTools: true,
+    answerPath: true,
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
 ];
 
 /** Names produced by calling `createArchitectTools` across every registration shape. */
@@ -2717,6 +2946,7 @@ function assertArchitectLifecycleRegistration(
   requireLifecycleTools: boolean,
   store: SchedulerStore,
   clock: () => string,
+  answerPathRequired?: readonly string[],
 ): void {
   const universe = architectLifecycleUniverseNames(store, clock);
   const surface = ARCHITECT_LIFECYCLE_SURFACE;
@@ -2734,6 +2964,13 @@ function assertArchitectLifecycleRegistration(
     for (const name of ARCHITECT_LIFECYCLE_TOOLS) {
       if (!registeredNames.includes(name)) {
         throw new Error(`Architect lifecycle required tool ${name} is missing.`);
+      }
+    }
+  }
+  if (answerPathRequired) {
+    for (const name of answerPathRequired) {
+      if (!registeredNames.includes(name)) {
+        throw new Error(`Answer path required tool ${name} is missing.`);
       }
     }
   }

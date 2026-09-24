@@ -434,6 +434,13 @@ export interface BuildCoverageVerdictContextInput {
   obligationsJson: string;
   planRevisionJson: string;
   ledgerJson: string;
+  /**
+   * T9 repair cycle 3 (B4-r3): acknowledged user guidance text for the
+   * verdict pass — the snapshot taken after obligations are recorded. The
+   * blind deriving pass stays unchanged (T3b blindness); the verdict pass
+   * already sees the plan, so seeing the guidance there leaks nothing.
+   */
+  guidance?: readonly { id: string; text: string }[];
   /** Re-review only: the prior findings, delivered after the own view was recorded. */
   priorFindingsJson?: string;
   /** Same-pass high-risk plan-critic checks, when the optional hook ran. */
@@ -447,6 +454,15 @@ export function buildCoverageVerdictContext(
   return new ContextAssembler(input.limits).assemble([
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     required("recorded-obligations", "obligations", input.obligationsJson),
+    ...(input.guidance !== undefined && input.guidance.length > 0
+      ? [
+        required(
+          "durable-guidance",
+          "guidance",
+          `Acknowledged user guidance the plan must reflect:\n${input.guidance.map((item) => `- ${item.id}: ${item.text}`).join("\n")}`,
+        ),
+      ]
+      : []),
     required("plan-revision", "plan", input.planRevisionJson),
     required("requirement-ledger", "ledger", input.ledgerJson),
     ...(input.priorFindingsJson !== undefined
@@ -470,7 +486,31 @@ export function architectContextSections(
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     ...(input.projection.planningPolicyVersion === 1
-      ? [required("new-policy-planning", "system", NEW_POLICY_PLANNING_INSTRUCTIONS)]
+      ? input.projection.planningTriageDecision === "answer"
+        // T9 repair cycle 1 (N5): answer turns carry only answer-path
+        // instructions — no triage or planning instructions, which
+        // contradict the answer path and waste tokens (OA-5 #8).
+        ? [
+          required(
+            "triage-status",
+            "system",
+            `Durable request triage (record_triage is your first action): ${renderTriageStatus(input.projection)}`,
+          ),
+          required("answer-path", "system", ANSWER_PATH_INSTRUCTIONS),
+        ]
+        : [
+          required(
+            "triage-status",
+            "system",
+            `Durable request triage (record_triage is your first action): ${renderTriageStatus(input.projection)}`,
+          ),
+          // T9: triage instructions until the run commits to build. Kept
+          // compact (token economy).
+          ...(input.projection.planningTriageDecision !== "build"
+            ? [required("new-policy-triage", "system", NEW_POLICY_TRIAGE_INSTRUCTIONS)]
+            : []),
+          required("new-policy-planning", "system", NEW_POLICY_PLANNING_INSTRUCTIONS),
+        ]
       : []),
     ...(input.projection.planningPolicyVersion === 1 && input.projection.planning
       ? [required("planning-status", "planning", renderPlanningStatus(input.projection))]
@@ -565,6 +605,44 @@ function required(id: string, kind: string, content: string): ContextSection {
  * blocking verdicts/findings, and any outstanding gate. Read-only projection
  * of scheduler state, so the Architect can resolve review findings.
  */
+
+/**
+ * T9 (EP39): short request-triage instructions. Triage is the Architect's
+ * first action on a new-policy run: one lifecycle call, in the normal turn.
+ */
+export const NEW_POLICY_TRIAGE_INSTRUCTIONS = [
+  "Triage this request FIRST with record_triage (answer, build, or clarify).",
+  "Use answer for a pure question; the answer lists the question parts it addresses.",
+  "Use build for any requested change — including mixed explain-then-fix requests.",
+  "Use clarify only when the request is unanswerable as stated, then ask_user in your very next turn — re-triaging clarify without a user reply is refused.",
+  "No planning tool runs before a triage decision of build.",
+].join("\n");
+
+/** T9 (OA-5): compact answer-path instructions for triage-`answer` turns. */
+export const ANSWER_PATH_INSTRUCTIONS = [
+  "Answer path: read and inspect freely; commands run in a disposable copy only.",
+  "Record the answer with record_answer, listing every addressed part in the same call.",
+  "You cannot plan, dispatch workers, integrate, or change the project here — the kernel refuses.",
+  "When answering discovers a needed change, convert explicitly with convert_to_build.",
+].join("\n");
+
+/**
+ * T9: the durable triage state for the Architect's context. Shown on every
+ * new-policy turn (triage precedes source registration, so it must not depend
+ * on the planning sub-projection).
+ */
+export function renderTriageStatus(projection: SchedulerProjection): string {
+  return JSON.stringify({
+    triageDecision: projection.planningTriageDecision ?? null,
+    rationale: projection.requestTriage?.rationale ?? null,
+    answerRecorded: projection.requestAnswer !== undefined,
+    addressedParts: projection.requestAnswer?.addressedParts ?? null,
+    conversions: projection.requestTriage?.conversions ?? [],
+    answerReviewOptIn: projection.answerReviewOptIn !== undefined,
+    answerReviews: Object.keys(projection.answerReviews ?? {}),
+  });
+}
+
 export function renderPlanningStatus(projection: SchedulerProjection): string {
   const planning = projection.planning;
   if (!planning) return JSON.stringify({ planning: "unconfigured" });
@@ -653,6 +731,24 @@ export function renderPlanningStatus(projection: SchedulerProjection): string {
     reviewId: entry.reviewId,
     retiredByAmendmentId: entry.retiredByAmendmentId,
   }));
+  // T9 repair cycle 3 (B4-r3): acknowledged guidance text belongs in the
+  // Architect's planning status — folded guidance especially, since the
+  // readiness gates refuse until the plan and a post-fold review have seen
+  // it. The two flags mirror the kernel refusal: null when no folded
+  // acknowledgement (or no bound review) applies.
+  const acknowledgedGuidance = Object.values(projection.userGuidance)
+    .filter((guidance) => guidance.status === "acknowledged")
+    .sort((left, right) => left.version - right.version)
+    .map((guidance) => ({
+      id: guidance.guidanceId,
+      version: guidance.version,
+      text: guidance.text,
+      resolution: guidance.resolution?.type ?? null,
+    }));
+  const foldedAck = projection.latestFoldedIntoPlanningAck ?? null;
+  const boundRequestSequence = planning.coverageReview === undefined
+    ? null
+    : (planning.coverageRequests[planning.coverageReview.id]?.requestedSequence ?? 0);
   return JSON.stringify({
     readiness: planning.readiness,
     manifestId: manifest.manifestId,
@@ -679,6 +775,14 @@ export function renderPlanningStatus(projection: SchedulerProjection): string {
     retiredFindings,
     readinessBlockers,
     unavailable: planning.coverageUnavailable ?? null,
+    acknowledgedGuidance,
+    latestFoldedIntoPlanningAck: foldedAck,
+    boundReviewRequestedAfterFold: foldedAck === null || boundRequestSequence === null
+      ? null
+      : boundRequestSequence > foldedAck.sequence,
+    planningTurnRecordedAfterFold: foldedAck === null
+      ? null
+      : (planning.lastPlanningTurnSequence ?? 0) > foldedAck.sequence,
   });
 }
 
@@ -749,4 +853,126 @@ function optional(
   content: string
 ): ContextSection {
   return { id, kind, required: false, priority, content };
+}
+
+// ---------------------------------------------------------------------------
+// T9 (OA-5/OA-10 #2): opt-in independent answer review prompts. The findings
+// pass sees the question and the answer only — never prior findings. The
+// verdict pass sees the own findings, and (only on a re-review, after the
+// durable release) the prior findings it must check one by one.
+// ---------------------------------------------------------------------------
+
+export const ANSWER_REVIEWER_INVARIANTS = [
+  "You are an independent reviewer. You did not write this answer.",
+  "Do not trust the answer text. Check every claim against the project sources with your read tools.",
+  "Never invent findings: every finding cites the source lines that contradict or fail to support the claim.",
+  "Your findings and verdict are durable evidence; another reviewer may audit them without seeing your session.",
+].join("\n");
+
+export const ANSWER_REVIEW_FINDINGS_INSTRUCTIONS = [
+  "Record your OWN findings on the answer with record_answer_review_findings, exactly once.",
+  "Severity blocking means the answer is wrong or unsupported on an addressed part; non_blocking means a gap worth noting.",
+  "An empty findings list means the answer checks out — record that explicitly.",
+  "On a re-review you have NOT seen the prior findings yet. Record your own view first.",
+].join("\n");
+
+export const ANSWER_REVIEW_VERDICT_INSTRUCTIONS = [
+  "Submit the verdict with submit_answer_review_verdict, exactly once.",
+  "Set answerAccurate only when every addressed part is correct and supported; otherwise set it false and summarize why.",
+  "The verdict is advisory evidence: the run owner reads it before trusting the answer.",
+].join("\n");
+
+export const ANSWER_REVIEW_REREVIEW_VERDICT_INSTRUCTIONS = [
+  "Submit the verdict with submit_answer_review_verdict, exactly once.",
+  "Check EACH prior finding as resolved or outstanding with a rationale, one check per finding.",
+  "Set answerAccurate only when every addressed part is correct and supported.",
+].join("\n");
+
+export type AnswerReviewerPromptMode = "findings" | "verdict" | "rereview-verdict";
+
+export function answerReviewerSystemPrompt(mode: AnswerReviewerPromptMode): string {
+  const instructions = mode === "findings"
+    ? ANSWER_REVIEW_FINDINGS_INSTRUCTIONS
+    : mode === "verdict"
+      ? ANSWER_REVIEW_VERDICT_INSTRUCTIONS
+      : ANSWER_REVIEW_REREVIEW_VERDICT_INSTRUCTIONS;
+  return `${ANSWER_REVIEWER_INVARIANTS}\n${instructions}`;
+}
+
+export interface BuildAnswerReviewFindingsContextInput {
+  limits: ContextLimits;
+  question: string;
+  answerText: string;
+  addressedParts: readonly string[];
+  /** T9 repair cycle 3 (N-C): acknowledged user guidance the answer must reflect. */
+  guidance?: readonly { id: string; text: string }[];
+}
+
+export function buildAnswerReviewFindingsContext(
+  input: BuildAnswerReviewFindingsContextInput,
+): ContextPack {
+  const assembler = new ContextAssembler(input.limits);
+  return assembler.assemble([
+    required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    required("review-question", "question", `The request the answer addresses:\n${input.question}`),
+    required("recorded-answer", "answer", `The recorded answer under review:\n${input.answerText}`),
+    required(
+      "addressed-parts",
+      "addressed-parts",
+      `Question parts the answer claims to address:\n${input.addressedParts.map((part) => `- ${part}`).join("\n")}`,
+    ),
+    ...(input.guidance !== undefined && input.guidance.length > 0
+      ? [
+        required(
+          "acknowledged-guidance",
+          "guidance",
+          `Acknowledged user guidance the answer must reflect:\n${input.guidance.map((item) => `- ${item.id}: ${item.text}`).join("\n")}`,
+        ),
+      ]
+      : []),
+  ]);
+}
+
+export interface BuildAnswerReviewVerdictContextInput {
+  limits: ContextLimits;
+  question: string;
+  answerText: string;
+  addressedParts: readonly string[];
+  /** T9 repair cycle 3 (N-C): acknowledged user guidance the answer must reflect. */
+  guidance?: readonly { id: string; text: string }[];
+  ownFindingsJson: string;
+  priorFindingsJson?: string;
+  priorSummary?: string;
+}
+
+export function buildAnswerReviewVerdictContext(
+  input: BuildAnswerReviewVerdictContextInput,
+): ContextPack {
+  const assembler = new ContextAssembler(input.limits);
+  return assembler.assemble([
+    required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    required("review-question", "question", `The request the answer addresses:\n${input.question}`),
+    required("recorded-answer", "answer", `The recorded answer under review:\n${input.answerText}`),
+    ...(input.guidance !== undefined && input.guidance.length > 0
+      ? [
+        required(
+          "acknowledged-guidance",
+          "guidance",
+          `Acknowledged user guidance the answer must reflect:\n${input.guidance.map((item) => `- ${item.id}: ${item.text}`).join("\n")}`,
+        ),
+      ]
+      : []),
+    required("own-findings", "own-findings", `Your durably recorded findings:\n${input.ownFindingsJson}`),
+    ...(input.priorFindingsJson !== undefined
+      ? [
+        required(
+          "prior-findings",
+          "prior-findings",
+          `Prior findings, released after your own view was recorded${
+            input.priorSummary !== undefined ? ` (prior summary: ${input.priorSummary})` : ""
+          }:\n${input.priorFindingsJson}`,
+        ),
+      ]
+      : []),
+  ]);
 }

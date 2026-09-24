@@ -60,6 +60,7 @@ import {
   createPlanningTools,
   type PlanningSourceReader,
 } from "./planning-tools.js";
+import { createRequestTriageTools } from "./request-triage.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
@@ -92,6 +93,26 @@ export interface ArchitectToolsOptions {
    * false on every other turn.
    */
   planningState?: boolean;
+  /**
+   * T9 (EP39): true on triage-`answer` turns. Mutation lifecycle tools are
+   * not offered (plan/task/review/integration/final-verification/repairs/
+   * critique/acceptance/guidance); ask_user, complete_run, write_project_doc,
+   * and the triage tools stay. The reducer refuses forged invokes as well.
+   */
+  answerPath?: boolean;
+  /**
+   * T9 (EP39): when true, the run is new-policy and triage tools
+   * (record_triage, record_answer, convert_to_build) are registered.
+   */
+  triageTools?: boolean;
+  /**
+   * T9 repair cycle 1 (B3): when true, the turn also offers
+   * `acknowledge_user_guidance` for inline acknowledgement of pending user
+   * guidance. The runner sets it only on new-policy `plan_required` turns
+   * (triage/answer/planning) with guidance pending; the tool re-checks the
+   * policy and targets the exact oldest pending guidance.
+   */
+  acknowledgeGuidanceAvailable?: boolean;
   /** When set, every Architect turn — including plan_only — can request project docs. */
   artifacts?: ArtifactStore;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
@@ -484,22 +505,31 @@ export function createArchitectTools(
   }
   // T3a repair (B1b): while a new-policy run is in planning state the
   // legacy plan/task tools are not offered; the reducer (plus the per-tool
-  // check below) refuses forged invokes as well.
-  const legacyPlanTools = options.planningState === true
+  // check below) refuses forged invokes as well. T9: same on the answer path.
+  const answerPath = options.answerPath === true;
+  const legacyPlanTools = options.planningState === true || answerPath
     ? []
     : [
         planTasksTool(options.store, clock),
         reviseTaskTool(options.store, clock),
       ];
-  const baseCore = [
-    ...legacyPlanTools,
-    answerGuidanceTool(options.store, clock),
-    upgradeAcceptanceContractTool(options.store, clock),
-  ];
+  const baseCore = answerPath
+    ? [...legacyPlanTools]
+    : [
+        ...legacyPlanTools,
+        answerGuidanceTool(options.store, clock),
+        upgradeAcceptanceContractTool(options.store, clock),
+      ];
   const withQuestion = options.architectAction
     ? [...baseCore, askUserTool(options.store, clock, options.architectAction)]
     : baseCore;
-  const core = options.architectAction?.reason.type === "user_guidance_required"
+  // T9 repair cycle 1 (B3): the dedicated guidance turn offers the
+  // acknowledgement, and so does a new-policy triage/answer/planning turn
+  // with guidance pending — the pending-guidance gate's "must be
+  // acknowledged" refusal is then actionable in the same turn.
+  const core = options.architectAction !== undefined &&
+      (options.architectAction.reason.type === "user_guidance_required" ||
+        options.acknowledgeGuidanceAvailable === true)
     ? [
         ...withQuestion,
         acknowledgeUserGuidanceTool(
@@ -510,7 +540,7 @@ export function createArchitectTools(
         ),
       ]
     : withQuestion;
-  const planning = options.finalVerificationPlanAvailable
+  const planning = options.finalVerificationPlanAvailable && !answerPath
     ? [...core, planFinalVerificationTool(
         options.store,
         clock,
@@ -518,20 +548,20 @@ export function createArchitectTools(
         options.discardFinalVerificationProfile,
       )]
     : core;
-  const verification = options.finalVerificationReviewAvailable
+  const verification = options.finalVerificationReviewAvailable && !answerPath
     ? [...planning, reviewFinalVerificationTool(
         options.store,
         clock,
         options.evidenceStore,
       )]
     : planning;
-  const repairPlanning = options.finalVerificationRepairPlanAvailable
+  const repairPlanning = options.finalVerificationRepairPlanAvailable && !answerPath
     ? [...verification, planVerificationRepairsTool(options.store, clock)]
     : verification;
-  const verifierRepairPlanning = options.verifierRepairPlanAvailable
+  const verifierRepairPlanning = options.verifierRepairPlanAvailable && !answerPath
     ? [...repairPlanning, planVerifierRepairsTool(options.store, clock)]
     : repairPlanning;
-  const critiqueResolution = options.planCritiqueResolutionAvailable
+  const critiqueResolution = options.planCritiqueResolutionAvailable && !answerPath
     ? [...verifierRepairPlanning, resolvePlanCritiqueTool(options.store, clock)]
     : verifierRepairPlanning;
   const tools = options.runPolicy === "plan_only"
@@ -540,11 +570,15 @@ export function createArchitectTools(
       : critiqueResolution
     : [
         ...critiqueResolution,
-        ...(options.planningState === true
+        ...(options.planningState === true || answerPath
           ? []
           : [reconcilePlanTool(options.store, clock)]),
-        reviewTaskTool(options.store, clock, options.evidenceStore),
-        requestIntegrationTool(options.store, clock),
+        ...(answerPath
+          ? []
+          : [
+              reviewTaskTool(options.store, clock, options.evidenceStore),
+              requestIntegrationTool(options.store, clock),
+            ]),
         completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
       ];
   const withPlanning = options.planningTools
@@ -557,12 +591,19 @@ export function createArchitectTools(
           ...(options.planningTools.readSource
             ? { readSource: options.planningTools.readSource }
             : {}),
+          // T9 repair cycle 1 (N5): answer turns keep only the durable
+          // read; the plan-progressing tools always refuse there.
+          ...(answerPath ? { answerPath: true as const } : {}),
         }),
       ]
     : tools;
-  if (!options.artifacts) return withPlanning;
+  // T9 (EP39): triage tools ride the new-policy turn alongside planning tools.
+  const withTriage = options.triageTools === true
+    ? [...withPlanning, ...createRequestTriageTools({ store: options.store, clock })]
+    : withPlanning;
+  if (!options.artifacts) return withTriage;
   return [
-    ...withPlanning,
+    ...withTriage,
     writeProjectDocTool(
       options.store,
       clock,
@@ -1412,6 +1453,8 @@ function reconcilePlanTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const answered = answeredRunRefused(store, context.runId, "reconcile the plan");
+      if (answered) return answered;
       const notReady = newPolicyPlanNotReady(store, context.runId);
       if (notReady) return notReady;
       return appendEvent(store, {
@@ -1454,6 +1497,8 @@ function planTasksTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const answered = answeredRunRefused(store, context.runId, "create tasks");
+      if (answered) return answered;
       const notReady = newPolicyPlanNotReady(store, context.runId);
       if (notReady) return notReady;
       const tasks: BuildTask[] = input.tasks.map((task) => ({
@@ -1523,6 +1568,8 @@ function reviseTaskTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const answered = answeredRunRefused(store, context.runId, "revise tasks");
+      if (answered) return answered;
       const notReady = newPolicyPlanNotReady(store, context.runId);
       if (notReady) return notReady;
       const patch = {
@@ -1627,6 +1674,8 @@ function reviewTaskTool(
           "Task review is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
         );
       }
+      const answered = answeredRunRefused(store, context.runId, "review tasks");
+      if (answered) return answered;
       const task = projection.tasks[input.taskId];
       if (!task) return errorOutput("unknown_task", `Unknown task ${input.taskId}.`);
       if (task.acceptanceCriteria) {
@@ -1752,6 +1801,8 @@ function requestIntegrationTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const answered = answeredRunRefused(store, context.runId, "request integration");
+      if (answered) return answered;
       const events = store.readRun(context.runId);
       const task = rebuildSchedulerProjection(events).tasks[input.taskId];
       const resolutionSequence = task?.status === "integration_resolution"
@@ -1922,12 +1973,12 @@ function acknowledgeUserGuidanceTool(
 ): NativeTool<AcknowledgeUserGuidanceInput> {
   return lifecycleTool({
     name: "acknowledge_user_guidance",
-    description: "Acknowledge the exact oldest pending user guidance with either durable evidence proving no semantic plan change or one atomic plan reconciliation",
+    description: "Acknowledge the exact oldest pending user guidance: folded_into_planning only while the run has no ready plan, otherwise durable evidence proving no semantic plan change or one atomic plan reconciliation",
     schema: objectSchema({
       guidanceId: { type: "string", minLength: 1 },
       expectedVersion: { type: "integer", minimum: 1 },
       resolution: objectSchema({
-        type: { type: "string", enum: ["no_plan_change", "plan_reconciled"] },
+        type: { type: "string", enum: ["no_plan_change", "plan_reconciled", "folded_into_planning"] },
         rationale: { type: "string", minLength: 1 },
         evidenceIds: {
           type: "array",
@@ -1941,19 +1992,26 @@ function acknowledgeUserGuidanceTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
-      if (architectAction.reason.type !== "user_guidance_required") {
+      const reason = architectAction.reason;
+      if (reason.type !== "user_guidance_required" && reason.type !== "plan_required") {
         return errorOutput("wrong_architect_action", "User guidance acknowledgement is unavailable for this Architect action.");
       }
       const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      // T9 repair cycle 1 (B3): the inline acknowledgement on a plan_required
+      // turn is new-policy only — legacy initial-plan turns proceed with
+      // guidance pending by design (the plan.created carve-out).
+      if (reason.type === "plan_required" && projection.planningPolicyVersion !== 1) {
+        return errorOutput("wrong_architect_action", "User guidance acknowledgement is unavailable for this Architect action.");
+      }
       const oldest = Object.values(projection.userGuidance)
         .filter((guidance) => guidance.status === "submitted")
         .sort((left, right) => left.version - right.version || left.guidanceId.localeCompare(right.guidanceId))[0];
       if (
         !oldest ||
-        oldest.guidanceId !== architectAction.reason.guidanceId ||
-        oldest.version !== architectAction.reason.version ||
         input.guidanceId !== oldest.guidanceId ||
-        input.expectedVersion !== oldest.version
+        input.expectedVersion !== oldest.version ||
+        (reason.type === "user_guidance_required" &&
+          (reason.guidanceId !== oldest.guidanceId || reason.version !== oldest.version))
       ) {
         return errorOutput(
           "wrong_pending_guidance",
@@ -2191,6 +2249,20 @@ function validateAcknowledgeUserGuidance(
         },
       };
     }
+    // T9 repair cycle 2 (B3-r2): folded-into-planning carries no evidence
+    // and no reconciliation — the kernel accepts it only while the run has
+    // no ready plan. Extras are rejected so it cannot smuggle either path.
+    if (value.resolution.type === "folded_into_planning") {
+      if (value.resolution.evidenceIds !== undefined || value.resolution.planReconciliation !== undefined) return null;
+      return {
+        guidanceId: value.guidanceId,
+        expectedVersion: value.expectedVersion,
+        resolution: {
+          type: "folded_into_planning" as const,
+          rationale: value.resolution.rationale,
+        },
+      };
+    }
     return null;
   }, "guidanceId, expectedVersion, and one valid acknowledgement resolution are required");
 }
@@ -2331,6 +2403,28 @@ function architectOnly(context: ToolExecutionContext): ToolExecutionOutput | nul
  * refuses the same events; this only produces a clearer error earlier.
  * Legacy runs and empty runs always pass.
  */
+/**
+ * T9 (EP39): per-tool half of the answered zero-mutation guarantee. The
+ * reducer refuses forged invokes as well; this returns the precise error
+ * before the tool does any other work.
+ */
+function answeredRunRefused(
+  store: SchedulerStore,
+  runId: string,
+  action: string,
+): ToolExecutionOutput | null {
+  const events = store.readRun(runId);
+  if (events.length === 0) return null;
+  const projection = rebuildSchedulerProjection(events);
+  if (projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer") {
+    return errorOutput(
+      "answered_run",
+      `Answered runs cannot ${action}; convert to build first.`,
+    );
+  }
+  return null;
+}
+
 function newPolicyPlanNotReady(
   store: SchedulerStore,
   runId: string,
@@ -2522,6 +2616,9 @@ function cloneGuidanceAcknowledgementResolution(
 ): UserGuidanceAcknowledgementResolution {
   if (resolution.type === "no_plan_change") {
     return { ...resolution, evidenceIds: [...resolution.evidenceIds] };
+  }
+  if (resolution.type === "folded_into_planning") {
+    return { ...resolution };
   }
   return {
     ...resolution,

@@ -19,15 +19,32 @@ export interface UserGuidancePlanReconciledResolution {
   planReconciliation: PlanReconciliation;
 }
 
+/**
+ * T9 repair cycle 2 (B3-r2): acknowledgement for a new-policy run with no
+ * ready plan (planning state, or an answered/pre-triage new-policy run).
+ * There is no plan to prove unchanged and no ready plan to reconcile, so no
+ * evidence is needed and nothing changes: the guidance folds into the plan
+ * or answer still being drafted. The kernel accepts it only while the run
+ * has no ready plan; once a ready plan exists the evidence-backed
+ * `no_plan_change` / `plan_reconciled` rules apply unchanged. Legacy runs
+ * never accept it.
+ */
+export interface UserGuidanceFoldedIntoPlanningResolution {
+  type: "folded_into_planning";
+  rationale: string;
+}
+
 export type UserGuidanceAcknowledgementResolution =
   | UserGuidanceNoPlanChangeResolution
-  | UserGuidancePlanReconciledResolution;
+  | UserGuidancePlanReconciledResolution
+  | UserGuidanceFoldedIntoPlanningResolution;
 
 export type ParsedUserGuidanceAcknowledgementResolution =
   | UserGuidanceNoPlanChangeResolution
   | Omit<UserGuidancePlanReconciledResolution, "planReconciliation"> & {
     planReconciliation: unknown;
-  };
+  }
+  | UserGuidanceFoldedIntoPlanningResolution;
 
 export interface UserGuidanceAcknowledgement {
   guidanceId: string;
@@ -226,6 +243,10 @@ function parseAcknowledgementResolution(value: unknown): ParsedUserGuidanceAckno
       rationale: requiredText(resolution, "rationale"),
       planReconciliation: resolution.planReconciliation,
     };
+  }
+  if (type === "folded_into_planning") {
+    assertExactKeys(resolution, ["type", "rationale"]);
+    return { type, rationale: requiredText(resolution, "rationale") };
   }
   throw new Error(`resolution type ${type} is invalid.`);
 }

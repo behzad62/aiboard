@@ -56,6 +56,7 @@ import {
   type ArchitectActionReason,
   type ArchitectQuestionItem,
   type UserGuidanceAcknowledgementResolution,
+  type UserGuidanceFoldedIntoPlanningResolution,
   type UserGuidanceItem,
 } from "./user-steering-contracts.js";
 import {
@@ -184,6 +185,15 @@ export type SchedulerEventType =
   | "project_doc.abandoned"
   | "project_docs.policy_configured"
   | "planning.policy_configured"
+  | "request.triaged"
+  | "request.answered"
+  | "request.converted_to_build"
+  | "answer.review_opted_in"
+  | "answer.review_opted_out"
+  | "answer.review_findings_recorded"
+  | "answer.review_prior_findings_released"
+  | "answer.review_recorded"
+  | "answer.review_unavailable"
   | PlanningEventType;
 
 export interface SchedulerEvent {
@@ -584,6 +594,91 @@ export interface RepairCyclesProjection {
  */
 export type PlanningTriageDecision = "answer" | "build" | "clarify";
 
+/** T9 (EP39): the durable request-triage record for a new-policy run. */
+export interface RequestTriageRecord {
+  decision: PlanningTriageDecision;
+  rationale: string;
+  decidedAt: string;
+  sequence: number;
+  conversions: { from: PlanningTriageDecision; to: PlanningTriageDecision; reason: string; sequence: number }[];
+}
+
+/** T9 (EP39): the recorded answer for a triage-`answer` run (latest wins). */
+export interface RequestAnswerRecord {
+  answerText: string;
+  /** Question parts the answer addresses, listed in the same turn. */
+  addressedParts: string[];
+  evidenceIds: string[];
+  recordedAt: string;
+  sequence: number;
+}
+
+/** T9 (OA-5): per-run user opt-in for the independent answer review. */
+export interface AnswerReviewOptInRecord {
+  optedInAt: string;
+  sequence: number;
+}
+
+/** T9 (OA-10 #2): one answer-review finding recorded before any verdict. */
+export interface AnswerReviewFinding {
+  id: string;
+  statement: string;
+  severity: "blocking" | "non_blocking";
+}
+
+/** T9: the reviewer's own findings, recorded before it may see prior findings. */
+export interface AnswerReviewFindingsRecord {
+  reviewId: string;
+  findings: AnswerReviewFinding[];
+  /**
+   * T9 repair cycle 2 (N-A): the answer sequence the findings were formed
+   * on. Findings are bound to the answer the reviewer saw — a verdict for a
+   * later answer needs fresh findings, never a reused record.
+   */
+  answerSequence: number;
+  priorReviewId?: string;
+  recordedAt: string;
+  sequence: number;
+}
+
+/** T9: release of prior findings after the own findings are durable. */
+export interface AnswerReviewReleaseRecord {
+  reviewId: string;
+  priorReviewId: string;
+  sequence: number;
+}
+
+/** T9: one prior-finding resolution check by a re-review. */
+export interface AnswerReviewFindingCheck {
+  findingId: string;
+  resolution: "resolved" | "outstanding";
+  rationale: string;
+}
+
+/** T9: a recorded opt-in answer review verdict (advisory evidence). */
+export interface AnswerReviewRecord {
+  id: string;
+  reviewerRuntimeId: string;
+  independence: "distinct_model" | "fresh_context";
+  answerSequence: number;
+  findings: AnswerReviewFinding[];
+  summary: string;
+  answerAccurate: boolean;
+  priorReviewId?: string;
+  priorFindingChecks?: AnswerReviewFindingCheck[];
+  recordedAt: string;
+  sequence: number;
+}
+
+/** T9: latest answer-review unavailability gate (owner-visible, retryable). */
+export interface AnswerReviewUnavailableRecord {
+  reviewId?: string;
+  reason: string;
+  detail?: string;
+  recordedAt: string;
+  sequence: number;
+}
+
 export interface SchedulerProjection {
   processRecovery?: Record<string, RecoveryAuditRecord>;
   runId: string;
@@ -620,6 +715,26 @@ export interface SchedulerProjection {
   architectQuestions: Record<string, ArchitectQuestionItem>;
   architectQuestionVersion: number;
   blockingArchitectQuestionId?: string;
+  /**
+   * T9 repair cycle 1 (N1): sequence of the latest `architect.question_answered`
+   * event. Bounds the clarify loop: re-triaging clarify without a user reply
+   * after the last triage is refused.
+   */
+  lastAnsweredArchitectQuestionSequence?: number;
+  /**
+   * T9 repair cycle 3 (B4-r3/N-C): the latest acknowledgement with resolution
+   * `folded_into_planning`, stamped at its event sequence. `plan_ready` is
+   * refused while the bound coverage review was requested at or before this
+   * sequence, or while no Architect planning turn postdates it; answered-run
+   * completion requires an answer recorded after it. Monotonic: only a newer
+   * folded acknowledgement replaces it. Copied by the `...current` spread;
+   * only the acknowledgement case sets it.
+   */
+  latestFoldedIntoPlanningAck?: {
+    guidanceId: string;
+    version: number;
+    sequence: number;
+  };
   reviews: Record<string, ReviewProjection>;
   /** Completed submissions retained as immutable attempt/version history. */
   submissionHistory?: Record<string, CriterionSubmissionProjection[]>;
@@ -646,8 +761,22 @@ export interface SchedulerProjection {
   projectDocsPolicyVersion?: number;
   planningPolicyVersion?: 1;
   planning?: PlanningProjection;
-  /** Durable triage decision once T9 lands; undefined ("no decision yet") until then. */
+  /** Durable triage decision (T9 `request.triaged`); undefined ("no decision yet") until then. */
   planningTriageDecision?: PlanningTriageDecision;
+  /** T9 (EP39): durable triage rationale plus the conversion history. */
+  requestTriage?: RequestTriageRecord;
+  /** T9 (EP39): the recorded answer for a triage-`answer` run. */
+  requestAnswer?: RequestAnswerRecord;
+  /** T9 (OA-5): per-run user opt-in for the independent answer review. */
+  answerReviewOptIn?: AnswerReviewOptInRecord;
+  /** T9: own-findings records by answer review id. */
+  answerReviewFindings?: Record<string, AnswerReviewFindingsRecord>;
+  /** T9 (OA-10 #2): prior-findings releases by answer review id. */
+  answerReviewReleases?: Record<string, AnswerReviewReleaseRecord>;
+  /** T9: recorded answer review verdicts by review id. */
+  answerReviews?: Record<string, AnswerReviewRecord>;
+  /** T9: latest answer-review unavailability gate. */
+  answerReviewUnavailable?: AnswerReviewUnavailableRecord;
   /**
    * T3a repair (B1/C): ready-plan binding per scheduler task id, new-policy
    * runs only. Stamped by the reducer when tasks are created (plan.created /
@@ -700,6 +829,202 @@ export function isPlanningState(projection: SchedulerProjection): boolean {
   return projection.planningTriageDecision !== "answer";
 }
 
+/**
+ * T9 (EP39/OA-5): a new-policy run on the answer path. Answered runs complete
+ * without a plan, workers, integration, or final verification; the kernel
+ * refuses every task, dispatch, integration, and plan-progressing event while
+ * this holds. Conversion (`request.converted_to_build`) flips the decision to
+ * `build`, which clears this predicate and returns the run to planning state.
+ */
+export function isAnsweredRun(projection: SchedulerProjection): boolean {
+  return projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer";
+}
+
+/**
+ * T9 triage-first ordering: planning events that make plan progress require a
+ * durable triage decision of `build`. Source registration/amendment and
+ * durable section reads are exempt (provisioning plus read-only inspection
+ * the triage and answer turns may use). Everything else — ledger,
+ * checkpoints, drafts, revisions, coverage, readiness, assignments,
+ * validation, references, acceptance — is refused before triage, under
+ * `clarify`, and on the answer path.
+ */
+const TRIAGE_GATED_PLANNING_EVENTS: ReadonlySet<string> = new Set([
+  "planning.ledger_persisted",
+  "planning.checkpoint_recorded",
+  "planning.plan_drafted",
+  "planning.plan_revised",
+  "planning.coverage_review_requested",
+  "planning.coverage_obligations_recorded",
+  "planning.coverage_plan_delivered",
+  "planning.coverage_correction_view_recorded",
+  "planning.coverage_prior_findings_released",
+  "planning.coverage_review_recorded",
+  "planning.coverage_review_unavailable",
+  "planning.coverage_review_suspended",
+  "planning.coverage_review_retry_authorized",
+  "planning.plan_ready",
+  "planning.assignment_claimed",
+  "planning.assignment_released",
+  "planning.validation_intent_recorded",
+  "planning.validation_observed",
+  "planning.validation_interrupted",
+  "planning.validation_reconciled",
+  "planning.recovery_reconciled",
+  "planning.reference_recorded",
+  "planning.acceptance_recorded",
+  "planning.acceptance_reopened",
+]);
+
+export function hasAnswerReviewVerdict(projection: SchedulerProjection): boolean {
+  return projection.answerReviews !== undefined && Object.keys(projection.answerReviews).length > 0;
+}
+
+/**
+ * T9 repair cycle 1 (B1): the latest recorded answer-review verdict by
+ * sequence, regardless of which answer it covers. The pump attaches it as
+ * the prior review when a re-review is driven (OA-10 #2 / EP42).
+ */
+export function latestAnswerReviewVerdict(
+  projection: SchedulerProjection,
+): AnswerReviewRecord | undefined {
+  return Object.values(projection.answerReviews ?? {})
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1);
+}
+
+/**
+ * T9 repair cycle 1 (B1): the verdict bound to the CURRENT answer — the one
+ * the user receives. A verdict for a superseded answer stays durable
+ * evidence but never satisfies the opt-in; the pump must re-review the new
+ * answer with the prior review attached.
+ */
+export function currentAnswerReviewVerdict(
+  projection: SchedulerProjection,
+): AnswerReviewRecord | undefined {
+  const answer = projection.requestAnswer;
+  if (!answer) return undefined;
+  return Object.values(projection.answerReviews ?? {})
+    .filter((verdict) => verdict.answerSequence === answer.sequence)
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1);
+}
+
+/**
+ * T9 repair cycle 1 (B1): the next answer-review id the pump drives —
+ * `answer_review_{n}` past every recorded verdict. A findings record without
+ * a verdict (crash between passes) keeps its id, so the retry resumes into
+ * the verdict pass instead of orphaning the durable own view.
+ */
+export function nextAnswerReviewId(projection: SchedulerProjection): string {
+  let ordinal = Object.keys(projection.answerReviews ?? {}).length + 1;
+  while (projection.answerReviews?.[`answer_review_${ordinal}`]) {
+    ordinal += 1;
+  }
+  // T9 repair cycle 2 (N-A): skip an id whose recorded findings were bound
+  // to a superseded answer. Findings without a verdict keep their id only
+  // while they still describe the current answer (a crash between passes
+  // resumes into the verdict pass); once the answer moved on, the next
+  // review starts fresh instead of inheriting a stale own view.
+  const answerSequence = projection.requestAnswer?.sequence;
+  while (
+    answerSequence !== undefined &&
+    (projection.answerReviewFindings?.[`answer_review_${ordinal}`]?.answerSequence ??
+      answerSequence) !== answerSequence
+  ) {
+    ordinal += 1;
+  }
+  return `answer_review_${ordinal}`;
+}
+
+/**
+ * T9 (EP39): completion issues for an answered run, beside (never bypassing)
+ * `projectDocumentationReadiness` (G-3). A pure answer still needs the
+ * STATE.md docs gate: the capability program's AC-25 requires it even of
+ * `plan_only` runs, whose whole product changes nothing in the project.
+ */
+function answeredRunReadiness(projection: SchedulerProjection): string[] {
+  const issues: string[] = [];
+  if (!projection.requestAnswer) {
+    issues.push("The run answer has not been recorded.");
+  }
+  const taskCount = Object.keys(projection.tasks).length;
+  if (taskCount > 0) {
+    issues.push(`Answered runs must not create tasks (found ${taskCount}).`);
+  }
+  if (projection.integrationRevision?.trim()) {
+    issues.push("Answered runs must not advance integration.");
+  }
+  if (projection.finalVerification) {
+    issues.push("Answered runs have no final verification.");
+  }
+  // T9 repair cycle 3 (N-C): guidance acknowledged as folded_into_planning
+  // after the recorded answer is not reflected in that answer. Completion
+  // requires a new answer recorded after the acknowledgement, so the folded
+  // guidance must be folded into answer text the user actually receives.
+  const foldedAnswer = projection.latestFoldedIntoPlanningAck;
+  if (
+    foldedAnswer &&
+    (projection.requestAnswer === undefined ||
+      projection.requestAnswer.sequence <= foldedAnswer.sequence)
+  ) {
+    issues.push(
+      `User guidance ${foldedAnswer.guidanceId} acknowledged as folded_into_planning ` +
+        "after the recorded answer requires a new answer recorded after the acknowledgement.",
+    );
+  }
+  // T9 repair cycle 1 (B1): the opt-in is satisfied only by a verdict bound
+  // to the CURRENT answer. A re-recorded answer after a verdict is not
+  // covered by it — the pump must drive a re-review.
+  if (projection.answerReviewOptIn && !currentAnswerReviewVerdict(projection)) {
+    if (hasAnswerReviewVerdict(projection)) {
+      issues.push("The opted-in answer review does not cover the current answer.");
+    } else {
+      issues.push("The opted-in answer review has not been recorded.");
+    }
+    const gate = projection.answerReviewUnavailable;
+    if (gate) {
+      issues.push(`Answer review is unavailable: ${gate.reason}${gate.detail ? ` (${gate.detail})` : ""}.`);
+    }
+  }
+  return issues;
+}
+
+/**
+ * T9 repair cycle 3 (B4-r3): the folded-guidance readiness block. Guidance
+ * acknowledged as `folded_into_planning` must be SEEN by the plan and by the
+ * coverage review that makes it ready — otherwise a passing review recorded
+ * before the guidance, plus an evidence-free ack, would ready an unchanged
+ * plan that never reflects it. Returns the refusal reason, or undefined when
+ * no folded acknowledgement exists (legacy and pre-T9 runs are untouched) or
+ * when the bound review was requested after the acknowledgement and an
+ * Architect planning turn (draft, revision, or checkpoint) postdates it too.
+ * The same gate covers the re-planning window after a ready plan drops back
+ * to not-ready: any stale binding or missing post-fold turn refuses again.
+ */
+function foldedGuidancePlanReadyBlocked(current: SchedulerProjection): string | undefined {
+  const folded = current.latestFoldedIntoPlanningAck;
+  if (!folded || current.planningPolicyVersion !== 1) return undefined;
+  const planning = current.planning;
+  const review = planning?.coverageReview;
+  if (!review) return undefined;
+  const requestedSequence = planning?.coverageRequests[review.id]?.requestedSequence ?? 0;
+  if (requestedSequence <= folded.sequence) {
+    return `Plan readiness is refused: coverage review ${review.id} was requested before ` +
+      `user guidance ${folded.guidanceId} was acknowledged as folded_into_planning; ` +
+      "the Architect must request a new coverage review after the acknowledgement " +
+      "so the review snapshot contains the guidance.";
+  }
+  const turnSequence = planning?.lastPlanningTurnSequence ?? 0;
+  if (turnSequence <= folded.sequence) {
+    return "Plan readiness is refused: no Architect planning turn (plan draft, plan revision, " +
+      `or planning checkpoint) was recorded after user guidance ${folded.guidanceId} ` +
+      "was acknowledged as folded_into_planning; revise the plan or record a checkpoint " +
+      "reviewed against the guidance, then request a new coverage review.";
+  }
+  return undefined;
+}
+
 export interface ReadyPlanIdentity {
   readonly revisionId: string;
   readonly digest: string;
@@ -747,6 +1072,12 @@ export function newPolicyTaskAdmissionBlocked(
   taskId: string,
 ): string | undefined {
   if (projection.planningPolicyVersion !== 1) return undefined;
+  // T9 (EP39/OA-5): answered runs admit no workers, even if a ready plan
+  // identity were somehow present — the zero-mutation guarantee is enforced
+  // here as well as at task creation, not only in the prompt.
+  if (projection.planningTriageDecision === "answer") {
+    return "Answered runs admit no workers.";
+  }
   if (projection.runPolicy === "plan_only") {
     return "Plan-only runs never admit workers.";
   }
@@ -930,7 +1261,24 @@ export function architectLifecycleEventMatchesReason(
   }
   switch (reason.type) {
     case "plan_required":
-      return event.actor.role === "architect" && event.type === "plan.created";
+      // T9 (clarify resume + new-policy question resume, the T3a seam):
+      // `plan_required` on a new-policy run is satisfied by the Architect's
+      // triage progress or planning progress, not only by the legacy
+      // `plan.created` (which never fires there — planRevision stays 0).
+      // Legacy runs emit none of the added types, so matching is unchanged
+      // for them.
+      return event.actor.role === "architect" && (
+        event.type === "plan.created" ||
+        event.type === "request.triaged" ||
+        event.type === "request.answered" ||
+        event.type === "request.converted_to_build" ||
+        event.type === "planning.source_section_read" ||
+        event.type === "planning.ledger_persisted" ||
+        event.type === "planning.checkpoint_recorded" ||
+        event.type === "planning.plan_drafted" ||
+        event.type === "planning.plan_revised" ||
+        event.type === "planning.coverage_review_requested"
+      );
     case "acceptance_contract_upgrade_required":
       return event.actor.role === "architect" && event.type === "acceptance_contract.upgraded";
     case "user_guidance_required":
@@ -996,6 +1344,15 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
   return [
     "architect.question_requested",
     "plan.created",
+    "request.triaged",
+    "request.answered",
+    "request.converted_to_build",
+    "planning.source_section_read",
+    "planning.ledger_persisted",
+    "planning.checkpoint_recorded",
+    "planning.plan_drafted",
+    "planning.plan_revised",
+    "planning.coverage_review_requested",
     "plan.reconciled",
     "acceptance_contract.upgraded",
     "user.guidance_acknowledged",
@@ -1137,13 +1494,26 @@ export function buildCompletionReadiness(
     issues.push(...projectDocumentationReadiness(projection));
     if (projection.planningPolicyVersion === 1) {
       // T3a (EP32): a new-policy plan-only run completes only with the READY
-      // plan identity. The documentation gate above is unchanged (G-3).
-      if (!readyPlanIdentity(projection)) {
+      // plan identity. T9 (EP39): a plan_only run given a pure question is
+      // answered instead — the answer path completes without a plan. The
+      // documentation gate above is unchanged (G-3).
+      if (isAnsweredRun(projection)) {
+        issues.push(...answeredRunReadiness(projection));
+      } else if (!readyPlanIdentity(projection)) {
         issues.push("Plan-only completion requires a ready plan revision (evidence-gated planning is not ready).");
       }
     } else if (projection.planRevision <= 0) {
       issues.push("Plan-only completion requires a valid plan.");
     }
+    return { ready: issues.length === 0, issues };
+  }
+
+  // T9 (EP39/OA-5): an answered run completes with no plan, no workers, no
+  // integration, and no final verification. The documentation gate still
+  // applies beside the answer checks (G-3) — see answeredRunReadiness.
+  if (isAnsweredRun(projection)) {
+    issues.push(...answeredRunReadiness(projection));
+    issues.push(...projectDocumentationReadiness(projection));
     return { ready: issues.length === 0, issues };
   }
 
@@ -1959,7 +2329,9 @@ export function reduceSchedulerEvent(
     event.type !== "plan_critique.submitted" &&
     event.type !== "planning.coverage_obligations_recorded" &&
     event.type !== "planning.coverage_correction_view_recorded" &&
-    event.type !== "planning.coverage_review_recorded"
+    event.type !== "planning.coverage_review_recorded" &&
+    event.type !== "answer.review_findings_recorded" &&
+    event.type !== "answer.review_recorded"
   ) {
     throw new Error("The verifier has no scheduler lifecycle authority.");
   }
@@ -2041,6 +2413,15 @@ export function reduceSchedulerEvent(
           planning: structuredClone(current.planning),
         }
       : {}),
+    // T9: triage/answer single records are always replaced wholesale by
+    // their cases; the per-review maps are copied here and extended by copy.
+    ...(current.answerReviewFindings
+      ? { answerReviewFindings: { ...current.answerReviewFindings } }
+      : {}),
+    ...(current.answerReviewReleases
+      ? { answerReviewReleases: { ...current.answerReviewReleases } }
+      : {}),
+    ...(current.answerReviews ? { answerReviews: { ...current.answerReviews } } : {}),
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
@@ -2065,6 +2446,26 @@ export function reduceSchedulerEvent(
     if (next.planningPolicyVersion !== 1) {
       throw new Error("Planning events require a durable planning policy stamp.");
     }
+    // T9 triage-first ordering: plan-progressing planning events require a
+    // durable triage decision of `build`. Source registration/amendment and
+    // durable reads stay available (provisioning plus answer-path inspection).
+    if (
+      TRIAGE_GATED_PLANNING_EVENTS.has(event.type) &&
+      current.planningTriageDecision !== "build"
+    ) {
+      throw new Error(
+        `Planning progress (${event.type}) requires a durable triage decision of build; ` +
+          `the current triage decision is ${current.planningTriageDecision ?? "none"}.`
+      );
+    }
+    if (event.type === "planning.plan_ready") {
+      // T9 repair cycle 3 (B4-r3): a bound review — or a plan — that predates
+      // the latest folded acknowledgement never readies. Checked pre-event on
+      // the current projection; the reducer below then decides readiness on
+      // the merits.
+      const foldedBlocker = foldedGuidancePlanReadyBlocked(current);
+      if (foldedBlocker) throw new Error(foldedBlocker);
+    }
     next.planning = reducePlanningProjection(current.planning, {
       runId: event.runId,
       type: event.type,
@@ -2072,6 +2473,7 @@ export function reduceSchedulerEvent(
       actor: event.actor,
       idempotencyKey: event.idempotencyKey,
       payload: event.payload,
+      sequence: event.sequence,
     }, {
       taskStatuses: new Map(Object.entries(current.tasks).map(([taskId, task]) => [taskId, task.status])),
     });
@@ -2164,12 +2566,369 @@ export function reduceSchedulerEvent(
       next.runPolicy = runPolicy;
       break;
     }
+    case "request.triaged": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record triage.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Request triage requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may record triage.");
+      }
+      const triage = parseRequestTriage(event.payload);
+      const prior = current.planningTriageDecision;
+      // T9 (EP39): triage runs once; only `clarify` re-triages (after the
+      // ask_user resume). An answered run converts explicitly to build; a
+      // build run never flips back (tasks may already exist — fail closed).
+      if (prior === "answer") {
+        throw new Error("An answered run cannot be re-triaged; convert to build first.");
+      }
+      if (prior === "build") {
+        throw new Error("A run already triaged to build cannot be re-triaged.");
+      }
+      // T9 repair cycle 1 (N1): a `clarify` triage must ask the user —
+      // re-triaging clarify to clarify without a user reply after the last
+      // triage is refused, so the loop is bounded by real user replies.
+      if (prior === "clarify" && triage.decision === "clarify") {
+        const lastTriage = current.requestTriage?.sequence ?? 0;
+        const answeredAfterTriage = (current.lastAnsweredArchitectQuestionSequence ?? 0) > lastTriage;
+        if (!answeredAfterTriage) {
+          throw new Error(
+            "A clarify triage must ask the user: re-triaging clarify without an answered user reply is refused."
+          );
+        }
+      }
+      next.planningTriageDecision = triage.decision;
+      next.requestTriage = {
+        decision: triage.decision,
+        rationale: triage.rationale,
+        decidedAt: event.occurredAt,
+        sequence: event.sequence,
+        conversions: current.requestTriage ? [...current.requestTriage.conversions] : [],
+      };
+      break;
+    }
+    case "request.answered": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record an answer.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Request answers require a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may record an answer.");
+      }
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("An answer requires a durable triage decision of answer.");
+      }
+      const answer = parseRequestAnswer(event.payload);
+      next.requestAnswer = {
+        answerText: answer.answerText,
+        addressedParts: answer.addressedParts,
+        evidenceIds: answer.evidenceIds,
+        recordedAt: event.occurredAt,
+        sequence: event.sequence,
+      };
+      break;
+    }
+    case "request.converted_to_build": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot convert to build.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Conversion to build requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may convert to build.");
+      }
+      // T9 (EP39): explicit durable conversion when answering discovers a
+      // needed change. Afterwards the run follows the normal planning flow:
+      // the decision flips to `build`, so the run is in planning state again.
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("Only an answered run converts to build.");
+      }
+      assertExactTriageKeys(event.payload, ["reason"]);
+      const reason = requiredNonBlank(event.payload, "reason");
+      const priorRecord = current.requestTriage;
+      next.planningTriageDecision = "build";
+      next.requestTriage = {
+        decision: "build",
+        rationale: priorRecord?.rationale ?? "",
+        decidedAt: priorRecord?.decidedAt ?? event.occurredAt,
+        sequence: priorRecord?.sequence ?? event.sequence,
+        conversions: [
+          ...(priorRecord?.conversions ?? []),
+          { from: "answer", to: "build", reason, sequence: event.sequence },
+        ],
+      };
+      break;
+    }
+    case "answer.review_opted_in": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot opt in to answer review.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review opt-in requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "user") {
+        throw new Error("Only the user may opt in to answer review.");
+      }
+      // T9 repair cycle 1 (B2): the opt-in is accepted on any non-terminal
+      // new-policy run — including at creation, before triage exists. The
+      // review runs only if and when the run is answered; on build runs the
+      // opt-in stays inert. A terminal run and a duplicate opt-in stay refused.
+      if (current.answerReviewOptIn) {
+        throw new Error("Answer review is already opted in for this run.");
+      }
+      assertExactTriageKeys(event.payload, []);
+      next.answerReviewOptIn = { optedInAt: event.occurredAt, sequence: event.sequence };
+      break;
+    }
+    case "answer.review_opted_out": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot opt out of answer review.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review opt-out requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "user") {
+        throw new Error("Only the user may opt out of answer review.");
+      }
+      // T9 repair cycle 1 (N2): the owner can withdraw the opt-in, so an
+      // unavailable reviewer never traps the run. Withdrawing clears the
+      // pending unavailability gate (the owner resolved it); the events stay
+      // durable history. A later opt-in starts clean, never stale-gated.
+      if (!current.answerReviewOptIn) {
+        throw new Error("Answer review is not opted in for this run.");
+      }
+      assertExactTriageKeys(event.payload, []);
+      next.answerReviewOptIn = undefined;
+      next.answerReviewUnavailable = undefined;
+      break;
+    }
+    case "answer.review_findings_recorded": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record answer review findings.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review findings require a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "verifier") {
+        throw new Error("Only the answer reviewer may record findings.");
+      }
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("Answer review findings require a triage decision of answer.");
+      }
+      // T9 opt-in-only (OA-5): no opt-in, no review — refused here, not only
+      // by the runtime driver.
+      if (!current.answerReviewOptIn) {
+        throw new Error("Answer review findings require the user's opt-in for this run.");
+      }
+      if (!current.requestAnswer) {
+        throw new Error("Answer review findings require a recorded answer.");
+      }
+      const findings = parseAnswerReviewFindings(event.payload);
+      if (current.answerReviewFindings?.[findings.reviewId]) {
+        throw new Error(`Answer review ${findings.reviewId} already recorded findings.`);
+      }
+      if (
+        findings.priorReviewId !== undefined &&
+        !current.answerReviews?.[findings.priorReviewId]
+      ) {
+        throw new Error(
+          `Answer review ${findings.reviewId} references an unknown prior review ${findings.priorReviewId}.`
+        );
+      }
+      next.answerReviewFindings = {
+        ...(current.answerReviewFindings ?? {}),
+        [findings.reviewId]: {
+          reviewId: findings.reviewId,
+          findings: findings.findings,
+          // T9 repair cycle 2 (N-A): bind the findings to the answer the
+          // reviewer saw. Stamped by the kernel from the current answer, not
+          // the payload, so it cannot be forged.
+          answerSequence: current.requestAnswer!.sequence,
+          ...(findings.priorReviewId !== undefined ? { priorReviewId: findings.priorReviewId } : {}),
+          recordedAt: event.occurredAt,
+          sequence: event.sequence,
+        },
+      };
+      next.answerReviewUnavailable = undefined;
+      break;
+    }
+    case "answer.review_prior_findings_released": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot release prior answer findings.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review releases require a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may release prior answer findings.");
+      }
+      assertExactTriageKeys(event.payload, ["reviewId", "priorReviewId"]);
+      const reviewId = requiredNonBlank(event.payload, "reviewId");
+      const priorReviewId = requiredNonBlank(event.payload, "priorReviewId");
+      // T9 (OA-10 #2): a re-review records its own view of the answer before
+      // it may see another reviewer's findings on it.
+      const recorded = current.answerReviewFindings?.[reviewId];
+      if (!recorded || recorded.priorReviewId !== priorReviewId) {
+        throw new Error(
+          `Answer review ${reviewId} must record its own findings before prior findings are released.`
+        );
+      }
+      if (current.answerReviewReleases?.[reviewId]) {
+        throw new Error(`Answer review ${reviewId} already released prior findings.`);
+      }
+      next.answerReviewReleases = {
+        ...(current.answerReviewReleases ?? {}),
+        [reviewId]: { reviewId, priorReviewId, sequence: event.sequence },
+      };
+      break;
+    }
+    case "answer.review_recorded": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record an answer review.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer reviews require a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "verifier") {
+        throw new Error("Only the answer reviewer may record a verdict.");
+      }
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("Answer reviews require a triage decision of answer.");
+      }
+      if (!current.answerReviewOptIn) {
+        throw new Error("Answer reviews require the user's opt-in for this run.");
+      }
+      if (!current.requestAnswer) {
+        throw new Error("Answer reviews require a recorded answer.");
+      }
+      const review = parseAnswerReview(event.payload);
+      if (current.answerReviews?.[review.id]) {
+        throw new Error(`Answer review ${review.id} is already recorded.`);
+      }
+      // Record-before-verdict (the RG-6 device, reused): the verdict's
+      // findings must equal the durably recorded own findings — no swap
+      // between the findings pass and the verdict pass.
+      const recorded = current.answerReviewFindings?.[review.id];
+      if (!recorded) {
+        throw new Error(`Answer review ${review.id} has no durably recorded findings.`);
+      }
+      if (!sameValue(recorded.findings, review.findings)) {
+        throw new Error(`Answer review ${review.id} verdict findings differ from its recorded findings.`);
+      }
+      // T9 repair cycle 2 (N-A): the verdict judges the CURRENT answer, and
+      // the findings behind it were formed on that same answer. A verdict
+      // stamped with another answer's sequence, or findings reused across a
+      // re-answer, are refused here — not only by the review driver.
+      if (review.answerSequence !== current.requestAnswer!.sequence) {
+        throw new Error(
+          `Answer review ${review.id} verdict binds answer sequence ${review.answerSequence}, not the current answer ${current.requestAnswer!.sequence}.`
+        );
+      }
+      if (recorded.answerSequence !== current.requestAnswer!.sequence) {
+        throw new Error(
+          `Answer review ${review.id} findings were recorded for superseded answer sequence ${recorded.answerSequence}, not the current answer ${current.requestAnswer!.sequence}.`
+        );
+      }
+      if ((recorded.priorReviewId ?? undefined) !== (review.priorReviewId ?? undefined)) {
+        throw new Error(`Answer review ${review.id} verdict drops or changes its prior review binding.`);
+      }
+      if (review.priorReviewId !== undefined) {
+        const release = current.answerReviewReleases?.[review.id];
+        if (!release || release.priorReviewId !== review.priorReviewId) {
+          throw new Error(
+            `Answer review ${review.id} must release prior findings before its verdict.`
+          );
+        }
+        const prior = current.answerReviews?.[review.priorReviewId];
+        if (!prior) {
+          throw new Error(
+            `Answer review ${review.id} references an unknown prior review ${review.priorReviewId}.`
+          );
+        }
+        // OA-10 #2: the re-review checks each prior finding exactly once.
+        const checks = review.priorFindingChecks ?? [];
+        const priorIds = prior.findings.map((finding) => finding.id).sort();
+        const checkIds = checks.map((check) => check.findingId).sort();
+        if (!sameValue(priorIds, checkIds) || new Set(checkIds).size !== checkIds.length) {
+          throw new Error(
+            `Answer review ${review.id} must check each prior finding exactly once.`
+          );
+        }
+      } else if (review.priorFindingChecks !== undefined && review.priorFindingChecks.length > 0) {
+        throw new Error(`Answer review ${review.id} checks findings without a prior review.`);
+      }
+      next.answerReviews = {
+        ...(current.answerReviews ?? {}),
+        [review.id]: {
+          id: review.id,
+          reviewerRuntimeId: review.reviewerRuntimeId,
+          independence: review.independence,
+          answerSequence: review.answerSequence,
+          findings: review.findings,
+          summary: review.summary,
+          answerAccurate: review.answerAccurate,
+          ...(review.priorReviewId !== undefined ? { priorReviewId: review.priorReviewId } : {}),
+          ...(review.priorFindingChecks !== undefined ? { priorFindingChecks: review.priorFindingChecks } : {}),
+          recordedAt: event.occurredAt,
+          sequence: event.sequence,
+        },
+      };
+      next.answerReviewUnavailable = undefined;
+      break;
+    }
+    case "answer.review_unavailable": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record answer review unavailability.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review unavailability requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may record answer review unavailability.");
+      }
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("Answer review unavailability requires a triage decision of answer.");
+      }
+      if (!current.answerReviewOptIn) {
+        throw new Error("Answer review unavailability requires the user's opt-in for this run.");
+      }
+      assertExactTriageKeys(event.payload, ["reviewId", "reason", "detail"]);
+      const detail = event.payload.detail;
+      if (detail !== undefined && (typeof detail !== "string" || !detail.trim())) {
+        throw new Error("Answer review unavailability detail is invalid.");
+      }
+      const reviewId = event.payload.reviewId;
+      if (reviewId !== undefined && (typeof reviewId !== "string" || !reviewId.trim())) {
+        throw new Error("Answer review unavailability reviewId is invalid.");
+      }
+      next.answerReviewUnavailable = {
+        ...(typeof reviewId === "string" ? { reviewId } : {}),
+        reason: requiredNonBlank(event.payload, "reason"),
+        ...(typeof detail === "string" ? { detail } : {}),
+        recordedAt: event.occurredAt,
+        sequence: event.sequence,
+      };
+      break;
+    }
     case "plan.created": {
       if (current.planRevision !== 0 || Object.keys(current.tasks).length > 0) {
         throw new Error("A scheduler run cannot create a second initial plan.");
       }
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may create a plan.");
+      }
+      // T9 (EP39/OA-5): answered runs create no tasks — refused here even
+      // before the readiness gate, so the zero-mutation guarantee never
+      // depends on planning state. Legacy runs are untouched.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs cannot create tasks; convert to build first."
+        );
       }
       // T3a repair (B1a): on a new-policy run, scheduler tasks materialise
       // only from a ready plan — which is necessarily after the ledger — so a
@@ -2240,6 +2999,12 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may upgrade an acceptance contract.");
       }
+      // T9 (EP39/OA-5): answered runs revise nothing.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs cannot upgrade the acceptance contract; convert to build first."
+        );
+      }
       // T3a repair (B1a): task-revising events on a new-policy run require a
       // ready plan. Legacy runs are untouched.
       if (current.planningPolicyVersion === 1 && !readyPlanIdentity(current)) {
@@ -2264,6 +3029,13 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may advance the integration revision.");
       }
+      // T9 (EP39/OA-5): answered runs never integrate. This is the only gate
+      // on this event, so it is load-bearing for the zero-mutation proof.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs cannot advance integration; convert to build first."
+        );
+      }
       advanceIntegrationRevision(
         next,
         requiredString(event.payload, "integrationRevision"),
@@ -2274,6 +3046,12 @@ export function reduceSchedulerEvent(
     case "final_verification.generation_created": {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may create a final verification generation.");
+      }
+      // T9 (EP39/OA-5): answered runs have no final verification.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs have no final verification; convert to build first."
+        );
       }
       createFinalVerificationGeneration(next, event.payload);
       break;
@@ -2501,6 +3279,12 @@ export function reduceSchedulerEvent(
       // T3a repair (B1a): task-revising events on a new-policy run require a
       // ready plan. The task keeps its original ready-plan binding (fail
       // closed): a revision is not a re-review. Legacy runs are untouched.
+      // T9 (EP39/OA-5): answered runs revise nothing.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs cannot revise tasks; convert to build first."
+        );
+      }
       if (current.planningPolicyVersion === 1 && !readyPlanIdentity(current)) {
         throw new Error(
           "Task revision on a new-policy run requires a ready plan revision."
@@ -2795,10 +3579,12 @@ export function reduceSchedulerEvent(
                 acknowledgement.resolution.planReconciliation,
               ),
             }
-          : {
-              ...acknowledgement.resolution,
-              evidenceIds: [...acknowledgement.resolution.evidenceIds],
-            };
+          : acknowledgement.resolution.type === "folded_into_planning"
+            ? acceptFoldedIntoPlanningAcknowledgement(current, acknowledgement.resolution)
+            : {
+                ...acknowledgement.resolution,
+                evidenceIds: [...acknowledgement.resolution.evidenceIds],
+              };
       if (resolution.type === "plan_reconciled") {
         applyPlanReconciliation(next, resolution.planReconciliation, {
           allowSteeringCheckpoints: true,
@@ -2824,6 +3610,16 @@ export function reduceSchedulerEvent(
             supersededRationale: resolution.rationale,
           };
         }
+      }
+      if (resolution.type === "folded_into_planning") {
+        // T9 repair cycle 3 (B4-r3/N-C): stamp the latest fold durably. The
+        // readiness gates (plan_ready, answered completion) compare against
+        // this sequence.
+        next.latestFoldedIntoPlanningAck = {
+          guidanceId: acknowledgement.guidanceId,
+          version: guidance.version,
+          sequence: event.sequence,
+        };
       }
       next.userGuidance[guidance.guidanceId] = {
         ...guidance,
@@ -2879,6 +3675,8 @@ export function reduceSchedulerEvent(
         answer: answer.answer,
         ...(question.checkpoint ? { resumeStatus: "pending" } : {}),
       };
+      // T9 repair cycle 1 (N1): the clarify-loop bound reads this.
+      next.lastAnsweredArchitectQuestionSequence = event.sequence;
       delete next.blockingArchitectQuestionId;
       break;
     }
@@ -3257,7 +4055,9 @@ export function reduceSchedulerEvent(
       }
       if (current.runPolicy === "plan_only") {
         if (current.planningPolicyVersion === 1) {
-          if (!readyPlanIdentity(current)) {
+          // T9 (EP39): a plan_only run given a pure question is answered —
+          // the answer path completes without the ready plan identity.
+          if (!readyPlanIdentity(current) && !isAnsweredRun(current)) {
             throw new Error("Plan-only final project handoff requires a ready plan revision.");
           }
         } else if (current.planRevision <= 0) {
@@ -3305,8 +4105,11 @@ export function reduceSchedulerEvent(
         event.payload,
         "integrationRevision",
       );
+      // T9 (EP39): answered runs have no integration revision to match —
+      // exempt like plan_only (the field stays required, the match is off).
       if (
         current.runPolicy !== "plan_only" &&
+        !isAnsweredRun(current) &&
         !revisionMatchesIntegrationOrDocumentTip(current, selectedIntegrationRevision)
       ) {
         throw new Error(
@@ -4304,6 +5107,13 @@ function createVerifierRepairTasks(
   // a new-policy run they are planned only under a ready plan (like every
   // other task-adding path) and stamped with its identity below. Checked
   // before the repair cycle is consumed so a refusal spends nothing.
+  // T9 (EP39/OA-5): answered runs plan no repairs. Checked before the
+  // budget is consumed, like the readiness refusal below.
+  if (projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer") {
+    throw new Error(
+      "Answered runs cannot plan repairs; convert to build first."
+    );
+  }
   // Legacy runs are untouched.
   const repairReady = projection.planningPolicyVersion === 1
     ? readyPlanIdentity(projection)
@@ -4493,6 +5303,13 @@ function createFinalVerificationRepairTasks(
   // a new-policy run they are planned only under a ready plan (like every
   // other task-adding path) and stamped with its identity below. Checked
   // before the repair cycle is consumed so a refusal spends nothing.
+  // T9 (EP39/OA-5): answered runs plan no repairs. Checked before the
+  // budget is consumed, like the readiness refusal below.
+  if (projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer") {
+    throw new Error(
+      "Answered runs cannot plan repairs; convert to build first."
+    );
+  }
   // Legacy runs are untouched.
   const repairReady = projection.planningPolicyVersion === 1
     ? readyPlanIdentity(projection)
@@ -5586,6 +6403,32 @@ function parseAcceptanceCriteria(
   return criteria;
 }
 
+/**
+ * T9 repair cycle 2 (B3-r2): the planning-state acknowledgement. A
+ * new-policy run with no ready plan has no plan to prove unchanged and no
+ * ready plan to reconcile, so the guidance folds into the plan or answer
+ * still being drafted — no evidence, no mutation. Accepted only while the
+ * run has no ready plan (planning state, or an answered/pre-triage
+ * new-policy run): once a ready plan exists, `no_plan_change` (with
+ * evidence) and `plan_reconciled` apply unchanged. Legacy runs are refused.
+ */
+function acceptFoldedIntoPlanningAcknowledgement(
+  current: SchedulerProjection,
+  resolution: UserGuidanceFoldedIntoPlanningResolution,
+): UserGuidanceFoldedIntoPlanningResolution {
+  if (current.planningPolicyVersion !== 1) {
+    throw new Error(
+      "Folded-into-planning acknowledgement requires a new-policy run."
+    );
+  }
+  if (readyPlanIdentity(current)) {
+    throw new Error(
+      "Folded-into-planning acknowledgement requires no ready plan; cite evidence with no_plan_change or reconcile the plan."
+    );
+  }
+  return { ...resolution };
+}
+
 function applyPlanReconciliation(
   projection: SchedulerProjection,
   reconciliation: PlanReconciliation,
@@ -5604,6 +6447,12 @@ function applyPlanReconciliation(
   // on a new-policy run each requires a ready plan. This single choke point
   // covers all four callers; none of them mutates planning first, so the
   // identity read here is the pre-event one. Legacy runs are untouched.
+  // T9 (EP39/OA-5): answered runs reconcile nothing.
+  if (projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer") {
+    throw new Error(
+      "Answered runs cannot reconcile the plan; convert to build first."
+    );
+  }
   if (projection.planningPolicyVersion === 1 && !readyPlanIdentity(projection)) {
     throw new Error(
       "Plan reconciliation on a new-policy run requires a ready plan revision."
@@ -6430,6 +7279,9 @@ function cloneUserGuidanceResolution(
   if (resolution.type === "no_plan_change") {
     return { ...resolution, evidenceIds: [...resolution.evidenceIds] };
   }
+  if (resolution.type === "folded_into_planning") {
+    return { ...resolution };
+  }
   return {
     ...resolution,
     planReconciliation: {
@@ -6742,6 +7594,164 @@ function requiredNumber(payload: Record<string, unknown>, key: string): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// ---------------------------------------------------------------------------
+// T9 (EP39/OA-5/OA-10 #2): request-triage and answer-review payload parsers.
+// Payloads are closed: unknown fields are refused, never ignored.
+// ---------------------------------------------------------------------------
+
+function assertExactTriageKeys(payload: Record<string, unknown>, allowed: readonly string[]): void {
+  const unknown = Object.keys(payload).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    throw new Error(`Unknown triage payload field(s): ${unknown.join(", ")}.`);
+  }
+}
+
+function requiredNonBlank(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be nonblank.`);
+  return value;
+}
+
+function parseRequestTriage(payload: Record<string, unknown>): {
+  decision: PlanningTriageDecision;
+  rationale: string;
+} {
+  assertExactTriageKeys(payload, ["decision", "rationale"]);
+  const decision = payload.decision;
+  if (decision !== "answer" && decision !== "build" && decision !== "clarify") {
+    throw new Error("Triage decision must be answer, build, or clarify.");
+  }
+  return { decision, rationale: requiredNonBlank(payload, "rationale") };
+}
+
+function parseRequestAnswer(payload: Record<string, unknown>): {
+  answerText: string;
+  addressedParts: string[];
+  evidenceIds: string[];
+} {
+  assertExactTriageKeys(payload, ["answerText", "addressedParts", "evidenceIds"]);
+  const answerText = requiredNonBlank(payload, "answerText");
+  const addressedParts = payload.addressedParts;
+  if (
+    !Array.isArray(addressedParts) ||
+    addressedParts.length === 0 ||
+    !addressedParts.every((part): part is string => typeof part === "string" && part.trim().length > 0)
+  ) {
+    throw new Error("The answer must list at least one addressed question part.");
+  }
+  const evidenceIds = payload.evidenceIds ?? [];
+  if (!Array.isArray(evidenceIds) || !evidenceIds.every((id): id is string => typeof id === "string" && id.length > 0)) {
+    throw new Error("Answer evidenceIds must be a string array.");
+  }
+  return { answerText, addressedParts: [...addressedParts], evidenceIds: [...evidenceIds] };
+}
+
+function parseAnswerReviewFinding(value: unknown): AnswerReviewFinding {
+  if (!isRecord(value)) throw new Error("Answer review finding is invalid.");
+  assertExactTriageKeys(value, ["id", "statement", "severity"]);
+  const severity = value.severity;
+  if (severity !== "blocking" && severity !== "non_blocking") {
+    throw new Error("Answer review finding severity must be blocking or non_blocking.");
+  }
+  return {
+    id: requiredNonBlank(value, "id"),
+    statement: requiredNonBlank(value, "statement"),
+    severity,
+  };
+}
+
+function parseAnswerReviewFindings(payload: Record<string, unknown>): {
+  reviewId: string;
+  findings: AnswerReviewFinding[];
+  priorReviewId?: string;
+} {
+  assertExactTriageKeys(payload, ["reviewId", "findings", "priorReviewId"]);
+  const reviewId = requiredNonBlank(payload, "reviewId");
+  const raw = payload.findings;
+  if (!Array.isArray(raw)) throw new Error("Answer review findings must be an array.");
+  const findings = raw.map(parseAnswerReviewFinding);
+  if (new Set(findings.map((finding) => finding.id)).size !== findings.length) {
+    throw new Error("Answer review finding ids must be unique.");
+  }
+  const priorReviewId = payload.priorReviewId;
+  if (priorReviewId !== undefined && (typeof priorReviewId !== "string" || !priorReviewId.trim())) {
+    throw new Error("Answer review priorReviewId is invalid.");
+  }
+  return {
+    reviewId,
+    findings,
+    ...(priorReviewId !== undefined ? { priorReviewId: priorReviewId as string } : {}),
+  };
+}
+
+function parseAnswerReviewFindingCheck(value: unknown): AnswerReviewFindingCheck {
+  if (!isRecord(value)) throw new Error("Answer review finding check is invalid.");
+  assertExactTriageKeys(value, ["findingId", "resolution", "rationale"]);
+  const resolution = value.resolution;
+  if (resolution !== "resolved" && resolution !== "outstanding") {
+    throw new Error("Answer review finding check resolution must be resolved or outstanding.");
+  }
+  return {
+    findingId: requiredNonBlank(value, "findingId"),
+    resolution,
+    rationale: requiredNonBlank(value, "rationale"),
+  };
+}
+
+function parseAnswerReview(payload: Record<string, unknown>): {
+  id: string;
+  reviewerRuntimeId: string;
+  independence: "distinct_model" | "fresh_context";
+  answerSequence: number;
+  findings: AnswerReviewFinding[];
+  summary: string;
+  answerAccurate: boolean;
+  priorReviewId?: string;
+  priorFindingChecks?: AnswerReviewFindingCheck[];
+} {
+  assertExactTriageKeys(payload, [
+    "id",
+    "reviewerRuntimeId",
+    "independence",
+    "answerSequence",
+    "findings",
+    "summary",
+    "answerAccurate",
+    "priorReviewId",
+    "priorFindingChecks",
+  ]);
+  const rawFindings = payload.findings;
+  if (!Array.isArray(rawFindings)) throw new Error("Answer review findings must be an array.");
+  const findings = rawFindings.map(parseAnswerReviewFinding);
+  if (new Set(findings.map((finding) => finding.id)).size !== findings.length) {
+    throw new Error("Answer review finding ids must be unique.");
+  }
+  const priorReviewId = payload.priorReviewId;
+  if (priorReviewId !== undefined && (typeof priorReviewId !== "string" || !priorReviewId.trim())) {
+    throw new Error("Answer review priorReviewId is invalid.");
+  }
+  const rawChecks = payload.priorFindingChecks;
+  const priorFindingChecks = rawChecks === undefined
+    ? undefined
+    : (() => {
+      if (!Array.isArray(rawChecks)) throw new Error("Answer review priorFindingChecks must be an array.");
+      return rawChecks.map(parseAnswerReviewFindingCheck);
+    })();
+  const answerAccurate = payload.answerAccurate;
+  if (typeof answerAccurate !== "boolean") throw new Error("Answer review answerAccurate must be a boolean.");
+  return {
+    id: requiredNonBlank(payload, "id"),
+    reviewerRuntimeId: requiredNonBlank(payload, "reviewerRuntimeId"),
+    independence: parseReviewerIndependence(payload.independence),
+    answerSequence: requiredPositiveInteger(payload, "answerSequence"),
+    findings,
+    summary: requiredNonBlank(payload, "summary"),
+    answerAccurate,
+    ...(priorReviewId !== undefined ? { priorReviewId: priorReviewId as string } : {}),
+    ...(priorFindingChecks !== undefined ? { priorFindingChecks } : {}),
+  };
 }
 
 function requiredRunPolicy(

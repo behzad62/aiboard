@@ -38,7 +38,7 @@ import {
   type SourceRequirement,
 } from "../src/planning-contracts.js";
 import { createPlanningTools } from "../src/planning-tools.js";
-import { renderPlanningStatus } from "../src/agent-prompts.js";
+import { buildCoverageVerdictContext, renderPlanningStatus } from "../src/agent-prompts.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
 import {
   roleAllowList,
@@ -148,6 +148,15 @@ function seedNewPolicySource(
     actor: { role: "user", id: "owner" },
     idempotencyKey: "source:base",
     payload: { manifest },
+  });
+  // T9: the Architect's first action — triage to build precedes all plan progress.
+  store.append({
+    runId,
+    type: "request.triaged",
+    occurredAt: CLOCK,
+    actor: { role: "architect", id: "architect_1" },
+    idempotencyKey: "triage:build",
+    payload: { decision: "build", rationale: "Seed triage: the fixture request changes the project." },
   });
 }
 
@@ -5398,4 +5407,24 @@ test("T3b-R3 N-R3-1: a plan_ready_blocked gate clears when its blocker is gone; 
     harness.close();
     store.close();
   }
+});
+
+test("T9 repair B4-r3: the coverage verdict context carries acknowledged guidance after obligations", () => {
+  const limits = { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 };
+  const withGuidance = buildCoverageVerdictContext({
+    limits,
+    obligationsJson: JSON.stringify([{ id: "obl-1" }]),
+    planRevisionJson: JSON.stringify({ revisionId: "revision_1" }),
+    ledgerJson: JSON.stringify({ id: "ledger-1" }),
+    guidance: [{ id: "g1:v1", text: "Also add an audit log entry for every login." }],
+  });
+  assert.ok(withGuidance.text.includes("Also add an audit log entry for every login."));
+  assert.ok(withGuidance.text.includes("g1:v1"));
+  const withoutGuidance = buildCoverageVerdictContext({
+    limits,
+    obligationsJson: JSON.stringify([{ id: "obl-1" }]),
+    planRevisionJson: JSON.stringify({ revisionId: "revision_1" }),
+    ledgerJson: JSON.stringify({ id: "ledger-1" }),
+  });
+  assert.equal(withoutGuidance.text.includes("Acknowledged user guidance"), false);
 });

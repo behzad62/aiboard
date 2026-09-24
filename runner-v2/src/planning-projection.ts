@@ -80,6 +80,14 @@ export interface PlanningEventInput {
   readonly actor: { readonly role: PlanningActorRole; readonly id: string };
   readonly idempotencyKey: string;
   readonly payload: Record<string, unknown>;
+  /**
+   * T9 repair cycle 3 (B4-r3): the durable scheduler event sequence, supplied
+   * by the scheduler store when it delegates planning events. Direct
+   * planning-projection callers omit it; sequence-gated rules treat a missing
+   * sequence as the beginning of the run (fail closed once a folded
+   * acknowledgement exists).
+   */
+  readonly sequence?: number;
 }
 
 export const PLANNING_EVENT_ACTOR_ROLES: Readonly<Record<PlanningEventType, readonly PlanningActorRole[]>> = {
@@ -208,6 +216,17 @@ export interface CoverageReviewRequestRecord {
   readonly sourceManifestId: string;
   readonly priorReviewId?: string;
   readonly requestedAt: string;
+  /**
+   * T9 repair cycle 3 (B4-r3): the durable scheduler event sequence that
+   * requested this review. `planning.plan_ready` is refused while the latest
+   * folded-into-planning acknowledgement postdates it — the bound review's
+   * snapshot must contain the folded guidance. Stamped by the scheduler
+   * store; absent on older projections and direct-constructed records, which
+   * read as the beginning of the run. Excluded from the idempotency
+   * comparison below: a re-appended identical request keeps its first
+   * sequence.
+   */
+  readonly requestedSequence?: number;
 }
 
 /**
@@ -363,6 +382,15 @@ export interface PlanningProjection {
   readonly coverageReviewHistory: readonly CoverageReview[];
   /** T3b: coverage review requests by review id. */
   readonly coverageRequests: Readonly<Record<string, CoverageReviewRequestRecord>>;
+  /**
+   * T9 repair cycle 3 (B4-r3): sequence of the latest Architect planning
+   * turn — a plan draft, plan revision, or planning checkpoint. `plan_ready`
+   * is refused while the latest folded-into-planning acknowledgement
+   * postdates every such turn: the Architect must demonstrably see the
+   * folded guidance (by revising, or by recording a checkpoint reviewed
+   * against it) before the plan can go ready.
+   */
+  readonly lastPlanningTurnSequence?: number;
   /** T3b: recorded blind obligations (record-before-verdict) by review id. */
   readonly coverageObligations: Readonly<Record<string, CoverageObligationsRecord>>;
   /** T3b repair cycle 1 (B2): plan-delivery record by review id. */
@@ -949,6 +977,24 @@ function assertDurableSectionReads(
   }
 }
 
+/**
+ * T9 repair cycle 3 (B4-r3): the idempotency comparison for a re-appended
+ * coverage review request. Compares the request payload, never the
+ * `requestedSequence` stamp, so an identical re-append keeps its first
+ * sequence instead of conflicting with itself.
+ */
+function sameCoverageReviewRequest(
+  left: CoverageReviewRequestRecord,
+  right: CoverageReviewRequestRecord,
+): boolean {
+  return left.reviewId === right.reviewId &&
+    left.planRevisionId === right.planRevisionId &&
+    left.planRevisionDigest === right.planRevisionDigest &&
+    left.sourceManifestId === right.sourceManifestId &&
+    left.priorReviewId === right.priorReviewId &&
+    left.requestedAt === right.requestedAt;
+}
+
 /** T3b: resolve a prior coverage review from the current review or its history. */
 function recordedCoverageReview(
   projection: PlanningProjection,
@@ -1447,6 +1493,9 @@ export function reducePlanningProjection(
           },
         ],
         readiness: "not_ready",
+        // T9 repair cycle 3 (B4-r3): a checkpoint is an Architect planning
+        // turn — it can carry the "reviewed against folded guidance" proof.
+        ...(event.sequence === undefined ? {} : { lastPlanningTurnSequence: event.sequence }),
       };
       break;
     }
@@ -1480,6 +1529,9 @@ export function reducePlanningProjection(
           revisionsById: { ...(next.plan?.revisionsById ?? {}), [bound.revision.revisionId]: cloneRevision(bound.revision) },
         },
         readiness: "not_ready",
+        // T9 repair cycle 3 (B4-r3): a draft or revision is an Architect
+        // planning turn — the new plan content postdates the folded guidance.
+        ...(event.sequence === undefined ? {} : { lastPlanningTurnSequence: event.sequence }),
       };
       break;
     }
@@ -1511,9 +1563,14 @@ export function reducePlanningProjection(
         sourceManifestId,
         ...(priorReviewId === undefined ? {} : { priorReviewId }),
         requestedAt,
+        // T9 repair cycle 3 (B4-r3): stamp the requesting event's sequence so
+        // plan_ready can refuse a review that predates a folded acknowledgement.
+        ...(event.sequence === undefined ? {} : { requestedSequence: event.sequence }),
       };
       if (prior) {
-        if (JSON.stringify(prior) !== JSON.stringify(record)) {
+        // The stamp is excluded: an idempotent re-append of the same request
+        // keeps its first sequence instead of conflicting with itself.
+        if (!sameCoverageReviewRequest(prior, record)) {
           throw new Error(`Coverage review request ${reviewId} conflicts with the recorded request.`);
         }
         break;
