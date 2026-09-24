@@ -269,7 +269,7 @@ try {
   const fixtureSource = join(scratch, "fixture-source");
   const fixtureOrigin = join(scratch, "fixture-origin.git");
   const shallowClone = join(scratch, "fixture-shallow");
-  execFileSync("git", ["clone", "--depth=1", "--no-tags", pathToFileURL(root).href, fixtureSource], { stdio: "pipe" });
+  execFileSync("git", ["clone", "--config", "core.longpaths=true", "--depth=1", "--no-tags", pathToFileURL(root).href, fixtureSource], { stdio: "pipe" });
   // A CI checkout stores the pin outside branch history. Seed the fixture origin
   // explicitly instead of relying on a developer clone's incidental full history.
   execFileSync("git", ["-C", fixtureSource, "fetch", "--depth=1", "origin",
@@ -291,7 +291,7 @@ try {
   execFileSync("git", ["-C", fixtureSource, "-c", "user.name=RJS Test", "-c", "user.email=rjs@test.invalid", "commit", "--allow-empty", "-m", "fixture descendant"], { stdio: "pipe" });
   execFileSync("git", ["clone", "--bare", fixtureSource, fixtureOrigin], { stdio: "pipe" });
   const originUrl = pathToFileURL(fixtureOrigin).href;
-  execFileSync("git", ["clone", "--depth=1", "--branch", "fixture-head", originUrl, shallowClone], { stdio: "pipe" });
+  execFileSync("git", ["clone", "--config", "core.longpaths=true", "--depth=1", "--branch", "fixture-head", originUrl, shallowClone], { stdio: "pipe" });
   assert.notEqual(
     spawnSync("git", ["-C", shallowClone, "cat-file", "-e", `${PINNED_RJS_RUNNER_COMMIT}^{commit}`]).status,
     0,
