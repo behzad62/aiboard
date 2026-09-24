@@ -7,6 +7,7 @@ Prerequisite met: the agent-capability program is merged to `main` at `3cae2b70`
 Worktree `D:/repos/ai-discussion-board/.worktrees/runner-v2-p6-6`, branch `codex/runner-v2-p6-6`, base `3cae2b70`.
 Workers: local sub-agents on Sonnet 5 (owner: Cursor usage near its end); controller Opus 5.5 reviews each task; larger checks use a fresh-context sub-agent.
 T1a ACCEPTED: grounding corrections G-1..G-11 in plan §5.0 (`c62847a1`); independent review `evidence/T1a-grounding-review.md` verified all eleven claims and found one gap (T6 scope missing the OA-17 temp-path files) — fixed exactly as prescribed.
+**T2 ACCEPTED** (worker MiMo; Opus review r4 ACCEPT after 3 repair cycles; importer matrix 720/720). **BP1 = T1 + T2 complete.** T3 next (split EX-2: T3a planning tools/state, T3b coverage review gate).
 **T1 ACCEPTED** (T1a + T1b; Opus review r3 ACCEPT; residual minors R-1/R-2/R-4 → T2, R-3 → T3). T2 next, worker MiMo (`xiaomi/mimo-v2.6-pro` via Codex CLI + OpenRouter, owner choice 2026-09-23).
 Controller decision EX-1: T1 runs as **T1a** (read-only inspection: symbol-level compatibility map, host capabilities, reuse/gaps, proposed downstream contract updates) then **T1b** (implementation), because T1's own contract says its inspection output must update T2–T10 before they are assigned.
 

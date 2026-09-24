@@ -57,6 +57,14 @@ export interface SourceManifestAmendment {
   readonly priorArtifactDigest: string;
   readonly authorizedBy: string;
   readonly rationale: string;
+  readonly recordedImpact?: SourceManifestAmendmentRecordedImpact;
+}
+
+export interface SourceManifestAmendmentRecordedImpact {
+  readonly addsSectionIds: readonly string[];
+  readonly retiresSectionIds: readonly string[];
+  readonly addsRequirementIds: readonly string[];
+  readonly retiresRequirementIds: readonly string[];
 }
 
 export interface ApprovedSourceManifest {
@@ -252,6 +260,20 @@ export function validateApprovedSourceManifest(
         code: "invalid_amendment",
         message: "Amendment requires id, priorManifestId, priorArtifactDigest, authorizedBy, and rationale.",
       });
+    } else if (amendment.recordedImpact !== undefined) {
+      const impact = amendment.recordedImpact;
+      const validLists = isObj(impact) && [
+        impact.addsSectionIds,
+        impact.retiresSectionIds,
+        impact.addsRequirementIds,
+        impact.retiresRequirementIds,
+      ].every((list) => Array.isArray(list) && list.every((id) => nonEmpty(id)) && new Set(list).size === list.length);
+      if (!validLists) {
+        issues.push({
+          code: "invalid_amendment",
+          message: "Amendment recordedImpact requires unique non-empty section and requirement id arrays.",
+        });
+      }
     }
   }
 
@@ -404,6 +426,8 @@ export function sourceManifestSectionIds(manifest: ApprovedSourceManifest): read
 export function manifestResolvesAmendmentRef(
   manifest: ApprovedSourceManifest,
   amendmentRef: string,
+  amendmentHistory: readonly Pick<SourceManifestAmendment, "id">[] = [],
 ): boolean {
-  return manifest.amendment?.id === amendmentRef;
+  return manifest.amendment?.id === amendmentRef ||
+    amendmentHistory.some((amendment) => amendment.id === amendmentRef);
 }

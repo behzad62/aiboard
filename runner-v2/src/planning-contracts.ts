@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   type ApprovedSourceManifest,
+  type SourceManifestAmendment,
   manifestResolvesAmendmentRef,
   sourceManifestSectionIds,
   validateApprovedSourceManifest,
@@ -66,6 +67,81 @@ function isValidTimestamp(value: unknown): value is string {
 
 function unique<T>(values: readonly T[]): T[] {
   return [...new Set(values)];
+}
+
+type AmendmentHistory = readonly SourceManifestAmendment[];
+
+function findAmendment(
+  manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory,
+  amendmentRef: string,
+): SourceManifestAmendment | undefined {
+  return [manifest.amendment, ...amendmentHistory].find((amendment) => amendment?.id === amendmentRef);
+}
+
+function validateRequirementAmendmentScope(
+  requirementId: string,
+  sectionIds: readonly string[],
+  amendmentRef: string,
+  manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory,
+): PlanningIssue[] {
+  const amendment = findAmendment(manifest, amendmentHistory, amendmentRef);
+  const impact = amendment?.recordedImpact;
+  if (
+    impact === undefined ||
+    !isObj(impact) ||
+    !isStringArray(impact.addsSectionIds) ||
+    !isStringArray(impact.retiresSectionIds) ||
+    !isStringArray(impact.addsRequirementIds) ||
+    !isStringArray(impact.retiresRequirementIds)
+  ) {
+    return [{
+      code: "amendment_scope_missing",
+      requirementId,
+      message: `Requirement ${requirementId} cites amendment ${amendmentRef} without complete recorded section and requirement impact.`,
+    }];
+  }
+  const issues: PlanningIssue[] = [];
+  if (!impact.retiresRequirementIds.includes(requirementId)) {
+    issues.push({
+      code: "amendment_scope_mismatch",
+      requirementId,
+      message: `Amendment ${amendmentRef} does not retire requirement ${requirementId}.`,
+    });
+  }
+  for (const sectionId of sectionIds) {
+    if (!impact.retiresSectionIds.includes(sectionId) && !impact.addsSectionIds.includes(sectionId)) {
+      issues.push({
+        code: "amendment_scope_mismatch",
+        requirementId,
+        message: `Amendment ${amendmentRef} does not cover source section ${sectionId}.`,
+      });
+    }
+  }
+  return issues;
+}
+
+function validateSectionAmendmentScope(
+  sectionId: string,
+  amendmentRef: string,
+  manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory,
+): PlanningIssue[] {
+  const impact = findAmendment(manifest, amendmentHistory, amendmentRef)?.recordedImpact;
+  if (impact === undefined || !isObj(impact) || !isStringArray(impact.retiresSectionIds)) {
+    return [{
+      code: "amendment_scope_missing",
+      message: `Source section ${sectionId} cites amendment ${amendmentRef} without complete recorded impact.`,
+    }];
+  }
+  if (!impact.retiresSectionIds.includes(sectionId)) {
+    return [{
+      code: "amendment_scope_mismatch",
+      message: `Amendment ${amendmentRef} does not retire source section ${sectionId}.`,
+    }];
+  }
+  return [];
 }
 
 function stableStringify(value: unknown): string {
@@ -205,9 +281,11 @@ export interface SourceSectionDisposition {
  */
 function validateNotApplicableDisposition(
   requirementId: string,
+  sectionIds: readonly string[],
   obligationKind: RequirementObligationKind,
   disposition: RequirementApplicabilityDisposition | undefined,
   manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory = [],
 ): PlanningIssue[] {
   const issues: PlanningIssue[] = [];
   if (!isRecord(disposition) || !nonEmpty(disposition.authorizedBy) || !nonEmpty(disposition.rationale) || !isValidTimestamp(disposition.decidedAt)) {
@@ -239,12 +317,23 @@ function validateNotApplicableDisposition(
     });
     return issues;
   }
-  if (nonEmpty(disposition.amendmentRef) && !manifestResolvesAmendmentRef(manifest, disposition.amendmentRef)) {
+  if (nonEmpty(disposition.amendmentRef) && !manifestResolvesAmendmentRef(manifest, disposition.amendmentRef, amendmentHistory)) {
     issues.push({
       code: "unresolved_amendment_ref",
       requirementId,
       message: `Requirement ${requirementId}'s disposition cites amendmentRef ${disposition.amendmentRef}, which does not resolve against the manifest's amendment chain.`,
     });
+  } else if (
+    nonEmpty(disposition.amendmentRef) &&
+    (amendmentHistory.length > 0 || manifest.amendment?.recordedImpact !== undefined)
+  ) {
+    issues.push(...validateRequirementAmendmentScope(
+      requirementId,
+      sectionIds,
+      disposition.amendmentRef,
+      manifest,
+      amendmentHistory,
+    ));
   }
   return issues;
 }
@@ -261,6 +350,7 @@ export function validateRequirementLedger(
   manifest: ApprovedSourceManifest,
   knownPhaseIds: readonly string[],
   nonNormativeSections: readonly SourceSectionDisposition[] = [],
+  amendmentHistory: AmendmentHistory = [],
 ): PlanningValidation {
   const issues: PlanningIssue[] = [];
   if (!Array.isArray(requirements) || requirements.length === 0) {
@@ -334,7 +424,8 @@ export function validateRequirementLedger(
         issues.push({ code: "missing_condition_expression", requirementId: id, message: `Requirement ${id} is conditional_pending but has no conditionExpression.` });
       }
       if (applicability.status === "not_applicable") {
-        issues.push(...validateNotApplicableDisposition(id, requirement.obligationKind, applicability.disposition, manifest));
+        const sectionIds = isNonBlankStringArray(requirement.reference?.sectionIds) ? requirement.reference.sectionIds : [];
+        issues.push(...validateNotApplicableDisposition(id, sectionIds, requirement.obligationKind, applicability.disposition, manifest, amendmentHistory));
       }
       if (applicability.status !== "not_applicable" && (!Array.isArray(requirement.acceptanceConditions) || requirement.acceptanceConditions.length === 0)) {
         issues.push({ code: "missing_acceptance_conditions", requirementId: id, message: `Requirement ${id} requires at least one acceptance condition.` });
@@ -388,11 +479,13 @@ export function validateRequirementLedger(
         code: "uncovered_source_section",
         message: `Source section ${section.id} is referenced by no requirement and has no authorized non-normative disposition (rationale/authorizedBy/decidedAt/amendmentRef all required).`,
       });
-    } else if (!manifestResolvesAmendmentRef(manifest, disposition.amendmentRef)) {
+    } else if (!manifestResolvesAmendmentRef(manifest, disposition.amendmentRef, amendmentHistory)) {
       issues.push({
         code: "unresolved_amendment_ref",
         message: `Source section ${section.id}'s non-normative disposition cites amendmentRef ${disposition.amendmentRef}, which does not resolve against the manifest's amendment chain.`,
       });
+    } else if (amendmentHistory.length > 0 || manifest.amendment?.recordedImpact !== undefined) {
+      issues.push(...validateSectionAmendmentScope(section.id, disposition.amendmentRef, manifest, amendmentHistory));
     }
   }
 
@@ -404,8 +497,9 @@ export function assertRequirementLedger(
   manifest: ApprovedSourceManifest,
   knownPhaseIds: readonly string[],
   nonNormativeSections: readonly SourceSectionDisposition[] = [],
+  amendmentHistory: AmendmentHistory = [],
 ): void {
-  assertValid(validateRequirementLedger(requirements, manifest, knownPhaseIds, nonNormativeSections), "Requirement ledger");
+  assertValid(validateRequirementLedger(requirements, manifest, knownPhaseIds, nonNormativeSections, amendmentHistory), "Requirement ledger");
 }
 
 /**
@@ -879,6 +973,7 @@ export function buildExecutionPlanRevision(
 export function validateExecutionPlanRevision(
   revision: ExecutionPlanRevision,
   manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory = [],
 ): PlanningValidation {
   if (!isObj(revision)) {
     return fail([{ code: "invalid_revision", message: "Execution plan revision must be an object." }]);
@@ -1005,7 +1100,7 @@ export function validateExecutionPlanRevision(
     }
   }
 
-  const ledgerValidation = validateRequirementLedger(safeRequirements, manifest, phaseIds, revision.nonNormativeSections ?? []);
+  const ledgerValidation = validateRequirementLedger(safeRequirements, manifest, phaseIds, revision.nonNormativeSections ?? [], amendmentHistory);
   issues.push(...ledgerValidation.issues);
 
   for (const task of safeTasks) {
@@ -1053,6 +1148,7 @@ export function validateRequirementRemovalAgainstPrior(
   current: ExecutionPlanRevision,
   prior: ExecutionPlanRevision,
   manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory = [],
 ): PlanningValidation {
   if (!isObj(current) || !isObj(prior) || !Array.isArray(current.requirements) || !Array.isArray(prior.requirements)) {
     return fail([{ code: "invalid_input", message: "validateRequirementRemovalAgainstPrior requires current and prior revisions with requirements arrays." }]);
@@ -1075,12 +1171,20 @@ export function validateRequirementRemovalAgainstPrior(
         requirementId: requirement.id,
         message: `Requirement ${requirement.id} was present in the prior revision and is missing now without an authorized removal record (retiredRequirementIds).`,
       });
-    } else if (isObj(manifest) && !manifestResolvesAmendmentRef(manifest, record.amendmentRef)) {
+    } else if (isObj(manifest) && !manifestResolvesAmendmentRef(manifest, record.amendmentRef, amendmentHistory)) {
       issues.push({
         code: "unresolved_amendment_ref",
         requirementId: requirement.id,
         message: `Requirement ${requirement.id}'s removal record cites amendmentRef ${record.amendmentRef}, which does not resolve against the manifest's amendment chain.`,
       });
+    } else if (amendmentHistory.length > 0 || manifest.amendment?.recordedImpact !== undefined) {
+      issues.push(...validateRequirementAmendmentScope(
+        requirement.id,
+        isNonBlankStringArray(requirement.reference?.sectionIds) ? requirement.reference.sectionIds : [],
+        record.amendmentRef,
+        manifest,
+        amendmentHistory,
+      ));
     }
   }
   return fail(issues);
@@ -1089,8 +1193,9 @@ export function validateRequirementRemovalAgainstPrior(
 export function assertExecutionPlanRevision(
   revision: ExecutionPlanRevision,
   manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory = [],
 ): void {
-  assertValid(validateExecutionPlanRevision(revision, manifest), "Execution plan revision");
+  assertValid(validateExecutionPlanRevision(revision, manifest, amendmentHistory), "Execution plan revision");
 }
 
 // ---------------------------------------------------------------------------
@@ -1564,7 +1669,8 @@ export function assertCoverageReview(review: CoverageReview): void {
 }
 
 /** True while any obligation has a blocking missing/weakened verdict (EP44). */
-export function coverageReviewHoldsReadiness(review: CoverageReview): boolean {
+export function coverageReviewHoldsReadiness(review: CoverageReview | null | undefined): boolean {
+  if (review === null || review === undefined || typeof review !== "object" || !Array.isArray(review.obligationVerdicts)) return true;
   return review.obligationVerdicts.some(
     (verdict) =>
       verdict.severity === "blocking" &&
@@ -1723,14 +1829,23 @@ export function validateRepairApproachDecision(decision: RepairApproachDecision)
   if (!isStringArray(decision.taskLineageIds) || decision.taskLineageIds.length === 0) {
     issues.push({ code: "missing_task_lineage", message: "RepairApproachDecision requires taskLineageIds." });
   }
+  if (!isStringArray(decision.priorFailedApproachIds)) {
+    issues.push({ code: "invalid_prior_failed_approaches", message: "RepairApproachDecision requires priorFailedApproachIds to be an array." });
+  }
+  if (!isStringArray(decision.priorEvidenceIds)) {
+    issues.push({ code: "invalid_prior_evidence", message: "RepairApproachDecision requires priorEvidenceIds to be an array." });
+  }
+  if (!isStringArray(decision.newDiagnosticEvidenceIds)) {
+    issues.push({ code: "invalid_new_diagnostic_evidence", message: "RepairApproachDecision requires newDiagnosticEvidenceIds to be an array." });
+  }
   if (!nonEmpty(decision.proposedApproachId)) issues.push({ code: "missing_proposed_approach", message: "RepairApproachDecision requires a proposedApproachId." });
   if (!nonEmpty(decision.rationale)) issues.push({ code: "missing_rationale", message: "RepairApproachDecision requires a rationale." });
   if (decision.decision !== "new_approach" && decision.decision !== "repeat_rejected") {
     issues.push({ code: "invalid_decision", message: "RepairApproachDecision decision must be new_approach or repeat_rejected." });
   }
 
-  const priorFailed = new Set(decision.priorFailedApproachIds ?? []);
-  const priorEvidence = new Set(decision.priorEvidenceIds ?? []);
+  const priorFailed = new Set(isStringArray(decision.priorFailedApproachIds) ? decision.priorFailedApproachIds : []);
+  const priorEvidence = new Set(isStringArray(decision.priorEvidenceIds) ? decision.priorEvidenceIds : []);
 
   if (decision.decision === "repeat_rejected") {
     if (!priorFailed.has(decision.proposedApproachId)) {
@@ -1744,7 +1859,7 @@ export function validateRepairApproachDecision(decision: RepairApproachDecision)
 
   const isRepeat = priorFailed.has(decision.proposedApproachId);
   if (isRepeat) {
-    const newEvidence = (decision.newDiagnosticEvidenceIds ?? []).filter((id) => !priorEvidence.has(id));
+    const newEvidence = (isStringArray(decision.newDiagnosticEvidenceIds) ? decision.newDiagnosticEvidenceIds : []).filter((id) => !priorEvidence.has(id));
     if (newEvidence.length === 0) {
       issues.push({
         code: "repeated_approach_without_new_evidence",
@@ -1842,6 +1957,7 @@ export function validatePhaseAcceptance(
   requirements: readonly SourceRequirement[],
   taskAcceptances: ReadonlyMap<string, TaskAcceptance>,
   manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory = [],
 ): PlanningValidation {
   if (!isObj(phaseAcceptance) || !Array.isArray(requirements) || !(taskAcceptances instanceof Map) || !isObj(manifest)) {
     return fail([{ code: "invalid_input", message: "validatePhaseAcceptance requires a PhaseAcceptance object, a requirements array, a taskAcceptances map, and a manifest." }]);
@@ -1865,7 +1981,14 @@ export function validatePhaseAcceptance(
     if (applicability?.status === "not_applicable") {
       // NEW-6: reuse the ledger's full disposition authorization rule, not
       // a weaker "any truthy object" check.
-      const dispositionIssues = validateNotApplicableDisposition(requirement.id, requirement.obligationKind, applicability.disposition, manifest);
+      const dispositionIssues = validateNotApplicableDisposition(
+        requirement.id,
+        isNonBlankStringArray(requirement.reference?.sectionIds) ? requirement.reference.sectionIds : [],
+        requirement.obligationKind,
+        applicability.disposition,
+        manifest,
+        amendmentHistory,
+      );
       issues.push(...dispositionIssues.map((issue) => ({ ...issue, phaseId: phaseAcceptance.phaseId })));
       continue;
     }
@@ -1911,8 +2034,9 @@ export function assertPhaseAcceptance(
   requirements: readonly SourceRequirement[],
   taskAcceptances: ReadonlyMap<string, TaskAcceptance>,
   manifest: ApprovedSourceManifest,
+  amendmentHistory: AmendmentHistory = [],
 ): void {
-  assertValid(validatePhaseAcceptance(phaseAcceptance, requirements, taskAcceptances, manifest), `Phase acceptance ${phaseAcceptance.phaseId}`);
+  assertValid(validatePhaseAcceptance(phaseAcceptance, requirements, taskAcceptances, manifest, amendmentHistory), `Phase acceptance ${phaseAcceptance.phaseId}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1996,6 +2120,9 @@ export function assertAssignmentClaim(claim: AssignmentClaim): void {
  * check-only inventory (timestamps, absent PRs, stale chat) is insufficient.
  */
 export function assertClaimReassignable(prior: AssignmentClaim, next: AssignmentClaim): void {
+  if (!isObj(prior) || !isObj(next)) {
+    throw new Error("Claim reassignment requires valid prior and next AssignmentClaim objects.");
+  }
   if (prior.packetId !== next.packetId) {
     throw new Error(`Claim ${next.id} reassigns a different packet than prior claim ${prior.id}.`);
   }
@@ -2158,6 +2285,7 @@ export interface PlanReadinessInput {
   readonly hostCapabilities: HostPlanningCapabilities;
   /** B1 revision-to-revision guard: supplied when this revision amends a prior one. */
   readonly priorRevision?: ExecutionPlanRevision;
+  readonly amendmentHistory?: AmendmentHistory;
 }
 
 export interface PlanReadinessResult {
@@ -2182,7 +2310,8 @@ export function computePlanReadiness(input: PlanReadinessInput): PlanReadinessRe
 
   const blockers: string[] = [];
 
-  const revisionValidation = validateExecutionPlanRevision(input.revision, input.manifest);
+  const amendmentHistory = Array.isArray(input.amendmentHistory) ? input.amendmentHistory : [];
+  const revisionValidation = validateExecutionPlanRevision(input.revision, input.manifest, amendmentHistory);
   blockers.push(...revisionValidation.issues.map((issue) => issue.message));
 
   const coverageValidation = validateCoverageReview(input.coverageReview);
@@ -2214,7 +2343,7 @@ export function computePlanReadiness(input: PlanReadinessInput): PlanReadinessRe
   // B1 (revision-to-revision guard): when a prior revision is supplied,
   // every requirement it named must survive or be authorized-removed.
   if (input.priorRevision !== undefined) {
-    const removalValidation = validateRequirementRemovalAgainstPrior(input.revision, input.priorRevision, input.manifest);
+    const removalValidation = validateRequirementRemovalAgainstPrior(input.revision, input.priorRevision, input.manifest, amendmentHistory);
     blockers.push(...removalValidation.issues.map((issue) => issue.message));
   }
 

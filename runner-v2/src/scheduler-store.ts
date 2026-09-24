@@ -97,6 +97,12 @@ import {
   type BuildRiskAssessment,
   type BuildRiskAssessmentInput,
 } from "./risk-policy.js";
+import {
+  isPlanningEventType,
+  reducePlanningProjection,
+  type PlanningEventType,
+  type PlanningProjection,
+} from "./planning-projection.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -176,7 +182,9 @@ export type SchedulerEventType =
   | "project_doc.requested"
   | "project_doc.committed"
   | "project_doc.abandoned"
-  | "project_docs.policy_configured";
+  | "project_docs.policy_configured"
+  | "planning.policy_configured"
+  | PlanningEventType;
 
 export interface SchedulerEvent {
   eventId: string;
@@ -628,6 +636,8 @@ export interface SchedulerProjection {
   projectDocs?: ProjectDocsProjection;
   /** Set when this run was stamped `project_docs.policy_configured`. Legacy runs omit it. */
   projectDocsPolicyVersion?: number;
+  planningPolicyVersion?: 1;
+  planning?: PlanningProjection;
   /** Sequence of the latest integration that advanced the canonical revision. */
   latestIntegratedTaskSequence?: number;
   lastArchitectActionEvent?: {
@@ -1793,7 +1803,8 @@ export function reduceSchedulerEvent(
     event.actor.role === "verifier" &&
     event.type !== "verifier.verdict_submitted" &&
     event.type !== "verifier.expectations_recorded" &&
-    event.type !== "plan_critique.submitted"
+    event.type !== "plan_critique.submitted" &&
+    event.type !== "planning.coverage_review_recorded"
   ) {
     throw new Error("The verifier has no scheduler lifecycle authority.");
   }
@@ -1870,6 +1881,11 @@ export function reduceSchedulerEvent(
           projectDocs: cloneProjectDocs(current.projectDocs),
         }
       : {}),
+    ...(current.planning
+      ? {
+          planning: structuredClone(current.planning),
+        }
+      : {}),
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
@@ -1886,6 +1902,60 @@ export function reduceSchedulerEvent(
     )
   ) {
     throw new Error("A failed Build cannot be resumed or dispatched.");
+  }
+  if (isPlanningEventType(event.type)) {
+    if (["completed", "failed", "stopped"].includes(current.status)) {
+      throw new Error("A terminal Build cannot accept planning events.");
+    }
+    if (next.planningPolicyVersion !== 1) {
+      throw new Error("Planning events require a durable planning policy stamp.");
+    }
+    next.planning = reducePlanningProjection(current.planning, {
+      runId: event.runId,
+      type: event.type,
+      occurredAt: event.occurredAt,
+      actor: event.actor,
+      idempotencyKey: event.idempotencyKey,
+      payload: event.payload,
+    }, {
+      taskStatuses: new Map(Object.entries(current.tasks).map(([taskId, task]) => [taskId, task.status])),
+    });
+    return next;
+  }
+  if (event.type === "planning.policy_configured") {
+    if (["completed", "failed", "stopped"].includes(current.status)) {
+      throw new Error("A terminal Build cannot configure planning policy.");
+    }
+    if (event.actor.role !== "runner") {
+      throw new Error("Only the runner may configure planning policy.");
+    }
+    if (
+      current.lastSequence > 3 ||
+      current.planRevision !== 0 ||
+      Object.keys(current.tasks).length > 0 ||
+      current.lastArchitectActionEvent !== undefined ||
+      Object.keys(current.guidance).length > 0 ||
+      Object.keys(current.userGuidance).length > 0 ||
+      Object.keys(current.architectQuestions).length > 0 ||
+      Object.keys(current.reviews).length > 0 ||
+      Object.keys(current.runtime.providerHealth).length > 0 ||
+      Object.keys(current.runtime.workerAssignments).length > 0 ||
+      current.runtime.architect.runtimeId !== undefined ||
+      current.integrationRevision !== undefined ||
+      current.finalVerification !== undefined ||
+      current.processRecovery !== undefined ||
+      current.contextRecording !== undefined
+    ) {
+      throw new Error("Planning policy can only be configured during run creation.");
+    }
+    if (event.payload.version !== 1 || Object.keys(event.payload).length !== 1) {
+      throw new Error("Planning policy version is invalid.");
+    }
+    if (next.planningPolicyVersion !== undefined) {
+      throw new Error("Planning policy is already configured.");
+    }
+    next.planningPolicyVersion = 1;
+    return next;
   }
   switch (event.type) {
     case "process.recovery_updated": {
