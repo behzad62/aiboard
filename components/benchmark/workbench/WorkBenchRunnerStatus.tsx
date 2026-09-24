@@ -123,7 +123,7 @@ export function WorkBenchRunnerStatus({
           </div>
           <p className="text-xs text-muted-foreground @[64rem]:text-right">
             {recoverableJobService ? (
-              <>Requires Windows and Node.js 24.18.0. After extraction, run <code>npm ci</code> and{" "}
+              <>Requires Node.js 24.18.0. After extraction, run <code>npm ci</code> and{" "}
                 <code>npm run setup:browser</code>.</>
             ) : (
               <>Includes Runner V2. After extraction, run <code>npm install</code> and{" "}

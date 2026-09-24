@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
-export const PINNED_RJS_RUNNER_COMMIT = "ccbbb0eeabc9f1543270d5e2abfb10b65c8d3c87";
+export const PINNED_RJS_RUNNER_COMMIT = "6c166f974e8c0b6f522d70327a838b1e6c3432b5";
 
 function git(repoRoot, args, options = {}) {
   return execFileSync("git", ["-C", repoRoot, ...args], {

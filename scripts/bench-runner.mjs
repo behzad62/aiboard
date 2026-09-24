@@ -417,7 +417,6 @@ async function inspectRjsRuntime() {
       ready: true,
       nodeVersion: process.versions.node,
       quickjsVersion: quickjsPackage.version,
-      managedBuildSupported: process.platform === "win32",
       contractHash: hashes.contractHash,
       suiteHash: hashes.suiteHash,
       profile: evaluator.PROFILE,
@@ -770,9 +769,6 @@ async function startAttemptRunner(body) {
   const attemptId = validateAttemptId(requiredString(body, "attemptId"));
   const attemptRoot = attemptWorkspacePath(attemptId);
   const meta = await readMeta(attemptRoot);
-  if (meta.trustedPolicy?.kind === "recoverable-job-service" && process.platform !== "win32") {
-    throw new HttpError(503, "This Recoverable Job Service release requires Windows for model-driven runs.");
-  }
   if (!runnerV2Launcher) {
     throw new HttpError(
       503,

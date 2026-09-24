@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { getTrustedBenchRunnerReadiness } from "../lib/client/bench-runner";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { RecoverableJobServiceSummary } from "../components/benchmark/certified/RecoverableJobServiceSummary";
@@ -9,11 +8,6 @@ import { createRecoverableJobServiceCasePack } from "../lib/benchmark/workbench/
 import { createWorkBenchPublicContractArtifact } from "../lib/benchmark/workbench/artifacts";
 import { createRecoverableJobServiceCase } from "../lib/benchmark/workbench/recoverable-job-service/case-pack";
 import { evaluateBounded, toVerifierResult } from "../benchmarks/recoverable-job-service/private/runtime.mjs";
-
-assert.match(getTrustedBenchRunnerReadiness({
-  ok: true, runnerV2: { ready: true },
-  rjs: { ready: true, managedBuildSupported: false },
-}, createRecoverableJobServiceCase()).error ?? "", /Windows/);
 
 const attemptId = "history/attempt:unicode-Δ";
 const benchmarkCase = createRecoverableJobServiceCase();

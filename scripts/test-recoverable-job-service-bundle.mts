@@ -217,7 +217,6 @@ try {
     });
     assert.equal(prepared.status, 200, JSON.stringify(prepared.data));
     const started = await request(baseUrl, token, "/bench/attempt-runner/start", { attemptId: "extracted_rjs_health" });
-    if (process.platform === "win32") {
       assert.equal(started.status, 200, JSON.stringify(started.data));
       assert.equal(started.data.nodeVersion, "24.18.0");
       const childHealthResponse = await fetch(`${started.data.url}/v2/health`, {
@@ -233,11 +232,6 @@ try {
       assert.equal(childHealth.projectPath, prepared.data.root);
       assert.equal(childHealth.nodeVersion, "24.18.0");
       assert.equal((await request(baseUrl, token, "/bench/attempt-runner/stop", { attemptId: "extracted_rjs_health" })).status, 200);
-    } else {
-      assert.equal(started.status, 503, JSON.stringify(started.data));
-      assert.match(String(started.data.error), /requires Windows/);
-      assert.equal((health?.rjs as TestJson)?.managedBuildSupported, false);
-    }
     const evaluated = await request(baseUrl, token, "/bench/run-verifier", {
       attemptId: "extracted_rjs_health",
     });

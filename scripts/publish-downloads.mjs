@@ -282,7 +282,7 @@ async function publishRjsWorkBenchRunner() {
   entries.set("package.json", packageBytes);
   entries.set("package-lock.json", lockBytes);
   entries.set("LICENSE", Buffer.from(normalizedTextFile(path.join(root, "LICENSE"))));
-  entries.set("README.md", Buffer.from(`# AI Board Recoverable Job Service WorkBench runner\n\nThis self-contained local package runs the Recoverable Job Service benchmark with its exact trusted runtime and accepted Runner V2 source. Model-driven runs require Windows and Node.js 24.18.0 because the accepted Runner uses Windows Job Objects. The standalone evaluator also runs on Linux.\n\n1. Run \`npm ci\`.\n2. Run \`npm run setup:browser\`.\n3. Run \`npm start\`.\n4. Paste the printed local URL and token into AI Board.\n\nThe private evaluator is trusted against benchmark agents, but it is present on and inspectable by the machine owner. Give models only the candidate-visible files shown in AI Board; do not provide the private evaluator or controls as solution material.\n`));
+  entries.set("README.md", Buffer.from(`# AI Board Recoverable Job Service WorkBench runner\n\nThis self-contained local package runs the Recoverable Job Service benchmark with its exact trusted runtime and accepted Runner V2 source. Use Node.js 24.18.0.\n\n1. Run \`npm ci\`.\n2. Run \`npm run setup:browser\`.\n3. Run \`npm start\`.\n4. Paste the printed local URL and token into AI Board.\n\nThe private evaluator is trusted against benchmark agents, but it is present on and inspectable by the machine owner. Give models only the candidate-visible files shown in AI Board; do not provide the private evaluator or controls as solution material.\n`));
   const archiveAllowlist = [...entries.keys()].sort();
   const manifest = {
     schemaVersion: 1,

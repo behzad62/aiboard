@@ -39,7 +39,6 @@ export interface BenchRunnerHealth {
   };
   rjs?: {
     ready: boolean;
-    managedBuildSupported?: boolean;
     nodeVersion?: string;
     quickjsVersion?: string;
     contractHash?: string;
@@ -104,9 +103,6 @@ export function getTrustedBenchRunnerReadiness(
       ready: false,
       error: trusted?.error ?? "Recoverable Job Service trusted runtime is unavailable.",
     };
-  }
-  if (trusted.managedBuildSupported === false) {
-    return { ready: false, error: "This Recoverable Job Service release requires Windows for model-driven runs." };
   }
   if (trusted.nodeVersion !== policy.requiredNodeVersion) {
     return {
