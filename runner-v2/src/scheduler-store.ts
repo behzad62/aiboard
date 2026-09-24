@@ -576,6 +576,14 @@ export interface RepairCyclesProjection {
   };
 }
 
+/**
+ * Durable request-triage decision. T9 owns the triage events that set this;
+ * T3a defines the field and the planning-state predicate that reads it.
+ * Until T9 lands this is always undefined ("no decision yet"), which counts
+ * as planning state.
+ */
+export type PlanningTriageDecision = "answer" | "build" | "clarify";
+
 export interface SchedulerProjection {
   processRecovery?: Record<string, RecoveryAuditRecord>;
   runId: string;
@@ -638,6 +646,16 @@ export interface SchedulerProjection {
   projectDocsPolicyVersion?: number;
   planningPolicyVersion?: 1;
   planning?: PlanningProjection;
+  /** Durable triage decision once T9 lands; undefined ("no decision yet") until then. */
+  planningTriageDecision?: PlanningTriageDecision;
+  /**
+   * T3a repair (B1/C): ready-plan binding per scheduler task id, new-policy
+   * runs only. Stamped by the reducer when tasks are created (plan.created /
+   * plan.reconciled newTasks) with the then-current ready plan identity;
+   * admission requires the binding to equal the current ready identity.
+   * Legacy runs omit it. Derived from the event log on rebuild.
+   */
+  readyPlanTaskBindings?: Record<string, ReadyPlanTaskBinding>;
   /** Sequence of the latest integration that advanced the canonical revision. */
   latestIntegratedTaskSequence?: number;
   lastArchitectActionEvent?: {
@@ -667,6 +685,133 @@ export function planCritiquePending(projection: SchedulerProjection): boolean {
   if (!state.risk) return true;
   if (!planCritiqueRequired(state.policy.mode, state.risk.assessment)) return false;
   return state.current?.status !== "resolved";
+}
+
+/**
+ * T3a (OA-7/EP41): kernel predicate over the durable projection. A new-policy
+ * run is in planning state while it has no ready plan and its durable triage
+ * decision is anything other than `answer` (no decision yet, `build`, or
+ * `clarify`). Legacy runs are never in planning state. T9 populates the
+ * triage decision and reuses this predicate for the answer path.
+ */
+export function isPlanningState(projection: SchedulerProjection): boolean {
+  if (projection.planningPolicyVersion !== 1) return false;
+  if (projection.planning?.readiness === "ready") return false;
+  return projection.planningTriageDecision !== "answer";
+}
+
+export interface ReadyPlanIdentity {
+  readonly revisionId: string;
+  readonly digest: string;
+}
+
+/**
+ * T3a (EP32/EP23): the READY plan identity — the ready plan revision digest —
+ * or undefined when this run has no ready plan. Worker admission (scheduler
+ * and reducer) and plan-only completion both require this identity; a changed
+ * source or plan flips the durable readiness back (T2 reducer), which removes
+ * the identity until re-readiness. T3b produces the coverage verdict that
+ * makes readiness possible; until then this is always undefined.
+ */
+export function readyPlanIdentity(
+  projection: SchedulerProjection,
+): ReadyPlanIdentity | undefined {
+  if (projection.planningPolicyVersion !== 1) return undefined;
+  const planning = projection.planning;
+  if (planning?.readiness !== "ready" || !planning.plan) return undefined;
+  if (!planning.plan.currentRevisionId || !planning.plan.currentDigest) return undefined;
+  return {
+    revisionId: planning.plan.currentRevisionId,
+    digest: planning.plan.currentDigest,
+  };
+}
+
+/**
+ * T3a repair (B1c): the ready plan identity stamped on a scheduler task at
+ * creation time. A task is admitted only while its binding equals the run's
+ * current ready plan identity.
+ */
+export interface ReadyPlanTaskBinding {
+  readonly revisionId: string;
+  readonly digest: string;
+}
+
+/**
+ * T3a repair (B1c): single source of truth for new-policy worker admission.
+ * Returns the blocking reason, or undefined when the task may be admitted.
+ * Legacy runs are never blocked here. The `task.transitioned` reducer gate
+ * and `TaskScheduler.tick` both use this predicate.
+ */
+export function newPolicyTaskAdmissionBlocked(
+  projection: SchedulerProjection,
+  taskId: string,
+): string | undefined {
+  if (projection.planningPolicyVersion !== 1) return undefined;
+  if (projection.runPolicy === "plan_only") {
+    return "Plan-only runs never admit workers.";
+  }
+  const ready = readyPlanIdentity(projection);
+  if (!ready) {
+    return "Worker admission requires a ready plan revision.";
+  }
+  const binding = projection.readyPlanTaskBindings?.[taskId];
+  if (
+    !binding ||
+    binding.revisionId !== ready.revisionId ||
+    binding.digest !== ready.digest
+  ) {
+    return `Task ${taskId} is not bound to the current ready plan revision ${ready.revisionId}.`;
+  }
+  return undefined;
+}
+
+/**
+ * T3a repair cycle 2 (B2): at `planning.plan_ready`, every non-terminal
+ * task carrying a stale ready-plan binding is rebound to the new ready
+ * identity. Any binding on a new-policy run was stamped from a ready
+ * identity (creation paths refuse otherwise), so a stale binding is
+ * necessarily from a previous ready revision; rebinding restores admission
+ * after re-readiness (EP23: blocked only "until re-readiness"). Terminal
+ * tasks keep their stamps (they will never need admission again) and
+ * never-bound tasks stay unbound (fail closed). Pure function of the
+ * post-event projection: deterministic and replay-safe.
+ */
+function rebindReadyPlanTaskBindings(projection: SchedulerProjection): void {
+  if (projection.planningPolicyVersion !== 1) return;
+  const ready = readyPlanIdentity(projection);
+  if (!ready) return;
+  const current = projection.readyPlanTaskBindings;
+  if (!current) return;
+  let rebound: Record<string, ReadyPlanTaskBinding> | undefined;
+  for (const [taskId, task] of Object.entries(projection.tasks)) {
+    if (task.status === "integrated" || task.status === "cancelled") continue;
+    const binding = current[taskId];
+    if (!binding) continue;
+    if (binding.revisionId === ready.revisionId && binding.digest === ready.digest) continue;
+    rebound ??= { ...current };
+    rebound[taskId] = { revisionId: ready.revisionId, digest: ready.digest };
+  }
+  if (rebound) projection.readyPlanTaskBindings = rebound;
+}
+
+/**
+ * T3a repair cycle 2 (B2): true when a new-policy run has pending
+ * non-terminal work but admission blocks every piece of it — the run would
+ * otherwise idle forever with zero Architect calls. The kernel final
+ * verification task is never worker-dispatched (the tick skips it), so it
+ * never counts as pending here. Legacy runs are never stalled.
+ * BuildRuntime.step wakes the Architect (plan_required) instead of idling
+ * when this holds after a tick made no progress.
+ */
+export function newPolicyStaleTasksRequireArchitect(projection: SchedulerProjection): boolean {
+  if (projection.planningPolicyVersion !== 1) return false;
+  const pending = Object.values(projection.tasks).filter(
+    (task) => task.kind !== "final_verification" && task.status !== "integrated" && task.status !== "cancelled",
+  );
+  if (pending.length === 0) return false;
+  return pending.every(
+    (task) => newPolicyTaskAdmissionBlocked(projection, task.id) !== undefined,
+  );
 }
 
 export function consumeRepairCycle(projection: SchedulerProjection): void {
@@ -990,7 +1135,15 @@ export function buildCompletionReadiness(
   const issues: string[] = [];
   if (projection.runPolicy === "plan_only") {
     issues.push(...projectDocumentationReadiness(projection));
-    if (projection.planRevision <= 0) issues.push("Plan-only completion requires a valid plan.");
+    if (projection.planningPolicyVersion === 1) {
+      // T3a (EP32): a new-policy plan-only run completes only with the READY
+      // plan identity. The documentation gate above is unchanged (G-3).
+      if (!readyPlanIdentity(projection)) {
+        issues.push("Plan-only completion requires a ready plan revision (evidence-gated planning is not ready).");
+      }
+    } else if (projection.planRevision <= 0) {
+      issues.push("Plan-only completion requires a valid plan.");
+    }
     return { ready: issues.length === 0, issues };
   }
 
@@ -1920,6 +2073,11 @@ export function reduceSchedulerEvent(
     }, {
       taskStatuses: new Map(Object.entries(current.tasks).map(([taskId, task]) => [taskId, task.status])),
     });
+    if (event.type === "planning.plan_ready") {
+      // T3a repair cycle 2 (B2): re-readiness rebinds stale non-terminal
+      // tasks to the new ready revision, so admission works again (EP23).
+      rebindReadyPlanTaskBindings(next);
+    }
     return next;
   }
   if (event.type === "planning.policy_configured") {
@@ -2011,6 +2169,18 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may create a plan.");
       }
+      // T3a repair (B1a): on a new-policy run, scheduler tasks materialise
+      // only from a ready plan — which is necessarily after the ledger — so a
+      // legacy plan_tasks call before readiness is refused. Legacy runs are
+      // untouched.
+      const planReady = current.planningPolicyVersion === 1
+        ? readyPlanIdentity(current)
+        : undefined;
+      if (current.planningPolicyVersion === 1 && !planReady) {
+        throw new Error(
+          "Scheduler tasks on a new-policy run require a ready plan revision."
+        );
+      }
       const tasks = event.payload.tasks as BuildTask[];
       const validation = validateTaskGraph(tasks);
       if (!validation.valid) {
@@ -2020,6 +2190,19 @@ export function reduceSchedulerEvent(
       }
       next.planRevision = requiredNumber(event.payload, "revision");
       next.tasks = Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)]));
+      if (planReady) {
+        // T3a repair (B1c): bind every created task to the ready plan that
+        // authorised it. Admission compares this stamp to the current ready
+        // identity, so tasks from a superseded revision are never admitted.
+        const bindings = { ...current.readyPlanTaskBindings };
+        for (const task of tasks) {
+          bindings[task.id] = {
+            revisionId: planReady.revisionId,
+            digest: planReady.digest,
+          };
+        }
+        next.readyPlanTaskBindings = bindings;
+      }
       next.acceptanceContractStatus = acceptanceContractStatusForTasks(tasks);
       next.planRiskDeclaration = parsePlanRiskDeclaration(event.payload);
       break;
@@ -2054,6 +2237,13 @@ export function reduceSchedulerEvent(
     case "acceptance_contract.upgraded": {
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may upgrade an acceptance contract.");
+      }
+      // T3a repair (B1a): task-revising events on a new-policy run require a
+      // ready plan. Legacy runs are untouched.
+      if (current.planningPolicyVersion === 1 && !readyPlanIdentity(current)) {
+        throw new Error(
+          "Acceptance-contract upgrade on a new-policy run requires a ready plan revision."
+        );
       }
       applyAcceptanceContractUpgrade(
         next,
@@ -2306,6 +2496,14 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may revise a task.");
       }
+      // T3a repair (B1a): task-revising events on a new-policy run require a
+      // ready plan. The task keeps its original ready-plan binding (fail
+      // closed): a revision is not a re-review. Legacy runs are untouched.
+      if (current.planningPolicyVersion === 1 && !readyPlanIdentity(current)) {
+        throw new Error(
+          "Task revision on a new-policy run requires a ready plan revision."
+        );
+      }
       const taskId = requiredString(event.payload, "taskId");
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
@@ -2396,6 +2594,19 @@ export function reduceSchedulerEvent(
       if (!task) throw new Error(`Unknown task ${taskId}.`);
       const status = requiredString(event.payload, "status") as BuildTask["status"];
       assertTransitionAuthority(status, event.actor.role);
+      if (
+        current.planningPolicyVersion === 1 &&
+        (status === "assigned" || status === "running")
+      ) {
+        // T3a (EP32/EP23) + repair (B1c): direct-event worker admission for a
+        // new-policy run requires the READY plan identity AND that the task
+        // be bound to that exact ready revision; plan-only runs never admit
+        // workers. Legacy runs are untouched.
+        const blocked = newPolicyTaskAdmissionBlocked(current, taskId);
+        if (blocked) {
+          throw new Error(blocked);
+        }
+      }
       if (
         status === "cancelled" &&
         task.kind === "verification_repair" &&
@@ -3043,7 +3254,11 @@ export function reduceSchedulerEvent(
         throw new Error("Final project handoff was already requested.");
       }
       if (current.runPolicy === "plan_only") {
-        if (current.planRevision <= 0) {
+        if (current.planningPolicyVersion === 1) {
+          if (!readyPlanIdentity(current)) {
+            throw new Error("Plan-only final project handoff requires a ready plan revision.");
+          }
+        } else if (current.planRevision <= 0) {
           throw new Error("Plan-only final project handoff requires a valid plan.");
         }
         assertBuildCompletionReady(current);
@@ -4083,6 +4298,19 @@ function createVerifierRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
 ): void {
+  // T3a repair cycle 2 (B3): repair tasks are ordinary worker tasks, so on
+  // a new-policy run they are planned only under a ready plan (like every
+  // other task-adding path) and stamped with its identity below. Checked
+  // before the repair cycle is consumed so a refusal spends nothing.
+  // Legacy runs are untouched.
+  const repairReady = projection.planningPolicyVersion === 1
+    ? readyPlanIdentity(projection)
+    : undefined;
+  if (projection.planningPolicyVersion === 1 && !repairReady) {
+    throw new Error(
+      "Verifier repairs on a new-policy run require a ready plan revision."
+    );
+  }
   consumeRepairCycle(projection);
   const current = projection.verifier?.current;
   if (
@@ -4203,6 +4431,13 @@ function createVerifierRepairTasks(
     );
   }
   for (const task of tasks) projection.tasks[task.id] = task;
+  if (repairReady) {
+    const bindings = { ...projection.readyPlanTaskBindings };
+    for (const task of tasks) {
+      bindings[task.id] = { revisionId: repairReady.revisionId, digest: repairReady.digest };
+    }
+    projection.readyPlanTaskBindings = bindings;
+  }
   current.repairTaskIds = tasks.map((task) => task.id);
   projection.planRevision = revision;
 }
@@ -4252,6 +4487,19 @@ function createFinalVerificationRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
 ): void {
+  // T3a repair cycle 2 (B3): repair tasks are ordinary worker tasks, so on
+  // a new-policy run they are planned only under a ready plan (like every
+  // other task-adding path) and stamped with its identity below. Checked
+  // before the repair cycle is consumed so a refusal spends nothing.
+  // Legacy runs are untouched.
+  const repairReady = projection.planningPolicyVersion === 1
+    ? readyPlanIdentity(projection)
+    : undefined;
+  if (projection.planningPolicyVersion === 1 && !repairReady) {
+    throw new Error(
+      "Final verification repairs on a new-policy run require a ready plan revision."
+    );
+  }
   consumeRepairCycle(projection);
   const current = requireCurrentFinalVerification(projection, {
     ...payload,
@@ -4350,6 +4598,13 @@ function createFinalVerificationRepairTasks(
     throw new Error(`Final verification repair plan is invalid: ${validation.issues.map((issue) => issue.message).join(" ")}`);
   }
   for (const task of tasks) projection.tasks[task.id] = task;
+  if (repairReady) {
+    const bindings = { ...projection.readyPlanTaskBindings };
+    for (const task of tasks) {
+      bindings[task.id] = { revisionId: repairReady.revisionId, digest: repairReady.digest };
+    }
+    projection.readyPlanTaskBindings = bindings;
+  }
   current.repairTaskIds = tasks.map((task) => task.id);
   projection.planRevision = revision;
 }
@@ -5342,6 +5597,16 @@ function applyPlanReconciliation(
       `Plan reconciliation must advance plan revision ${projection.planRevision} by one.`
     );
   }
+  // T3a repair (B1a): every reconciliation path (plan.reconciled, review or
+  // guidance or critique resolutions carrying one) adds or revises tasks, so
+  // on a new-policy run each requires a ready plan. This single choke point
+  // covers all four callers; none of them mutates planning first, so the
+  // identity read here is the pre-event one. Legacy runs are untouched.
+  if (projection.planningPolicyVersion === 1 && !readyPlanIdentity(projection)) {
+    throw new Error(
+      "Plan reconciliation on a new-policy run requires a ready plan revision."
+    );
+  }
   const duplicate = reconciliation.taskUpdates.find(
     (update, index, updates) =>
       updates.findIndex((candidate) => candidate.taskId === update.taskId) !== index
@@ -5579,6 +5844,20 @@ function applyPlanReconciliation(
   }
 
   projection.tasks = candidateTasks;
+  if (projection.planningPolicyVersion === 1) {
+    // T3a repair (B1c): bind tasks added by this reconciliation to the ready
+    // plan that authorised it (the entry gate guarantees one exists). Revised
+    // tasks keep their original binding: a revision is not a re-review.
+    const ready = readyPlanIdentity(projection);
+    const added = reconciliation.newTasks ?? [];
+    if (ready && added.length > 0) {
+      const bindings = { ...projection.readyPlanTaskBindings };
+      for (const task of added) {
+        bindings[task.id] = { revisionId: ready.revisionId, digest: ready.digest };
+      }
+      projection.readyPlanTaskBindings = bindings;
+    }
+  }
   for (const taskId of reviewsToClear) {
     delete projection.reviews[taskId];
   }

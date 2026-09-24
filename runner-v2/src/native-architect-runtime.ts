@@ -59,8 +59,8 @@ import {
   type ProviderHealthRegistry,
 } from "./provider-health.js";
 import type { AgentRuntimeCandidate, RuntimeRouter } from "./runtime-router.js";
-import type { SchedulerStore } from "./scheduler-store.js";
-import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
+import { isPlanningState, rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { rankSkillsForTask } from "./skill-routing.js";
@@ -298,26 +298,42 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           tool.definition.readOnly === true && tool.definition.effect === "none",
       });
     }
-    const inspectionTools = this.options.runPolicy === "plan_only"
-      ? new PlanOnlyInspectionRuntime(extras)
-      : commandRevision
-        ? composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
-            () => this.openArchitectCommandCopy(commandRevision),
-            {
-              projectRoot: this.options.projectRoot,
-              permissionProfile: this.options.permissionProfile ?? "project",
-              artifacts: this.options.artifacts,
-              evidenceStore: this.options.evidenceStore,
-              clock: this.clock,
-              ...(this.options.git ? { git: this.options.git } : {}),
-              ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
-              ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
-              ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
-              ...(this.options.execution ? { execution: this.options.execution } : {}),
-              ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
-            },
-          ))
-        : extras;
+    // T3a (OA-7/EP41): a new-policy run in planning state — no ready plan and
+    // no triage `answer` — is refused Architect command execution at the tool
+    // boundary, not only in the prompt. Legacy runs behave as today.
+    let inspectionTools: AgentToolRuntime;
+    if (this.options.runPolicy === "plan_only") {
+      inspectionTools = new PlanOnlyInspectionRuntime(extras);
+    } else if (isPlanningState(projection)) {
+      inspectionTools = new PlanningStateInspectionRuntime(extras);
+    } else if (commandRevision) {
+      // T3a repair (N4): the command tool stays listed for the turn, but
+      // every invoke re-reads the projection — losing readiness mid-turn
+      // refuses run_evidence_command from that point on.
+      inspectionTools = new PlanningStateCommandGuard(
+        composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
+          () => this.openArchitectCommandCopy(commandRevision),
+          {
+            projectRoot: this.options.projectRoot,
+            permissionProfile: this.options.permissionProfile ?? "project",
+            artifacts: this.options.artifacts,
+            evidenceStore: this.options.evidenceStore,
+            clock: this.clock,
+            ...(this.options.git ? { git: this.options.git } : {}),
+            ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
+            ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+            ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+            ...(this.options.execution ? { execution: this.options.execution } : {}),
+            ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
+          },
+        )),
+        () => rebuildSchedulerProjection(
+          this.options.schedulerStore.readRun(request.runId),
+        ),
+      );
+    } else {
+      inspectionTools = extras;
+    }
     const layeredTools = new LayeredToolRuntime(request.tools, inspectionTools);
     const tools = this.options.budgetLedger
       ? new BudgetedToolRuntime({
@@ -1089,6 +1105,91 @@ export class PlanOnlyInspectionRuntime implements AgentToolRuntime {
       },
     };
   }
+}
+
+/**
+ * T3a (OA-7/EP41): the inspection surface for a new-policy run in planning
+ * state. Full read-only inspection stays available; `run_evidence_command` is
+ * neither listed nor invokable — forged calls are refused with
+ * `planning_state_command_refused`, and no disposable copy is ever created.
+ */
+export class PlanningStateInspectionRuntime implements AgentToolRuntime {
+  constructor(private readonly runtime: AgentToolRuntime) {}
+
+  definitions() {
+    return this.runtime.definitions().filter(
+      (definition) => definition.name !== "run_evidence_command",
+    );
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return name !== "run_evidence_command" && this.runtime.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return name !== "run_evidence_command" && this.runtime.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.runtime.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    if (call.name === "run_evidence_command") {
+      return planningStateCommandRefused(call);
+    }
+    return await this.runtime.invoke(call, context);
+  }
+}
+
+/**
+ * T3a repair (N4): per-invoke planning-state gate for Architect turns that
+ * started outside planning state. The command tool stays listed, but every
+ * `run_evidence_command` invoke re-reads the durable projection and is
+ * refused once the run has returned to planning state (e.g. readiness lost
+ * mid-turn). All other tools delegate untouched.
+ */
+export class PlanningStateCommandGuard implements AgentToolRuntime {
+  constructor(
+    private readonly runtime: AgentToolRuntime,
+    private readonly readProjection: () => SchedulerProjection,
+  ) {}
+
+  definitions() {
+    return this.runtime.definitions();
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return this.runtime.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.runtime.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.runtime.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    if (call.name === "run_evidence_command" && isPlanningState(this.readProjection())) {
+      return planningStateCommandRefused(call);
+    }
+    return await this.runtime.invoke(call, context);
+  }
+}
+
+function planningStateCommandRefused(call: ToolCallBlock): ToolResult {
+  const message =
+    "Architect command execution is refused while the run is in planning state: " +
+    "no ready plan exists and the triage decision is not answer.";
+  return {
+    callId: call.callId,
+    toolName: call.name,
+    content: [{ type: "text", text: message }],
+    isError: true,
+    error: { code: "planning_state_command_refused", message },
+  };
 }
 
 class LayeredToolRuntime implements AgentToolRuntime {

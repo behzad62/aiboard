@@ -25,10 +25,14 @@ import {
   contextRecordingRetriesRemaining,
   DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
+  isPlanningState,
   latestUnresolvedContextRecordingNote,
+  newPolicyStaleTasksRequireArchitect,
+  readyPlanIdentity,
   rebuildSchedulerProjection,
   repairCyclesExhausted,
 } from "./scheduler-store.js";
+import type { PlanningSourceReader } from "./planning-tools.js";
 import type { BuildTask } from "./task-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import type {
@@ -224,6 +228,12 @@ export interface BuildRuntimeOptions {
   architectLifecycleProbe?: (
     tools: readonly NativeTool<unknown>[],
   ) => readonly NativeTool<unknown>[];
+  /**
+   * Supplies approved-source bytes for new-policy planning reads. When absent
+   * the read tool falls back to the artifact store by artifact digest, and
+   * errors explicitly when neither is provisioned.
+   */
+  planningSourceReader?: PlanningSourceReader;
 }
 
 export interface ProjectDocsPort {
@@ -280,6 +290,7 @@ export class BuildRuntime {
   private readonly planCritic?: PlanCriticDriver;
   private readonly repairPlanLimit: number;
   private readonly architectLifecycleProbe?: BuildRuntimeOptions["architectLifecycleProbe"];
+  private readonly planningSourceReader?: PlanningSourceReader;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
   private recordingFailureContext: {
@@ -312,6 +323,7 @@ export class BuildRuntime {
     this.planCritic = options.planCritic;
     this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
     this.architectLifecycleProbe = options.architectLifecycleProbe;
+    this.planningSourceReader = options.planningSourceReader;
     if (
       this.independentVerifier &&
       (
@@ -755,7 +767,15 @@ export class BuildRuntime {
       );
       return this.afterArchitect("acceptance_contract_upgrade_required");
     }
-    if (projection.planRevision === 0) {
+    if (projection.planningPolicyVersion === 1) {
+      // T3a: new-policy runs plan through the planning tools, not plan_tasks,
+      // so legacy planRevision stays 0; planning continues until T3b's ready
+      // plan identity exists (unreachable until T3b lands — correct).
+      if (!readyPlanIdentity(projection)) {
+        await this.runArchitect({ type: "plan_required" }, projection);
+        return this.afterArchitect("plan_required");
+      }
+    } else if (projection.planRevision === 0) {
       await this.runArchitect({ type: "plan_required" }, projection);
       return this.afterArchitect("plan_required");
     }
@@ -971,6 +991,13 @@ export class BuildRuntime {
     }
     if (afterWorkers.lastSequence > sequenceBeforeWorkers) {
       return { status: "progressed", action: "workers_advanced" };
+    }
+    // T3a repair cycle 2 (B2): never idle forever when pending work exists
+    // but admission blocks all of it — wake the Architect to reconcile
+    // instead of returning idle with zero Architect calls.
+    if (newPolicyStaleTasksRequireArchitect(afterWorkers)) {
+      await this.runArchitect({ type: "plan_required" }, afterWorkers);
+      return this.afterArchitect("plan_required");
     }
     return { status: "idle", action: "no_mechanical_progress" };
   }
@@ -1808,7 +1835,9 @@ export class BuildRuntime {
       planOnlyCompletionAvailable:
         this.runPolicy === "plan_only" &&
         reason.type === "completion_decision_required" &&
-        projection.planRevision > 0,
+        (projection.planningPolicyVersion === 1
+          ? readyPlanIdentity(projection) !== undefined
+          : projection.planRevision > 0),
       finalVerificationPlanAvailable:
         reason.type === "final_verification_plan_required",
       finalVerificationReviewAvailable:
@@ -1823,6 +1852,18 @@ export class BuildRuntime {
         reason,
         sequence: projection.lastSequence,
       },
+      ...(projection.planningPolicyVersion === 1
+        ? {
+            planningTools: {
+              ...(this.planningSourceReader
+                ? { readSource: this.planningSourceReader }
+                : {}),
+            },
+          }
+        : {}),
+      // T3a repair (B1b): in planning state the legacy plan/task tools are
+      // not offered. False for legacy runs and once a plan is ready.
+      ...(isPlanningState(projection) ? { planningState: true as const } : {}),
       ...(this.finalVerificationProfileFor
         ? { finalVerificationProfileFor: this.finalVerificationProfileFor }
         : {}),
@@ -2233,16 +2274,21 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "answer_guidance",
   "ask_user",
   "complete_run",
+  "draft_planning_plan",
+  "persist_planning_ledger",
   "plan_final_verification",
   "plan_tasks",
   "plan_verification_repairs",
   "plan_verifier_repairs",
+  "read_planning_source_section",
   "reconcile_plan",
+  "record_planning_checkpoint",
   "request_integration",
   "resolve_context_recording",
   "resolve_plan_critique",
   "review_final_verification",
   "review_task",
+  "revise_planning_plan",
   "revise_task",
   "upgrade_acceptance_contract",
   "write_project_doc",
@@ -2343,6 +2389,20 @@ const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store"
   {
     runPolicy: "finish",
     planCritiqueResolutionAvailable: true,
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    runPolicy: "finish",
+    planningTools: {},
+    architectAction: { reason: { type: "plan_required" }, sequence: 0 },
+  },
+  {
+    // T3a repair (B1b): the planning-state registration shape. It registers
+    // a subset of the universe (no legacy plan/task tools), so the surface
+    // assert still holds; the entry keeps future shapes inside the surface.
+    runPolicy: "finish",
+    planningTools: {},
+    planningState: true,
     architectAction: { reason: { type: "plan_required" }, sequence: 0 },
   },
 ];

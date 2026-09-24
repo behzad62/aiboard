@@ -4,7 +4,9 @@ import type {
   SchedulerStore,
 } from "./scheduler-store.js";
 import {
+  newPolicyTaskAdmissionBlocked,
   planCritiquePending,
+  readyPlanIdentity,
   rebuildSchedulerProjection,
 } from "./scheduler-store.js";
 import { isFinalVerificationTask, type BuildTask } from "./task-contracts.js";
@@ -124,6 +126,11 @@ export class TaskScheduler {
         "acceptance_contract_upgrade_required"
       ) return;
       if (planCritiquePending(projection)) return;
+      // T3a (EP32/EP23): a new-policy run admits no worker until the plan is
+      // ready; a changed source or plan flips readiness back (T2 reducer),
+      // which re-blocks admission until re-readiness. Plan-only runs never
+      // admit workers, even with a ready plan. Legacy runs are untouched.
+      if (newPolicyAdmissionClosed(projection)) return;
 
       for (const task of Object.values(projection.tasks)) {
         if (this.active.size >= this.maxConcurrency) break;
@@ -132,11 +139,20 @@ export class TaskScheduler {
           (task.status === "assigned" || task.status === "running") &&
           !this.active.has(task.id)
         ) {
+          // T3a repair (B1c): only tasks bound to the current ready plan may
+          // be dispatched; anything else is skipped without spending work.
+          if (newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
           const allocation = task.workspacePath
             ? { path: task.workspacePath }
             : normalizeWorkspace(await this.workspaceFor(task, task.attempt));
           projection = this.projection();
           if (hasPendingUserGuidance(projection)) return;
+          // T3a repair (N3): re-check admission after the async gap, so a
+          // source/plan change landing during the await cannot dispatch. A
+          // global loss stops the tick; a per-task loss skips just this
+          // task. Either way the task is skipped cleanly, never thrown.
+          if (newPolicyAdmissionClosed(projection)) return;
+          if (newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
           const workspacePath = allocation.path;
           if (task.status === "assigned") {
             this.transition(task.id, "running", task.attempt, {
@@ -144,6 +160,11 @@ export class TaskScheduler {
             }, task.assignedWorkerId);
             projection = this.projection();
           }
+          // T3a repair (N3): final check before each dispatch (this also
+          // covers the no-await workspacePath path). The check and the
+          // transition/dispatch below are synchronous, so no change can land
+          // between them and tick() never throws an admission error.
+          if (newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
           this.dispatch(projection.tasks[task.id], workspacePath);
         }
       }
@@ -163,14 +184,23 @@ export class TaskScheduler {
           });
           break;
         }
+        // T3a repair (B1c): skip tasks not bound to the current ready plan
+        // before spending a workspace allocation on them.
+        if (newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
         const attempt = task.attempt + 1;
         const allocation = normalizeWorkspace(
           await this.workspaceFor(task, attempt)
         );
         projection = this.projection();
         if (hasPendingUserGuidance(projection)) return;
+        // T3a repair (N3): re-check after the async gap; skip cleanly.
+        if (newPolicyAdmissionClosed(projection)) return;
+        if (newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
         const workspacePath = allocation.path;
         const workerId = standardWorkerId(taskId, attempt);
+        // T3a repair (N3): final check before the transitions and dispatch;
+        // synchronous with them, so tick() never throws an admission error.
+        if (newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
         this.transition(taskId, "assigned", attempt, {
           attempt,
           assignedWorkerId: workerId,
@@ -387,4 +417,15 @@ function hasPendingUserGuidance(projection: SchedulerProjection): boolean {
   return Object.values(projection.userGuidance).some(
     (guidance) => guidance.status === "submitted"
   );
+}
+
+/**
+ * T3a repair (N3): the global half of new-policy admission — plan-only, or
+ * no ready plan at all. When closed, the whole tick stops; per-task binding
+ * loss instead skips just that task (`newPolicyTaskAdmissionBlocked`).
+ * Legacy runs are never closed here.
+ */
+function newPolicyAdmissionClosed(projection: SchedulerProjection): boolean {
+  return projection.planningPolicyVersion === 1 &&
+    (projection.runPolicy === "plan_only" || !readyPlanIdentity(projection));
 }

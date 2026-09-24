@@ -43,6 +43,19 @@ export const ARCHITECT_PROJECT_DOCS_INSTRUCTIONS = [
   DEFAULT_STATE_TEMPLATE,
 ].join("\n");
 
+/**
+ * T3a: shown only on new-policy runs (durable planningPolicyVersion 1).
+ * Compact by design (token economy): the kernel enforces every rule below,
+ * so the prompt only orients the Architect toward the planning tools.
+ */
+export const NEW_POLICY_PLANNING_INSTRUCTIONS = [
+  "Evidence-gated planning: list the source inventory with read_planning_source_section (no sectionId), then read every section in full.",
+  "Persist the requirement ledger with persist_planning_ledger before drafting any task; a draft before the ledger is refused.",
+  "Record checkpoints with record_planning_checkpoint as sections complete; only sections read in full count as covered.",
+  "Draft and revise the plan with draft_planning_plan / revise_planning_plan; investigations need a question, deliverable, decision criterion, and dependent unlock.",
+  "No worker starts until the plan is ready, and plan-only runs never start workers. Command execution is refused while the run is in planning state.",
+].join("\n");
+
 /** Shown only on a context_recording_decision_required turn, beside the reason JSON. */
 export const CONTEXT_RECORDING_DECISION_GUIDANCE = [
   "context_recording_decision_required: the runner could not durably record a context manifest (the audit record of what an agent was shown) after `attempts` tries; `reason` is the storage error. Call only resolve_context_recording on this turn. All other lifecycle tools, including complete_run, are refused until it is resolved. Choose retry when the error looks transient (busy, locked, timeout, I/O) and retriesRemaining is greater than zero. Choose proceed_without_manifest, with a specific rationale, when the failure is persistent and the build can continue safely; manifests are then not recorded for the rest of this run. Choose abort only when continuing without the audit record is unacceptable for this objective; the run fails.",
@@ -319,6 +332,9 @@ export function architectContextSections(
 ): ContextSection[] {
   const sections: ContextSection[] = [
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+    ...(input.projection.planningPolicyVersion === 1
+      ? [required("new-policy-planning", "system", NEW_POLICY_PLANNING_INSTRUCTIONS)]
+      : []),
     required("project-documentation", "system", ARCHITECT_PROJECT_DOCS_INSTRUCTIONS),
     required("project-docs", "project-docs", renderArchitectProjectDocs(input)),
     required("build-objective", "user-intent", input.objective),

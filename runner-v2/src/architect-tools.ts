@@ -11,6 +11,7 @@ import {
   assertOpenArchitectQuestionAllowsEvent,
   buildCompletionReadiness,
   latestUnresolvedContextRecordingNote,
+  readyPlanIdentity,
   rebuildSchedulerProjection,
   type SchedulerActor,
   type SchedulerStore,
@@ -55,6 +56,10 @@ import type {
   ArchitectQuestionDecisionKind,
   UserGuidanceAcknowledgementResolution,
 } from "./user-steering-contracts.js";
+import {
+  createPlanningTools,
+  type PlanningSourceReader,
+} from "./planning-tools.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
@@ -71,6 +76,22 @@ export interface ArchitectToolsOptions {
     sequence: number;
   };
   planCritiqueResolutionAvailable?: boolean;
+  /**
+   * New-policy evidence-gated planning tools (T3a). Set for runs whose durable
+   * projection carries planningPolicyVersion 1; legacy runs omit it and keep
+   * today's tools.
+   */
+  planningTools?: {
+    readSource?: PlanningSourceReader;
+  };
+  /**
+   * T3a repair (B1b): set while a new-policy run is in planning state (no
+   * ready plan, triage not `answer`). The legacy plan/task tools
+   * (plan_tasks, revise_task, reconcile_plan) are then not registered at
+   * all; the reducer refuses the matching direct events too. Omit or set
+   * false on every other turn.
+   */
+  planningState?: boolean;
   /** When set, every Architect turn — including plan_only — can request project docs. */
   artifacts?: ArtifactStore;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
@@ -461,9 +482,17 @@ export function createArchitectTools(
       askUserTool(options.store, clock, options.architectAction),
     ];
   }
+  // T3a repair (B1b): while a new-policy run is in planning state the
+  // legacy plan/task tools are not offered; the reducer (plus the per-tool
+  // check below) refuses forged invokes as well.
+  const legacyPlanTools = options.planningState === true
+    ? []
+    : [
+        planTasksTool(options.store, clock),
+        reviseTaskTool(options.store, clock),
+      ];
   const baseCore = [
-    planTasksTool(options.store, clock),
-    reviseTaskTool(options.store, clock),
+    ...legacyPlanTools,
     answerGuidanceTool(options.store, clock),
     upgradeAcceptanceContractTool(options.store, clock),
   ];
@@ -511,14 +540,29 @@ export function createArchitectTools(
       : critiqueResolution
     : [
         ...critiqueResolution,
-        reconcilePlanTool(options.store, clock),
+        ...(options.planningState === true
+          ? []
+          : [reconcilePlanTool(options.store, clock)]),
         reviewTaskTool(options.store, clock, options.evidenceStore),
         requestIntegrationTool(options.store, clock),
         completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
       ];
-  if (!options.artifacts) return tools;
+  const withPlanning = options.planningTools
+    ? [
+        ...tools,
+        ...createPlanningTools({
+          store: options.store,
+          clock,
+          ...(options.artifacts ? { artifacts: options.artifacts } : {}),
+          ...(options.planningTools.readSource
+            ? { readSource: options.planningTools.readSource }
+            : {}),
+        }),
+      ]
+    : tools;
+  if (!options.artifacts) return withPlanning;
   return [
-    ...tools,
+    ...withPlanning,
     writeProjectDocTool(
       options.store,
       clock,
@@ -1368,6 +1412,8 @@ function reconcilePlanTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const notReady = newPolicyPlanNotReady(store, context.runId);
+      if (notReady) return notReady;
       return appendEvent(store, {
         runId: context.runId,
         type: "plan.reconciled",
@@ -1408,6 +1454,8 @@ function planTasksTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const notReady = newPolicyPlanNotReady(store, context.runId);
+      if (notReady) return notReady;
       const tasks: BuildTask[] = input.tasks.map((task) => ({
         ...task,
         dependencies: [...task.dependencies],
@@ -1475,6 +1523,8 @@ function reviseTaskTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const notReady = newPolicyPlanNotReady(store, context.runId);
+      if (notReady) return notReady;
       const patch = {
         ...(input.objective !== undefined ? { objective: input.objective } : {}),
         ...(input.dependencies ? { dependencies: [...input.dependencies] } : {}),
@@ -2273,6 +2323,28 @@ function architectOnly(context: ToolExecutionContext): ToolExecutionOutput | nul
   return context.actor.role === "architect"
     ? null
     : errorOutput("architect_only", "Only the Architect may use this tool.");
+}
+
+/**
+ * T3a repair (B1a, extra): the tool-side half of the new-policy readiness
+ * gate for the legacy plan/task tools. The reducer is the authority and
+ * refuses the same events; this only produces a clearer error earlier.
+ * Legacy runs and empty runs always pass.
+ */
+function newPolicyPlanNotReady(
+  store: SchedulerStore,
+  runId: string,
+): ToolExecutionOutput | null {
+  const events = store.readRun(runId);
+  if (events.length === 0) return null;
+  const projection = rebuildSchedulerProjection(events);
+  if (projection.planningPolicyVersion === 1 && !readyPlanIdentity(projection)) {
+    return errorOutput(
+      "plan_not_ready",
+      "Scheduler tasks on a new-policy run require a ready plan revision; finish evidence-gated planning first."
+    );
+  }
+  return null;
 }
 
 function errorOutput(code: string, message: string, issues?: string[]): ToolExecutionOutput {
