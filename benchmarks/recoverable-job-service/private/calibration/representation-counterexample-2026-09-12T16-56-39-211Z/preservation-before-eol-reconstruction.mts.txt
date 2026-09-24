@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {mkdir, readFile, writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {contractPaths, suitePaths} from '../benchmarks/recoverable-job-service/private/identity.mjs';
+
+// Reconstruct the exact first correction attempt from the recorded one-line
+// edit, and require its complete suite hash to equal the executed failed result.
+// The failed source is inert data, never imported or executed in Node.
+const base = 'benchmarks/recoverable-job-service';
+const failedRun = join(base, 'private/calibration/representation-counterexample-2026-09-12T16-56-39-211Z');
+const output = join(failedRun, 'verified-attempt-source');
+await mkdir(output, {recursive: true});
+const text = await readFile(join(base, 'private/variants.mjs'), 'utf8');
+const previous = " if(v.kind==='restore-crash'){await s.setup();await s.accepted();const cap=await s.ok('exportCapsule',{jobId:s.jobId}),since=s.b.trace.length,spans=cap.evidence.spans.filter(span=>span.kind==='bytes');const verifiedReads=()=>spans.length>0&&spans.every(span=>s.b.trace.slice(since).some(e=>e.type==='return'&&e.method==='artifact.read'&&canonical(e.args.root)===canonical(span.root)&&e.args.name===span.name&&Array.isArray(e.value)&&e.value.length===span.end-span.start&&digest(e.value)===span.digest));const h=await s.hold(a.point,()=>s.run('restore',{capsule:cap}),{predicate:verifiedReads});s.check(verifiedReads(),'restore publication boundary follows actual public artifact verification reads');await s.reopen();h.resume();await h.pending.catch(()=>{});await s.ok('restore',{capsule:cap});const evidence=await s.evidence([11,29,47]);s.check(evidence.manifest.final===cap.evidence.final&&evidence.manifest.manifestDigest===cap.evidence.manifestDigest,'restored evidence preserves exact public finality and manifest');s.check(s.b.audit.filter(e=>e.type==='accepted'&&e.jobId===s.jobId).length===1,'restore crash never duplicates accepted output');return;}";
+assert.equal(text.match(/^ if\(v.kind==='restore-crash'\).*$/gm)?.length, 1);
+const variants = text.replace(/^ if\(v.kind==='restore-crash'\).*$/m, previous)
+  .replace("import {canonical,clone,jsonDigest} from './broker.mjs';", "import {canonical,clone,jsonDigest,digest} from './broker.mjs';");
+const suite = createHash('sha256');
+for (const path of [...contractPaths, ...suitePaths]) {
+  suite.update(path + '\0'); suite.update(path === 'private/variants.mjs' ? variants : await readFile(join(base, path))); suite.update('\0');
+}
+const suiteHash = suite.digest('hex');
+const observed = JSON.parse(await readFile(join(failedRun, 'reference.result.json'), 'utf8'));
+assert.equal(suiteHash, observed.suiteHash, 'reconstructed bytes match the actually executed failed suite identity');
+const files = [];
+for (const [name, bytes] of [['variants.mjs', Buffer.from(variants)], ['scenarios.mjs', await readFile(join(base, 'private/scenarios.mjs'))]] as const) {
+  await writeFile(join(output, name), bytes); files.push({path: join(output, name), bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex')});
+}
+const manifest = {provenance: 'Reconstructed from retained exact edit; complete ordered suite digest verified against the executed failed result before preservation.', suiteHash, observedResult: join(failedRun, 'reference.result.json'), files};
+await writeFile(join(output, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
+console.log(JSON.stringify(manifest, null, 2));

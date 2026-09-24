@@ -1,0 +1,12 @@
+{
+  "target": "benchmarks\\recoverable-job-service\\private\\calibration\\predicate-dependency-ledger-final.json",
+  "sha256": "c3f4b9c4038edecb4313e3e2c2bd2d9d1fb1a86e78481aa7df2534db43573d84",
+  "counts": {
+    "variants": 302,
+    "families": 69,
+    "materialGroups": 61,
+    "predicateEquivalenceClasses": 302,
+    "probeClasses": 8
+  },
+  "confirmedAffectedRows": 11
+}

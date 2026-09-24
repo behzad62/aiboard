@@ -1,0 +1,271 @@
+{
+  "control": "omit-channel",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B02"
+    ],
+    "variantIds": [
+      "B02/proof-channel"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "B02/proof-channel",
+          "caseCommitment": "d131fcc97f8c6ab2b3c81d619dc40e771d8a011ef7252a7eaba5f2db647d1850",
+          "fixtureCommitment": "f9d8c9044efeac4ff916ca7103a20c625ea587031eb52016763976ee6540782a",
+          "fixtureAllocations": 8,
+          "authenticationCommitment": "a0e76b90f1c9043fd4521da266237bb8c33c06f0c9b18849a28ff4c8f4703ce5"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B02/proof-channel"
+      ],
+      "scheduleHash": "814c2ce912703583b13f3420157d135838cf6d815edfeec00b9273623eb58ca5",
+      "configurationHash": "f0ec36ffb5096142f93d5136cdb8084e76f959a88902c939d389d984368165de"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B02",
+        "group": "B",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B02/f0ec36ffb5096142f93d5136cdb8084e76f959a88902c939d389d984368165de",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "B02/proof-channel",
+              "caseCommitment": "d131fcc97f8c6ab2b3c81d619dc40e771d8a011ef7252a7eaba5f2db647d1850",
+              "fixtureCommitment": "f9d8c9044efeac4ff916ca7103a20c625ea587031eb52016763976ee6540782a",
+              "fixtureAllocations": 8,
+              "authenticationCommitment": "a0e76b90f1c9043fd4521da266237bb8c33c06f0c9b18849a28ff4c8f4703ce5"
+            },
+            "id": "B02/proof-channel",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "acquired resource has exact physical retirement",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 407,
+            "promiseJobs": 1896
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B02/proof-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: released public job",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: acquired resource has exact physical retirement",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-channel: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 407,
+        "promiseJobs": 1896
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.2,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B02",
+      "variantId": "B02/proof-channel",
+      "execution": {
+        "variant": {
+          "id": "B02/proof-channel",
+          "family": "B02",
+          "kind": "resource-proof",
+          "args": {
+            "resource": "channel"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B02/qualification-v1",
+        "schedule": {
+          "partition": 2755,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

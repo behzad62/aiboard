@@ -1,0 +1,134 @@
+{
+  "variantId": "C09/restore-store.commit.after",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "poll must progress",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "accepted capsule retains evidence and checkpoint",
+      "passed": true
+    },
+    {
+      "label": "unretired accepted identity retained in capsule",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "exportCapsule must progress",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful store.commit.after",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "restore must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "readEvidence must progress",
+      "passed": true
+    },
+    {
+      "label": "exact retained bytes after public read",
+      "passed": true
+    },
+    {
+      "label": "exact accepted total",
+      "passed": true
+    },
+    {
+      "label": "restored evidence preserves exact public finality and manifest",
+      "passed": true
+    },
+    {
+      "label": "restore crash never duplicates accepted output",
+      "passed": true
+    }
+  ],
+  "operations": 280,
+  "promiseJobs": 1580,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok"
+    },
+    {
+      "method": "start",
+      "kind": "ok"
+    },
+    {
+      "method": "poll",
+      "kind": "ok"
+    },
+    {
+      "method": "exportCapsule",
+      "kind": "ok"
+    },
+    {
+      "method": "restore",
+      "kind": "ok"
+    },
+    {
+      "method": "readEvidence",
+      "kind": "ok"
+    }
+  ],
+  "successfulRestore": true,
+  "physicalWrites": 1,
+  "acceptedAudits": 1,
+  "commitCalls": 42,
+  "candidateRecordsEnveloped": true,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

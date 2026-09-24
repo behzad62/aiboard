@@ -1,0 +1,939 @@
+{
+  "control": "skip-retirement",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A06",
+      "A14"
+    ],
+    "variantIds": [
+      "A06/primary",
+      "A14/primary",
+      "A06/crash-ack-intent",
+      "A06/crash-acked"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "A06/primary",
+          "caseCommitment": "7a1eba08300a43d5075ca4c9f5e7e3d8fb83cda1881efa7398a7175d302108bc",
+          "fixtureCommitment": "5267712a87a6931bb6e389758ab0d421c711002afa361992030111d3dc78f31e",
+          "fixtureAllocations": 12,
+          "authenticationCommitment": "9e914b6178f3a4498364cd0bea797bf35e83faa2a0d0ab24e2507a8d2b445baa"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "A06/crash-ack-intent",
+          "caseCommitment": "07906fba137c8f40aabc99ceeb0015df462c334af65753f7130d83bf9387c344",
+          "fixtureCommitment": "852840bb4939f82ab639f3bf11d19dbeec57e415e6d81f79d4360ca126a94ac6",
+          "fixtureAllocations": 14,
+          "authenticationCommitment": "5189b3212e890b23637e58cca76923c523e4ca074e95be0333bda026e19b1ef4"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "A06/crash-acked",
+          "caseCommitment": "b6b590855bc68c63dd7057b819132430ef75dae675f6b2242f15ea645297b73f",
+          "fixtureCommitment": "ffe3550121f6177e27d3ee333af3317f461683741d5f5b6c76ebd2459fd9fa43",
+          "fixtureAllocations": 14,
+          "authenticationCommitment": "22225113a145e7c93dcb973c03a23b27e88f62ada5ab6ae5dab716f4d26d61ad"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "A14/primary",
+          "caseCommitment": "1d12c9915c3e1cc1874fe5eec41d9c8c38fee277f50cffb54d25ef154781cff9",
+          "fixtureCommitment": "2223719bea38ff8c647853d1ea84628afaabf1321657bd1c28148db8d8fa8de4",
+          "fixtureAllocations": 12,
+          "authenticationCommitment": "208705c24679c6f3bdb5013552e5a3d23ee9fa116bcdcf2cb0d62f8199036302"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "df7fdd1f9406e34a4937463c3c6f7b3be13c03d33c4fc489131d57e9cf438e2e",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A06/primary",
+        "A14/primary",
+        "A06/crash-ack-intent",
+        "A06/crash-acked"
+      ],
+      "scheduleHash": "8a5a264e0053f5cd8819862449d9b227a5be2daeb49bb0b071b38f22cde55e98",
+      "configurationHash": "a206a76aaf52641e44baaa45dec0a81a1cc82548d28b6869b7b8615b01aa0743"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A06",
+        "group": "A",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/A06/a206a76aaf52641e44baaa45dec0a81a1cc82548d28b6869b7b8615b01aa0743",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "A06/primary",
+              "caseCommitment": "7a1eba08300a43d5075ca4c9f5e7e3d8fb83cda1881efa7398a7175d302108bc",
+              "fixtureCommitment": "5267712a87a6931bb6e389758ab0d421c711002afa361992030111d3dc78f31e",
+              "fixtureAllocations": 12,
+              "authenticationCommitment": "9e914b6178f3a4498364cd0bea797bf35e83faa2a0d0ab24e2507a8d2b445baa"
+            },
+            "id": "A06/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.retireAck.after",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "candidate reached lawful driver.retireAck.after; safety: ack-proof",
+            "safetyFailures": [
+              {
+                "code": "ack-proof",
+                "jobId": "748c8aaab5bfb5967eb6dcab7724cbb7",
+                "detail": "ACK commit lacks authenticated retirement.",
+                "familyId": "A06",
+                "variantId": "A06/primary"
+              }
+            ],
+            "operations": 319,
+            "promiseJobs": 1452
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "A06/crash-ack-intent",
+              "caseCommitment": "07906fba137c8f40aabc99ceeb0015df462c334af65753f7130d83bf9387c344",
+              "fixtureCommitment": "852840bb4939f82ab639f3bf11d19dbeec57e415e6d81f79d4360ca126a94ac6",
+              "fixtureAllocations": 14,
+              "authenticationCommitment": "5189b3212e890b23637e58cca76923c523e4ca074e95be0333bda026e19b1ef4"
+            },
+            "id": "A06/crash-ack-intent",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "acknowledge must progress",
+                "passed": true
+              },
+              {
+                "label": "crash boundary conserves exact one retirement",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "crash boundary conserves exact one retirement; safety: ack-proof",
+            "safetyFailures": [
+              {
+                "code": "ack-proof",
+                "jobId": "1a33baa59c9f4d7e4b9bb3d56cccb99d",
+                "detail": "ACK commit lacks authenticated retirement.",
+                "familyId": "A06",
+                "variantId": "A06/crash-ack-intent"
+              }
+            ],
+            "operations": 340,
+            "promiseJobs": 1522
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "A06/crash-acked",
+              "caseCommitment": "b6b590855bc68c63dd7057b819132430ef75dae675f6b2242f15ea645297b73f",
+              "fixtureCommitment": "ffe3550121f6177e27d3ee333af3317f461683741d5f5b6c76ebd2459fd9fa43",
+              "fixtureAllocations": 14,
+              "authenticationCommitment": "22225113a145e7c93dcb973c03a23b27e88f62ada5ab6ae5dab716f4d26d61ad"
+            },
+            "id": "A06/crash-acked",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "acknowledge must progress",
+                "passed": true
+              },
+              {
+                "label": "crash boundary conserves exact one retirement",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "crash boundary conserves exact one retirement; safety: ack-proof",
+            "safetyFailures": [
+              {
+                "code": "ack-proof",
+                "jobId": "aeb9a3e7866322c395e86111dc7a1bdd",
+                "detail": "ACK commit lacks authenticated retirement.",
+                "familyId": "A06",
+                "variantId": "A06/crash-acked"
+              }
+            ],
+            "operations": 333,
+            "promiseJobs": 1493
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A06/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/primary: candidate reached lawful driver.retireAck.after",
+            "passed": false
+          },
+          {
+            "label": "A06/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          },
+          {
+            "label": "A06/crash-ack-intent: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: acknowledge must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-ack-intent: crash boundary conserves exact one retirement",
+            "passed": false
+          },
+          {
+            "label": "A06/crash-ack-intent: Trusted causal oracle checked observed trace",
+            "passed": false
+          },
+          {
+            "label": "A06/crash-acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: acknowledge must progress",
+            "passed": true
+          },
+          {
+            "label": "A06/crash-acked: crash boundary conserves exact one retirement",
+            "passed": false
+          },
+          {
+            "label": "A06/crash-acked: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "A06/primary: candidate reached lawful driver.retireAck.after; safety: ack-proof; A06/crash-ack-intent: crash boundary conserves exact one retirement; safety: ack-proof; A06/crash-acked: crash boundary conserves exact one retirement; safety: ack-proof",
+        "operations": 992,
+        "promiseJobs": 4467
+      },
+      {
+        "id": "A14",
+        "group": "A",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/A14/a206a76aaf52641e44baaa45dec0a81a1cc82548d28b6869b7b8615b01aa0743",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "A14/primary",
+              "caseCommitment": "1d12c9915c3e1cc1874fe5eec41d9c8c38fee277f50cffb54d25ef154781cff9",
+              "fixtureCommitment": "2223719bea38ff8c647853d1ea84628afaabf1321657bd1c28148db8d8fa8de4",
+              "fixtureAllocations": 12,
+              "authenticationCommitment": "208705c24679c6f3bdb5013552e5a3d23ee9fa116bcdcf2cb0d62f8199036302"
+            },
+            "id": "A14/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.retireAck.after",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "candidate reached lawful driver.retireAck.after; safety: ack-proof",
+            "safetyFailures": [
+              {
+                "code": "ack-proof",
+                "jobId": "ac799d9f1798348b3c76378e51eb9259",
+                "detail": "ACK commit lacks authenticated retirement.",
+                "familyId": "A14",
+                "variantId": "A14/primary"
+              }
+            ],
+            "operations": 319,
+            "promiseJobs": 1452
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A14/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/primary: candidate reached lawful driver.retireAck.after",
+            "passed": false
+          },
+          {
+            "label": "A14/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "A14/primary: candidate reached lawful driver.retireAck.after; safety: ack-proof",
+        "operations": 319,
+        "promiseJobs": 1452
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 2,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "ack-proof",
+        "jobId": "748c8aaab5bfb5967eb6dcab7724cbb7",
+        "detail": "ACK commit lacks authenticated retirement.",
+        "familyId": "A06",
+        "variantId": "A06/primary"
+      },
+      {
+        "code": "ack-proof",
+        "jobId": "1a33baa59c9f4d7e4b9bb3d56cccb99d",
+        "detail": "ACK commit lacks authenticated retirement.",
+        "familyId": "A06",
+        "variantId": "A06/crash-ack-intent"
+      },
+      {
+        "code": "ack-proof",
+        "jobId": "aeb9a3e7866322c395e86111dc7a1bdd",
+        "detail": "ACK commit lacks authenticated retirement.",
+        "familyId": "A06",
+        "variantId": "A06/crash-acked"
+      },
+      {
+        "code": "ack-proof",
+        "jobId": "ac799d9f1798348b3c76378e51eb9259",
+        "detail": "ACK commit lacks authenticated retirement.",
+        "familyId": "A14",
+        "variantId": "A14/primary"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "A06",
+      "variantId": "A06/primary",
+      "execution": {
+        "variant": {
+          "id": "A06/primary",
+          "family": "A06",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A06/qualification-v1",
+        "schedule": {
+          "partition": 3600,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "A06",
+      "variantId": "A06/crash-ack-intent",
+      "execution": {
+        "variant": {
+          "id": "A06/crash-ack-intent",
+          "family": "A06",
+          "kind": "ack-crash",
+          "args": {
+            "point": "ack-intent"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A06/qualification-v1",
+        "schedule": {
+          "partition": 4074,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "A06",
+      "variantId": "A06/crash-acked",
+      "execution": {
+        "variant": {
+          "id": "A06/crash-acked",
+          "family": "A06",
+          "kind": "ack-crash",
+          "args": {
+            "point": "acked"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A06/qualification-v1",
+        "schedule": {
+          "partition": 4052,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "A14",
+      "variantId": "A14/primary",
+      "execution": {
+        "variant": {
+          "id": "A14/primary",
+          "family": "A14",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A14/qualification-v1",
+        "schedule": {
+          "partition": 3207,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

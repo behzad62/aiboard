@@ -1,0 +1,295 @@
+{
+  "control": "reject-allowed-extension",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C05"
+    ],
+    "variantIds": [
+      "C05/allowed-extension"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "d2f9bb4c6f72ae62850b790e5742850063881b316b89df54473a847f2f644ea1",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C05/allowed-extension"
+      ],
+      "scheduleHash": "f19de696e8b29c58c8e724f80d4c55d1b134cb41eade1fea21c82273d3fa30c5",
+      "configurationHash": "13e9e1ebe3c1469a04ca0f6c35120778e9d565a63eede1a8f49c36c7ffa7356b"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C05",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C05/13e9e1ebe3c1469a04ca0f6c35120778e9d565a63eede1a8f49c36c7ffa7356b",
+        "variants": [
+          {
+            "id": "C05/allowed-extension",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "unretired accepted identity retained in capsule",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 275,
+            "promiseJobs": 1255
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: unretired accepted identity retained in capsule",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "C05/allowed-extension: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "C05/allowed-extension: restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+        "operations": 275,
+        "promiseJobs": 1255
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C05",
+      "variantId": "C05/allowed-extension",
+      "execution": {
+        "variant": {
+          "id": "C05/allowed-extension",
+          "family": "C05",
+          "kind": "capsule",
+          "args": {
+            "change": "allowed-extension"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C05/qualification-v1",
+        "schedule": {
+          "partition": 2129,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

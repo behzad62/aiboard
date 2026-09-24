@@ -1,0 +1,231 @@
+{
+  "control": "allow-cross-type-reuse",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "E07"
+    ],
+    "variantIds": [
+      "E07/cross-type"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "faf8d242af2f245f75aa645a98a3f9f77c1814cb6b6f80507ba1858274338750",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "E07/cross-type"
+      ],
+      "scheduleHash": "a6384c487f05c2a6080dbb2a71059f3b4437e6fada838ad9d4af14f8370541ce",
+      "configurationHash": "3eefc9cc6d0d3eb9b6bdbb0e96f26d501804502f9460ecf07cdb1b0063cd07e8"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "E07",
+        "group": "E",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/E07/3eefc9cc6d0d3eb9b6bdbb0e96f26d501804502f9460ecf07cdb1b0063cd07e8",
+        "variants": [
+          {
+            "id": "E07/cross-type",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "close must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "close must refuse",
+            "safetyFailures": [],
+            "operations": 448,
+            "promiseJobs": 2097
+          }
+        ],
+        "assertions": [
+          {
+            "label": "E07/cross-type: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: close must refuse",
+            "passed": false
+          },
+          {
+            "label": "E07/cross-type: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "E07/cross-type: close must refuse",
+        "operations": 448,
+        "promiseJobs": 2097
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "E07",
+      "variantId": "E07/cross-type",
+      "execution": {
+        "variant": {
+          "id": "E07/cross-type",
+          "family": "E07",
+          "kind": "durability",
+          "args": {
+            "kind": "cross-type"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E07/qualification-v1",
+        "schedule": {
+          "partition": 2620,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

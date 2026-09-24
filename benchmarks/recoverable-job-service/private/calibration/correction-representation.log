@@ -1,0 +1,63 @@
+{
+  "output": "benchmarks\\recoverable-job-service\\private\\calibration\\representation-counterexample-2026-09-12T16-56-39-211Z",
+  "schemaVersion": 1,
+  "purpose": "opaque-record scheduling counterexample; not full calibration",
+  "referenceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "recordEnvelopeHash": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+  "contractVersion": "rjs-contract-2.0.0",
+  "suiteVersion": "rjs-suite-2.0.0",
+  "replayCommitment": "659a9802ea5c6aa7dfdb78e89fee7d18d86af05d0eab43055232f2b910c1259c",
+  "node": "24.18.0",
+  "results": {
+    "reference": {
+      "status": "valid",
+      "selected": 4,
+      "pass": 2,
+      "fail": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "reason": "candidate reached lawful store.commit.before"
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "reason": "candidate reached lawful store.commit.after"
+        }
+      ],
+      "safetyFailures": 0
+    },
+    "record-envelope": {
+      "status": "valid",
+      "selected": 4,
+      "pass": 2,
+      "fail": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "reason": "candidate reached lawful store.commit.before"
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "reason": "candidate reached lawful store.commit.after"
+        }
+      ],
+      "safetyFailures": 0
+    }
+  }
+}
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+
+false !== true
+
+    at <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\scripts\test-recoverable-job-service-calibration-representation.mts:98:8) {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.18.0

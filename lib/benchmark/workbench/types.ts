@@ -5,6 +5,7 @@ import type {
   CertifiedAttemptStatus,
 } from "@/lib/benchmark/types";
 import type { WorkBenchScore } from "@/lib/benchmark/scoring/types";
+import type { RecoverableJobServiceDiagnostics } from "./recoverable-job-service/diagnostics";
 
 export type WorkBenchDifficulty = "easy" | "medium" | "hard" | "expert";
 /**
@@ -62,6 +63,18 @@ export interface WorkBenchScoring {
   timeTargetSeconds?: number;
 }
 
+export interface WorkBenchTrustedPolicy {
+  kind: "recoverable-job-service";
+  runtimeModule: string;
+  requiredNodeVersion: string;
+  requiredQuickJsVersion: string;
+  contractHash: string;
+  suiteHash: string;
+  hiddenPaths: string[];
+  protectedPaths: string[];
+  editablePaths: string[];
+}
+
 export interface WorkBenchContamination {
   originalTask: boolean;
   canary: string;
@@ -87,6 +100,8 @@ export interface WorkBenchCase {
   allowedCommands: string[];
   /** Inline fixture files for generated/local-only benchmark cases. */
   fixtureFiles?: Record<string, string>;
+  /** Trusted local-runner policy for cases whose evaluator must stay outside the candidate workspace. */
+  trustedPolicy?: WorkBenchTrustedPolicy;
 }
 
 export interface WorkBenchVerifierAssertionInput {
@@ -111,6 +126,8 @@ export interface ParsedWorkBenchVerifierResult {
   summary: string;
   assertions: WorkBenchVerifierAssertion[];
   rawJson: string;
+  failureClass?: WorkBenchVerifierFailureClass;
+  recoverableJobService?: RecoverableJobServiceDiagnostics;
 }
 
 export interface WorkBenchRunnerConfig {

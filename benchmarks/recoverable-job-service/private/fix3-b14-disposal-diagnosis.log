@@ -1,0 +1,28 @@
+before disposal {"instructions":1086,"jobs":360268,"pending":1,"handles":0,"error":null,"active":1,"timers":1}
+{
+  malloc_limit: 134217728,
+  memory_used_size: 13108984,
+  malloc_count: 522410,
+  memory_used_count: 449828,
+  atom_count: 972,
+  atom_size: 31252,
+  str_count: 67440,
+  str_size: 3135884,
+  obj_count: 143537,
+  obj_size: 6889776,
+  prop_count: 271670,
+  prop_size: 2830328,
+  shape_count: 249,
+  shape_size: 36808,
+  js_func_count: 174,
+  js_func_size: 139732,
+  js_func_code_size: 29920,
+  js_func_pc2line_count: 174,
+  js_func_pc2line_size: 11724,
+  c_func_count: 245,
+  array_count: 4,
+  fast_array_count: 4,
+  fast_array_elements: 0,
+  binary_object_count: 0,
+  binary_object_size: 0
+}

@@ -1,0 +1,8 @@
+{"name":"nonfinal-revision-red","sourceHash":"5934b229e3122ff738a059c0828ae3f42c346f014f85b4894e682dd53f415e87","expectation":"red","selected":2,"passed":0,"skipped":0,"rows":[{"id":"C09/restore-store.commit.before","passed":false,"reason":"restored evidence preserves exact public finality and manifest","operations":281,"promiseJobs":1260},{"id":"C09/restore-store.commit.after","passed":false,"reason":"restored evidence preserves exact public finality and manifest","operations":281,"promiseJobs":1260}]}
+{
+  "output": "benchmarks\\recoverable-job-service\\private\\calibration\\c09-digest-red-2026-09-12T17-46-02-808Z",
+  "red": true,
+  "passed": true,
+  "checks": 3,
+  "failedChecks": []
+}

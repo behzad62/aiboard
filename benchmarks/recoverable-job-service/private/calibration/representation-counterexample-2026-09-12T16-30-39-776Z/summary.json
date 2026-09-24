@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "purpose": "opaque-record scheduling counterexample; not full calibration",
+  "referenceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "recordEnvelopeHash": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+  "contractVersion": "rjs-contract-2.0.0",
+  "suiteVersion": "rjs-suite-2.0.0",
+  "replayCommitment": "3ae86011ce43cc8cc7475b173b434737a5a12104925695e6ee9c3402d67313c0",
+  "node": "24.18.0",
+  "results": {
+    "reference": {
+      "status": "valid",
+      "selected": 4,
+      "pass": 4,
+      "fail": [],
+      "safetyFailures": 0
+    },
+    "record-envelope": {
+      "status": "valid",
+      "selected": 4,
+      "pass": 2,
+      "fail": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "reason": "candidate reached lawful store.commit.before"
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "reason": "candidate reached lawful store.commit.after"
+        }
+      ],
+      "safetyFailures": 0
+    }
+  }
+}

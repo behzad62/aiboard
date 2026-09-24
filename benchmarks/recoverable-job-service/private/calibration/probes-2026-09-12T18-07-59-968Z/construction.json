@@ -1,0 +1,22 @@
+{
+  "purpose": "Source construction only; no candidate execution",
+  "identity": {
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
+  },
+  "classes": [
+    "P07-owned-accounting"
+  ],
+  "sources": {
+    "reference": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "algorithm": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac"
+  },
+  "materialSources": [
+    {
+      "control": "algorithm",
+      "selector": "truncate-scan",
+      "sha256": "b62d564db9de7c1febc1c690d899d21429be6909bc9ca312b0e279ee41e7f256",
+      "bytes": 58556
+    }
+  ]
+}

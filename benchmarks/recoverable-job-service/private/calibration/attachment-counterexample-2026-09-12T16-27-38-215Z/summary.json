@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "purpose": "setup-reader scheduling counterexample; not full calibration",
+  "referenceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "setupReaderHash": "0f9af49f2f4679e1a0aee684b2820e3b63e7aace80319225bb5b76a1bbdf0963",
+  "contractVersion": "rjs-contract-2.0.0",
+  "suiteVersion": "rjs-suite-2.0.0",
+  "replayCommitment": "a9a0089f580579411dbbbe2667d9cb850ce21bd36d402732b89441914c594568",
+  "node": "24.18.0",
+  "results": {
+    "reference": {
+      "status": "valid",
+      "selected": 6,
+      "pass": 6,
+      "fail": [],
+      "safetyFailures": 0
+    },
+    "setup-reader": {
+      "status": "valid",
+      "selected": 6,
+      "pass": 2,
+      "fail": [
+        {
+          "id": "B01/recover-driver.attach.before",
+          "reason": "stop must refuse"
+        },
+        {
+          "id": "B06/deadline-driver.attach.before",
+          "reason": "stop must refuse"
+        },
+        {
+          "id": "B07/issued-driver.attach.before",
+          "reason": "candidate reached lawful driver.attach.before"
+        },
+        {
+          "id": "B07/resource-intent-reader",
+          "reason": "candidate reached lawful driver.attach.before"
+        }
+      ],
+      "safetyFailures": 0
+    }
+  }
+}

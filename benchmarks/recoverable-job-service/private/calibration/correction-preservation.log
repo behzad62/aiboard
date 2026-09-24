@@ -1,0 +1,17 @@
+{
+  "provenance": "Reconstructed from retained exact edit; complete ordered suite digest verified against the executed failed result before preservation.",
+  "suiteHash": "d15057f4086ee07060d8872d1581e6eefd6858eedb99f949ee12c93c342d622d",
+  "observedResult": "benchmarks\\recoverable-job-service\\private\\calibration\\representation-counterexample-2026-09-12T16-56-39-211Z\\reference.result.json",
+  "files": [
+    {
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\representation-counterexample-2026-09-12T16-56-39-211Z\\verified-attempt-source\\variants.mjs",
+      "bytes": 29200,
+      "sha256": "b88c1f20f55063a4fe1a67e446eed56025935408dee8a49ca4119e0e4bb9e890"
+    },
+    {
+      "path": "benchmarks\\recoverable-job-service\\private\\calibration\\representation-counterexample-2026-09-12T16-56-39-211Z\\verified-attempt-source\\scenarios.mjs",
+      "bytes": 40792,
+      "sha256": "8a7e5e477ec0e8fe6ebff99f774e4496f8dc391fdf36d31704cbefbbd7248530"
+    }
+  ]
+}

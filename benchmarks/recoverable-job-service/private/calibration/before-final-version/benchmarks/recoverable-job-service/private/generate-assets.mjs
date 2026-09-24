@@ -1,0 +1,14 @@
+import {PROFILE,CONTRACT_VERSION,SUITE_VERSION} from './evaluator.mjs';
+import {effectiveProvenance} from './provenance.mjs';
+import {readFile,writeFile} from 'node:fs/promises';
+import {scoreInputHashes} from './identity.mjs';
+const publicNames=['service.js','contract.d.ts','runtime-contract.md','problem.md','acceptance-contract.md','families.json','examples.mjs','public-test.mjs','source-bootstrap.md','source-variants.json','source-examples.mjs'];
+const files=Object.fromEntries(await Promise.all(publicNames.map(async name=>[name,await readFile(new URL('../public/'+name,import.meta.url),'utf8')])));
+files['verify.mjs']=await readFile(new URL('./verify-template.mjs',import.meta.url),'utf8');
+const hashes=await scoreInputHashes();const productionProvenance=effectiveProvenance();
+const families=JSON.parse(files['families.json']);
+const metadata={schemaVersion:2,profile:PROFILE,contractVersion:CONTRACT_VERSION,suiteVersion:SUITE_VERSION,derivationVersion:'rjs-input-hmac-sha256-v1',familyCount:families.length,variantCount:productionProvenance.variantIds.length};
+const output='// Generated from canonical standalone RJS assets. Do not hand-edit.\nexport const RECOVERABLE_JOB_SERVICE_PUBLIC_FILES = '+JSON.stringify(files,null,2)+' as const;\nexport const RECOVERABLE_JOB_SERVICE_INPUT_HASHES = '+JSON.stringify(hashes,null,2)+' as const;\nexport const RECOVERABLE_JOB_SERVICE_FAMILIES = '+JSON.stringify(families,null,2)+' as const;\nexport const RECOVERABLE_JOB_SERVICE_PRODUCTION_PROVENANCE = '+JSON.stringify(productionProvenance,null,2)+' as const;\n';
+const finalOutput=output+'export const RECOVERABLE_JOB_SERVICE_METADATA = '+JSON.stringify(metadata,null,2)+' as const;\n';
+const target=new URL('../../../lib/benchmark/workbench/recoverable-job-service/assets.generated.ts',import.meta.url);
+if(process.argv.includes('--check')){if(await readFile(target,'utf8')!==finalOutput)throw Error('RJS browser fixture assets are stale');}else await writeFile(target,finalOutput);

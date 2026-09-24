@@ -119,7 +119,9 @@ async function stopRunner(): Promise<void> {
 
 async function removeTempDir(): Promise<void> {
   const retryableRemovalCodes = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
-  for (let i = 0; i < 10; i += 1) {
+  // Windows can keep the just-stopped command directory locked briefly after
+  // its HTTP listener closes; cleanup may wait, but the timeout assertions cannot.
+  for (let i = 0; i < 40; i += 1) {
     try {
       fs.rmSync(tmp, { recursive: true, force: true });
       return;
@@ -129,7 +131,7 @@ async function removeTempDir(): Promise<void> {
           ? (err as { code?: string }).code
           : undefined;
       if (
-        i === 9 ||
+        i === 39 ||
         !code ||
         !retryableRemovalCodes.has(code)
       ) {

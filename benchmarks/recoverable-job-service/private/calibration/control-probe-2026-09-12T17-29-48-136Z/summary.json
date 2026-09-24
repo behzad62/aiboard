@@ -1,0 +1,62 @@
+{
+  "purpose": "Initial complete-control construction probes; not full qualification",
+  "evidence": "benchmarks\\recoverable-job-service\\private\\calibration\\control-probe-2026-09-12T17-29-48-136Z",
+  "identity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f8f1f824577efab1719a750b22df833daf62c13fb9bf29b28bf9363cf94fa7f8"
+  },
+  "variantIds": [
+    "C01/primary",
+    "C09/restore-store.commit.before",
+    "C09/restore-store.commit.after",
+    "E02/primary",
+    "B06/primary",
+    "B06/deadline-driver.attach.before",
+    "B07/acquire-intent-isolation",
+    "B07/acquire-intent-channel",
+    "B07/issued-driver.attach.before",
+    "B07/resource-intent-reader",
+    "B10/primary",
+    "B17/source-both",
+    "B17/source-pristine-early",
+    "B17/source-changed-ack",
+    "B17/source-pending-ack-stdout",
+    "B17/source-unknown-ack-stderr",
+    "B17/source-consumer-unknown",
+    "A07/invalid-stream",
+    "A07/invalid-seq",
+    "E08/primary"
+  ],
+  "results": [
+    {
+      "id": "representation",
+      "sha256": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445",
+      "status": "valid",
+      "selected": 20,
+      "pass": 20,
+      "skipped": 0,
+      "failed": [],
+      "safety": []
+    },
+    {
+      "id": "algorithm",
+      "sha256": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+      "status": "valid",
+      "selected": 20,
+      "pass": 20,
+      "skipped": 0,
+      "failed": [],
+      "safety": []
+    },
+    {
+      "id": "truthful-outcome",
+      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf",
+      "status": "valid",
+      "selected": 20,
+      "pass": 20,
+      "skipped": 0,
+      "failed": [],
+      "safety": []
+    }
+  ]
+}

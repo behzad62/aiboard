@@ -1,0 +1,493 @@
+{
+  "control": "early-terminal-intent",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A14"
+    ],
+    "variantIds": [
+      "A14/inflight-driver.publishAck.after",
+      "A14/inflight-consumer.consume.after"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "e3827a6f06aae9e296fc3d365ee8b73116252046850fb1550b9200bf5df9b7f5",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A14/inflight-driver.publishAck.after",
+        "A14/inflight-consumer.consume.after"
+      ],
+      "scheduleHash": "8f573121e3b21a051ceef609f386d49913f4087d978e30ca31fded2569beaa74",
+      "configurationHash": "82ff705ebb35f5aee7c7d3ff7ce40cede157a2b926962acfef680953af09a143"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A14",
+        "group": "A",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/A14/82ff705ebb35f5aee7c7d3ff7ce40cede157a2b926962acfef680953af09a143",
+        "variants": [
+          {
+            "id": "A14/inflight-driver.publishAck.after",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.publishAck.after",
+                "passed": true
+              },
+              {
+                "label": "in-flight prerequisite cannot certify terminal release",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "in-flight prerequisite cannot certify terminal release; safety: resource-still-owned, terminal-conjunction, resource-still-owned, terminal-conjunction",
+            "safetyFailures": [
+              {
+                "code": "resource-still-owned",
+                "jobId": "0014c28ae3c223e8f11844f76221c79b",
+                "detail": "Released publication retains actual ownership.",
+                "familyId": "A14",
+                "variantId": "A14/inflight-driver.publishAck.after"
+              },
+              {
+                "code": "terminal-conjunction",
+                "jobId": "0014c28ae3c223e8f11844f76221c79b",
+                "detail": "Released assertion omits required cleanup facts.",
+                "familyId": "A14",
+                "variantId": "A14/inflight-driver.publishAck.after"
+              },
+              {
+                "code": "resource-still-owned",
+                "jobId": "0014c28ae3c223e8f11844f76221c79b",
+                "detail": "Released publication retains actual ownership.",
+                "familyId": "A14",
+                "variantId": "A14/inflight-driver.publishAck.after"
+              },
+              {
+                "code": "terminal-conjunction",
+                "jobId": "0014c28ae3c223e8f11844f76221c79b",
+                "detail": "Released assertion omits required cleanup facts.",
+                "familyId": "A14",
+                "variantId": "A14/inflight-driver.publishAck.after"
+              }
+            ],
+            "operations": 302,
+            "promiseJobs": 1363
+          },
+          {
+            "id": "A14/inflight-consumer.consume.after",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful consumer.consume.after",
+                "passed": true
+              },
+              {
+                "label": "in-flight prerequisite cannot certify terminal release",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "in-flight prerequisite cannot certify terminal release; safety: resource-still-owned, terminal-conjunction",
+            "safetyFailures": [
+              {
+                "code": "resource-still-owned",
+                "jobId": "0f63776fe0a3d0e7366eaf530ced9011",
+                "detail": "Released publication retains actual ownership.",
+                "familyId": "A14",
+                "variantId": "A14/inflight-consumer.consume.after"
+              },
+              {
+                "code": "terminal-conjunction",
+                "jobId": "0f63776fe0a3d0e7366eaf530ced9011",
+                "detail": "Released assertion omits required cleanup facts.",
+                "familyId": "A14",
+                "variantId": "A14/inflight-consumer.consume.after"
+              }
+            ],
+            "operations": 257,
+            "promiseJobs": 1167
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A14/inflight-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: candidate reached lawful driver.publishAck.after",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: in-flight prerequisite cannot certify terminal release",
+            "passed": false
+          },
+          {
+            "label": "A14/inflight-driver.publishAck.after: Trusted causal oracle checked observed trace",
+            "passed": false
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: candidate reached lawful consumer.consume.after",
+            "passed": true
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: in-flight prerequisite cannot certify terminal release",
+            "passed": false
+          },
+          {
+            "label": "A14/inflight-consumer.consume.after: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "A14/inflight-driver.publishAck.after: in-flight prerequisite cannot certify terminal release; safety: resource-still-owned, terminal-conjunction, resource-still-owned, terminal-conjunction; A14/inflight-consumer.consume.after: in-flight prerequisite cannot certify terminal release; safety: resource-still-owned, terminal-conjunction",
+        "operations": 559,
+        "promiseJobs": 2530
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "resource-still-owned",
+        "jobId": "0014c28ae3c223e8f11844f76221c79b",
+        "detail": "Released publication retains actual ownership.",
+        "familyId": "A14",
+        "variantId": "A14/inflight-driver.publishAck.after"
+      },
+      {
+        "code": "terminal-conjunction",
+        "jobId": "0014c28ae3c223e8f11844f76221c79b",
+        "detail": "Released assertion omits required cleanup facts.",
+        "familyId": "A14",
+        "variantId": "A14/inflight-driver.publishAck.after"
+      },
+      {
+        "code": "resource-still-owned",
+        "jobId": "0014c28ae3c223e8f11844f76221c79b",
+        "detail": "Released publication retains actual ownership.",
+        "familyId": "A14",
+        "variantId": "A14/inflight-driver.publishAck.after"
+      },
+      {
+        "code": "terminal-conjunction",
+        "jobId": "0014c28ae3c223e8f11844f76221c79b",
+        "detail": "Released assertion omits required cleanup facts.",
+        "familyId": "A14",
+        "variantId": "A14/inflight-driver.publishAck.after"
+      },
+      {
+        "code": "resource-still-owned",
+        "jobId": "0f63776fe0a3d0e7366eaf530ced9011",
+        "detail": "Released publication retains actual ownership.",
+        "familyId": "A14",
+        "variantId": "A14/inflight-consumer.consume.after"
+      },
+      {
+        "code": "terminal-conjunction",
+        "jobId": "0f63776fe0a3d0e7366eaf530ced9011",
+        "detail": "Released assertion omits required cleanup facts.",
+        "familyId": "A14",
+        "variantId": "A14/inflight-consumer.consume.after"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "A14",
+      "variantId": "A14/inflight-driver.publishAck.after",
+      "execution": {
+        "variant": {
+          "id": "A14/inflight-driver.publishAck.after",
+          "family": "A14",
+          "kind": "pending-settlement",
+          "args": {
+            "point": "driver.publishAck.after"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A14/qualification-v1",
+        "schedule": {
+          "partition": 2378,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "A14",
+      "variantId": "A14/inflight-consumer.consume.after",
+      "execution": {
+        "variant": {
+          "id": "A14/inflight-consumer.consume.after",
+          "family": "A14",
+          "kind": "pending-settlement",
+          "args": {
+            "point": "consumer.consume.after"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A14/qualification-v1",
+        "schedule": {
+          "partition": 3793,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

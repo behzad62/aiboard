@@ -1,0 +1,1323 @@
+{
+  "control": "repeat-consumption",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C08",
+      "E03"
+    ],
+    "variantIds": [
+      "C08/primary",
+      "C08/consuming-not-applied",
+      "C08/acked",
+      "E03/crash-consumer.consume.after",
+      "E03/crash-driver.publishAck.after"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C08/primary",
+          "caseCommitment": "62a205bc145a86d20b90de763b5dbcb2fb50472a683a409d7e2a0c6389797296",
+          "fixtureCommitment": "cb33c1558258846278ab793260ffd9df045b933f5465bb03570cb9149ebf7c84",
+          "fixtureAllocations": 15,
+          "authenticationCommitment": "437aec4eb510f72caa64a63a54a05692f099233387d08078e4bb4d93da1fdecb"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C08/consuming-not-applied",
+          "caseCommitment": "8e914fb52d7e14737cd4ab303c69fe29c39279033796b056c1cc11e9b08805da",
+          "fixtureCommitment": "39ed718e4cd757b731518e1b24f9c1961130b6d7703438a47685708b4286565c",
+          "fixtureAllocations": 13,
+          "authenticationCommitment": "5a3fd1733fdbfbd94af903642c31d69e173ccc7215fc5bede5cf9cf9d5b773b3"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C08/acked",
+          "caseCommitment": "2f85ed813520ebdb7ab785d9f2974474f20e5c3681976fbbef58187f90ded68c",
+          "fixtureCommitment": "1c3d053c1e657f20f4faac049d0f2b18d07c18b5ace51ac5e402d157234d20e8",
+          "fixtureAllocations": 13,
+          "authenticationCommitment": "639ca2591ec1496b60d83238bdd871952adc2db5075c5f79948239877af3442a"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "E03/crash-consumer.consume.after",
+          "caseCommitment": "c19e537403d6e5430b047c0f610cda4ff7db016f6fd8a7d37db556f1f28904a8",
+          "fixtureCommitment": "97540496348483c9de7c21bf87179d2ceadb3da43c8062ae6966a773735205ae",
+          "fixtureAllocations": 16,
+          "authenticationCommitment": "12a360bd06ecff0f81e5cf66e376fe18f3662e18b23ea377ab7781bde55d76d5"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "E03/crash-driver.publishAck.after",
+          "caseCommitment": "e58243927c91d1393e2d00adc684c5afb79daf85b9fd7d1f5e5f955e2251cd87",
+          "fixtureCommitment": "f8e77b312acb11eb42af1d854f38f25d1eb8464b0ff28670f96e67134915e3a3",
+          "fixtureAllocations": 16,
+          "authenticationCommitment": "b7ab0a7e445b31b4de06aa37f2ceed6b4ab83e9c614832e1c14a55e149f9cf54"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "4c9f483b4f840547c8495b6cb8c52455dc81981b0fd0ac112124f3ad90ace4db",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C08/primary",
+        "C08/consuming-not-applied",
+        "C08/acked",
+        "E03/crash-consumer.consume.after",
+        "E03/crash-driver.publishAck.after"
+      ],
+      "scheduleHash": "a2427316af88e4feb20bc4724544926dbb2c37a0fb4af0f7f5b90836dc063cb3",
+      "configurationHash": "3f7235881c5ae02015af0d8470a2b11d7193bb8eced7de3fb76223fa3c538163"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C08",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C08/3f7235881c5ae02015af0d8470a2b11d7193bb8eced7de3fb76223fa3c538163",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C08/primary",
+              "caseCommitment": "62a205bc145a86d20b90de763b5dbcb2fb50472a683a409d7e2a0c6389797296",
+              "fixtureCommitment": "cb33c1558258846278ab793260ffd9df045b933f5465bb03570cb9149ebf7c84",
+              "fixtureAllocations": 15,
+              "authenticationCommitment": "437aec4eb510f72caa64a63a54a05692f099233387d08078e4bb4d93da1fdecb"
+            },
+            "id": "C08/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful consumer.consume.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "acknowledge must progress",
+                "passed": true
+              },
+              {
+                "label": "consumed replay across guest crash produces one external effect",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "consumed replay across guest crash produces one external effect; safety: intent-before-consume",
+            "safetyFailures": [
+              {
+                "code": "intent-before-consume",
+                "jobId": "d4829a5c6ba58c2b3cc5fec66fb70c19",
+                "detail": "Consumer effect lacks exact delivery intent.",
+                "familyId": "C08",
+                "variantId": "C08/primary"
+              }
+            ],
+            "operations": 376,
+            "promiseJobs": 1688
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C08/consuming-not-applied",
+              "caseCommitment": "8e914fb52d7e14737cd4ab303c69fe29c39279033796b056c1cc11e9b08805da",
+              "fixtureCommitment": "39ed718e4cd757b731518e1b24f9c1961130b6d7703438a47685708b4286565c",
+              "fixtureAllocations": 13,
+              "authenticationCommitment": "5a3fd1733fdbfbd94af903642c31d69e173ccc7215fc5bede5cf9cf9d5b773b3"
+            },
+            "id": "C08/consuming-not-applied",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "exact delivery replay has one external effect",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "exact delivery replay has one external effect; safety: intent-before-consume",
+            "safetyFailures": [
+              {
+                "code": "intent-before-consume",
+                "jobId": "921340ae0aa62a0cd70d7b12e382b8d5",
+                "detail": "Consumer effect lacks exact delivery intent.",
+                "familyId": "C08",
+                "variantId": "C08/consuming-not-applied"
+              }
+            ],
+            "operations": 327,
+            "promiseJobs": 1471
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C08/acked",
+              "caseCommitment": "2f85ed813520ebdb7ab785d9f2974474f20e5c3681976fbbef58187f90ded68c",
+              "fixtureCommitment": "1c3d053c1e657f20f4faac049d0f2b18d07c18b5ace51ac5e402d157234d20e8",
+              "fixtureAllocations": 13,
+              "authenticationCommitment": "639ca2591ec1496b60d83238bdd871952adc2db5075c5f79948239877af3442a"
+            },
+            "id": "C08/acked",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "acknowledge must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "exact delivery replay has one external effect",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "exact delivery replay has one external effect; safety: intent-before-consume",
+            "safetyFailures": [
+              {
+                "code": "intent-before-consume",
+                "jobId": "49c4163b4b642c12bf5228ef0f24cf9c",
+                "detail": "Consumer effect lacks exact delivery intent.",
+                "familyId": "C08",
+                "variantId": "C08/acked"
+              }
+            ],
+            "operations": 358,
+            "promiseJobs": 1628
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: candidate reached lawful consumer.consume.after",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: acknowledge must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/primary: consumed replay across guest crash produces one external effect",
+            "passed": false
+          },
+          {
+            "label": "C08/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          },
+          {
+            "label": "C08/consuming-not-applied: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: consume must refuse",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/consuming-not-applied: exact delivery replay has one external effect",
+            "passed": false
+          },
+          {
+            "label": "C08/consuming-not-applied: Trusted causal oracle checked observed trace",
+            "passed": false
+          },
+          {
+            "label": "C08/acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: acknowledge must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C08/acked: exact delivery replay has one external effect",
+            "passed": false
+          },
+          {
+            "label": "C08/acked: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "C08/primary: consumed replay across guest crash produces one external effect; safety: intent-before-consume; C08/consuming-not-applied: exact delivery replay has one external effect; safety: intent-before-consume; C08/acked: exact delivery replay has one external effect; safety: intent-before-consume",
+        "operations": 1061,
+        "promiseJobs": 4787
+      },
+      {
+        "id": "E03",
+        "group": "E",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/E03/3f7235881c5ae02015af0d8470a2b11d7193bb8eced7de3fb76223fa3c538163",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "E03/crash-consumer.consume.after",
+              "caseCommitment": "c19e537403d6e5430b047c0f610cda4ff7db016f6fd8a7d37db556f1f28904a8",
+              "fixtureCommitment": "97540496348483c9de7c21bf87179d2ceadb3da43c8062ae6966a773735205ae",
+              "fixtureAllocations": 16,
+              "authenticationCommitment": "12a360bd06ecff0f81e5cf66e376fe18f3662e18b23ea377ab7781bde55d76d5"
+            },
+            "id": "E03/crash-consumer.consume.after",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful consumer.consume.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "acknowledge must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "crashed consumption is not duplicated",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "crashed consumption is not duplicated; safety: intent-before-consume",
+            "safetyFailures": [
+              {
+                "code": "intent-before-consume",
+                "jobId": "c0a8d531032c6348cf5bd15eb99de6cf",
+                "detail": "Consumer effect lacks exact delivery intent.",
+                "familyId": "E03",
+                "variantId": "E03/crash-consumer.consume.after"
+              }
+            ],
+            "operations": 580,
+            "promiseJobs": 2635
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "E03/crash-driver.publishAck.after",
+              "caseCommitment": "e58243927c91d1393e2d00adc684c5afb79daf85b9fd7d1f5e5f955e2251cd87",
+              "fixtureCommitment": "f8e77b312acb11eb42af1d854f38f25d1eb8464b0ff28670f96e67134915e3a3",
+              "fixtureAllocations": 16,
+              "authenticationCommitment": "b7ab0a7e445b31b4de06aa37f2ceed6b4ab83e9c614832e1c14a55e149f9cf54"
+            },
+            "id": "E03/crash-driver.publishAck.after",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.publishAck.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "acknowledge must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "acknowledge must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}; safety: intent-before-consume, intent-before-consume",
+            "safetyFailures": [
+              {
+                "code": "intent-before-consume",
+                "jobId": "6cb8cdfbdc6702ed19b6511a37f7caa3",
+                "detail": "Consumer effect lacks exact delivery intent.",
+                "familyId": "E03",
+                "variantId": "E03/crash-driver.publishAck.after"
+              },
+              {
+                "code": "intent-before-consume",
+                "jobId": "6cb8cdfbdc6702ed19b6511a37f7caa3",
+                "detail": "Consumer effect lacks exact delivery intent.",
+                "familyId": "E03",
+                "variantId": "E03/crash-driver.publishAck.after"
+              }
+            ],
+            "operations": 368,
+            "promiseJobs": 1640
+          }
+        ],
+        "assertions": [
+          {
+            "label": "E03/crash-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: candidate reached lawful consumer.consume.after",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: acknowledge must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: released public job",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: crashed consumption is not duplicated",
+            "passed": false
+          },
+          {
+            "label": "E03/crash-consumer.consume.after: Trusted causal oracle checked observed trace",
+            "passed": false
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: candidate reached lawful driver.publishAck.after",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: acknowledge must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "E03/crash-driver.publishAck.after: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "E03/crash-consumer.consume.after: crashed consumption is not duplicated; safety: intent-before-consume; E03/crash-driver.publishAck.after: acknowledge must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}; safety: intent-before-consume, intent-before-consume",
+        "operations": 948,
+        "promiseJobs": 4275
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "intent-before-consume",
+        "jobId": "d4829a5c6ba58c2b3cc5fec66fb70c19",
+        "detail": "Consumer effect lacks exact delivery intent.",
+        "familyId": "C08",
+        "variantId": "C08/primary"
+      },
+      {
+        "code": "intent-before-consume",
+        "jobId": "921340ae0aa62a0cd70d7b12e382b8d5",
+        "detail": "Consumer effect lacks exact delivery intent.",
+        "familyId": "C08",
+        "variantId": "C08/consuming-not-applied"
+      },
+      {
+        "code": "intent-before-consume",
+        "jobId": "49c4163b4b642c12bf5228ef0f24cf9c",
+        "detail": "Consumer effect lacks exact delivery intent.",
+        "familyId": "C08",
+        "variantId": "C08/acked"
+      },
+      {
+        "code": "intent-before-consume",
+        "jobId": "c0a8d531032c6348cf5bd15eb99de6cf",
+        "detail": "Consumer effect lacks exact delivery intent.",
+        "familyId": "E03",
+        "variantId": "E03/crash-consumer.consume.after"
+      },
+      {
+        "code": "intent-before-consume",
+        "jobId": "6cb8cdfbdc6702ed19b6511a37f7caa3",
+        "detail": "Consumer effect lacks exact delivery intent.",
+        "familyId": "E03",
+        "variantId": "E03/crash-driver.publishAck.after"
+      },
+      {
+        "code": "intent-before-consume",
+        "jobId": "6cb8cdfbdc6702ed19b6511a37f7caa3",
+        "detail": "Consumer effect lacks exact delivery intent.",
+        "familyId": "E03",
+        "variantId": "E03/crash-driver.publishAck.after"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "C08",
+      "variantId": "C08/primary",
+      "execution": {
+        "variant": {
+          "id": "C08/primary",
+          "family": "C08",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C08/qualification-v1",
+        "schedule": {
+          "partition": 3143,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C08",
+      "variantId": "C08/consuming-not-applied",
+      "execution": {
+        "variant": {
+          "id": "C08/consuming-not-applied",
+          "family": "C08",
+          "kind": "consumer-replay",
+          "args": {
+            "stage": "consuming-not-applied"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C08/qualification-v1",
+        "schedule": {
+          "partition": 2336,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C08",
+      "variantId": "C08/acked",
+      "execution": {
+        "variant": {
+          "id": "C08/acked",
+          "family": "C08",
+          "kind": "consumer-replay",
+          "args": {
+            "stage": "acked"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C08/qualification-v1",
+        "schedule": {
+          "partition": 3673,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E03",
+      "variantId": "E03/crash-consumer.consume.after",
+      "execution": {
+        "variant": {
+          "id": "E03/crash-consumer.consume.after",
+          "family": "E03",
+          "kind": "consumption-crash",
+          "args": {
+            "point": "consumer.consume.after"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E03/qualification-v1",
+        "schedule": {
+          "partition": 2397,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E03",
+      "variantId": "E03/crash-driver.publishAck.after",
+      "execution": {
+        "variant": {
+          "id": "E03/crash-driver.publishAck.after",
+          "family": "E03",
+          "kind": "consumption-crash",
+          "args": {
+            "point": "driver.publishAck.after"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E03/qualification-v1",
+        "schedule": {
+          "partition": 3737,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

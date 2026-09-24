@@ -1,0 +1,1813 @@
+{
+  "control": "discard-reconciliation-receipts",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B07",
+      "B08"
+    ],
+    "variantIds": [
+      "B07/primary",
+      "B08/primary",
+      "B07/issued-driver.attach.before",
+      "B07/issued-driver.detach.before",
+      "B07/issued-driver.release.before",
+      "B07/resource-intent-reader",
+      "B07/resource-intent-release-request",
+      "B07/resource-intent-barrier",
+      "B07/resource-intent-detach",
+      "B07/resource-intent-process",
+      "B07/resource-intent-isolation"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/primary",
+          "caseCommitment": "b10214a9d1b8ad79d78cbf8be1dd609b4c77d4c775fd4c34161e0e524148c518",
+          "fixtureCommitment": "38042515e1a4897bba4c10de4bd852363d9c9cc3a5a55a6eeedf143a4c1de89b",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "9070e9fcd23559abd62324630818303b43de4bacfd0f0cd1428f9b07b4992dd0"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/issued-driver.attach.before",
+          "caseCommitment": "00f55760f53c75e281b6bbd686ea09f9379e70d1cfbb0309a37bda7f18a88575",
+          "fixtureCommitment": "ef35dc757d2df56da42c232480862412ead1a80a3c90e14c99cef422a2d9abda",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "b8ec0175e6cc768cedb03c44737329b1e9db84058b47e5fabf23ce12f57c6f8b"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/issued-driver.detach.before",
+          "caseCommitment": "b812a7b003a3001c2ed54515db13338cc6fe2115fb4052b91c7932f91153bfb8",
+          "fixtureCommitment": "8b81ab5d3b4553aee217d4df6a6da01a2976b459b4692efdef168997e6afbe86",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "5707f25d39176683721274ed2b1b7fe13de3d679d3011a9ce2cc37d424e1077d"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/issued-driver.release.before",
+          "caseCommitment": "452400e6fd86b3f604255d4c3a399dc120abc5312679a90c08d285fc143f4de2",
+          "fixtureCommitment": "9aa18d861ef26347c29e3027b2ea869d250c292848c5a14b57e0fd61e5f79973",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "1f0b6810164a62905eb50e9778954ef7f28bfe8a4e2a3eab426645e772bd40e4"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/resource-intent-reader",
+          "caseCommitment": "9107be3d743b87993dcc01b105557a1d6f4f361569a50af520a35f79875e7195",
+          "fixtureCommitment": "dd5eb7554a73087af92c6f0664b99b84b9ba3239cf258e37bfb930a3ea768dea",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "768ad11a0956966c728c2085f4842578da62e60a9c902c44bcd1c95511ed7e7f"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/resource-intent-release-request",
+          "caseCommitment": "c64c9f321dca090587d2d57c47d2548e0fccafb6e781d43848bf380e31b293b1",
+          "fixtureCommitment": "dc165bdde5bc11346abd55fa25b5af33e609f917139eff742d3252f68f65f19c",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "1208b2a5fa3284a8971b39dd35d9ee143473742707ffcd0278dc15a284ddff5c"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/resource-intent-barrier",
+          "caseCommitment": "f34fc1dffd8ee4d6c2919cb2f1bd78d1547c8be08960c41900fdd660981f3380",
+          "fixtureCommitment": "a71991b891d51d9c999f98b5323a920976e74dee405e505966eab175cc3a68b7",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "e73c248f6409a02b84ea795509a03b2f61d19d017e19a0fde71229406b257fd0"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/resource-intent-detach",
+          "caseCommitment": "2abf77e08ba415ad9bd1424be72ffcef16fcaf29f880ff18fb0cff14578fe074",
+          "fixtureCommitment": "491ba81ff772caaf37fc536862dac58e096e857bf7d243b873f82d981e363e55",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "950ad94733ef980240788300d2a6b79ddfb16c0358bee7bd70d769c93ab7eee8"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/resource-intent-process",
+          "caseCommitment": "3cdb9af850439193db70364663d2e6d46448b64797380d92189e6af33f02c866",
+          "fixtureCommitment": "3eeb3314185d06c12697c796ebf397c46c1bcc6cebd49ef6da88827c748384fa",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "61cb27a593125bbc256fa5bb644c8e7135b31c30dfb77b233f93aead2852a650"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B07/resource-intent-isolation",
+          "caseCommitment": "72166b779bb0ee11757d6629d57f2336e7648eb5c1f29084ce39b87eb67d390f",
+          "fixtureCommitment": "cc9efe592b9bc4d062d53fb869453a2a353d670a4e2efb3640ed1d12bacb73b3",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "6b2ca15cbf0740237a37fa02d70c09b5d1822f3d8c0aedf41be033bb41b2761b"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B08/primary",
+          "caseCommitment": "8f9fbcf8a0de239399177dd7a810e880b16edd7ad19e4a7b3b106a8b99ccd020",
+          "fixtureCommitment": "638a44418ad88e695bfabd90e8c561a78c3cf12e426f76c5e54de929ec28fc9f",
+          "fixtureAllocations": 9,
+          "authenticationCommitment": "efe7b2c633440dbec123bebc6b613eef3c1ba77fdacc07afbf8177063a39994a"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "a93af07995b1f5b5f0a8357a8723c4b79bd76e945dbdea7beebbeb4e5b39a344",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B07/primary",
+        "B08/primary",
+        "B07/issued-driver.attach.before",
+        "B07/issued-driver.detach.before",
+        "B07/issued-driver.release.before",
+        "B07/resource-intent-reader",
+        "B07/resource-intent-release-request",
+        "B07/resource-intent-barrier",
+        "B07/resource-intent-detach",
+        "B07/resource-intent-process",
+        "B07/resource-intent-isolation"
+      ],
+      "scheduleHash": "95d109de56b3e26c1ca5cc712205c5684e8fa010308302e2afd3ff43c17c2420",
+      "configurationHash": "3029372b6287ec975a6cbc7e75edcd2c39e5321a9b00646e3f99a84b25f900eb"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B07",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B07/3029372b6287ec975a6cbc7e75edcd2c39e5321a9b00646e3f99a84b25f900eb",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/primary",
+              "caseCommitment": "b10214a9d1b8ad79d78cbf8be1dd609b4c77d4c775fd4c34161e0e524148c518",
+              "fixtureCommitment": "38042515e1a4897bba4c10de4bd852363d9c9cc3a5a55a6eeedf143a4c1de89b",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "9070e9fcd23559abd62324630818303b43de4bacfd0f0cd1428f9b07b4992dd0"
+            },
+            "id": "B07/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.release.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 409,
+            "promiseJobs": 1874
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/issued-driver.attach.before",
+              "caseCommitment": "00f55760f53c75e281b6bbd686ea09f9379e70d1cfbb0309a37bda7f18a88575",
+              "fixtureCommitment": "ef35dc757d2df56da42c232480862412ead1a80a3c90e14c99cef422a2d9abda",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "b8ec0175e6cc768cedb03c44737329b1e9db84058b47e5fabf23ce12f57c6f8b"
+            },
+            "id": "B07/issued-driver.attach.before",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.attach.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 254,
+            "promiseJobs": 1167
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/issued-driver.detach.before",
+              "caseCommitment": "b812a7b003a3001c2ed54515db13338cc6fe2115fb4052b91c7932f91153bfb8",
+              "fixtureCommitment": "8b81ab5d3b4553aee217d4df6a6da01a2976b459b4692efdef168997e6afbe86",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "5707f25d39176683721274ed2b1b7fe13de3d679d3011a9ce2cc37d424e1077d"
+            },
+            "id": "B07/issued-driver.detach.before",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.detach.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 386,
+            "promiseJobs": 1761
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/issued-driver.release.before",
+              "caseCommitment": "452400e6fd86b3f604255d4c3a399dc120abc5312679a90c08d285fc143f4de2",
+              "fixtureCommitment": "9aa18d861ef26347c29e3027b2ea869d250c292848c5a14b57e0fd61e5f79973",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "1f0b6810164a62905eb50e9778954ef7f28bfe8a4e2a3eab426645e772bd40e4"
+            },
+            "id": "B07/issued-driver.release.before",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.release.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 409,
+            "promiseJobs": 1874
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/resource-intent-reader",
+              "caseCommitment": "9107be3d743b87993dcc01b105557a1d6f4f361569a50af520a35f79875e7195",
+              "fixtureCommitment": "dd5eb7554a73087af92c6f0664b99b84b9ba3239cf258e37bfb930a3ea768dea",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "768ad11a0956966c728c2085f4842578da62e60a9c902c44bcd1c95511ed7e7f"
+            },
+            "id": "B07/resource-intent-reader",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.attach.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 254,
+            "promiseJobs": 1167
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/resource-intent-release-request",
+              "caseCommitment": "c64c9f321dca090587d2d57c47d2548e0fccafb6e781d43848bf380e31b293b1",
+              "fixtureCommitment": "dc165bdde5bc11346abd55fa25b5af33e609f917139eff742d3252f68f65f19c",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "1208b2a5fa3284a8971b39dd35d9ee143473742707ffcd0278dc15a284ddff5c"
+            },
+            "id": "B07/resource-intent-release-request",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.publishRelease.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 303,
+            "promiseJobs": 1356
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/resource-intent-barrier",
+              "caseCommitment": "f34fc1dffd8ee4d6c2919cb2f1bd78d1547c8be08960c41900fdd660981f3380",
+              "fixtureCommitment": "a71991b891d51d9c999f98b5323a920976e74dee405e505966eab175cc3a68b7",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "e73c248f6409a02b84ea795509a03b2f61d19d017e19a0fde71229406b257fd0"
+            },
+            "id": "B07/resource-intent-barrier",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.barrier.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 341,
+            "promiseJobs": 1544
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/resource-intent-detach",
+              "caseCommitment": "2abf77e08ba415ad9bd1424be72ffcef16fcaf29f880ff18fb0cff14578fe074",
+              "fixtureCommitment": "491ba81ff772caaf37fc536862dac58e096e857bf7d243b873f82d981e363e55",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "950ad94733ef980240788300d2a6b79ddfb16c0358bee7bd70d769c93ab7eee8"
+            },
+            "id": "B07/resource-intent-detach",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.detach.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 386,
+            "promiseJobs": 1761
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/resource-intent-process",
+              "caseCommitment": "3cdb9af850439193db70364663d2e6d46448b64797380d92189e6af33f02c866",
+              "fixtureCommitment": "3eeb3314185d06c12697c796ebf397c46c1bcc6cebd49ef6da88827c748384fa",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "61cb27a593125bbc256fa5bb644c8e7135b31c30dfb77b233f93aead2852a650"
+            },
+            "id": "B07/resource-intent-process",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.release.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 409,
+            "promiseJobs": 1874
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B07/resource-intent-isolation",
+              "caseCommitment": "72166b779bb0ee11757d6629d57f2336e7648eb5c1f29084ce39b87eb67d390f",
+              "fixtureCommitment": "cc9efe592b9bc4d062d53fb869453a2a353d670a4e2efb3640ed1d12bacb73b3",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "6b2ca15cbf0740237a37fa02d70c09b5d1822f3d8c0aedf41be033bb41b2761b"
+            },
+            "id": "B07/resource-intent-isolation",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.release.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 430,
+            "promiseJobs": 1977
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/primary: candidate reached lawful driver.release.after",
+            "passed": true
+          },
+          {
+            "label": "B07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/primary: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.attach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.attach.before: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.attach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.attach.before: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.attach.before: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.attach.before: candidate reached lawful driver.attach.before",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.attach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.attach.before: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/issued-driver.attach.before: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.detach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.detach.before: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.detach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.detach.before: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.detach.before: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.detach.before: candidate reached lawful driver.detach.before",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.detach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.detach.before: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/issued-driver.detach.before: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.release.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.release.before: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.release.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.release.before: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.release.before: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.release.before: candidate reached lawful driver.release.before",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.release.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/issued-driver.release.before: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/issued-driver.release.before: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-reader: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-reader: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-reader: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-reader: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-reader: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-reader: candidate reached lawful driver.attach.before",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-reader: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-reader: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/resource-intent-reader: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-release-request: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-release-request: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-release-request: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-release-request: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-release-request: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-release-request: candidate reached lawful driver.publishRelease.before",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-release-request: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-release-request: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/resource-intent-release-request: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-barrier: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-barrier: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-barrier: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-barrier: candidate reached lawful driver.barrier.before",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-barrier: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/resource-intent-barrier: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-detach: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-detach: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-detach: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-detach: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-detach: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-detach: candidate reached lawful driver.detach.before",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-detach: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-detach: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/resource-intent-detach: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-process: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-process: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-process: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-process: candidate reached lawful driver.release.before",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-process: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/resource-intent-process: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-isolation: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-isolation: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-isolation: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-isolation: candidate reached lawful driver.release.before",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/resource-intent-isolation: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B07/resource-intent-isolation: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B07/primary: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/issued-driver.attach.before: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/issued-driver.detach.before: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/issued-driver.release.before: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/resource-intent-reader: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/resource-intent-release-request: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/resource-intent-barrier: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/resource-intent-detach: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/resource-intent-process: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}; B07/resource-intent-isolation: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+        "operations": 3581,
+        "promiseJobs": 16355
+      },
+      {
+        "id": "B08",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B08/3029372b6287ec975a6cbc7e75edcd2c39e5321a9b00646e3f99a84b25f900eb",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B08/primary",
+              "caseCommitment": "8f9fbcf8a0de239399177dd7a810e880b16edd7ad19e4a7b3b106a8b99ccd020",
+              "fixtureCommitment": "638a44418ad88e695bfabd90e8c561a78c3cf12e426f76c5e54de929ec28fc9f",
+              "fixtureAllocations": 9,
+              "authenticationCommitment": "efe7b2c633440dbec123bebc6b613eef3c1ba77fdacc07afbf8177063a39994a"
+            },
+            "id": "B08/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "stop categorical blocker",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "safetyFailures": [],
+            "operations": 417,
+            "promiseJobs": 1928
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: stop categorical blocker",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B08/primary: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+            "passed": false
+          },
+          {
+            "label": "B08/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B08/primary: stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+        "operations": 417,
+        "promiseJobs": 1928
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 2,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B07",
+      "variantId": "B07/primary",
+      "execution": {
+        "variant": {
+          "id": "B07/primary",
+          "family": "B07",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3511,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/issued-driver.attach.before",
+      "execution": {
+        "variant": {
+          "id": "B07/issued-driver.attach.before",
+          "family": "B07",
+          "kind": "stop-effect-crash",
+          "args": {
+            "point": "driver.attach.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3524,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/issued-driver.detach.before",
+      "execution": {
+        "variant": {
+          "id": "B07/issued-driver.detach.before",
+          "family": "B07",
+          "kind": "stop-effect-crash",
+          "args": {
+            "point": "driver.detach.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2375,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/issued-driver.release.before",
+      "execution": {
+        "variant": {
+          "id": "B07/issued-driver.release.before",
+          "family": "B07",
+          "kind": "stop-effect-crash",
+          "args": {
+            "point": "driver.release.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2378,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/resource-intent-reader",
+      "execution": {
+        "variant": {
+          "id": "B07/resource-intent-reader",
+          "family": "B07",
+          "kind": "stop-resource-intent",
+          "args": {
+            "name": "reader",
+            "point": "driver.attach.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2350,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/resource-intent-release-request",
+      "execution": {
+        "variant": {
+          "id": "B07/resource-intent-release-request",
+          "family": "B07",
+          "kind": "stop-resource-intent",
+          "args": {
+            "name": "release-request",
+            "point": "driver.publishRelease.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3026,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/resource-intent-barrier",
+      "execution": {
+        "variant": {
+          "id": "B07/resource-intent-barrier",
+          "family": "B07",
+          "kind": "stop-resource-intent",
+          "args": {
+            "name": "barrier",
+            "point": "driver.barrier.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3090,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/resource-intent-detach",
+      "execution": {
+        "variant": {
+          "id": "B07/resource-intent-detach",
+          "family": "B07",
+          "kind": "stop-resource-intent",
+          "args": {
+            "name": "detach",
+            "point": "driver.detach.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2143,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/resource-intent-process",
+      "execution": {
+        "variant": {
+          "id": "B07/resource-intent-process",
+          "family": "B07",
+          "kind": "stop-resource-intent",
+          "args": {
+            "name": "process",
+            "point": "driver.release.before",
+            "resource": "process"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3745,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/resource-intent-isolation",
+      "execution": {
+        "variant": {
+          "id": "B07/resource-intent-isolation",
+          "family": "B07",
+          "kind": "stop-resource-intent",
+          "args": {
+            "name": "isolation",
+            "point": "driver.release.before",
+            "resource": "isolation"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2571,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B08",
+      "variantId": "B08/primary",
+      "execution": {
+        "variant": {
+          "id": "B08/primary",
+          "family": "B08",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B08/qualification-v1",
+        "schedule": {
+          "partition": 3852,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

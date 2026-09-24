@@ -1,0 +1,92 @@
+{
+  "variantId": "B07/issued-driver.attach.before",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "actual public setup intent identifies lifecycle job",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful driver.attach.before",
+      "passed": true
+    },
+    {
+      "label": "actual public setup intent identifies lifecycle job",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "stop must progress",
+      "passed": true
+    },
+    {
+      "label": "released public job",
+      "passed": true
+    },
+    {
+      "label": "witness released after settlement",
+      "passed": true
+    },
+    {
+      "label": "all six durable facts",
+      "passed": true
+    },
+    {
+      "label": "crash keeps completed release effects exact",
+      "passed": true
+    },
+    {
+      "label": "crash keeps immutable final evidence",
+      "passed": true
+    },
+    {
+      "label": "recovered cleanup retires an actual authenticated attachment",
+      "passed": true
+    }
+  ],
+  "operations": 427,
+  "promiseJobs": 1966,
+  "attachments": 1,
+  "detachments": 1,
+  "releases": 2,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "ok",
+      "state": "released"
+    }
+  ],
+  "heldBoundaries": 1,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

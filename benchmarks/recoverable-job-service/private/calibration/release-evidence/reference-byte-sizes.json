@@ -1,0 +1,625 @@
+{
+  "diagnosticsCompact": 1525528,
+  "diagnosticsPretty": 2573170,
+  "diagnosticsFile": 2573171,
+  "verifierCompact": 1531641,
+  "verifierPretty": 2752565,
+  "verifierFile": 2752566,
+  "privateReplay": [
+    {
+      "name": "reference.json",
+      "compact": 3701802,
+      "prettyFile": 11216106
+    },
+    {
+      "name": "01-negative.json",
+      "compact": 543233,
+      "prettyFile": 960399
+    },
+    {
+      "name": "01-restored.json",
+      "compact": 616207,
+      "prettyFile": 1094513
+    },
+    {
+      "name": "02-negative.json",
+      "compact": 4591,
+      "prettyFile": 7312
+    },
+    {
+      "name": "02-restored.json",
+      "compact": 4815,
+      "prettyFile": 7699
+    },
+    {
+      "name": "03-negative.json",
+      "compact": 19011,
+      "prettyFile": 30509
+    },
+    {
+      "name": "03-restored.json",
+      "compact": 21677,
+      "prettyFile": 35190
+    },
+    {
+      "name": "04-negative.json",
+      "compact": 7545,
+      "prettyFile": 12235
+    },
+    {
+      "name": "04-restored.json",
+      "compact": 7478,
+      "prettyFile": 12114
+    },
+    {
+      "name": "05-negative.json",
+      "compact": 3502,
+      "prettyFile": 5778
+    },
+    {
+      "name": "05-restored.json",
+      "compact": 3502,
+      "prettyFile": 5778
+    },
+    {
+      "name": "06-negative.json",
+      "compact": 3218,
+      "prettyFile": 5277
+    },
+    {
+      "name": "06-restored.json",
+      "compact": 3218,
+      "prettyFile": 5277
+    },
+    {
+      "name": "07-negative.json",
+      "compact": 3218,
+      "prettyFile": 5277
+    },
+    {
+      "name": "07-restored.json",
+      "compact": 3218,
+      "prettyFile": 5277
+    },
+    {
+      "name": "08-negative.json",
+      "compact": 2493,
+      "prettyFile": 3876
+    },
+    {
+      "name": "08-restored.json",
+      "compact": 2493,
+      "prettyFile": 3876
+    },
+    {
+      "name": "09-negative.json",
+      "compact": 9454,
+      "prettyFile": 15784
+    },
+    {
+      "name": "09-restored.json",
+      "compact": 9678,
+      "prettyFile": 16171
+    },
+    {
+      "name": "10-negative.json",
+      "compact": 3218,
+      "prettyFile": 5277
+    },
+    {
+      "name": "10-restored.json",
+      "compact": 3218,
+      "prettyFile": 5277
+    },
+    {
+      "name": "11-negative.json",
+      "compact": 36295,
+      "prettyFile": 60957
+    },
+    {
+      "name": "11-restored.json",
+      "compact": 36295,
+      "prettyFile": 60957
+    },
+    {
+      "name": "12-negative.json",
+      "compact": 12796,
+      "prettyFile": 21577
+    },
+    {
+      "name": "12-restored.json",
+      "compact": 13700,
+      "prettyFile": 23133
+    },
+    {
+      "name": "13-negative.json",
+      "compact": 48329,
+      "prettyFile": 209095
+    },
+    {
+      "name": "13-restored.json",
+      "compact": 48555,
+      "prettyFile": 209484
+    },
+    {
+      "name": "14-negative.json",
+      "compact": 574694,
+      "prettyFile": 979363
+    },
+    {
+      "name": "14-restored.json",
+      "compact": 575152,
+      "prettyFile": 980147
+    },
+    {
+      "name": "15-negative.json",
+      "compact": 7413,
+      "prettyFile": 12315
+    },
+    {
+      "name": "15-restored.json",
+      "compact": 10287,
+      "prettyFile": 17696
+    },
+    {
+      "name": "16-negative.json",
+      "compact": 41866,
+      "prettyFile": 72870
+    },
+    {
+      "name": "16-restored.json",
+      "compact": 46862,
+      "prettyFile": 81808
+    },
+    {
+      "name": "17-negative.json",
+      "compact": 2945,
+      "prettyFile": 4654
+    },
+    {
+      "name": "17-restored.json",
+      "compact": 4052,
+      "prettyFile": 6770
+    },
+    {
+      "name": "18-negative.json",
+      "compact": 556280,
+      "prettyFile": 2693234
+    },
+    {
+      "name": "18-restored.json",
+      "compact": 578583,
+      "prettyFile": 2735521
+    },
+    {
+      "name": "19-negative.json",
+      "compact": 3168,
+      "prettyFile": 4991
+    },
+    {
+      "name": "19-restored.json",
+      "compact": 3168,
+      "prettyFile": 4991
+    },
+    {
+      "name": "20-negative.json",
+      "compact": 3605,
+      "prettyFile": 5984
+    },
+    {
+      "name": "20-restored.json",
+      "compact": 5615,
+      "prettyFile": 9690
+    },
+    {
+      "name": "21-negative.json",
+      "compact": 26791,
+      "prettyFile": 43342
+    },
+    {
+      "name": "21-restored.json",
+      "compact": 27898,
+      "prettyFile": 45458
+    },
+    {
+      "name": "22-negative.json",
+      "compact": 5113,
+      "prettyFile": 8214
+    },
+    {
+      "name": "22-restored.json",
+      "compact": 9497,
+      "prettyFile": 16200
+    },
+    {
+      "name": "23-negative.json",
+      "compact": 7213,
+      "prettyFile": 11709
+    },
+    {
+      "name": "23-restored.json",
+      "compact": 7889,
+      "prettyFile": 12874
+    },
+    {
+      "name": "24-negative.json",
+      "compact": 3779,
+      "prettyFile": 6010
+    },
+    {
+      "name": "24-restored.json",
+      "compact": 4003,
+      "prettyFile": 6397
+    },
+    {
+      "name": "25-negative.json",
+      "compact": 7839,
+      "prettyFile": 13243
+    },
+    {
+      "name": "25-restored.json",
+      "compact": 7839,
+      "prettyFile": 13243
+    },
+    {
+      "name": "26-negative.json",
+      "compact": 3824,
+      "prettyFile": 6379
+    },
+    {
+      "name": "26-restored.json",
+      "compact": 4269,
+      "prettyFile": 7150
+    },
+    {
+      "name": "27-negative.json",
+      "compact": 10509,
+      "prettyFile": 17606
+    },
+    {
+      "name": "27-restored.json",
+      "compact": 10735,
+      "prettyFile": 17995
+    },
+    {
+      "name": "28-negative.json",
+      "compact": 4003,
+      "prettyFile": 6720
+    },
+    {
+      "name": "28-restored.json",
+      "compact": 4003,
+      "prettyFile": 6720
+    },
+    {
+      "name": "29-negative.json",
+      "compact": 4030,
+      "prettyFile": 6632
+    },
+    {
+      "name": "29-restored.json",
+      "compact": 4386,
+      "prettyFile": 7286
+    },
+    {
+      "name": "30-negative.json",
+      "compact": 3218,
+      "prettyFile": 5277
+    },
+    {
+      "name": "30-restored.json",
+      "compact": 3218,
+      "prettyFile": 5277
+    },
+    {
+      "name": "31-negative.json",
+      "compact": 3315,
+      "prettyFile": 5176
+    },
+    {
+      "name": "31-restored.json",
+      "compact": 3976,
+      "prettyFile": 6380
+    },
+    {
+      "name": "32-negative.json",
+      "compact": 3667,
+      "prettyFile": 6113
+    },
+    {
+      "name": "32-restored.json",
+      "compact": 3885,
+      "prettyFile": 6494
+    },
+    {
+      "name": "33-negative.json",
+      "compact": 4792,
+      "prettyFile": 8234
+    },
+    {
+      "name": "33-restored.json",
+      "compact": 4121,
+      "prettyFile": 6880
+    },
+    {
+      "name": "34-negative.json",
+      "compact": 3836,
+      "prettyFile": 6391
+    },
+    {
+      "name": "34-restored.json",
+      "compact": 4286,
+      "prettyFile": 7167
+    },
+    {
+      "name": "35-negative.json",
+      "compact": 5305,
+      "prettyFile": 8695
+    },
+    {
+      "name": "35-restored.json",
+      "compact": 5305,
+      "prettyFile": 8695
+    },
+    {
+      "name": "36-negative.json",
+      "compact": 2446,
+      "prettyFile": 3727
+    },
+    {
+      "name": "36-restored.json",
+      "compact": 3052,
+      "prettyFile": 4816
+    },
+    {
+      "name": "37-negative.json",
+      "compact": 4517,
+      "prettyFile": 7693
+    },
+    {
+      "name": "37-restored.json",
+      "compact": 4450,
+      "prettyFile": 7572
+    },
+    {
+      "name": "38-negative.json",
+      "compact": 7451,
+      "prettyFile": 11854
+    },
+    {
+      "name": "38-restored.json",
+      "compact": 9598,
+      "prettyFile": 15965
+    },
+    {
+      "name": "39-negative.json",
+      "compact": 16231,
+      "prettyFile": 27325
+    },
+    {
+      "name": "39-restored.json",
+      "compact": 16231,
+      "prettyFile": 27325
+    },
+    {
+      "name": "40-negative.json",
+      "compact": 98201,
+      "prettyFile": 163094
+    },
+    {
+      "name": "40-restored.json",
+      "compact": 105387,
+      "prettyFile": 175853
+    },
+    {
+      "name": "41-negative.json",
+      "compact": 3230,
+      "prettyFile": 5289
+    },
+    {
+      "name": "41-restored.json",
+      "compact": 3230,
+      "prettyFile": 5289
+    },
+    {
+      "name": "42-negative.json",
+      "compact": 3230,
+      "prettyFile": 5289
+    },
+    {
+      "name": "42-restored.json",
+      "compact": 3230,
+      "prettyFile": 5289
+    },
+    {
+      "name": "43-negative.json",
+      "compact": 3234,
+      "prettyFile": 5293
+    },
+    {
+      "name": "43-restored.json",
+      "compact": 3234,
+      "prettyFile": 5293
+    },
+    {
+      "name": "44-negative.json",
+      "compact": 9875,
+      "prettyFile": 15499
+    },
+    {
+      "name": "44-restored.json",
+      "compact": 11653,
+      "prettyFile": 18969
+    },
+    {
+      "name": "45-negative.json",
+      "compact": 19835,
+      "prettyFile": 33331
+    },
+    {
+      "name": "45-restored.json",
+      "compact": 19835,
+      "prettyFile": 33331
+    },
+    {
+      "name": "46-negative.json",
+      "compact": 6817,
+      "prettyFile": 11337
+    },
+    {
+      "name": "46-restored.json",
+      "compact": 6817,
+      "prettyFile": 11337
+    },
+    {
+      "name": "47-negative.json",
+      "compact": 3982,
+      "prettyFile": 6681
+    },
+    {
+      "name": "47-restored.json",
+      "compact": 3982,
+      "prettyFile": 6681
+    },
+    {
+      "name": "48-negative.json",
+      "compact": 4063,
+      "prettyFile": 6781
+    },
+    {
+      "name": "48-restored.json",
+      "compact": 4063,
+      "prettyFile": 6781
+    },
+    {
+      "name": "49-negative.json",
+      "compact": 228491,
+      "prettyFile": 439614
+    },
+    {
+      "name": "49-restored.json",
+      "compact": 228491,
+      "prettyFile": 439614
+    },
+    {
+      "name": "50-negative.json",
+      "compact": 23306,
+      "prettyFile": 37208
+    },
+    {
+      "name": "50-restored.json",
+      "compact": 23306,
+      "prettyFile": 37208
+    },
+    {
+      "name": "51-negative.json",
+      "compact": 2964,
+      "prettyFile": 4673
+    },
+    {
+      "name": "51-restored.json",
+      "compact": 2964,
+      "prettyFile": 4673
+    },
+    {
+      "name": "52-negative.json",
+      "compact": 22577,
+      "prettyFile": 42758
+    },
+    {
+      "name": "52-restored.json",
+      "compact": 23029,
+      "prettyFile": 43536
+    },
+    {
+      "name": "53-negative.json",
+      "compact": 3662,
+      "prettyFile": 5763
+    },
+    {
+      "name": "53-restored.json",
+      "compact": 3662,
+      "prettyFile": 5763
+    },
+    {
+      "name": "54-negative.json",
+      "compact": 10316,
+      "prettyFile": 16050
+    },
+    {
+      "name": "54-restored.json",
+      "compact": 10316,
+      "prettyFile": 16050
+    },
+    {
+      "name": "55-negative.json",
+      "compact": 2555,
+      "prettyFile": 3957
+    },
+    {
+      "name": "55-restored.json",
+      "compact": 2555,
+      "prettyFile": 3957
+    },
+    {
+      "name": "56-negative.json",
+      "compact": 2560,
+      "prettyFile": 3962
+    },
+    {
+      "name": "56-restored.json",
+      "compact": 2560,
+      "prettyFile": 3962
+    },
+    {
+      "name": "57-negative.json",
+      "compact": 3430,
+      "prettyFile": 5678
+    },
+    {
+      "name": "57-restored.json",
+      "compact": 2541,
+      "prettyFile": 3943
+    },
+    {
+      "name": "58-negative.json",
+      "compact": 3371,
+      "prettyFile": 5565
+    },
+    {
+      "name": "58-restored.json",
+      "compact": 3707,
+      "prettyFile": 6132
+    },
+    {
+      "name": "59-negative.json",
+      "compact": 6619,
+      "prettyFile": 11017
+    },
+    {
+      "name": "59-restored.json",
+      "compact": 6795,
+      "prettyFile": 11342
+    },
+    {
+      "name": "60-negative.json",
+      "compact": 3449,
+      "prettyFile": 5671
+    },
+    {
+      "name": "60-restored.json",
+      "compact": 3449,
+      "prettyFile": 5671
+    },
+    {
+      "name": "61-negative.json",
+      "compact": 1084386,
+      "prettyFile": 4787940
+    },
+    {
+      "name": "61-restored.json",
+      "compact": 1105522,
+      "prettyFile": 4831029
+    }
+  ]
+}

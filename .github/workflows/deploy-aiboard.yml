@@ -20,6 +20,9 @@ jobs:
           node-version: 24.x
           cache: npm
 
+      - name: Acquire pinned Recoverable Job Service Runner source
+        run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
+
       - name: Install dependencies
         run: npm ci
 

@@ -1,0 +1,261 @@
+{
+  "control": "duplicate-stop-observation",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A10"
+    ],
+    "variantIds": [
+      "A10/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "A10/primary",
+          "caseCommitment": "e8149eabe29157b70ec84eb4782d6264d865b9ad16c9543108bd634f4114534a",
+          "fixtureCommitment": "3a2b06e6f94bbc980364dfc11c23b2051bc2dbb117f59c02a8903765c9bee15b",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "d91ac051985a8bb7e4cce3f43b28e5e68dc433a32292d5ba8e2fdf24ba41825f"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "f69e9b4fe5a665c082b81d4ed850bbcc7b2838705b0cbe1782843fcf441f5aad",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A10/primary"
+      ],
+      "scheduleHash": "f6813a722501f0223353c33208a2507cd5ca1a8ffd2265957dab14d0fd56211f",
+      "configurationHash": "15d0a0e49b982e450f76487091e62fa02bd3fe4a2d391778b30a33791a7d8069"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A10",
+        "group": "A",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/A10/15d0a0e49b982e450f76487091e62fa02bd3fe4a2d391778b30a33791a7d8069",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "A10/primary",
+              "caseCommitment": "e8149eabe29157b70ec84eb4782d6264d865b9ad16c9543108bd634f4114534a",
+              "fixtureCommitment": "3a2b06e6f94bbc980364dfc11c23b2051bc2dbb117f59c02a8903765c9bee15b",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "d91ac051985a8bb7e4cce3f43b28e5e68dc433a32292d5ba8e2fdf24ba41825f"
+            },
+            "id": "A10/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.inspect.before",
+                "passed": true
+              },
+              {
+                "label": "concurrent stop observers share exact outstanding inspection",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "shared waiters settle consistently",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "shared waiters settle consistently",
+            "safetyFailures": [],
+            "operations": 455,
+            "promiseJobs": 2109
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: candidate reached lawful driver.inspect.before",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: concurrent stop observers share exact outstanding inspection",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A10/primary: shared waiters settle consistently",
+            "passed": false
+          },
+          {
+            "label": "A10/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "A10/primary: shared waiters settle consistently",
+        "operations": 455,
+        "promiseJobs": 2109
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "A10",
+      "variantId": "A10/primary",
+      "execution": {
+        "variant": {
+          "id": "A10/primary",
+          "family": "A10",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A10/qualification-v1",
+        "schedule": {
+          "partition": 2809,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

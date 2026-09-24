@@ -1,0 +1,55 @@
+runner-v2/src/oci-execution-isolation-provider.ts(1266,11): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Property 'NODE_ENV' is missing in type '{ [x: string]: string; }' but required in type 'ProcessEnv'.
+runner-v2/src/oci-execution-isolation-provider.ts(1281,17): error TS2339: Property 'removeAllListeners' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1282,17): error TS2339: Property 'stdout' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1283,17): error TS2339: Property 'stderr' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1284,17): error TS2339: Property 'stdin' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1285,17): error TS2339: Property 'stdout' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1286,17): error TS2339: Property 'stderr' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1287,17): error TS2339: Property 'stdin' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1288,17): error TS2339: Property 'unref' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1294,25): error TS2339: Property 'kill' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1301,15): error TS2339: Property 'stdout' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1302,15): error TS2339: Property 'stderr' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1303,15): error TS2339: Property 'once' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1303,30): error TS7006: Parameter 'error' implicitly has an 'any' type.
+runner-v2/src/oci-execution-isolation-provider.ts(1304,40): error TS2339: Property 'stdin' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1306,23): error TS2339: Property 'kill' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1312,15): error TS2339: Property 'once' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/src/oci-execution-isolation-provider.ts(1312,30): error TS7006: Parameter 'code' implicitly has an 'any' type.
+runner-v2/test/lsp-client.test.ts(25,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_PARTIAL: string; LSP_FIXTURE_EXIT_FILE: string; LSP_FIXTURE_CANCEL_RESPONSE: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(103,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_POSITION_ENCODING: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(183,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_PAUSE_STDIN_FILE: string; LSP_FIXTURE_DESCENDANT_PID_FILE: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(399,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_IGNORE_SHUTDOWN: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(421,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_IGNORE_SHUTDOWN: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(455,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_DIAGNOSTICS_MODE: string; LSP_FIXTURE_PUBLISH_WITHOUT_VERSION: string; LSP_FIXTURE_DIAGNOSTIC_VERSION_MARKERS: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(486,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_DIAGNOSTICS_MODE: string; LSP_FIXTURE_PUBLISH_WITHOUT_VERSION: string; LSP_FIXTURE_DELAY_VERSIONLESS_VERSION: string; LSP_FIXTURE_DELAY_VERSIONLESS_MS: string; LSP_FIXTURE_DIAGNOSTIC_VERSION_MARKERS: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(523,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_DIAGNOSTICS_MODE: string; LSP_FIXTURE_PUBLISH_STALE_VERSION: string; LSP_FIXTURE_PUBLISH_STALE_AFTER_VERSION: string; LSP_FIXTURE_DIAGNOSTIC_VERSION_MARKERS: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(560,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_DESCENDANT_PID_FILE: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/lsp-client.test.ts(591,5): error TS2741: Property 'NODE_ENV' is missing in type '{ LSP_FIXTURE_CRASH_ONCE_FILE: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/portable-process-channel.test.ts(1050,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Property 'NODE_ENV' is missing in type '{ AIBOARD_TEST_LOCK_PATH: string; AIBOARD_TEST_LOCK_MS: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/portable-process-channel.test.ts(1066,16): error TS2339: Property 'exitCode' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/test/portable-process-channel.test.ts(1066,42): error TS2339: Property 'kill' does not exist on type 'never'.
+  The intersection 'ChildProcessWithoutNullStreams & ChildProcessByStdio<Writable, Readable, Readable> & ... 7 more ... & ChildProcess' was reduced to 'never' because property 'stdin' has conflicting types in some constituents.
+runner-v2/test/runner-capability-contract.test.ts(125,7): error TS2741: Property 'NODE_ENV' is missing in type '{ PATH: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/runner-capability-contract.test.ts(138,7): error TS2741: Property 'NODE_ENV' is missing in type '{ PATH: string; }' but required in type 'ProcessEnv'.
+runner-v2/test/runner-capability-contract.test.ts(147,7): error TS2741: Property 'NODE_ENV' is missing in type '{ PATH: string; PATHEXT: string; }' but required in type 'ProcessEnv'.

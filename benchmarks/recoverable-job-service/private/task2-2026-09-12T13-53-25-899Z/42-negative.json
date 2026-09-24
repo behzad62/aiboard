@@ -1,0 +1,285 @@
+{
+  "control": "omit-process",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B02"
+    ],
+    "variantIds": [
+      "B02/proof-process"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "B02/proof-process",
+          "caseCommitment": "5bd0048709e29353b1ab5a5dbeb6205ced54536d064d03ed9144def1c739d55e",
+          "fixtureCommitment": "983f676d512d06809daca52bc5319f66267fa47c20109f4fa8dd0288b26cd1cf",
+          "fixtureAllocations": 8,
+          "authenticationCommitment": "fd2d248bf2f93ddfb1f180a818c55ed37167826623c36132ebf5db14b246d453"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "2b49fbb51a684fd6c831d48eb56b24e37ee61dabbcfcf10832d0fa5e63488b04",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B02/proof-process"
+      ],
+      "scheduleHash": "c700abce7b9191a926cd2284f99226d615f236d327bb58e3386e697e57b32395",
+      "configurationHash": "f92e9bf80bd3891fb18ca17cd331a6eac23f9feebb97db65c4d18cc88d35ac66"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B02",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B02/f92e9bf80bd3891fb18ca17cd331a6eac23f9feebb97db65c4d18cc88d35ac66",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "B02/proof-process",
+              "caseCommitment": "5bd0048709e29353b1ab5a5dbeb6205ced54536d064d03ed9144def1c739d55e",
+              "fixtureCommitment": "983f676d512d06809daca52bc5319f66267fa47c20109f4fa8dd0288b26cd1cf",
+              "fixtureAllocations": 8,
+              "authenticationCommitment": "fd2d248bf2f93ddfb1f180a818c55ed37167826623c36132ebf5db14b246d453"
+            },
+            "id": "B02/proof-process",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "witness released after settlement; safety: resource-release-proof, resource-still-owned",
+            "safetyFailures": [
+              {
+                "code": "resource-release-proof",
+                "jobId": "9c1900c60fffb3009844bfe43d291991",
+                "detail": "process fact lacks actual exact retirement.",
+                "familyId": "B02",
+                "variantId": "B02/proof-process"
+              },
+              {
+                "code": "resource-still-owned",
+                "jobId": "9c1900c60fffb3009844bfe43d291991",
+                "detail": "Released publication retains actual ownership.",
+                "familyId": "B02",
+                "variantId": "B02/proof-process"
+              }
+            ],
+            "operations": 390,
+            "promiseJobs": 1815
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B02/proof-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-process: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-process: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-process: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-process: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-process: released public job",
+            "passed": true
+          },
+          {
+            "label": "B02/proof-process: witness released after settlement",
+            "passed": false
+          },
+          {
+            "label": "B02/proof-process: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "B02/proof-process: witness released after settlement; safety: resource-release-proof, resource-still-owned",
+        "operations": 390,
+        "promiseJobs": 1815
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "resource-release-proof",
+        "jobId": "9c1900c60fffb3009844bfe43d291991",
+        "detail": "process fact lacks actual exact retirement.",
+        "familyId": "B02",
+        "variantId": "B02/proof-process"
+      },
+      {
+        "code": "resource-still-owned",
+        "jobId": "9c1900c60fffb3009844bfe43d291991",
+        "detail": "Released publication retains actual ownership.",
+        "familyId": "B02",
+        "variantId": "B02/proof-process"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "B02",
+      "variantId": "B02/proof-process",
+      "execution": {
+        "variant": {
+          "id": "B02/proof-process",
+          "family": "B02",
+          "kind": "resource-proof",
+          "args": {
+            "resource": "process"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B02/qualification-v1",
+        "schedule": {
+          "partition": 3921,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

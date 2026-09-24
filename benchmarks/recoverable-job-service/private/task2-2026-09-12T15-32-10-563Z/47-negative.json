@@ -1,0 +1,287 @@
+{
+  "control": "ignore-final-suffix",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B12"
+    ],
+    "variantIds": [
+      "B12/new-suffix"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "B12/new-suffix",
+          "caseCommitment": "ba98f7c372e0258b352935c6e5129bcc94d0350e0cfe99fab873c05cf13f9c67",
+          "fixtureCommitment": "8e043a75029beb10642b9016d28bd3e78dc73663782a2092fdbf0022e96edee5",
+          "fixtureAllocations": 12,
+          "authenticationCommitment": "89dd04edb5585699953852915af46191740b772623897a4e3bd60953e89b7b3b"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "0b01c134996ffb21c85d1f7231f26bfee2467326bcea6e6d7019fd5ddb8f9dcf",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B12/new-suffix"
+      ],
+      "scheduleHash": "49c714f471de5e48891661d745d38e31db7dd382e70c5aa1365f1f0ab8feeee7",
+      "configurationHash": "1bae7f6b6472752eacf21d77c6ccbd45aef5f0dfd39c2459fd814b64d6b08a59"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B12",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B12/1bae7f6b6472752eacf21d77c6ccbd45aef5f0dfd39c2459fd814b64d6b08a59",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "B12/new-suffix",
+              "caseCommitment": "ba98f7c372e0258b352935c6e5129bcc94d0350e0cfe99fab873c05cf13f9c67",
+              "fixtureCommitment": "8e043a75029beb10642b9016d28bd3e78dc73663782a2092fdbf0022e96edee5",
+              "fixtureAllocations": 12,
+              "authenticationCommitment": "89dd04edb5585699953852915af46191740b772623897a4e3bd60953e89b7b3b"
+            },
+            "id": "B12/new-suffix",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must refuse",
+            "safetyFailures": [],
+            "operations": 563,
+            "promiseJobs": 2594
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B12/new-suffix: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/new-suffix: stop must refuse",
+            "passed": false
+          },
+          {
+            "label": "B12/new-suffix: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B12/new-suffix: stop must refuse",
+        "operations": 563,
+        "promiseJobs": 2594
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B12",
+      "variantId": "B12/new-suffix",
+      "execution": {
+        "variant": {
+          "id": "B12/new-suffix",
+          "family": "B12",
+          "kind": "final-replay",
+          "args": {
+            "change": "new-suffix"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B12/qualification-v1",
+        "schedule": {
+          "partition": 3890,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

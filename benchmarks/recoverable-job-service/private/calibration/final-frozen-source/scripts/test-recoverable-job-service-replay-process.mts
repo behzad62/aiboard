@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';import {readFile,writeFile,mkdir} from 'node:fs/promises';import {spawn} from 'node:child_process';import {resolve} from 'node:path';
+import {createReplayInput,replayInputFromRecord,evaluateBounded} from '../benchmarks/recoverable-job-service/private/runtime.mjs';
+import {controls} from '../benchmarks/recoverable-job-service/private/controls.mjs';
+import {compareExecutedInputs} from '../benchmarks/recoverable-job-service/private/replay-comparison.mjs';
+const source=await readFile('benchmarks/recoverable-job-service/private/reference.js','utf8');
+if(process.argv[2]==='child'){
+ const input=replayInputFromRecord(JSON.parse(await readFile(process.argv[3],'utf8')));let record;const result=await evaluateBounded(source,{families:['A02'],variantIds:['A02/primary'],replayInput:input,onReplayRecord:r=>record=r});assert.equal(result.families[0].passed,true);await writeFile(process.argv[4],JSON.stringify(record));
+}else{
+ const input=createReplayInput(),privateDir='.superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-private-replay-'+new Date().toISOString().replaceAll(':','-');await mkdir(privateDir);let record;
+ const result=await evaluateBounded(source,{families:['A02'],variantIds:['A02/primary'],replayInput:input,onReplayRecord:r=>record=r});assert.equal(result.families[0].passed,true);await writeFile(privateDir+'/input-record.json',JSON.stringify(record));
+ await new Promise((ok,no)=>{const child=spawn(process.execPath,['--import','tsx',resolve('scripts/test-recoverable-job-service-replay-process.mts'),'child',resolve(privateDir+'/input-record.json'),resolve(privateDir+'/child-record.json')],{cwd:process.cwd(),stdio:['ignore','ignore','pipe'],windowsHide:true});let error='';child.stderr.on('data',b=>error+=b);child.on('error',no);child.on('exit',code=>code===0?ok(null):no(Error('Replay child exit '+code+': '+error)));});
+ const childRecord=JSON.parse(await readFile(privateDir+'/child-record.json','utf8'));compareExecutedInputs(record,childRecord,'A02/primary',{exact:true});console.log('Fresh Node process replays exact actual fixture IDs, request and authority/receipt bytes.');
+ const options={families:['B14'],variantIds:['B14/primary'],replayInput:input};let negativeRecord,restoredRecord;const negative=await evaluateBounded(controls['truncate-scan'].mutate(source),{...options,onReplayRecord:r=>negativeRecord=r}),restored=await evaluateBounded(source,{...options,onReplayRecord:r=>restoredRecord=r});
+ await writeFile(privateDir+'/b14-negative-record.json',JSON.stringify(negativeRecord));await writeFile(privateDir+'/b14-restored-record.json',JSON.stringify(restoredRecord));
+ const n=negative.families[0].variants[0],r=restored.families[0].variants[0],comparison=compareExecutedInputs(restoredRecord,negativeRecord,'B14/primary');
+ const path='.superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-b14-replay-focused-'+new Date().toISOString().replaceAll(':','-')+'.json';await writeFile(path,JSON.stringify({negative,restored,comparison},null,2));
+ assert.equal(negative.status,'valid');assert.equal(restored.status,'valid');assert.equal(r.passed,true);assert.equal(n.passed,false);assert.ok(n.assertions.some(a=>!a.passed&&a.label.startsWith('snapshot reaches every owned setup beyond pages'))||n.safetyFailures.some(f=>f.code==='close-owned-records'),'unchanged truncation violates the exact owned setup completeness obligation');assert.ok(!/Invalid public response|timeout|watchdog/.test(n.reason));assert.ok(comparison.commonPrefixRequests>=1027,'all 1025 setup requests and traversal request share actual concrete inputs');console.log('B14 1025-job negative/restored:',n.reason,JSON.stringify(comparison));
+}

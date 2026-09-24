@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "issue": "CAL-CONTROL-TRUTHFUL-B14-CAPACITY",
+  "disposition": "control-construction correction; scored contract, scorer, limits, reference, and participant-facing files unchanged",
+  "failedQualification": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/qualification-2026-09-21T05-14-21-756Z/truthful-outcome.result.json",
+    "sha256": "82b73457bf38b3c871619f1c462cf10d594eb6ee975d37f02b4b6f26a80e7b58",
+    "variant": "B14/primary",
+    "operations": 101553,
+    "limit": 100000,
+    "reason": "truthful control read now at every internal guard"
+  },
+  "correction": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/controls.mjs",
+    "sha256": "e4f61b9fca571974dde56d9f6ba1fba4e9638d707a00e496938833d74f84c976",
+    "behavior": "cache the first explicit now observation by public request object so expired-entry precedence remains observable while repeated internal guards use the reference authority clock",
+    "regression": "scripts/test-recoverable-job-service-calibration-truthful-capacity.mts",
+    "green": {
+      "records": 1025,
+      "operations": 88224,
+      "limit": 100000
+    }
+  },
+  "preservation": {
+    "operationLimit": 100000,
+    "referenceChanged": false,
+    "scoredInputsChanged": false,
+    "publicFilesChanged": false
+  },
+  "remaining": "regenerate complete controls/freeze and rerun full alternate qualification"
+}

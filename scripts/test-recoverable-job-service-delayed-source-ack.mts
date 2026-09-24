@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';import {Broker} from '../benchmarks/recoverable-job-service/private/broker.mjs';
+const b=new Broker('delayed-source-ack');assert.equal(typeof b.sourceAckBegin,'function','published delayed source ACK event exists');
+const input=b.sourcePrelude({streams:{stdout:[[1,2]],stderr:[]}}),jobId=b.id(),fence={grant:b.grant,deadline:1000};
+for(const resource of ['isolation','process','channel','workload'])await b.call('driver.acquire',{resource,jobId,operationId:b.id(),fence});
+const j=b.getJob(jobId);await b.call('driver.start',{jobId,workloadId:input.workloadId,workload:j.workload,witness:j.witness,operationId:b.id(),fence});
+const reader=await b.call('driver.attach',{jobId,operationId:b.id(),fence}),before=b.sourceState({sourceId:input.sourceId});
+const ack=b.sourceAckBegin({sourceId:input.sourceId,stream:'stdout',state:'pending'}),during=b.sourceState({sourceId:input.sourceId});
+assert.deepEqual(during.counts,before.counts,'issuance causes no reads/output/client/private/ACK application effects');assert.deepEqual(during.streams,before.streams);assert.equal(during.pendingAcks[0].operationId,ack.operationId);
+const complete=b.sourceAckOutcome({sourceId:input.sourceId,operationId:ack.operationId,outcome:'applied'});assert.equal(complete.receipt.effect,'source.ack');
+assert.deepEqual(await b.call('store.commit',{operationId:b.id(),fence,writes:[],audit:[],sourceGuards:[{observation:reader.value}]}),{kind:'not-applied',code:'busy'},'begin+complete cannot ABA-match old empty-pending revision');
+const fresh=await b.call('driver.observeSource',{jobId,reader:reader.value,operationId:b.id(),fence});assert.equal(fresh.value.payload.source.pendingAcks.length,0);
+assert.throws(()=>b.sourceAckBegin({sourceId:input.sourceId,stream:'stdout',state:'unknown'}),/once/);assert.throws(()=>b.sourceAckBegin({sourceId:input.sourceId,stream:'stderr',state:'pending'}),/positive/);
+await b.shutdown();console.log('Delayed source ACK purity, lifetime bound, exact completion and stale empty-pending revision guard passed.');

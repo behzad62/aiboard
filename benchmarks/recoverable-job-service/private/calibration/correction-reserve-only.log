@@ -1,0 +1,8 @@
+{"name":"forbidden-attach-reserve","sourceHash":"b9383530a5dfa7f39d8216ca2a0d2fbd16c9fc9e8eed32e627bb6c8fd38d6ecb","expectation":"insufficient reserve issues no work","variantIds":["B06/primary"],"status":"valid","selected":1,"passed":0,"skipped":0,"wallMs":1951,"operations":212,"promiseJobs":983,"failed":[{"id":"B06/primary","reason":"insufficient reserve issues no work","safety":[]}]}
+{
+  "output": "benchmarks\\recoverable-job-service\\private\\calibration\\correction-proof-2026-09-12T17-14-13-149Z",
+  "runs": 1,
+  "probes": 1,
+  "passed": true,
+  "failedChecks": []
+}

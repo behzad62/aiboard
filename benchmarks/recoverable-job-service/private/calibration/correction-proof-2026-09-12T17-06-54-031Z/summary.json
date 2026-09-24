@@ -1,0 +1,1545 @@
+{
+  "schemaVersion": 1,
+  "purpose": "targeted correction proof; not full production qualification or calibration admission",
+  "output": "benchmarks\\recoverable-job-service\\private\\calibration\\correction-proof-2026-09-12T17-06-54-031Z",
+  "identity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f8f1f824577efab1719a750b22df833daf62c13fb9bf29b28bf9363cf94fa7f8"
+  },
+  "contractVersion": "rjs-contract-2.0.0",
+  "suiteVersion": "rjs-suite-2.0.0",
+  "node": "24.18.0",
+  "replayCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+  "sourceHashes": {
+    "reference": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "setup-reader": "0f9af49f2f4679e1a0aee684b2820e3b63e7aace80319225bb5b76a1bbdf0963",
+    "record-envelope": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+    "lazy-roots": "6721011cdaeaa9ce543c2cc51069d2a8dd7f736b89977ec226cf7b726410a29d",
+    "wrong-category": "169461088ead336c9300a0024c2659c6e2500e291a69ed23a9b605ed88251650",
+    "range-integrity": "db9787ab2d9bfbf882a46830dbbe6784aa41f69819283cd4546fa251d8abea9c",
+    "forbidden-attach-expired": "50ff58d6e04603ecea3447ee6dcfac6e260abcf0eff3d711bc752b4fbf23d023",
+    "forbidden-attach-reserve": "22701367205176fd17f6553dddf406dfe9eadac8ab49208dd3c189bc69400539"
+  },
+  "affectedVariants": [
+    "B01/recover-driver.attach.before",
+    "B06/deadline-driver.attach.before",
+    "B07/issued-driver.attach.before",
+    "B07/resource-intent-reader",
+    "C09/restore-store.commit.before",
+    "C09/restore-store.commit.after",
+    "E02/primary",
+    "A07/invalid-stream",
+    "A07/invalid-digest",
+    "A07/invalid-artifactId",
+    "A07/invalid-channelId"
+  ],
+  "runs": [
+    {
+      "name": "reference-positive",
+      "sourceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+      "expectation": "positive",
+      "variantIds": [
+        "B01/recover-driver.attach.before",
+        "B06/deadline-driver.attach.before",
+        "B07/issued-driver.attach.before",
+        "B07/resource-intent-reader",
+        "C09/restore-store.commit.before",
+        "C09/restore-store.commit.after",
+        "E02/primary",
+        "A07/invalid-stream",
+        "A07/invalid-digest",
+        "A07/invalid-artifactId",
+        "A07/invalid-channelId",
+        "A07/invalid-seq",
+        "A07/invalid-offset",
+        "A07/invalid-length",
+        "B06/primary",
+        "B10/primary",
+        "C01/primary",
+        "C09/primary",
+        "B13/primary",
+        "E03/primary",
+        "E08/primary",
+        "B07/acquire-intent-isolation",
+        "B07/acquire-intent-process",
+        "B07/acquire-intent-channel",
+        "B07/acquire-intent-workload"
+      ],
+      "status": "valid",
+      "selected": 25,
+      "passed": 25,
+      "skipped": 0,
+      "wallMs": 3229,
+      "operations": 7961,
+      "promiseJobs": 36691,
+      "failed": []
+    },
+    {
+      "name": "setup-reader-positive",
+      "sourceHash": "0f9af49f2f4679e1a0aee684b2820e3b63e7aace80319225bb5b76a1bbdf0963",
+      "expectation": "positive",
+      "variantIds": [
+        "B01/recover-driver.attach.before",
+        "B06/deadline-driver.attach.before",
+        "B07/issued-driver.attach.before",
+        "B07/resource-intent-reader",
+        "B06/primary",
+        "B10/primary"
+      ],
+      "status": "valid",
+      "selected": 6,
+      "passed": 6,
+      "skipped": 0,
+      "wallMs": 2267,
+      "operations": 2167,
+      "promiseJobs": 10088,
+      "failed": []
+    },
+    {
+      "name": "record-envelope-positive",
+      "sourceHash": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+      "expectation": "positive",
+      "variantIds": [
+        "C09/restore-store.commit.before",
+        "C09/restore-store.commit.after",
+        "C01/primary",
+        "C09/primary"
+      ],
+      "status": "valid",
+      "selected": 4,
+      "passed": 4,
+      "skipped": 0,
+      "wallMs": 2164,
+      "operations": 1482,
+      "promiseJobs": 8390,
+      "failed": []
+    },
+    {
+      "name": "lazy-roots-positive",
+      "sourceHash": "6721011cdaeaa9ce543c2cc51069d2a8dd7f736b89977ec226cf7b726410a29d",
+      "expectation": "positive",
+      "variantIds": [
+        "E02/primary",
+        "C01/primary",
+        "E08/primary",
+        "B13/primary",
+        "E03/primary"
+      ],
+      "status": "valid",
+      "selected": 5,
+      "passed": 5,
+      "skipped": 0,
+      "wallMs": 2253,
+      "operations": 2242,
+      "promiseJobs": 10278,
+      "failed": []
+    },
+    {
+      "name": "reference-material-omit-failure-diagnostic",
+      "sourceHash": "4176206c20d4944958cf7895e8d9a474d9638f0776a6d86b5ef5ac7d10d86579",
+      "expectation": "material",
+      "variantIds": [
+        "B01/recover-driver.attach.before"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1953,
+      "operations": 244,
+      "promiseJobs": 1146,
+      "failed": [
+        {
+          "id": "B01/recover-driver.attach.before",
+          "reason": "rejection has explicit failure presence",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "reference-material-optimistic-reconciliation",
+      "sourceHash": "e97aec507683d6b5d2e4a5749a3761f39b65f288edc5ccb45711c56ac8661bbb",
+      "expectation": "material",
+      "variantIds": [
+        "B06/deadline-driver.attach.before",
+        "A07/invalid-stream",
+        "A07/invalid-digest",
+        "A07/invalid-artifactId",
+        "A07/invalid-channelId"
+      ],
+      "status": "valid",
+      "selected": 5,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 2074,
+      "operations": 1122,
+      "promiseJobs": 5359,
+      "failed": [
+        {
+          "id": "A07/invalid-stream",
+          "reason": "poll must refuse",
+          "safety": []
+        },
+        {
+          "id": "A07/invalid-digest",
+          "reason": "poll must refuse",
+          "safety": []
+        },
+        {
+          "id": "A07/invalid-artifactId",
+          "reason": "poll must refuse",
+          "safety": []
+        },
+        {
+          "id": "A07/invalid-channelId",
+          "reason": "poll must refuse",
+          "safety": []
+        },
+        {
+          "id": "B06/deadline-driver.attach.before",
+          "reason": "stop must refuse",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "reference-material-discard-reconciliation-receipts",
+      "sourceHash": "a93af07995b1f5b5f0a8357a8723c4b79bd76e945dbdea7beebbeb4e5b39a344",
+      "expectation": "material",
+      "variantIds": [
+        "B07/issued-driver.attach.before",
+        "B07/resource-intent-reader"
+      ],
+      "status": "valid",
+      "selected": 2,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1959,
+      "operations": 508,
+      "promiseJobs": 2334,
+      "failed": [
+        {
+          "id": "B07/issued-driver.attach.before",
+          "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+          "safety": []
+        },
+        {
+          "id": "B07/resource-intent-reader",
+          "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "reference-material-omit-evidence-write",
+      "sourceHash": "59f39de74f488fb7f3186029ac1f254ea5f212c0ec83c78bf238ace10b44bf19",
+      "expectation": "material",
+      "variantIds": [
+        "C09/restore-store.commit.before",
+        "C09/restore-store.commit.after"
+      ],
+      "status": "valid",
+      "selected": 2,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1983,
+      "operations": 522,
+      "promiseJobs": 2364,
+      "failed": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "safety": [
+            {
+              "code": "evidence-before-acceptance",
+              "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "detail": "Acceptance has no matching persisted payload.",
+              "familyId": "C09",
+              "variantId": "C09/restore-store.commit.before"
+            }
+          ]
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "safety": [
+            {
+              "code": "evidence-before-acceptance",
+              "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+              "detail": "Acceptance has no matching persisted payload.",
+              "familyId": "C09",
+              "variantId": "C09/restore-store.commit.after"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "reference-material-relaunch-on-recovery",
+      "sourceHash": "e514140885538715373c0ee9ab583dfa7de64e8db78ba733ccc8e9371cbaf6ca",
+      "expectation": "material",
+      "variantIds": [
+        "E02/primary"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1942,
+      "operations": 414,
+      "promiseJobs": 1919,
+      "failed": [
+        {
+          "id": "E02/primary",
+          "reason": "all acquired setup owners close without launching",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "reference-restored",
+      "sourceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+      "expectation": "positive",
+      "variantIds": [
+        "B01/recover-driver.attach.before",
+        "B06/deadline-driver.attach.before",
+        "B07/issued-driver.attach.before",
+        "B07/resource-intent-reader",
+        "C09/restore-store.commit.before",
+        "C09/restore-store.commit.after",
+        "E02/primary",
+        "A07/invalid-stream",
+        "A07/invalid-digest",
+        "A07/invalid-artifactId",
+        "A07/invalid-channelId"
+      ],
+      "status": "valid",
+      "selected": 11,
+      "passed": 11,
+      "skipped": 0,
+      "wallMs": 2469,
+      "operations": 3342,
+      "promiseJobs": 15523,
+      "failed": []
+    },
+    {
+      "name": "setup-reader-material-omit-failure-diagnostic",
+      "sourceHash": "6ee85e905b67fdbaeae9086729cf36af2086428d150f675ee13b02da60f9aca6",
+      "expectation": "material",
+      "variantIds": [
+        "B01/recover-driver.attach.before"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1973,
+      "operations": 214,
+      "promiseJobs": 1005,
+      "failed": [
+        {
+          "id": "B01/recover-driver.attach.before",
+          "reason": "rejection has explicit failure presence",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "setup-reader-material-optimistic-reconciliation",
+      "sourceHash": "90d5775b2cd8973708dbc776b2163371205cfff3b8f0a78cf632de87d4f47cf5",
+      "expectation": "material",
+      "variantIds": [
+        "B06/deadline-driver.attach.before"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1897,
+      "operations": 218,
+      "promiseJobs": 1100,
+      "failed": [
+        {
+          "id": "B06/deadline-driver.attach.before",
+          "reason": "stop must refuse",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "setup-reader-material-discard-reconciliation-receipts",
+      "sourceHash": "edc5ad21cec9833bff1a8beb2b7b6feb2056de913192ccfb95c8d532954a490d",
+      "expectation": "material",
+      "variantIds": [
+        "B07/issued-driver.attach.before",
+        "B07/resource-intent-reader"
+      ],
+      "status": "valid",
+      "selected": 2,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1942,
+      "operations": 456,
+      "promiseJobs": 2092,
+      "failed": [
+        {
+          "id": "B07/issued-driver.attach.before",
+          "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+          "safety": []
+        },
+        {
+          "id": "B07/resource-intent-reader",
+          "reason": "stop must progress: {\"kind\":\"unknown\",\"operationId\":\"<opaque>\",\"blockers\":[{\"code\":\"unknown-effect\",\"jobId\":\"<opaque>\",\"operationId\":\"<opaque>\"}]}",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "setup-reader-restored",
+      "sourceHash": "0f9af49f2f4679e1a0aee684b2820e3b63e7aace80319225bb5b76a1bbdf0963",
+      "expectation": "positive",
+      "variantIds": [
+        "B01/recover-driver.attach.before",
+        "B06/deadline-driver.attach.before",
+        "B07/issued-driver.attach.before",
+        "B07/resource-intent-reader"
+      ],
+      "status": "valid",
+      "selected": 4,
+      "passed": 4,
+      "skipped": 0,
+      "wallMs": 2136,
+      "operations": 1437,
+      "promiseJobs": 6720,
+      "failed": []
+    },
+    {
+      "name": "record-envelope-material-omit-evidence-write",
+      "sourceHash": "af14a95efdbe822129427dba6e7f6e2bab44fe9c825c544dfdaa286d0dd64d54",
+      "expectation": "material",
+      "variantIds": [
+        "C09/restore-store.commit.before",
+        "C09/restore-store.commit.after"
+      ],
+      "status": "valid",
+      "selected": 2,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1993,
+      "operations": 522,
+      "promiseJobs": 2970,
+      "failed": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "safety": [
+            {
+              "code": "evidence-before-acceptance",
+              "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "detail": "Acceptance has no matching persisted payload.",
+              "familyId": "C09",
+              "variantId": "C09/restore-store.commit.before"
+            }
+          ]
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "safety": [
+            {
+              "code": "evidence-before-acceptance",
+              "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+              "detail": "Acceptance has no matching persisted payload.",
+              "familyId": "C09",
+              "variantId": "C09/restore-store.commit.after"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "record-envelope-restored",
+      "sourceHash": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+      "expectation": "positive",
+      "variantIds": [
+        "C09/restore-store.commit.before",
+        "C09/restore-store.commit.after"
+      ],
+      "status": "valid",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "wallMs": 2001,
+      "operations": 560,
+      "promiseJobs": 3160,
+      "failed": []
+    },
+    {
+      "name": "lazy-roots-material-relaunch-on-recovery",
+      "sourceHash": "8a3c3eb0b368496bf5884bdc3e653714ae785a17672a4cc4a4372a382602fffd",
+      "expectation": "material",
+      "variantIds": [
+        "E02/primary"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1934,
+      "operations": 393,
+      "promiseJobs": 1818,
+      "failed": [
+        {
+          "id": "E02/primary",
+          "reason": "all acquired setup owners close without launching",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "lazy-roots-restored",
+      "sourceHash": "6721011cdaeaa9ce543c2cc51069d2a8dd7f736b89977ec226cf7b726410a29d",
+      "expectation": "positive",
+      "variantIds": [
+        "E02/primary"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 1,
+      "skipped": 0,
+      "wallMs": 1931,
+      "operations": 352,
+      "promiseJobs": 1631,
+      "failed": []
+    },
+    {
+      "name": "wrong-category",
+      "sourceHash": "169461088ead336c9300a0024c2659c6e2500e291a69ed23a9b605ed88251650",
+      "expectation": "poll categorical blocker",
+      "variantIds": [
+        "A07/invalid-stream",
+        "A07/invalid-digest",
+        "A07/invalid-artifactId",
+        "A07/invalid-channelId"
+      ],
+      "status": "valid",
+      "selected": 4,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1996,
+      "operations": 865,
+      "promiseJobs": 4066,
+      "failed": [
+        {
+          "id": "A07/invalid-stream",
+          "reason": "poll categorical blocker",
+          "safety": []
+        },
+        {
+          "id": "A07/invalid-digest",
+          "reason": "poll categorical blocker",
+          "safety": []
+        },
+        {
+          "id": "A07/invalid-artifactId",
+          "reason": "poll categorical blocker",
+          "safety": []
+        },
+        {
+          "id": "A07/invalid-channelId",
+          "reason": "poll categorical blocker",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "range-gap",
+      "sourceHash": "169461088ead336c9300a0024c2659c6e2500e291a69ed23a9b605ed88251650",
+      "expectation": "positive",
+      "variantIds": [
+        "A07/invalid-seq",
+        "A07/invalid-offset"
+      ],
+      "status": "valid",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "wallMs": 1998,
+      "operations": 438,
+      "promiseJobs": 2050,
+      "failed": []
+    },
+    {
+      "name": "range-integrity",
+      "sourceHash": "db9787ab2d9bfbf882a46830dbbe6784aa41f69819283cd4546fa251d8abea9c",
+      "expectation": "positive",
+      "variantIds": [
+        "A07/invalid-seq",
+        "A07/invalid-offset"
+      ],
+      "status": "valid",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "wallMs": 1994,
+      "operations": 438,
+      "promiseJobs": 2050,
+      "failed": []
+    },
+    {
+      "name": "forbidden-attach-expired",
+      "sourceHash": "50ff58d6e04603ecea3447ee6dcfac6e260abcf0eff3d711bc752b4fbf23d023",
+      "expectation": "expired entry issues no attach",
+      "variantIds": [
+        "B06/primary"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 0,
+      "skipped": 0,
+      "wallMs": 1934,
+      "operations": 208,
+      "promiseJobs": 967,
+      "failed": [
+        {
+          "id": "B06/primary",
+          "reason": "expired entry issues no attach",
+          "safety": []
+        }
+      ]
+    },
+    {
+      "name": "forbidden-attach-reserve",
+      "sourceHash": "22701367205176fd17f6553dddf406dfe9eadac8ab49208dd3c189bc69400539",
+      "expectation": "insufficient reserve issues no work",
+      "variantIds": [
+        "B06/primary"
+      ],
+      "status": "valid",
+      "selected": 1,
+      "passed": 1,
+      "skipped": 0,
+      "wallMs": 1966,
+      "operations": 212,
+      "promiseJobs": 983,
+      "failed": []
+    }
+  ],
+  "probes": [
+    {
+      "name": "trace-reference-B01-recover-driver.attach.before",
+      "variantId": "B01/recover-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 453,
+      "promiseJobs": 2101
+    },
+    {
+      "name": "trace-reference-B06-deadline-driver.attach.before",
+      "variantId": "B06/deadline-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 237,
+      "promiseJobs": 1194
+    },
+    {
+      "name": "trace-reference-B07-issued-driver.attach.before",
+      "variantId": "B07/issued-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 427,
+      "promiseJobs": 1966
+    },
+    {
+      "name": "trace-reference-B07-resource-intent-reader",
+      "variantId": "B07/resource-intent-reader",
+      "failure": null,
+      "safety": [],
+      "operations": 427,
+      "promiseJobs": 1966
+    },
+    {
+      "name": "trace-setup-reader-B01-recover-driver.attach.before",
+      "variantId": "B01/recover-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 423,
+      "promiseJobs": 1961
+    },
+    {
+      "name": "trace-setup-reader-B06-deadline-driver.attach.before",
+      "variantId": "B06/deadline-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 212,
+      "promiseJobs": 1069
+    },
+    {
+      "name": "trace-setup-reader-B07-issued-driver.attach.before",
+      "variantId": "B07/issued-driver.attach.before",
+      "failure": null,
+      "safety": [],
+      "operations": 401,
+      "promiseJobs": 1845
+    },
+    {
+      "name": "trace-setup-reader-B07-resource-intent-reader",
+      "variantId": "B07/resource-intent-reader",
+      "failure": null,
+      "safety": [],
+      "operations": 401,
+      "promiseJobs": 1845
+    },
+    {
+      "name": "trace-reference-C09-restore-store.commit.before",
+      "variantId": "C09/restore-store.commit.before",
+      "failure": null,
+      "safety": [],
+      "operations": 280,
+      "promiseJobs": 1257
+    },
+    {
+      "name": "trace-reference-missing-bytes-C09-restore-store.commit.before",
+      "variantId": "C09/restore-store.commit.before",
+      "failure": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+      "safety": [
+        {
+          "code": "evidence-before-acceptance",
+          "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "detail": "Acceptance has no matching persisted payload."
+        }
+      ],
+      "operations": 261,
+      "promiseJobs": 1182
+    },
+    {
+      "name": "trace-reference-C09-restore-store.commit.after",
+      "variantId": "C09/restore-store.commit.after",
+      "failure": null,
+      "safety": [],
+      "operations": 280,
+      "promiseJobs": 1257
+    },
+    {
+      "name": "trace-reference-missing-bytes-C09-restore-store.commit.after",
+      "variantId": "C09/restore-store.commit.after",
+      "failure": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+      "safety": [
+        {
+          "code": "evidence-before-acceptance",
+          "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "detail": "Acceptance has no matching persisted payload."
+        }
+      ],
+      "operations": 261,
+      "promiseJobs": 1182
+    },
+    {
+      "name": "trace-record-envelope-C09-restore-store.commit.before",
+      "variantId": "C09/restore-store.commit.before",
+      "failure": null,
+      "safety": [],
+      "operations": 280,
+      "promiseJobs": 1580
+    },
+    {
+      "name": "trace-record-envelope-missing-bytes-C09-restore-store.commit.before",
+      "variantId": "C09/restore-store.commit.before",
+      "failure": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+      "safety": [
+        {
+          "code": "evidence-before-acceptance",
+          "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "detail": "Acceptance has no matching persisted payload."
+        }
+      ],
+      "operations": 261,
+      "promiseJobs": 1485
+    },
+    {
+      "name": "trace-record-envelope-C09-restore-store.commit.after",
+      "variantId": "C09/restore-store.commit.after",
+      "failure": null,
+      "safety": [],
+      "operations": 280,
+      "promiseJobs": 1580
+    },
+    {
+      "name": "trace-record-envelope-missing-bytes-C09-restore-store.commit.after",
+      "variantId": "C09/restore-store.commit.after",
+      "failure": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+      "safety": [
+        {
+          "code": "evidence-before-acceptance",
+          "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "detail": "Acceptance has no matching persisted payload."
+        }
+      ],
+      "operations": 261,
+      "promiseJobs": 1485
+    },
+    {
+      "name": "trace-reference-E02",
+      "variantId": "E02/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 373,
+      "promiseJobs": 1732
+    },
+    {
+      "name": "trace-lazy-roots-E02",
+      "variantId": "E02/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 352,
+      "promiseJobs": 1631
+    },
+    {
+      "name": "trace-wrong-category-A07-invalid-stream",
+      "variantId": "A07/invalid-stream",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "trace-wrong-category-A07-invalid-digest",
+      "variantId": "A07/invalid-digest",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 217,
+      "promiseJobs": 1018
+    },
+    {
+      "name": "trace-wrong-category-A07-invalid-artifactId",
+      "variantId": "A07/invalid-artifactId",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "trace-wrong-category-A07-invalid-channelId",
+      "variantId": "A07/invalid-channelId",
+      "failure": "poll categorical blocker",
+      "safety": [],
+      "operations": 216,
+      "promiseJobs": 1016
+    },
+    {
+      "name": "trace-forbidden-expired",
+      "variantId": "B06/primary",
+      "failure": "expired entry issues no attach",
+      "safety": [],
+      "operations": 208,
+      "promiseJobs": 967
+    },
+    {
+      "name": "trace-forbidden-reserve",
+      "variantId": "B06/primary",
+      "failure": null,
+      "safety": [],
+      "operations": 212,
+      "promiseJobs": 983
+    }
+  ],
+  "checks": [
+    {
+      "label": "reference-positive: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: A07/invalid-stream passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: A07/invalid-seq passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: A07/invalid-offset passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: A07/invalid-length passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: A07/invalid-digest passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: A07/invalid-artifactId passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: A07/invalid-channelId passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B01/recover-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B06/primary passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B06/deadline-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B07/acquire-intent-isolation passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B07/acquire-intent-process passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B07/acquire-intent-channel passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B07/acquire-intent-workload passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B07/issued-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B07/resource-intent-reader passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B10/primary passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: B13/primary passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: C01/primary passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: C09/primary passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: E02/primary passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: E03/primary passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: E08/primary passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-positive: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-positive: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-positive: B01/recover-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-positive: B06/primary passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-positive: B06/deadline-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-positive: B07/issued-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-positive: B07/resource-intent-reader passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-positive: B10/primary passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: C01/primary passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: C09/primary passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-positive: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-positive: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-positive: B13/primary passes",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-positive: C01/primary passes",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-positive: E02/primary passes",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-positive: E03/primary passes",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-positive: E08/primary passes",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-failure-diagnostic: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-failure-diagnostic: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-failure-diagnostic: B01/recover-driver.attach.before intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-optimistic-reconciliation: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "reference-material-optimistic-reconciliation: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "reference-material-optimistic-reconciliation: A07/invalid-stream intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-optimistic-reconciliation: A07/invalid-digest intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-optimistic-reconciliation: A07/invalid-artifactId intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-optimistic-reconciliation: A07/invalid-channelId intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-optimistic-reconciliation: B06/deadline-driver.attach.before intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-discard-reconciliation-receipts: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "reference-material-discard-reconciliation-receipts: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "reference-material-discard-reconciliation-receipts: B07/issued-driver.attach.before intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-discard-reconciliation-receipts: B07/resource-intent-reader intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-evidence-write: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-evidence-write: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-evidence-write: C09/restore-store.commit.before intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-evidence-write: real restore boundary and missing-byte safety finding",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-evidence-write: C09/restore-store.commit.after intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-material-omit-evidence-write: real restore boundary and missing-byte safety finding",
+      "passed": true
+    },
+    {
+      "label": "reference-material-relaunch-on-recovery: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "reference-material-relaunch-on-recovery: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "reference-material-relaunch-on-recovery: E02/primary intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: A07/invalid-stream passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: A07/invalid-digest passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: A07/invalid-artifactId passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: A07/invalid-channelId passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: B01/recover-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: B06/deadline-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: B07/issued-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: B07/resource-intent-reader passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: E02/primary passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-omit-failure-diagnostic: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-omit-failure-diagnostic: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-omit-failure-diagnostic: B01/recover-driver.attach.before intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-optimistic-reconciliation: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-optimistic-reconciliation: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-optimistic-reconciliation: B06/deadline-driver.attach.before intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-discard-reconciliation-receipts: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-discard-reconciliation-receipts: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-discard-reconciliation-receipts: B07/issued-driver.attach.before intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-material-discard-reconciliation-receipts: B07/resource-intent-reader intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-restored: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-restored: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-restored: B01/recover-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-restored: B06/deadline-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-restored: B07/issued-driver.attach.before passes",
+      "passed": true
+    },
+    {
+      "label": "setup-reader-restored: B07/resource-intent-reader passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material-omit-evidence-write: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material-omit-evidence-write: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material-omit-evidence-write: C09/restore-store.commit.before intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material-omit-evidence-write: real restore boundary and missing-byte safety finding",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material-omit-evidence-write: C09/restore-store.commit.after intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material-omit-evidence-write: real restore boundary and missing-byte safety finding",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-restored: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-restored: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-restored: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-restored: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-material-relaunch-on-recovery: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-material-relaunch-on-recovery: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-material-relaunch-on-recovery: E02/primary intended material predicate",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-restored: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-restored: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "lazy-roots-restored: E02/primary passes",
+      "passed": true
+    },
+    {
+      "label": "wrong-category: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "wrong-category: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "wrong-category: A07/invalid-stream exact forbidden predicate",
+      "passed": true
+    },
+    {
+      "label": "wrong-category: A07/invalid-digest exact forbidden predicate",
+      "passed": true
+    },
+    {
+      "label": "wrong-category: A07/invalid-artifactId exact forbidden predicate",
+      "passed": true
+    },
+    {
+      "label": "wrong-category: A07/invalid-channelId exact forbidden predicate",
+      "passed": true
+    },
+    {
+      "label": "range-gap: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "range-gap: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "range-gap: A07/invalid-seq passes",
+      "passed": true
+    },
+    {
+      "label": "range-gap: A07/invalid-offset passes",
+      "passed": true
+    },
+    {
+      "label": "range-integrity: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "range-integrity: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "range-integrity: A07/invalid-seq passes",
+      "passed": true
+    },
+    {
+      "label": "range-integrity: A07/invalid-offset passes",
+      "passed": true
+    },
+    {
+      "label": "forbidden-attach-expired: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "forbidden-attach-expired: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "forbidden-attach-expired: B06/primary exact forbidden predicate",
+      "passed": true
+    },
+    {
+      "label": "forbidden-attach-reserve: valid bounded execution",
+      "passed": true
+    },
+    {
+      "label": "forbidden-attach-reserve: complete selected predicates",
+      "passed": true
+    },
+    {
+      "label": "forbidden-attach-reserve: B06/primary exact forbidden predicate",
+      "passed": false
+    },
+    {
+      "label": "trace-reference-B01-recover-driver.attach.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-reference-B06-deadline-driver.attach.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-reference-B07-issued-driver.attach.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-reference-B07-resource-intent-reader: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-setup-reader-B01-recover-driver.attach.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-setup-reader-B06-deadline-driver.attach.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-setup-reader-B07-issued-driver.attach.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-setup-reader-B07-resource-intent-reader: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-reference-C09-restore-store.commit.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "reference: restore boundary, crash, retry, evidence actually reached",
+      "passed": true
+    },
+    {
+      "label": "trace-reference-missing-bytes-C09-restore-store.commit.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "reference: missing bytes reaches actual restored integrity refusal",
+      "passed": true
+    },
+    {
+      "label": "trace-reference-C09-restore-store.commit.after: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "reference: restore boundary, crash, retry, evidence actually reached",
+      "passed": true
+    },
+    {
+      "label": "trace-reference-missing-bytes-C09-restore-store.commit.after: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "reference: missing bytes reaches actual restored integrity refusal",
+      "passed": true
+    },
+    {
+      "label": "trace-record-envelope-C09-restore-store.commit.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "record-envelope: restore boundary, crash, retry, evidence actually reached",
+      "passed": true
+    },
+    {
+      "label": "trace-record-envelope-missing-bytes-C09-restore-store.commit.before: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "record-envelope: missing bytes reaches actual restored integrity refusal",
+      "passed": true
+    },
+    {
+      "label": "trace-record-envelope-C09-restore-store.commit.after: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "record-envelope: restore boundary, crash, retry, evidence actually reached",
+      "passed": true
+    },
+    {
+      "label": "trace-record-envelope-missing-bytes-C09-restore-store.commit.after: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "record-envelope: missing bytes reaches actual restored integrity refusal",
+      "passed": true
+    },
+    {
+      "label": "trace-reference-E02: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-lazy-roots-E02: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "trace-wrong-category-A07-invalid-stream: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "A07/invalid-stream: corrupted non-range field leaves range unchanged",
+      "passed": true
+    },
+    {
+      "label": "trace-wrong-category-A07-invalid-digest: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "A07/invalid-digest: corrupted non-range field leaves range unchanged",
+      "passed": true
+    },
+    {
+      "label": "trace-wrong-category-A07-invalid-artifactId: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "A07/invalid-artifactId: corrupted non-range field leaves range unchanged",
+      "passed": true
+    },
+    {
+      "label": "trace-wrong-category-A07-invalid-channelId: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "A07/invalid-channelId: corrupted non-range field leaves range unchanged",
+      "passed": true
+    },
+    {
+      "label": "trace-forbidden-expired: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "expired: forbidden neighbor issued an actual attachment",
+      "passed": true
+    },
+    {
+      "label": "trace-forbidden-reserve: all direct probe resources disposed",
+      "passed": true
+    },
+    {
+      "label": "reserve: forbidden neighbor issued an actual attachment",
+      "passed": false
+    }
+  ],
+  "passed": false
+}

@@ -1,0 +1,48 @@
+ const sourceSemantics=async(j,r,reader=null,fresh=false)=>{
+  if(r===null||r===undefined)fail('missing-receipt',{jobId:j.jobId});
+  if(!wire.receipt(r)||!['driver.attach','driver.observeSource'].includes(r.effect)||!await call('verify',{receipt:r}))fail('integrity',{jobId:j.jobId});
+  const now=await call('now'),p=r.payload,s=p.source;
+  if(r.resourceId!==j.jobId||s.scopeId!==grant.scopeId||s.channelId!==j.acquired.channel?.payload.channelId||reader&&s.attachmentOperationId!==reader.operationId||r.effect==='driver.attach'&&s.attachmentOperationId!==r.operationId)fail('identity',{jobId:j.jobId});
+  if(r.epoch>grant.epoch||r.epoch===grant.epoch&&r.ownerId!==grant.ownerId||r.appliedAt>now||r.appliedAt>=p.observationDeadline)fail('integrity',{jobId:j.jobId});
+  if(fresh&&(r.epoch!==grant.epoch||r.ownerId!==grant.ownerId))fail('authority',{jobId:j.jobId});
+  if(fresh&&now>=p.observationDeadline)fail('deadline',{jobId:j.jobId});
+  let retained=0,buffered=0,total=0,frames=0;const operations=new Set();
+  for(const stream of ['stdout','stderr']){const t=s.streams[stream],a=t.advanced,u=t.unavailablePrefix;
+   if((a.seq===0)!==(a.offset===0)||a.seq>a.offset||a.offset>4096*a.seq||t.produced!==a.offset+t.retainedBytes+t.bufferedBytes)fail('integrity',{jobId:j.jobId});
+   if(u&&(!u.offset||!u.seq||u.seq>u.offset||u.offset>4096*u.seq||u.offset>a.offset||u.seq>a.seq))fail('integrity',{jobId:j.jobId});
+   if(a.offset!==(u?.offset??0)||a.seq!==(u?.seq??0))fail('gap',{jobId:j.jobId});
+   retained+=t.retainedBytes;buffered+=t.bufferedBytes;total+=t.produced;frames+=a.seq;
+  }
+  if(retained>8192||buffered>4096||total>262144||frames>128)fail('integrity',{jobId:j.jobId});
+  for(const a of s.pendingAcks){if(operations.has(a.operationId)||a.through.seq!==s.streams[a.stream].advanced.seq||a.through.offset!==s.streams[a.stream].advanced.offset)fail('integrity',{jobId:j.jobId});operations.add(a.operationId);}
+  return s;
+ };
+ const ensureSource=async(j,reader,op)=>{
+  j=await job(j.jobId);if(j.checkpointEverCreated&&!j.evidence)fail('missing-checkpoint',{jobId:j.jobId});
+  if(j.evidence?.sourceProof||j.evidence?.final&&j.facts.output)return j;
+  if(!reader)fail('missing-receipt',{jobId:j.jobId});
+  // Ordinary output history has no source-prefix adoption and adds no source RPC.
+  if(j.evidence&&Object.values(j.evidence.totals).some(t=>t.accepted||t.consumed||t.acked))return j;
+  let proof=reader;await sourceSemantics(j,proof,reader,false);
+  for(let attempt=0;attempt<3;attempt++){
+   const now=await call('now');if(attempt||proof.ownerId!==grant.ownerId||proof.epoch!==grant.epoch||proof.payload?.observationDeadline<=now||proof.payload?.source?.pendingAcks?.length){
+    proof=await effect(j,'source-observation-'+op.requestId+'-'+attempt,'driver.observeSource',{reader},op);
+   }
+   const s=await sourceSemantics(j,proof,reader,true);await guard(op);
+   if(s.pendingAcks.length){const a=s.pendingAcks[0],code=a.state==='pending'?'dependency':'unknown-effect';
+    await update(jk(j.jobId),old=>({...old,state:'blocked',blockers:[{code,jobId:j.jobId,operationId:a.operationId}],obligations:[{resource:'source.ack',attemptId:a.operationId,state:a.state==='pending'?'issued':'unknown'}]}),[],op);
+    if(a.state==='unknown')throw {rjs:true,result:{kind:'unknown',operationId:a.operationId,blockers:[{code,jobId:j.jobId,operationId:a.operationId}]}};fail('dependency',{jobId:j.jobId,operationId:a.operationId});
+   }
+   const positive=['stdout','stderr'].some(stream=>s.streams[stream].unavailablePrefix!==null);if(!positive)return j;
+   const current=await read(jk(j.jobId));j=current.value;if(j.evidence?.sourceProof)return j;
+   if(j.checkpointEverCreated&&!j.evidence)fail('missing-checkpoint',{jobId:j.jobId});
+   if(j.evidence&&Object.values(j.evidence.totals).some(t=>t.accepted||t.consumed||t.acked)|| (await all('frame/'+j.jobId+'/')).length)fail('integrity',{jobId:j.jobId});
+   const created=!j.evidence,e=created?await evidenceBlank(j):copy(j.evidence);e.sourceProof=proof;e.revision++;
+   for(const stream of ['stdout','stderr']){const t=s.streams[stream],B=t.unavailablePrefix?.offset??0;e.totals[stream]={produced:t.produced,accepted:B,consumed:0,acked:0,sourcePrefix:B};if(B)e.spans.push({stream,start:0,end:B,kind:'loss',reason:'source-prefix-unavailable'});}
+   await sealEvidence(e);
+   const next={...j,evidence:e,checkpointEverCreated:true,blockers:[],obligations:(j.obligations??[]).filter(o=>o.resource!=='source.ack')};
+   try{await primitive('store.commit',{operationId:await call('newId'),writes:[{key:jk(j.jobId),expected:current.revision,value:next}],audit:[...(created?[{type:'checkpoint-created',jobId:j.jobId,data:{generation:e.generation}}]:[]),{type:'source-bootstrap',jobId:j.jobId,receipt:proof,data:{evidenceRevision:e.revision}}],sourceGuards:[{observation:proof}]},op);return next;}catch(error){if(error?.result?.blockers?.[0]?.code!=='busy')throw error;}
+  }fail('busy',{jobId:j.jobId});
+ };
+
+ const validateKey=async(frame,j)=>{const k=frame?.key;if(!k||!same(Object.keys(k).sort(),['artifactId','channelId','digest','jobId','length','offset','seq','stream'].sort())||k.jobId!==j.jobId||k.channelId!==j.acquired.channel?.payload.channelId||!['stdout','stderr'].includes(k.stream)||!safe(k.seq)||!safe(k.offset)||!Number.isSafeInteger(k.length)||k.length<1||k.length>4096||!ids.test(k.artifactId)||!Array.isArray(frame.bytes)||frame.bytes.length!==k.length||!frame.bytes.every(n=>Number.isInteger(n)&&n>=0&&n<=255)||await call('digest',{bytes:frame.bytes})!==k.digest)fail('integrity',{jobId:j.jobId});};

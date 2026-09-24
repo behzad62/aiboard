@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 1,
+  "derivationVersion": "rjs-input-hmac-sha256-v1",
+  "root": "36406495ba1dceba7270b08687414f4cfa1fc7f874ed349b5dad4e03e9a14cc0",
+  "commitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+  "cases": [
+    {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "variantId": "C07/primary",
+      "caseCommitment": "8b1ffe36343e4f50a42a8b17570e06c48c5b48dc4b8e0d99559aec2d75bd7b83",
+      "fixtureCommitment": "ca157841166842c3a41d3b50138121bd43269ac33fb4f40fa4061cfd11dcfe74",
+      "fixtureAllocations": 10,
+      "authenticationCommitment": "88fbe0e1176088d0b6c19f1778167c2f5bdee8c16f6653437fd2e61e07bf1d9c"
+    }
+  ],
+  "executedInputs": [
+    {
+      "variantId": "C07/primary",
+      "events": [
+        {
+          "type": "id",
+          "ordinal": 0,
+          "id": "5a3f3271e9e9a2d9488d3def0d19af1a"
+        },
+        {
+          "type": "id",
+          "ordinal": 1,
+          "id": "d2370575eb2ca105d17bba86bce6abdf"
+        },
+        {
+          "type": "id",
+          "ordinal": 2,
+          "id": "14b2d58cd3338582674029e4720248cf"
+        },
+        {
+          "type": "id",
+          "ordinal": 3,
+          "id": "0526b52e4d93991b3f75c4b37d03a14b"
+        },
+        {
+          "type": "binding",
+          "binding": {
+            "id": "14b2d58cd3338582674029e4720248cf",
+            "birth": "0526b52e4d93991b3f75c4b37d03a14b",
+            "kind": "agent",
+            "token": "0ec3bc3dfa05f8cdfc3418f8033b4350aab3c9d44791b77ca1e70764003b67d2"
+          }
+        },
+        {
+          "type": "grant",
+          "grant": {
+            "scopeId": "5a3f3271e9e9a2d9488d3def0d19af1a",
+            "ownerId": "d2370575eb2ca105d17bba86bce6abdf",
+            "epoch": 1,
+            "expiresAt": 20000,
+            "holder": {
+              "id": "14b2d58cd3338582674029e4720248cf",
+              "birth": "0526b52e4d93991b3f75c4b37d03a14b",
+              "kind": "agent",
+              "token": "0ec3bc3dfa05f8cdfc3418f8033b4350aab3c9d44791b77ca1e70764003b67d2"
+            },
+            "token": "61c52611636bb0b291426780b887a65e246d7c730d46e67dc401be9791c57598"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 4,
+          "id": "e6f2ad485ab5bd2bd4ecc940459ff1e0"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "createBatch",
+            "requestId": "e6f2ad485ab5bd2bd4ecc940459ff1e0",
+            "deadline": 1005
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 5,
+          "id": "cc910bff466b475effc1b52a12b17341"
+        },
+        {
+          "type": "id",
+          "ordinal": 6,
+          "id": "40cc053902ec4916baff722092163e5d"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "start",
+            "requestId": "40cc053902ec4916baff722092163e5d",
+            "deadline": 1005,
+            "batchId": "f51729a25722513f8ecbd503870040bb",
+            "workloadId": "cc910bff466b475effc1b52a12b17341"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 7,
+          "id": "97e6fcb4e7166f04cd30253f4f3c0206"
+        },
+        {
+          "type": "output",
+          "jobId": "1337f4f19c009945d0ae7d20028f0879",
+          "stream": "stdout",
+          "bytes": [
+            19,
+            23
+          ]
+        },
+        {
+          "type": "id",
+          "ordinal": 8,
+          "id": "92c53fd49804670405f5fdaee6f402ee"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "stop",
+            "requestId": "92c53fd49804670405f5fdaee6f402ee",
+            "deadline": 1005,
+            "jobId": "1337f4f19c009945d0ae7d20028f0879"
+          }
+        },
+        {
+          "type": "source-observation",
+          "method": "driver.attach",
+          "receipt": {
+            "id": "eb12211aab28bed131bdb248a47042a9",
+            "operationId": "feb6cb2e671c3339df8f7d5bbcc82fe7",
+            "effect": "driver.attach",
+            "resourceId": "1337f4f19c009945d0ae7d20028f0879",
+            "ownerId": "d2370575eb2ca105d17bba86bce6abdf",
+            "epoch": 1,
+            "appliedAt": 5,
+            "payload": {
+              "privateReader": true,
+              "observationDeadline": 1005,
+              "source": {
+                "version": 1,
+                "scopeId": "5a3f3271e9e9a2d9488d3def0d19af1a",
+                "channelId": "637cdefad78ae462777928c42029d3b9",
+                "attachmentOperationId": "feb6cb2e671c3339df8f7d5bbcc82fe7",
+                "sourceRevision": 0,
+                "streams": {
+                  "stdout": {
+                    "advanced": {
+                      "seq": 0,
+                      "offset": 0
+                    },
+                    "produced": 2,
+                    "retainedBytes": 2,
+                    "bufferedBytes": 0,
+                    "unavailablePrefix": null
+                  },
+                  "stderr": {
+                    "advanced": {
+                      "seq": 0,
+                      "offset": 0
+                    },
+                    "produced": 0,
+                    "retainedBytes": 0,
+                    "bufferedBytes": 0,
+                    "unavailablePrefix": null
+                  }
+                },
+                "pendingAcks": []
+              }
+            },
+            "token": "929631e293d2e1ce5ce7d13f645a8145b01256b9d048cfd63d254e7c5cc90ea3"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 9,
+          "id": "6cfc846e00234341956d422500f47349"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "readEvidence",
+            "requestId": "6cfc846e00234341956d422500f47349",
+            "deadline": 1005,
+            "jobId": "1337f4f19c009945d0ae7d20028f0879"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,596 @@
+{
+  "control": "trust-scratch-handle",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C18"
+    ],
+    "variantIds": [
+      "C18/root-birth",
+      "C18/root-path",
+      "C18/root-retained",
+      "C18/root-foreignEntries"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "111c96ad137af3ed2760fdc46ef74416b3db539ea8e1951b5e8e1deabec48c17",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C18/root-birth",
+        "C18/root-path",
+        "C18/root-retained",
+        "C18/root-foreignEntries"
+      ],
+      "scheduleHash": "4d32b503a8ffebc53809d125cd9e8f3c8bae30b80afc5c26e82682f7104657ed",
+      "configurationHash": "81341c8603e3ed2f31cda363ea966f621ce65101645fc359ce30e19b047a7512"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C18",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C18/81341c8603e3ed2f31cda363ea966f621ce65101645fc359ce30e19b047a7512",
+        "variants": [
+          {
+            "id": "C18/root-birth",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "ownScratch must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "ownScratch must refuse",
+            "safetyFailures": [],
+            "operations": 215,
+            "promiseJobs": 1003
+          },
+          {
+            "id": "C18/root-path",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "ownScratch must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "ownScratch must refuse",
+            "safetyFailures": [],
+            "operations": 215,
+            "promiseJobs": 1003
+          },
+          {
+            "id": "C18/root-retained",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "ownScratch must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "ownScratch must refuse",
+            "safetyFailures": [],
+            "operations": 215,
+            "promiseJobs": 1003
+          },
+          {
+            "id": "C18/root-foreignEntries",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "ownScratch must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "ownScratch must refuse",
+            "safetyFailures": [],
+            "operations": 215,
+            "promiseJobs": 1003
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C18/root-birth: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-birth: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C18/root-birth: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-birth: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C18/root-birth: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C18/root-birth: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-birth: ownScratch must refuse",
+            "passed": false
+          },
+          {
+            "label": "C18/root-birth: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C18/root-path: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-path: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C18/root-path: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-path: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C18/root-path: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C18/root-path: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-path: ownScratch must refuse",
+            "passed": false
+          },
+          {
+            "label": "C18/root-path: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C18/root-retained: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-retained: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C18/root-retained: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-retained: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C18/root-retained: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C18/root-retained: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-retained: ownScratch must refuse",
+            "passed": false
+          },
+          {
+            "label": "C18/root-retained: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C18/root-foreignEntries: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-foreignEntries: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C18/root-foreignEntries: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-foreignEntries: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C18/root-foreignEntries: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C18/root-foreignEntries: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C18/root-foreignEntries: ownScratch must refuse",
+            "passed": false
+          },
+          {
+            "label": "C18/root-foreignEntries: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "C18/root-birth: ownScratch must refuse; C18/root-path: ownScratch must refuse; C18/root-retained: ownScratch must refuse; C18/root-foreignEntries: ownScratch must refuse",
+        "operations": 860,
+        "promiseJobs": 4012
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C18",
+      "variantId": "C18/root-birth",
+      "execution": {
+        "variant": {
+          "id": "C18/root-birth",
+          "family": "C18",
+          "kind": "root-identity",
+          "args": {
+            "change": "birth"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C18/qualification-v1",
+        "schedule": {
+          "partition": 2875,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C18",
+      "variantId": "C18/root-path",
+      "execution": {
+        "variant": {
+          "id": "C18/root-path",
+          "family": "C18",
+          "kind": "root-identity",
+          "args": {
+            "change": "path"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C18/qualification-v1",
+        "schedule": {
+          "partition": 3561,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C18",
+      "variantId": "C18/root-retained",
+      "execution": {
+        "variant": {
+          "id": "C18/root-retained",
+          "family": "C18",
+          "kind": "root-identity",
+          "args": {
+            "change": "retained"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C18/qualification-v1",
+        "schedule": {
+          "partition": 2684,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C18",
+      "variantId": "C18/root-foreignEntries",
+      "execution": {
+        "variant": {
+          "id": "C18/root-foreignEntries",
+          "family": "C18",
+          "kind": "root-identity",
+          "args": {
+            "change": "foreignEntries"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C18/qualification-v1",
+        "schedule": {
+          "partition": 2075,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

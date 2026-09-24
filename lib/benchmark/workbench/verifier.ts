@@ -4,16 +4,29 @@ import type {
   WorkBenchVerifierAssertionInput,
   WorkBenchVerifierFailureClass,
 } from "./types";
+import {
+  parseRecoverableJobServiceDiagnostics,
+  recoverableJobServiceVerifierResult,
+} from "./recoverable-job-service/diagnostics";
+import {
+  RECOVERABLE_JOB_SERVICE_CASE_ID,
+  RECOVERABLE_JOB_SERVICE_INPUT_HASHES,
+} from "./recoverable-job-service/fixture";
 
 export function parseVerifierResult(
   stdout: string,
-  resultFileContent?: string | null
+  resultFileContent?: string | null,
+  caseId?: string
 ): ParsedWorkBenchVerifierResult {
   const source =
     typeof resultFileContent === "string" && resultFileContent.trim()
       ? resultFileContent
       : extractVerifierJson(stdout);
   const parsed = parseJsonObject(source, "verifier JSON");
+
+  if (caseId === RECOVERABLE_JOB_SERVICE_CASE_ID) {
+    return parseRecoverableJobServiceVerifierResult(parsed);
+  }
 
   const rawPassed = getBoolean(parsed, "passed");
   const assertions = normalizeVerifierAssertions(
@@ -85,7 +98,76 @@ export function classifyVerifierFailure(
   if (resultOrError instanceof Error || typeof resultOrError === "string") {
     return "failed_verifier";
   }
-  return resultOrError.passed ? "passed" : "failed_model";
+  return resultOrError.failureClass ?? (resultOrError.passed ? "passed" : "failed_model");
+}
+
+function parseRecoverableJobServiceVerifierResult(
+  outer: Record<string, unknown>
+): ParsedWorkBenchVerifierResult {
+  const allowedOuter = new Set([
+    "passed",
+    "score",
+    "summary",
+    "assertions",
+    "recoverableJobService",
+  ]);
+  if (Object.keys(outer).some((key) => !allowedOuter.has(key))) {
+    throw new Error("Unexpected Recoverable Job Service outer result field.");
+  }
+  const parsedDiagnostics = parseRecoverableJobServiceDiagnostics(
+    outer.recoverableJobService
+  );
+  if (!parsedDiagnostics.ok) {
+    throw new Error(`Invalid Recoverable Job Service diagnostics: ${parsedDiagnostics.error}`);
+  }
+  const diagnostics = parsedDiagnostics.value;
+  if (diagnostics.contractHash !== RECOVERABLE_JOB_SERVICE_INPUT_HASHES.contractHash) {
+    throw new Error("Recoverable Job Service contract hash does not match the recorded evaluator.");
+  }
+  if (diagnostics.suiteHash !== RECOVERABLE_JOB_SERVICE_INPUT_HASHES.suiteHash) {
+    throw new Error("Recoverable Job Service suite hash does not match the recorded evaluator.");
+  }
+
+  const expected = recoverableJobServiceVerifierResult(diagnostics);
+  const passed = getBoolean(outer, "passed");
+  const score = getFiniteNumber(outer, "score");
+  const summary = typeof outer.summary === "string" ? outer.summary : "";
+  const assertions = normalizeVerifierAssertions(
+    Array.isArray(outer.assertions) ? outer.assertions : []
+  );
+  if (passed !== expected.passed) {
+    throw new Error("Recoverable Job Service outer passed flag contradicts diagnostics.");
+  }
+  if (score !== expected.score) {
+    throw new Error("Recoverable Job Service outer score contradicts diagnostics.");
+  }
+  if (summary !== expected.summary) {
+    throw new Error("Recoverable Job Service outer summary contradicts diagnostics.");
+  }
+  if (JSON.stringify(assertions) !== JSON.stringify(expected.assertions)) {
+    throw new Error("Recoverable Job Service outer assertions contradict diagnostics.");
+  }
+
+  const failureClass: WorkBenchVerifierFailureClass =
+    diagnostics.status === "invalid_environment"
+      ? "invalid_environment"
+      : diagnostics.status === "invalid_harness"
+        ? "invalid_harness"
+        : passed
+          ? "passed"
+          : "failed_verifier";
+  const normalized = {
+    passed,
+    score,
+    summary,
+    assertions,
+    recoverableJobService: diagnostics,
+  };
+  return {
+    ...normalized,
+    failureClass,
+    rawJson: JSON.stringify(normalized),
+  };
 }
 
 function extractVerifierJson(stdout: string): string {

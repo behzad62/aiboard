@@ -1,0 +1,958 @@
+{
+  "control": "skip-barrier-tail",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B10",
+      "D05"
+    ],
+    "variantIds": [
+      "B10/primary",
+      "D05/primary",
+      "D05/delayed-stdout",
+      "D05/delayed-stderr"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B10/primary",
+          "caseCommitment": "e0eaba50ed8dae9dc4cf6c5001b527219f3f05399891381bc5359878dcca01d4",
+          "fixtureCommitment": "45210d5c253f85e4f89c99bd4166ed0ed7df6db249b77c23a04f7ee55789ebb3",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "1cee46d33ee7764b433fa23ca4f22aa2d407d92766d065728fb106791cd78684"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "D05/primary",
+          "caseCommitment": "a17600920408ad15990d64ed1ddd7296fcde21b6988695d454587c564cabb5c0",
+          "fixtureCommitment": "5f3f5226c397948a07d95fd4c6766182161a0091d2332ccad6ca17cea386fa7c",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "7caf4e128c0ea23d73ebe3d305254b76e3718f04923e3a8b3ad08f4fa23d2640"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "D05/delayed-stdout",
+          "caseCommitment": "f0c5fcd2841c804e2a0a2b47f75a96fc343ace00875e5fea21eb6ae802f99ab7",
+          "fixtureCommitment": "4220d251ba20f2d5cb91f9c7bcf92f8ccf9c76d9b3f37bfd37a754879d3ab197",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "ee6878a572374791531f99bf8a3975738e4b90fdd756b2afc73ced1a2c08f21f"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "D05/delayed-stderr",
+          "caseCommitment": "2bd64918f499b68344cd1883b495740fab598c9d8c366891e7c9bc6f5e5a408c",
+          "fixtureCommitment": "0a46fb720d9b52ecad6714aa60b0851f2c04285d2a6a129931f6a0869d50b034",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "7bb8cdacf02bcaaece54e62661347269c5f3a6b44fe177cfb7984967dac6c863"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B10/primary",
+        "D05/primary",
+        "D05/delayed-stdout",
+        "D05/delayed-stderr"
+      ],
+      "scheduleHash": "500d3bf3b1f5992b53e0c1638514bd228d2729d7047b0edade4a3b8f0d10123c",
+      "configurationHash": "a244cbaad659c1aea53b178775f5afa74a5abe1bac479c07318e92aa1eb764be"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B10",
+        "group": "B",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B10/a244cbaad659c1aea53b178775f5afa74a5abe1bac479c07318e92aa1eb764be",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B10/primary",
+              "caseCommitment": "e0eaba50ed8dae9dc4cf6c5001b527219f3f05399891381bc5359878dcca01d4",
+              "fixtureCommitment": "45210d5c253f85e4f89c99bd4166ed0ed7df6db249b77c23a04f7ee55789ebb3",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "1cee46d33ee7764b433fa23ca4f22aa2d407d92766d065728fb106791cd78684"
+            },
+            "id": "B10/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "exact retained bytes after public read",
+                "passed": true
+              },
+              {
+                "label": "exact accepted total",
+                "passed": true
+              },
+              {
+                "label": "private reader surrounds terminal barrier tail",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 505,
+            "promiseJobs": 2318
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: exact retained bytes after public read",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: exact accepted total",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: private reader surrounds terminal barrier tail",
+            "passed": true
+          },
+          {
+            "label": "B10/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 505,
+        "promiseJobs": 2318
+      },
+      {
+        "id": "D05",
+        "group": "D",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/D05/a244cbaad659c1aea53b178775f5afa74a5abe1bac479c07318e92aa1eb764be",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "D05/primary",
+              "caseCommitment": "a17600920408ad15990d64ed1ddd7296fcde21b6988695d454587c564cabb5c0",
+              "fixtureCommitment": "5f3f5226c397948a07d95fd4c6766182161a0091d2332ccad6ca17cea386fa7c",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "7caf4e128c0ea23d73ebe3d305254b76e3718f04923e3a8b3ad08f4fa23d2640"
+            },
+            "id": "D05/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "exact retained bytes after public read",
+                "passed": true
+              },
+              {
+                "label": "exact accepted total",
+                "passed": true
+              },
+              {
+                "label": "tail acceptance precedes terminal evidence publication",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 469,
+            "promiseJobs": 2148
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "D05/delayed-stdout",
+              "caseCommitment": "f0c5fcd2841c804e2a0a2b47f75a96fc343ace00875e5fea21eb6ae802f99ab7",
+              "fixtureCommitment": "4220d251ba20f2d5cb91f9c7bcf92f8ccf9c76d9b3f37bfd37a754879d3ab197",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "ee6878a572374791531f99bf8a3975738e4b90fdd756b2afc73ced1a2c08f21f"
+            },
+            "id": "D05/delayed-stdout",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "exact retained bytes after public read",
+                "passed": true
+              },
+              {
+                "label": "exact accepted total",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 469,
+            "promiseJobs": 2148
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "D05/delayed-stderr",
+              "caseCommitment": "2bd64918f499b68344cd1883b495740fab598c9d8c366891e7c9bc6f5e5a408c",
+              "fixtureCommitment": "0a46fb720d9b52ecad6714aa60b0851f2c04285d2a6a129931f6a0869d50b034",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "7bb8cdacf02bcaaece54e62661347269c5f3a6b44fe177cfb7984967dac6c863"
+            },
+            "id": "D05/delayed-stderr",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "exact retained bytes after public read",
+                "passed": true
+              },
+              {
+                "label": "exact accepted total",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 469,
+            "promiseJobs": 2148
+          }
+        ],
+        "assertions": [
+          {
+            "label": "D05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: exact retained bytes after public read",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: exact accepted total",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: tail acceptance precedes terminal evidence publication",
+            "passed": true
+          },
+          {
+            "label": "D05/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: start must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: released public job",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: exact retained bytes after public read",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: exact accepted total",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stdout: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: start must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: released public job",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: public result schema",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: exact retained bytes after public read",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: exact accepted total",
+            "passed": true
+          },
+          {
+            "label": "D05/delayed-stderr: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 1407,
+        "promiseJobs": 6444
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.4,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B10",
+      "variantId": "B10/primary",
+      "execution": {
+        "variant": {
+          "id": "B10/primary",
+          "family": "B10",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B10/qualification-v1",
+        "schedule": {
+          "partition": 3419,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "D05",
+      "variantId": "D05/primary",
+      "execution": {
+        "variant": {
+          "id": "D05/primary",
+          "family": "D05",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/D05/qualification-v1",
+        "schedule": {
+          "partition": 2207,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "D05",
+      "variantId": "D05/delayed-stdout",
+      "execution": {
+        "variant": {
+          "id": "D05/delayed-stdout",
+          "family": "D05",
+          "kind": "barrier-tail",
+          "args": {
+            "stream": "stdout"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/D05/qualification-v1",
+        "schedule": {
+          "partition": 3648,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "D05",
+      "variantId": "D05/delayed-stderr",
+      "execution": {
+        "variant": {
+          "id": "D05/delayed-stderr",
+          "family": "D05",
+          "kind": "barrier-tail",
+          "args": {
+            "stream": "stderr"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/D05/qualification-v1",
+        "schedule": {
+          "partition": 3031,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

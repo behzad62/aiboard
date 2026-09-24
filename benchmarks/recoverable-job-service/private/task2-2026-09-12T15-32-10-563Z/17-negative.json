@@ -1,0 +1,277 @@
+{
+  "control": "skip-evidence-validation",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C03"
+    ],
+    "variantIds": [
+      "C03/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C03/primary",
+          "caseCommitment": "490096a33a4e032b83391c210f5617076912ab3a5a425fdf13e7c7cd729cf626",
+          "fixtureCommitment": "443c31afe24a664362e10ad40eb06465d82eb6c4ed01fbf206f23938382b1afd",
+          "fixtureAllocations": 11,
+          "authenticationCommitment": "a1824d16149c542c16cdf98caed799826947c6b64cafe1364b1fd957964a017a"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "8de518785cbce3b2f70d35d5452ff10e21ad3cdfbfe2b64faa0a6192287ef421",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C03/primary"
+      ],
+      "scheduleHash": "59de75e48c17753393077b40ed13544cdc6d67b341cb79e83b1bfe6e800f0e5d",
+      "configurationHash": "7fd05f2a7cead0c5182cf1ac0ba1f94b97579235de57f44a23c904612ad41d97"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C03",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C03/7fd05f2a7cead0c5182cf1ac0ba1f94b97579235de57f44a23c904612ad41d97",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C03/primary",
+              "caseCommitment": "490096a33a4e032b83391c210f5617076912ab3a5a425fdf13e7c7cd729cf626",
+              "fixtureCommitment": "443c31afe24a664362e10ad40eb06465d82eb6c4ed01fbf206f23938382b1afd",
+              "fixtureAllocations": 11,
+              "authenticationCommitment": "a1824d16149c542c16cdf98caed799826947c6b64cafe1364b1fd957964a017a"
+            },
+            "id": "C03/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "readEvidence must refuse",
+            "safetyFailures": [],
+            "operations": 241,
+            "promiseJobs": 1116
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C03/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/primary: readEvidence must refuse",
+            "passed": false
+          },
+          {
+            "label": "C03/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "C03/primary: readEvidence must refuse",
+        "operations": 241,
+        "promiseJobs": 1116
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C03",
+      "variantId": "C03/primary",
+      "execution": {
+        "variant": {
+          "id": "C03/primary",
+          "family": "C03",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C03/qualification-v1",
+        "schedule": {
+          "partition": 3030,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}
