@@ -48,6 +48,14 @@ function runNpm(args: string[], cwd: string) {
 }
 
 function stop(child: ChildProcessWithoutNullStreams): Promise<void> {
+  if (process.platform === "win32" && child.pid && child.exitCode === null) {
+    return new Promise((resolveStop, rejectStop) => {
+      const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"],
+        { windowsHide: true, stdio: "ignore" });
+      killer.once("error", rejectStop);
+      killer.once("close", () => resolveStop());
+    });
+  }
   return new Promise((resolveStop) => {
     if (child.exitCode !== null) return resolveStop();
     child.once("exit", () => resolveStop());
@@ -224,7 +232,11 @@ try {
     assert.equal(evaluatorResult.recoverableJobService.contractHash, hashes.contractHash);
     assert.equal(evaluatorResult.recoverableJobService.suiteHash, hashes.suiteHash);
     assert.equal((await request(baseUrl, token, "/bench/cleanup", { attemptId: "extracted_rjs_health" })).status, 200);
+    } catch (error) {
+      console.error("Extracted package execution failed:", error);
+      throw error;
     } finally {
+      await request(baseUrl, token, "/bench/attempt-runner/stop", { attemptId: "extracted_rjs_health" }).catch(() => {});
       await stop(bench);
     }
   } else {
@@ -328,8 +340,11 @@ try {
     "scripts/publish-downloads.mjs", "--only", "rjs-workbench", "--only", "rjs-workbench", "--output-dir", join(scratch, "duplicate"),
   ], { cwd: root, encoding: "utf8" });
   assert.notEqual(duplicateSelector.status, 0);
+} catch (error) {
+  console.error("Bundle qualification failed:", error);
+  throw error;
 } finally {
-  await rm(scratch, { recursive: true, force: true });
+  await rm(scratch, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }
 
 console.log("PASS");
