@@ -1535,7 +1535,7 @@ test("projection records the most recently integrated revision", () => {
       taskId: "T1",
       status: "integrated",
       patch: { integrationRevision: "a".repeat(40) },
-    }));
+    }, { role: "runner", id: "integration-manager" }));
     assert.equal(
       rebuildSchedulerProjection(store.readRun("run_revision")).integrationRevision,
       "a".repeat(40)
@@ -1802,13 +1802,14 @@ function event(
   runId: string,
   type: NewSchedulerEvent["type"],
   idempotencyKey: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  actorOverride?: NewSchedulerEvent["actor"],
 ): NewSchedulerEvent {
   return {
     runId,
     type,
     occurredAt: "2026-07-12T00:00:00.000Z",
-    actor: {
+    actor: actorOverride ?? {
       role:
         type === "plan.created" || type === "plan.reconciled"
           ? "architect"

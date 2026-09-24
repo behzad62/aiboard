@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   applyTaskTransition,
+  dependencyBlockReason,
   readyTaskIds,
   validateTaskGraph,
 } from "../src/task-graph.js";
@@ -69,6 +70,27 @@ test("new task plans require non-empty unique acceptance criteria", () => {
     duplicate.issues.some((issue) => issue.code === "duplicate_acceptance_criterion_id"),
     true
   );
+});
+
+test("T4 phase labels do not create task dependencies", () => {
+  const phaseOne: BuildTask = {
+    id: "phase-one",
+    objective: "Phase one",
+    dependencies: [],
+    status: "planned",
+    requiredCapabilities: [],
+    attempt: 0,
+  };
+  const phaseTwo: BuildTask = {
+    id: "phase-two",
+    objective: "Phase two",
+    dependencies: [],
+    status: "planned",
+    requiredCapabilities: [],
+    attempt: 0,
+  };
+  assert.deepEqual(readyTaskIds([phaseOne, phaseTwo]), ["phase-one", "phase-two"]);
+  assert.equal(dependencyBlockReason([phaseOne, phaseTwo], "phase-two"), undefined);
 });
 
 test("task transitions are explicit and illegal jumps do not mutate", () => {

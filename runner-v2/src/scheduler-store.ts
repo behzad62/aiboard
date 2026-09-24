@@ -13,6 +13,7 @@ import {
   type ReplanRequest,
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
+import type { ExecutionTaskContract } from "./planning-contracts.js";
 import {
   planFinalVerification,
   validateFinalVerificationPlan,
@@ -1059,6 +1060,14 @@ export function readyPlanIdentity(
 export interface ReadyPlanTaskBinding {
   readonly revisionId: string;
   readonly digest: string;
+  /**
+   * T4 (N-A true membership): the ready-plan contract this scheduler task
+   * was bridged from, or the parent contract for kernel-created repair
+   * tasks. Absent on bindings stamped before T4 (membership then falls
+   * back to the scheduler task id) and on rogue tasks that map to no
+   * ready contract.
+   */
+  readonly contractId?: string;
 }
 
 /**
@@ -1093,21 +1102,219 @@ export function newPolicyTaskAdmissionBlocked(
   ) {
     return `Task ${taskId} is not bound to the current ready plan revision ${ready.revisionId}.`;
   }
+  // T4 (N-A true membership): kernel-created repair tasks stay admissible
+  // while bound to the ready identity (their parent contract is recorded
+  // when resolvable); every other task must map to a contract in the
+  // CURRENT ready revision. A dropped contract is surfaced to the
+  // Architect, never silently lost; a rogue post-ready task is never
+  // admitted. Legacy runs never reach here.
+  const membership = taskPlanMembership(projection, taskId);
+  if (
+    projection.tasks[taskId]?.kind === "verification_repair" &&
+    binding.contractId === undefined
+  ) {
+    return undefined;
+  }
+  if (membership.status === "dropped") {
+    return (
+      `Task ${taskId} is not admissible: its contract ${membership.contractId} ` +
+      `is not in the current ready plan revision ${ready.revisionId}; ` +
+      `surfaced to the Architect, never silently lost.`
+    );
+  }
+  if (membership.status === "unmapped") {
+    return (
+      `Task ${taskId} is not admissible: it does not map to a contract in ` +
+      `the current ready plan revision ${ready.revisionId}.`
+    );
+  }
   return undefined;
 }
 
 /**
- * T3a repair cycle 2 (B2): at `planning.plan_ready`, every non-terminal
- * task carrying a stale ready-plan binding is rebound to the new ready
- * identity. Any binding on a new-policy run was stamped from a ready
- * identity (creation paths refuse otherwise), so a stale binding is
- * necessarily from a previous ready revision; rebinding restores admission
- * after re-readiness (EP23: blocked only "until re-readiness"). Terminal
- * tasks keep their stamps (they will never need admission again) and
- * never-bound tasks stay unbound (fail closed). Pure function of the
- * post-event projection: deterministic and replay-safe.
+ * T4 (N-A true membership): where a new-policy scheduler task stands
+ * relative to the CURRENT ready plan revision.
+ * - `member`: its contract is in the current revision (or, for bindings
+ *   stamped before T4 that carry no contract id, its scheduler id is).
+ * - `dropped`: its contract was removed by a later revision â€” the task is
+ *   non-admissible and surfaced to the Architect, never silently lost.
+ * - `unmapped`: no ready contract (for example a post-ready rogue
+ *   `plan_tasks` task) â€” never admissible.
+ * Kernel-created repair tasks carry no revision contract of their own and
+ * classify `unmapped` here; admission exempts them explicitly while they
+ * stay bound to the ready identity.
  */
-function rebindReadyPlanTaskBindings(projection: SchedulerProjection): void {
+export type TaskPlanMembershipStatus = "member" | "dropped" | "unmapped";
+
+export interface TaskPlanMembership {
+  readonly status: TaskPlanMembershipStatus;
+  readonly contractId?: string;
+}
+
+export function taskPlanMembership(
+  projection: SchedulerProjection,
+  taskId: string,
+): TaskPlanMembership {
+  const plan = projection.planning?.plan;
+  const revision = plan?.revisionsById[plan.currentRevisionId];
+  const revisionContractIds = new Set(
+    (revision?.tasks ?? []).map((contract) => contract.id),
+  );
+  const contractId = projection.readyPlanTaskBindings?.[taskId]?.contractId;
+  if (contractId !== undefined) {
+    return revisionContractIds.has(contractId)
+      ? { status: "member", contractId }
+      : { status: "dropped", contractId };
+  }
+  if (
+    projection.readyPlanTaskBindings?.[taskId] !== undefined &&
+    revisionContractIds.has(taskId)
+  ) {
+    return { status: "member", contractId: taskId };
+  }
+  return { status: "unmapped" };
+}
+
+/**
+ * T4: non-terminal tasks whose contract left the current ready revision.
+ * Non-admissible; the pump surfaces them to the Architect through the
+ * stale-task wake instead of idling.
+ */
+export function droppedReadyContractTasks(
+  projection: SchedulerProjection,
+): string[] {
+  return Object.values(projection.tasks)
+    .filter(
+      (task) =>
+        task.kind !== "final_verification" &&
+        task.status !== "integrated" &&
+        task.status !== "cancelled" &&
+        taskPlanMembership(projection, task.id).status === "dropped",
+    )
+    .map((task) => task.id)
+    .sort();
+}
+
+/**
+ * T4: the ready-plan contract a kernel-created repair task is bound to.
+ * Verifier repairs cite their parent task directly; final-verification
+ * repairs resolve through their first dependency that maps to a ready
+ * contract (repair-of-repair resolves transitively). Undefined when the
+ * parent has no contract (legacy-seeded parents) â€” the repair then stays
+ * identity-bound and admissible.
+ */
+export function repairParentContractId(
+  projection: SchedulerProjection,
+  task: BuildTask,
+): string | undefined {
+  const verifierParent = task.verifierRepair?.criteria[0]?.taskId;
+  const candidates = verifierParent !== undefined
+    ? [verifierParent]
+    : task.dependencies;
+  for (const parentId of candidates) {
+    const parent = projection.tasks[parentId];
+    if (!parent) continue;
+    if (parent.kind === "verification_repair") {
+      const nested = repairParentContractId(projection, parent);
+      if (nested !== undefined) return nested;
+      continue;
+    }
+    const membership = taskPlanMembership(projection, parentId);
+    if (membership.status === "member" && membership.contractId !== undefined) {
+      return membership.contractId;
+    }
+  }
+  return undefined;
+}
+
+function schedulerTaskFromContract(contract: ExecutionTaskContract): BuildTask {
+  return {
+    id: contract.id,
+    objective: contract.outcome.user,
+    dependencies: [...contract.dependencies],
+    status: "planned",
+    requiredCapabilities: [],
+    acceptanceCriteria: contract.acceptance.criteria.map((criterion) => ({
+      id: criterion.id,
+      text: criterion.text,
+    })),
+    acceptanceCriteriaVersion: 1,
+    attempt: 0,
+  };
+}
+
+/**
+ * T4 bridge (carry-forward): when a new-policy plan becomes ready, its
+ * task contracts become scheduler tasks through the kernel â€” one
+ * authority, deterministic ids derived from contract ids (the scheduler
+ * id IS the contract id), replay-safe (rebuilding the same log
+ * materializes the same tasks; pre-existing tasks win and are adopted
+ * into membership). Each task carries its contract id in its ready-plan
+ * binding. Legacy runs are untouched.
+ */
+function materializeReadyPlanTasks(projection: SchedulerProjection): void {
+  if (projection.planningPolicyVersion !== 1) return;
+  const ready = readyPlanIdentity(projection);
+  const plan = projection.planning?.plan;
+  const revision = plan?.revisionsById[plan.currentRevisionId];
+  if (!ready || !revision) return;
+  const bindings = { ...(projection.readyPlanTaskBindings ?? {}) };
+  const knownIds = new Set(Object.keys(projection.tasks));
+  for (const contract of revision.tasks) {
+    const missing = contract.dependencies.filter(
+      (dependency) =>
+        !knownIds.has(dependency) &&
+        !revision.tasks.some((candidate) => candidate.id === dependency),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `Ready plan contract ${contract.id} depends on unknown tasks: ${missing.join(", ")}.`,
+      );
+    }
+    const existing = projection.tasks[contract.id];
+    if (existing && existing.kind === "verification_repair") {
+      throw new Error(`Ready plan contract ${contract.id} collides with a kernel repair task.`);
+    }
+    if (!existing) {
+      projection.tasks[contract.id] = schedulerTaskFromContract(contract);
+      knownIds.add(contract.id);
+    } else if (
+      existing.status !== "assigned" &&
+      existing.status !== "running" &&
+      existing.status !== "waiting_guidance" &&
+      existing.status !== "integrated" &&
+      existing.status !== "cancelled"
+    ) {
+      projection.tasks[contract.id] = {
+        ...existing,
+        dependencies: [...contract.dependencies],
+      };
+    }
+    bindings[contract.id] = {
+      revisionId: ready.revisionId,
+      digest: ready.digest,
+      contractId: contract.id,
+    };
+  }
+  projection.readyPlanTaskBindings = bindings;
+  projection.planRevision = Math.max(projection.planRevision, 1);
+  if (projection.acceptanceContractStatus !== "legacy_completed") {
+    projection.acceptanceContractStatus = acceptanceContractStatusForTasks(
+      Object.values(projection.tasks),
+    );
+  }
+}
+
+/**
+ * T4: replaces T3a rebind-all rule with true membership. At re-readiness,
+ * only tasks whose contract is STILL in the current revision are rebound;
+ * a revision that drops a contract leaves that task on its stale binding
+ * â€” non-admissible and surfaced, never silently re-admitted. Repair tasks
+ * keep their ready-identity binding (parent contract recorded when
+ * resolvable). Pure function of the post-event projection: deterministic
+ * and replay-safe.
+ */
+function rebindMemberTasksToReadyPlan(projection: SchedulerProjection): void {
   if (projection.planningPolicyVersion !== 1) return;
   const ready = readyPlanIdentity(projection);
   if (!ready) return;
@@ -1118,9 +1325,37 @@ function rebindReadyPlanTaskBindings(projection: SchedulerProjection): void {
     if (task.status === "integrated" || task.status === "cancelled") continue;
     const binding = current[taskId];
     if (!binding) continue;
-    if (binding.revisionId === ready.revisionId && binding.digest === ready.digest) continue;
+    const membershipBeforeRebind = taskPlanMembership(projection, taskId);
+    if (binding.revisionId === ready.revisionId && binding.digest === ready.digest) {
+      if (binding.contractId !== undefined) continue;
+      if (membershipBeforeRebind.status === "unmapped") continue;
+      rebound ??= { ...current };
+      rebound[taskId] = {
+        revisionId: ready.revisionId,
+        digest: ready.digest,
+        ...(membershipBeforeRebind.contractId !== undefined
+          ? { contractId: membershipBeforeRebind.contractId }
+          : {}),
+      };
+      continue;
+    }
+    if (task.kind === "verification_repair") {
+      rebound ??= { ...current };
+      const parent = repairParentContractId(projection, task);
+      rebound[taskId] = parent !== undefined
+        ? { revisionId: ready.revisionId, digest: ready.digest, contractId: parent }
+        : { revisionId: ready.revisionId, digest: ready.digest };
+      continue;
+    }
+    if (membershipBeforeRebind.status === "unmapped") continue;
     rebound ??= { ...current };
-    rebound[taskId] = { revisionId: ready.revisionId, digest: ready.digest };
+    rebound[taskId] = {
+      revisionId: ready.revisionId,
+      digest: ready.digest,
+      ...(membershipBeforeRebind.contractId !== undefined
+        ? { contractId: membershipBeforeRebind.contractId }
+        : {}),
+    };
   }
   if (rebound) projection.readyPlanTaskBindings = rebound;
 }
@@ -1140,9 +1375,10 @@ export function newPolicyStaleTasksRequireArchitect(projection: SchedulerProject
     (task) => task.kind !== "final_verification" && task.status !== "integrated" && task.status !== "cancelled",
   );
   if (pending.length === 0) return false;
-  return pending.every(
-    (task) => newPolicyTaskAdmissionBlocked(projection, task.id) !== undefined,
-  );
+  return droppedReadyContractTasks(projection).length > 0 ||
+    pending.every(
+      (task) => newPolicyTaskAdmissionBlocked(projection, task.id) !== undefined,
+    );
 }
 
 export function consumeRepairCycle(projection: SchedulerProjection): void {
@@ -1206,6 +1442,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     initialPlanQuestionResume ||
     guidanceQuestionResume ||
     event.type === "integration.revision_advanced" ||
+    event.type === "planning.assignment_released" ||
     event.type === "final_verification.cleanup_started" ||
     event.type === "final_verification.cleanup_succeeded" ||
     event.type === "final_verification.cleanup_failed" ||
@@ -1240,7 +1477,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
     (event.type === "project_doc.committed" && event.actor.role === "runner") ||
-    (event.type === "project_doc.abandoned" && event.actor.role === "runner");
+    (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
+    event.type === "planning.assignment_released";
   if (!allowed) {
     throw new Error(
       `Blocking Architect question ${current.blockingArchitectQuestionId} must be answered before ${event.type} may advance the run.`
@@ -2478,9 +2716,12 @@ export function reduceSchedulerEvent(
       taskStatuses: new Map(Object.entries(current.tasks).map(([taskId, task]) => [taskId, task.status])),
     });
     if (event.type === "planning.plan_ready") {
-      // T3a repair cycle 2 (B2): re-readiness rebinds stale non-terminal
-      // tasks to the new ready revision, so admission works again (EP23).
-      rebindReadyPlanTaskBindings(next);
+      // T4: the bridge materializes the ready revision contracts as
+      // scheduler tasks, then true membership rebinds only current
+      // members (EP23 still holds for members: blocked only "until
+      // re-readiness"; dropped contracts stay non-admissible, surfaced).
+      materializeReadyPlanTasks(next);
+      rebindMemberTasksToReadyPlan(next);
     }
     return next;
   }
@@ -2916,7 +3157,13 @@ export function reduceSchedulerEvent(
       break;
     }
     case "plan.created": {
-      if (current.planRevision !== 0 || Object.keys(current.tasks).length > 0) {
+      const readyForLegacyOverlay = current.planningPolicyVersion === 1
+        ? readyPlanIdentity(current)
+        : undefined;
+      if (
+        !readyForLegacyOverlay &&
+        (current.planRevision !== 0 || Object.keys(current.tasks).length > 0)
+      ) {
         throw new Error("A scheduler run cannot create a second initial plan.");
       }
       if (event.actor.role !== "architect") {
@@ -2934,15 +3181,31 @@ export function reduceSchedulerEvent(
       // only from a ready plan — which is necessarily after the ledger — so a
       // legacy plan_tasks call before readiness is refused. Legacy runs are
       // untouched.
-      const planReady = current.planningPolicyVersion === 1
-        ? readyPlanIdentity(current)
-        : undefined;
+      const planReady = readyForLegacyOverlay;
       if (current.planningPolicyVersion === 1 && !planReady) {
         throw new Error(
           "Scheduler tasks on a new-policy run require a ready plan revision."
         );
       }
       const tasks = event.payload.tasks as BuildTask[];
+      if (planReady) {
+        const currentContractIds = new Set(
+          current.planning!.plan!.revisionsById[
+            current.planning!.plan!.currentRevisionId
+          ].tasks.map((contract) => contract.id),
+        );
+        const reusedContract = tasks.find((task) => currentContractIds.has(task.id));
+        if (reusedContract) {
+          throw new Error(
+            `Plan task ${reusedContract.id} reuses a bridged ready-plan contract id.`,
+          );
+        }
+        if (tasks.some((task) => task.status === "integrated")) {
+          throw new Error(
+            "A direct plan event cannot set a task to integrated.",
+          );
+        }
+      }
       const validation = validateTaskGraph(tasks);
       if (!validation.valid) {
         throw new Error(
@@ -2950,21 +3213,39 @@ export function reduceSchedulerEvent(
         );
       }
       next.planRevision = requiredNumber(event.payload, "revision");
-      next.tasks = Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)]));
+      if (!planReady) {
+        next.tasks = Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)]));
+      } else {
+        const bridged = { ...current.tasks };
+        for (const task of tasks) {
+          if (!bridged[task.id]) bridged[task.id] = cloneBuildTask(task);
+        }
+        next.tasks = bridged;
+      }
       if (planReady) {
         // T3a repair (B1c): bind every created task to the ready plan that
         // authorised it. Admission compares this stamp to the current ready
         // identity, so tasks from a superseded revision are never admitted.
+        // T4: tasks mapping to a ready contract carry it; rogue tasks stay
+        // identity-bound and non-admissible (true membership).
+        const plan = current.planning?.plan;
+        const revision = plan?.revisionsById[plan.currentRevisionId];
+        const memberIds = new Set(
+          (revision?.tasks ?? []).map((contract) => contract.id),
+        );
         const bindings = { ...current.readyPlanTaskBindings };
         for (const task of tasks) {
           bindings[task.id] = {
             revisionId: planReady.revisionId,
             digest: planReady.digest,
+            ...(memberIds.has(task.id) ? { contractId: task.id } : {}),
           };
         }
         next.readyPlanTaskBindings = bindings;
       }
-      next.acceptanceContractStatus = acceptanceContractStatusForTasks(tasks);
+      next.acceptanceContractStatus = acceptanceContractStatusForTasks(
+        Object.values(next.tasks),
+      );
       next.planRiskDeclaration = parsePlanRiskDeclaration(event.payload);
       break;
     }
@@ -3379,7 +3660,7 @@ export function reduceSchedulerEvent(
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
       const status = requiredString(event.payload, "status") as BuildTask["status"];
-      assertTransitionAuthority(status, event.actor.role);
+      assertTransitionAuthority(status, event.actor);
       if (
         current.planningPolicyVersion === 1 &&
         (status === "assigned" || status === "running")
@@ -5244,9 +5525,15 @@ function createVerifierRepairTasks(
   }
   for (const task of tasks) projection.tasks[task.id] = task;
   if (repairReady) {
+    // T4: kernel-created repairs stay admissible under the ready plan;
+    // the parent contract is recorded when resolvable, otherwise the
+    // repair stays identity-bound (legacy-seeded parents).
     const bindings = { ...projection.readyPlanTaskBindings };
     for (const task of tasks) {
-      bindings[task.id] = { revisionId: repairReady.revisionId, digest: repairReady.digest };
+      const parent = repairParentContractId(projection, task);
+      bindings[task.id] = parent !== undefined
+        ? { revisionId: repairReady.revisionId, digest: repairReady.digest, contractId: parent }
+        : { revisionId: repairReady.revisionId, digest: repairReady.digest };
     }
     projection.readyPlanTaskBindings = bindings;
   }
@@ -5418,9 +5705,15 @@ function createFinalVerificationRepairTasks(
   }
   for (const task of tasks) projection.tasks[task.id] = task;
   if (repairReady) {
+    // T4: kernel-created repairs stay admissible under the ready plan;
+    // the parent contract is recorded when resolvable, otherwise the
+    // repair stays identity-bound (legacy-seeded parents).
     const bindings = { ...projection.readyPlanTaskBindings };
     for (const task of tasks) {
-      bindings[task.id] = { revisionId: repairReady.revisionId, digest: repairReady.digest };
+      const parent = repairParentContractId(projection, task);
+      bindings[task.id] = parent !== undefined
+        ? { revisionId: repairReady.revisionId, digest: repairReady.digest, contractId: parent }
+        : { revisionId: repairReady.revisionId, digest: repairReady.digest };
     }
     projection.readyPlanTaskBindings = bindings;
   }
@@ -6506,6 +6799,35 @@ function applyPlanReconciliation(
   for (const update of reconciliation.taskUpdates) {
     const task = candidateTasks[update.taskId];
     if (!task) throw new Error(`Unknown task ${update.taskId}.`);
+    const membership = taskPlanMembership(projection, update.taskId);
+    const contract = membership.contractId
+      ? projection.planning?.plan?.revisionsById[
+          projection.planning.plan.currentRevisionId
+        ]?.tasks.find((candidate) => candidate.id === membership.contractId)
+      : undefined;
+    if (contract) {
+      if (
+        update.dependencies !== undefined &&
+        (
+          update.dependencies.length !== contract.dependencies.length ||
+          update.dependencies.some(
+            (dependency, index) => dependency !== contract.dependencies[index],
+          )
+        )
+      ) {
+        throw new Error(
+          `Task ${update.taskId} contract dependencies change only through a new ready plan revision.`,
+        );
+      }
+      if (
+        update.requiredCapabilities !== undefined ||
+        update.acceptanceCriteria !== undefined
+      ) {
+        throw new Error(
+          `Task ${update.taskId} contract fields change only through a new ready plan revision.`,
+        );
+      }
+    }
     if (isFinalVerificationTask(task)) {
       throw new Error("Kernel-owned final verification task cannot be reconciled.");
     }
@@ -6699,12 +7021,25 @@ function applyPlanReconciliation(
     // T3a repair (B1c): bind tasks added by this reconciliation to the ready
     // plan that authorised it (the entry gate guarantees one exists). Revised
     // tasks keep their original binding: a revision is not a re-review.
+    // T4: tasks mapping to a ready contract carry it; the rest stay
+    // identity-bound and non-admissible (true membership).
     const ready = readyPlanIdentity(projection);
     const added = reconciliation.newTasks ?? [];
     if (ready && added.length > 0) {
+      const plan = projection.planning?.plan;
+      const revision = plan?.revisionsById[plan.currentRevisionId];
+      const memberIds = new Set(
+        (revision?.tasks ?? []).map((contract) => contract.id),
+      );
       const bindings = { ...projection.readyPlanTaskBindings };
       for (const task of added) {
-        bindings[task.id] = { revisionId: ready.revisionId, digest: ready.digest };
+        bindings[task.id] = memberIds.has(task.id)
+          ? {
+              revisionId: ready.revisionId,
+              digest: ready.digest,
+              contractId: task.id,
+            }
+          : { revisionId: ready.revisionId, digest: ready.digest };
       }
       projection.readyPlanTaskBindings = bindings;
     }
@@ -7362,8 +7697,9 @@ function planProjection(
 
 function assertTransitionAuthority(
   status: BuildTask["status"],
-  role: SchedulerActorRole
+  actor: SchedulerActor,
 ): void {
+  const role = actor.role;
   const architectStatuses: BuildTask["status"][] = [
     "architect_review",
     "approved",
@@ -7373,11 +7709,15 @@ function assertTransitionAuthority(
   if (architectStatuses.includes(status) && role !== "architect") {
     throw new Error(`Only the Architect may transition a task to ${status}.`);
   }
-  if (
-    (status === "integrated" || status === "integration_resolution") &&
-    role !== "runner"
-  ) {
-    throw new Error(`Only the runner may transition a task to ${status}.`);
+  if (status === "integrated" || status === "integration_resolution") {
+    if (
+      role !== "runner" ||
+      !["integration-manager", "integration_manager"].includes(actor.id)
+    ) {
+      throw new Error(
+        `Only the integration authority may transition a task to ${status}.`,
+      );
+    }
   }
 }
 

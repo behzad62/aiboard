@@ -1,5 +1,4 @@
 import {
-  assertClaimReassignable,
   computeDigest,
   computePlanReadiness,
   validateAssignmentClaim,
@@ -28,6 +27,13 @@ import {
   type ValidationIntent,
   type ValidationObservation,
 } from "./planning-contracts.js";
+import {
+  assertClaimSuccessor,
+  assignmentContractId,
+  assignmentIsKernelRepair,
+  findClaimConflict,
+  taskWriteClaimFromAssignment,
+} from "./task-resource-claims.js";
 import {
   validateApprovedSourceManifest,
   verifyAmendmentReferencesPredecessor,
@@ -2000,13 +2006,25 @@ export function reducePlanningProjection(
       assertValidation(validateAssignmentClaim(claim), "Assignment claim");
       if (claim.state !== "claimed") throw new Error("assignment_claimed must record a claimed state.");
       const revision = next.plan!.revisionsById[next.plan!.currentRevisionId];
-      if (!revision.tasks.some((task) => task.id === claim.packetId)) {
+      const kernelRepair = assignmentIsKernelRepair(claim.packetId);
+      const contractId = assignmentContractId(claim.packetId);
+      const contract = revision.tasks.find((candidate) => candidate.id === contractId);
+      if (!kernelRepair && !contract) {
         throw new Error(`Assignment packet ${claim.packetId} is not in the current plan revision.`);
       }
-      const priorClaims = Object.values(next.assignments).filter((state) => state.claim.packetId === claim.packetId);
+      const priorClaims = Object.values(next.assignments)
+        .filter((state) => state.claim.packetId === claim.packetId)
+        .sort((left, right) => left.claim.ownershipGeneration - right.claim.ownershipGeneration);
       const prior = priorClaims.at(-1);
-      if (prior && prior.status !== "stopped_fenced") throw new Error("Planning packet still has an owned assignment.");
-      if (prior) assertClaimReassignable(prior.claim, claim);
+      if (prior) assertClaimSuccessor(prior.claim, claim);
+      const candidateClaim = taskWriteClaimFromAssignment(claim, claim.packetId);
+      const activeClaims = Object.values(next.assignments)
+        .filter((state) => state.status === "claimed")
+        .map((state) => taskWriteClaimFromAssignment(state.claim, state.claim.packetId));
+      const conflict = findClaimConflict(candidateClaim, activeClaims);
+      if (conflict) {
+        throw new Error(`Planning assignment claim conflict: ${conflict.detail}`);
+      }
       next = {
         ...next,
         assignments: {

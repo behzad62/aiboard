@@ -69,7 +69,6 @@ import { ToolRegistry } from "../src/tool-registry.js";
 import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
 import { emptyFinalVerificationProfile } from "./support/final-verification-profile.js";
 import {
-  CRITERIA as VERIFIER_CRITERIA,
   REVIEW_ID as VERIFIER_REVIEW_ID,
   REVISION as VERIFIER_REVISION,
   SESSION_ID as VERIFIER_SESSION_ID,
@@ -1425,7 +1424,7 @@ test("T3a plan_only new-policy run dispatches zero workers, including after rest
     assert.equal(workspaceCalls, 0);
     assert.deepEqual(
       Object.values(projectionOf(firstStore, runId).tasks).map((task) => task.status),
-      ["planned", "planned"],
+      Array(8).fill("planned"),
     );
     assert.throws(() => directAssigned(firstStore, "direct:planonly-first"), /never admit workers/);
   } finally {
@@ -1437,7 +1436,10 @@ test("T3a plan_only new-policy run dispatches zero workers, including after rest
     // After restart the ready plan and its tasks are still there — and the
     // tick still dispatches nothing.
     assert.equal(projectionOf(secondStore, runId).planning!.readiness, "ready");
-    assert.deepEqual(Object.keys(projectionOf(secondStore, runId).tasks).sort(), ["a", "b"]);
+    assert.deepEqual(
+      Object.keys(projectionOf(secondStore, runId).tasks).sort(),
+      ["T-INV", "T1", "T2", "T3", "T4", "T5", "a", "b"],
+    );
     const scheduler = new TaskScheduler({
       runId,
       store: secondStore,
@@ -1455,7 +1457,7 @@ test("T3a plan_only new-policy run dispatches zero workers, including after rest
     assert.equal(workspaceCalls, 0);
     assert.deepEqual(
       Object.values(projectionOf(secondStore, runId).tasks).map((task) => task.status),
-      ["planned", "planned"],
+      Array(8).fill("planned"),
     );
     assert.throws(() => directAssigned(secondStore, "direct:planonly-second"), /never admit workers/);
   } finally {
@@ -1526,11 +1528,11 @@ test("T3a worker admission refused until ready, blocked again after a source cha
     // seeded once the ready plan exists, and are bound to it at creation.
     seedLegacyPlan(store, runId, [planTask("a"), planTask("b"), planTask("c")]);
     await scheduler.tick();
-    assert.deepEqual(driver.assignments, ["a", "b"]);
-    driver.resolve("a", { type: "failed", reason: "fixture_failure" });
-    driver.resolve("b", { type: "failed", reason: "fixture_failure" });
-    await waitFor(() => projectionOf(store, runId).tasks.a.status === "failed");
-    await waitFor(() => projectionOf(store, runId).tasks.b.status === "failed");
+    assert.deepEqual(driver.assignments, ["T1", "T3"]);
+    driver.resolve("T1", { type: "failed", reason: "fixture_failure" });
+    driver.resolve("T3", { type: "failed", reason: "fixture_failure" });
+    await waitFor(() => projectionOf(store, runId).tasks.T1.status === "failed");
+    await waitFor(() => projectionOf(store, runId).tasks.T3.status === "failed");
 
     // A source amendment after readiness blocks further admission until re-readiness.
     const current = projectionOf(store, runId).planning!.source;
@@ -1575,7 +1577,7 @@ test("T3a worker admission refused until ready, blocked again after a source cha
     });
     assert.equal(projectionOf(store, runId).planning!.readiness, "not_ready");
     await scheduler.tick();
-    assert.deepEqual(driver.assignments, ["a", "b"]);
+    assert.deepEqual(driver.assignments, ["T1", "T3"]);
     assert.equal(projectionOf(store, runId).tasks.c.status, "planned");
     await scheduler.awaitIdle();
   } finally {
@@ -1614,9 +1616,9 @@ test("T3a worker admission blocked again after a plan change, with a ready contr
         clock,
       });
       await scheduler.tick();
-      assert.deepEqual(driver.assignments, ["a"], label);
-      driver.resolve("a", { type: "failed", reason: "fixture_failure" });
-      await waitFor(() => projectionOf(store, runId).tasks.a.status === "failed");
+      assert.deepEqual(driver.assignments, ["T1"], label);
+      driver.resolve("T1", { type: "failed", reason: "fixture_failure" });
+      await waitFor(() => projectionOf(store, runId).tasks.T1.status === "failed");
       if (label === "revised") {
         const plan = projectionOf(store, runId).planning!.plan!;
         const revised = await invokePlanningTool(tools, "revise_planning_plan", {
@@ -1629,12 +1631,12 @@ test("T3a worker admission blocked again after a plan change, with a ready contr
       }
       await scheduler.tick();
       if (label === "control") {
-        assert.deepEqual(driver.assignments, ["a", "b"], label);
+        assert.deepEqual(driver.assignments, ["T1", "T3"], label);
       } else {
-        assert.deepEqual(driver.assignments, ["a"], label);
-        assert.equal(projectionOf(store, runId).tasks.b.status, "planned", label);
+        assert.deepEqual(driver.assignments, ["T1"], label);
+        assert.equal(projectionOf(store, runId).tasks.T3.status, "planned", label);
       }
-      driver.resolve("b", { type: "failed", reason: "fixture_failure" });
+      driver.resolve("T3", { type: "failed", reason: "fixture_failure" });
       await scheduler.awaitIdle();
     } finally {
       store.close();
@@ -1668,11 +1670,11 @@ test("T3a direct scheduler dispatch bypass is refused before readiness", () => {
     appendSourceAmendment(store, unreadyRun, "source:amend-lost", "s9");
     assert.equal(projectionOf(store, unreadyRun).planning!.readiness, "not_ready");
     assert.throws(
-      () => store.append(transition(unreadyRun, "a", "assigned", "direct:assigned")),
+      () => store.append(transition(unreadyRun, "T1", "assigned", "direct:assigned")),
       /requires a ready plan revision/,
     );
     assert.throws(
-      () => store.append(transition(unreadyRun, "b", "running", "direct:running")),
+      () => store.append(transition(unreadyRun, "T3", "running", "direct:running")),
       /requires a ready plan revision/,
     );
 
@@ -1693,9 +1695,8 @@ test("T3a direct scheduler dispatch bypass is refused before readiness", () => {
     const readyRun = "run_t3a_bypass_ready";
     seedNewPolicySource(store, readyRun, fixture.manifest, { priorManifest: fixture.priorManifest });
     seedReadyPlan(store, readyRun, fixture);
-    seedLegacyPlan(store, readyRun, [planTask("a")]);
-    store.append(transition(readyRun, "a", "assigned", "direct:ready"));
-    assert.equal(projectionOf(store, readyRun).tasks.a.status, "assigned");
+    store.append(transition(readyRun, "T1", "assigned", "direct:ready"));
+    assert.equal(projectionOf(store, readyRun).tasks.T1.status, "assigned");
 
     // Legacy runs keep today's direct-dispatch behavior, including plan_only.
     for (const runPolicy of ["finish", "plan_only"] as const) {
@@ -1810,10 +1811,20 @@ test("T3a repair B1: legacy plan tools refuse before readiness and bind once rea
     seedReadyPlan(store, runId, fixture);
     const created = await invoke("plan_tasks", { revision: 1, tasks: [rogueTask] });
     assert.equal(created.isError, false, JSON.stringify(created.error));
-    assert.deepEqual(Object.keys(projectionOf(store, runId).tasks), ["rogue"]);
+    assert.deepEqual(
+      Object.keys(projectionOf(store, runId).tasks).sort(),
+      ["T-INV", "T1", "T2", "T3", "T4", "T5", "rogue"],
+    );
     const ready = readyPlanIdentity(projectionOf(store, runId))!;
-    assert.deepEqual(projectionOf(store, runId).readyPlanTaskBindings, {
-      rogue: { revisionId: ready.revisionId, digest: ready.digest },
+    const bindings = projectionOf(store, runId).readyPlanTaskBindings!;
+    assert.deepEqual(bindings.rogue, {
+      revisionId: ready.revisionId,
+      digest: ready.digest,
+    });
+    assert.deepEqual(bindings.T1, {
+      revisionId: ready.revisionId,
+      digest: ready.digest,
+      contractId: "T1",
     });
   } finally {
     store.close();
@@ -1899,7 +1910,10 @@ test("T3a repair B1: reducer refuses task-adding and task-revising events before
       idempotencyKey: "task-revision:3:b",
       payload: { taskId: "b", revision: 3, patch: { objective: "Revised b." } },
     });
-    assert.deepEqual(Object.keys(projectionOf(store, runId).tasks).sort(), ["a", "b"]);
+    assert.deepEqual(
+      Object.keys(projectionOf(store, runId).tasks).sort(),
+      ["T-INV", "T1", "T2", "T3", "T4", "T5", "a", "b"],
+    );
 
     // Legacy runs are untouched: the same events append with no ready plan.
     const legacyRun = "run_t3a_b1_direct_legacy";
@@ -2063,25 +2077,25 @@ test("T3a repair B1: no task outside the ready plan is ever dispatched", async (
       clock,
     });
     await scheduler.tick();
-    assert.deepEqual(driver.assignments, ["a"]);
+    assert.deepEqual(driver.assignments, ["T1"]);
     assert.equal(driver.assignments.includes("rogue"), false);
-    assert.equal(projectionOf(store, runId).tasks.b.status, "planned");
-    driver.resolve("a", { type: "failed", reason: "fixture_failure" });
-    await waitFor(() => projectionOf(store, runId).tasks.a.status === "failed");
+    assert.equal(projectionOf(store, runId).tasks.T3.status, "planned");
+    driver.resolve("T1", { type: "failed", reason: "fixture_failure" });
+    await waitFor(() => projectionOf(store, runId).tasks.T1.status === "failed");
     await scheduler.awaitIdle();
 
     // Both ready-bound tasks dispatch; nothing outside the ready plan
     // does. (Repair cycle 2: the old R1→R2 stranding assertions lived here;
     // re-readiness now rebinds tasks — see the T3a repair B2 test below.)
     await scheduler.tick();
-    assert.deepEqual(driver.assignments, ["a", "b"]);
+    assert.deepEqual(driver.assignments, ["T1", "T3"]);
     assert.equal(driver.assignments.includes("rogue"), false);
-    driver.resolve("b", { type: "failed", reason: "fixture_failure" });
-    await waitFor(() => projectionOf(store, runId).tasks.b.status === "failed");
+    driver.resolve("T3", { type: "failed", reason: "fixture_failure" });
+    await waitFor(() => projectionOf(store, runId).tasks.T3.status === "failed");
     await scheduler.awaitIdle();
 
-    // A task added later by reconciliation is bound to the ready plan and
-    // dispatches normally.
+    // A task added later by reconciliation exists but has no current ready
+    // contract, so true membership keeps it non-admissible.
     store.append({
       runId,
       type: "plan.reconciled",
@@ -2102,9 +2116,9 @@ test("T3a repair B1: no task outside the ready plan is ever dispatched", async (
       },
     });
     await scheduler.tick();
-    assert.deepEqual(driver.assignments, ["a", "b", "c"]);
-    assert.equal(projectionOf(store, runId).tasks.b.status, "failed");
-    driver.resolve("c", { type: "failed", reason: "fixture_failure" });
+    assert.deepEqual(driver.assignments, ["T1", "T3", "T-INV"]);
+    assert.equal(projectionOf(store, runId).tasks.c.status, "planned");
+    driver.resolve("T-INV", { type: "failed", reason: "fixture_failure" });
     await scheduler.awaitIdle();
   } finally {
     store.close();
@@ -2131,9 +2145,32 @@ test("T3a repair N3: a source change during workspace allocation cannot dispatch
         actor: { role: "runner", id: "scheduler" },
         idempotencyKey: "direct:assign-a",
         payload: {
-          taskId: "a",
+          taskId: "T1",
           status: "assigned",
-          patch: { attempt: 1, assignedWorkerId: "worker_a_1" },
+          patch: { attempt: 1, assignedWorkerId: "worker_T1_1" },
+        },
+      });
+    }
+    if (label === "running" || label === "assigned") {
+      store.append({
+        runId,
+        type: "planning.assignment_claimed",
+        occurredAt: CLOCK,
+        actor: { role: "runner", id: "scheduler" },
+        idempotencyKey: "direct:claim-T1",
+        payload: {
+          claim: {
+            id: "t4claim:T1:gen:1",
+            packetId: "T1",
+            laneId: "lane-N3",
+            workerOrSessionId: "worker_T1_1",
+            acceptedBaseRevision: "accepted plan revision revision_1",
+            branchOrWorktree: "C:/work/T1/1",
+            writableSurfaces: ["runner-v2/src/t1.ts"],
+            forbiddenSurfaces: [],
+            ownershipGeneration: 1,
+            state: "claimed",
+          },
         },
       });
     }
@@ -2144,7 +2181,7 @@ test("T3a repair N3: a source change during workspace allocation cannot dispatch
         occurredAt: CLOCK,
         actor: { role: "runner", id: "scheduler" },
         idempotencyKey: "direct:run-a",
-        payload: { taskId: "a", status: "running", patch: {} },
+        payload: { taskId: "T1", status: "running", patch: {} },
       });
     }
     try {
@@ -2171,14 +2208,18 @@ test("T3a repair N3: a source change during workspace allocation cannot dispatch
       // a disabled guard fails fast instead of hanging on a dispatched worker.
       await scheduler.tick();
       assert.equal(amended, true, label);
-      assert.equal(projectionOf(store, runId).planning!.readiness, "not_ready", label);
+      assert.equal(
+        projectionOf(store, runId).planning!.readiness,
+        "not_ready",
+        label,
+      );
       assert.deepEqual(driver.assignments, [], label);
       assert.equal(
-        projectionOf(store, runId).tasks.a.status,
+        projectionOf(store, runId).tasks.T1.status,
         label === "planned" ? "planned" : label,
         label,
       );
-      assert.equal(projectionOf(store, runId).tasks.b.status, "planned", label);
+      assert.equal(projectionOf(store, runId).tasks.T3.status, "planned", label);
       await scheduler.awaitIdle();
     } finally {
       store.close();
@@ -2262,8 +2303,8 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
     // Ready R1 → tasks exist, bound to R1.
     seedLegacyPlan(store, runId, [planTask("a"), planTask("b")]);
     assert.deepEqual(
-      projectionOf(store, runId).readyPlanTaskBindings?.a,
-      { revisionId: r1.revisionId, digest: r1.digest },
+      projectionOf(store, runId).readyPlanTaskBindings?.T1,
+      { revisionId: r1.revisionId, digest: r1.digest, contractId: "T1" },
     );
 
     // A plan revision supersedes R1; admission closes until re-readiness.
@@ -2297,8 +2338,16 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
     // THE B2 ASSERTION: non-terminal tasks are rebound to R2, so admission
     // works again (EP23: blocked only "until re-readiness").
     const bindings = projectionOf(store, runId).readyPlanTaskBindings!;
-    assert.deepEqual(bindings.a, { revisionId: r2.revisionId, digest: r2.digest });
-    assert.deepEqual(bindings.b, { revisionId: r2.revisionId, digest: r2.digest });
+    assert.deepEqual(bindings.T1, {
+      revisionId: r2.revisionId,
+      digest: r2.digest,
+      contractId: "T1",
+    });
+    assert.deepEqual(bindings.T3, {
+      revisionId: r2.revisionId,
+      digest: r2.digest,
+      contractId: "T3",
+    });
 
     // Direct admission succeeds again after the rebind.
     store.append({
@@ -2308,12 +2357,12 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
       actor: { role: "runner", id: "scheduler" },
       idempotencyKey: "direct:rebound",
       payload: {
-        taskId: "a",
+        taskId: "T1",
         status: "assigned",
-        patch: { attempt: 1, assignedWorkerId: "worker_a_1", workspacePath: "C:/work/a" },
+        patch: { attempt: 1, assignedWorkerId: "worker_T1_1", workspacePath: "C:/work/T1" },
       },
     });
-    assert.equal(projectionOf(store, runId).tasks.a.status, "assigned");
+    assert.equal(projectionOf(store, runId).tasks.T1.status, "assigned");
 
     // And the tick dispatches both tasks again.
     const driver = new DeferredDriver();
@@ -2326,9 +2375,8 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
       clock,
     });
     await scheduler.tick();
-    assert.deepEqual(driver.assignments, ["a", "b"]);
-    driver.resolve("a", { type: "failed", reason: "fixture_failure" });
-    driver.resolve("b", { type: "failed", reason: "fixture_failure" });
+    assert.deepEqual(driver.assignments, ["T3"]);
+    driver.resolve("T3", { type: "failed", reason: "fixture_failure" });
     await scheduler.awaitIdle();
 
     // Replay-safe: an incremental reduce of the log derives identical bindings.
@@ -2407,7 +2455,6 @@ test("T3a repair B2: the stale-task predicate only fires when pending work is fu
     const readyRun = "run_t3a_stale_ready";
     seedNewPolicySource(store, readyRun, fixture.manifest, { priorManifest: fixture.priorManifest });
     seedReadyPlan(store, readyRun, fixture);
-    seedLegacyPlan(store, readyRun, [planTask("a")]);
     assert.equal(newPolicyStaleTasksRequireArchitect(projectionOf(store, readyRun)), false);
     // Readiness lost: the same pending task is now fully blocked.
     appendSourceAmendment(store, readyRun, "source:amend-stale", "s9");
@@ -2434,7 +2481,7 @@ test("T3a repair B2: the stale-task predicate only fires when pending work is fu
     const terminalRun = "run_t3a_stale_terminal";
     seedNewPolicySource(store, terminalRun, fixture.manifest, { priorManifest: fixture.priorManifest });
     seedReadyPlan(store, terminalRun, fixture);
-    seedLegacyPlan(store, terminalRun, [{ ...planTask("a"), status: "integrated", attempt: 1 }]);
+    integrateReadyContractTasks(store, terminalRun);
     assert.equal(newPolicyStaleTasksRequireArchitect(projectionOf(store, terminalRun)), false);
 
     // The kernel final-verification task is never worker-dispatched, so a
@@ -2443,7 +2490,7 @@ test("T3a repair B2: the stale-task predicate only fires when pending work is fu
     const fvRun = "run_t3a_stale_fv";
     seedNewPolicySource(store, fvRun, fixture.manifest, { priorManifest: fixture.priorManifest });
     seedReadyPlan(store, fvRun, fixture);
-    seedLegacyPlan(store, fvRun, [{ ...planTask("implementation-one"), status: "integrated", attempt: 1 }]);
+    integrateReadyContractTasks(store, fvRun);
     const revision = "a".repeat(40);
     store.append({
       runId: fvRun,
@@ -2614,6 +2661,98 @@ function seedGreenFinalVerification(
   return { plan };
 }
 
+function appendTaskTransition(
+  store: SchedulerStore,
+  runId: string,
+  taskId: string,
+  status: BuildTask["status"],
+  actor: NewSchedulerEvent["actor"],
+  patch: Record<string, unknown>,
+  key: string,
+): void {
+  store.append({
+    runId,
+    type: "task.transitioned",
+    occurredAt: CLOCK,
+    actor,
+    idempotencyKey: `${taskId}:${key}`,
+    payload: { taskId, status, patch },
+  });
+}
+
+function integrateReadyContractTasks(
+  store: SchedulerStore,
+  runId: string,
+): void {
+  let remaining = Object.values(projectionOf(store, runId).tasks)
+    .filter((task) => task.kind !== "final_verification" && task.status === "planned");
+  while (remaining.length > 0) {
+    const ready = remaining.filter((task) =>
+      task.dependencies.every((dependency) =>
+        projectionOf(store, runId).tasks[dependency]?.status === "integrated",
+      ),
+    );
+    if (ready.length === 0) throw new Error("Integrated fixture tasks have a dependency cycle.");
+    for (const task of ready) {
+      appendTaskTransition(store, runId, task.id, "assigned", {
+        role: "runner",
+        id: "scheduler",
+      }, {
+        attempt: task.attempt + 1,
+        assignedWorkerId: `worker_${task.id}_1`,
+        workspacePath: `C:/work/${task.id}`,
+      }, "assigned");
+      appendTaskTransition(store, runId, task.id, "running", {
+        role: "runner",
+        id: "scheduler",
+      }, {}, "running");
+      appendTaskTransition(store, runId, task.id, "submitted", {
+        role: "runner",
+        id: "scheduler",
+      }, {
+        changeSetId: `changeset-${task.id}`,
+        criterionEvidenceLinks: (task.acceptanceCriteria ?? []).map((criterion, index) => ({
+          criterionId: criterion.id,
+          evidenceId: `evidence-${task.id}-${index}`,
+          artifactHashes: [String(index + 1).repeat(64)],
+        })),
+      }, "submitted");
+      appendTaskTransition(store, runId, task.id, "architect_review", {
+        role: "architect",
+        id: "architect_1",
+      }, {}, "review");
+      appendTaskTransition(store, runId, task.id, "approved", {
+        role: "architect",
+        id: "architect_1",
+      }, {}, "approved");
+      appendTaskTransition(store, runId, task.id, "integrating", {
+        role: "architect",
+        id: "architect_1",
+      }, {}, "integrating");
+      appendTaskTransition(store, runId, task.id, "integrated", {
+        role: "runner",
+        id: "integration-manager",
+      }, { integrationRevision: `revision-${task.id}` }, "integrated");
+    }
+    remaining = remaining.filter((task) =>
+      projectionOf(store, runId).tasks[task.id]?.status !== "integrated",
+    );
+  }
+}
+
+function verifierCriteriaFor(store: SchedulerStore, runId: string) {
+  return Object.values(projectionOf(store, runId).tasks)
+    .filter((task) => task.status !== "cancelled" && task.kind !== "final_verification")
+    .flatMap((task) => (task.acceptanceCriteria ?? []).map((criterion) => ({
+      taskId: task.id,
+      criterionId: criterion.id,
+    })))
+    .sort((left, right) =>
+      left.taskId.localeCompare(right.taskId) ||
+      left.criterionId.localeCompare(right.criterionId),
+    );
+}
+
 test("T3a repair B3: verifier repair tasks are bound to the ready plan and dispatched by tick", async () => {
   const fixture = scopedFixture();
   const store = new MemorySchedulerStore();
@@ -2624,43 +2763,7 @@ test("T3a repair B3: verifier repair tasks are bound to the ready plan and dispa
     // Integrated implementation plan (mirrors the verifier fixture) under
     // the ready plan, then the canonical revision and a green approved
     // final verification (the verifier lifecycle prerequisite).
-    store.append({
-      runId,
-      type: "plan.created",
-      occurredAt: CLOCK,
-      actor: { role: "architect", id: "architect_1" },
-      idempotencyKey: "plan:1",
-      payload: {
-        revision: 1,
-        tasks: [
-          {
-            id: "task-api",
-            objective: "Implement the API",
-            dependencies: [],
-            status: "integrated",
-            requiredCapabilities: ["code"],
-            acceptanceCriteria: [
-              { id: "shared", text: "The API meets its user-visible behavior." },
-              { id: "typed", text: "The API rejects malformed input." },
-            ],
-            acceptanceCriteriaVersion: 1,
-            attempt: 1,
-          },
-          {
-            id: "task-ui",
-            objective: "Implement the UI",
-            dependencies: ["task-api"],
-            status: "integrated",
-            requiredCapabilities: ["code"],
-            acceptanceCriteria: [
-              { id: "shared", text: "The UI exposes the requested workflow." },
-            ],
-            acceptanceCriteriaVersion: 1,
-            attempt: 1,
-          },
-        ],
-      },
-    });
+    integrateReadyContractTasks(store, runId);
     store.append({
       runId,
       type: "integration.revision_advanced",
@@ -2701,13 +2804,19 @@ test("T3a repair B3: verifier repair tasks are bound to the ready plan and dispa
     });
 
     // The independent verifier reviews and returns an unsatisfied verdict.
+    const verifierCriteria = verifierCriteriaFor(store, runId);
+    const rejectedCriterion = verifierCriteria[0];
     store.append({
       runId,
       type: "verifier.review_requested",
       occurredAt: CLOCK,
       actor: { role: "runner", id: "native-verifier-runtime" },
       idempotencyKey: "verifier:request",
-      payload: { ...verifierRequestPayload() },
+      payload: {
+        ...verifierRequestPayload({
+          criteria: verifierCriteria,
+        }),
+      },
     });
     store.append({
       runId,
@@ -2719,11 +2828,11 @@ test("T3a repair B3: verifier repair tasks are bound to the ready plan and dispa
         reviewId: VERIFIER_REVIEW_ID,
         targetRevision: VERIFIER_REVISION,
         sessionId: VERIFIER_SESSION_ID,
-        criterionVerdicts: VERIFIER_CRITERIA.map((criterion, index) => ({
+        criterionVerdicts: verifierCriteria.map((criterion, index) => ({
           ...criterion,
           verdict: index === 0 ? "unsatisfied" : "satisfied",
           rationale: index === 0
-            ? "The API behavior is incomplete."
+            ? "The selected criterion is incomplete."
             : `Criterion ${index + 1} is satisfied.`,
           evidenceIds: [`evidence-${index + 1}`],
         })),
@@ -2746,7 +2855,7 @@ test("T3a repair B3: verifier repair tasks are bound to the ready plan and dispa
         tasks: [{
           id: "repair-api",
           objective: "Repair the rejected API behavior.",
-          criteria: [{ taskId: "task-api", criterionId: "shared" }],
+          criteria: [rejectedCriterion],
           evidenceIds: ["evidence-1"],
           dependencies: [],
           requiredCapabilities: ["code"],
@@ -2763,7 +2872,11 @@ test("T3a repair B3: verifier repair tasks are bound to the ready plan and dispa
     assert.ok(ready);
     assert.deepEqual(
       projection.readyPlanTaskBindings?.["repair-api"],
-      { revisionId: ready.revisionId, digest: ready.digest },
+      {
+        revisionId: ready.revisionId,
+        digest: ready.digest,
+        contractId: rejectedCriterion.taskId,
+      },
     );
     const driver = new DeferredDriver();
     const scheduler = new TaskScheduler({
@@ -2791,26 +2904,7 @@ test("T3a repair B3: final-verification repair tasks are bound to the ready plan
   seedReadyPlan(store, runId, fixture);
   try {
     const targetRevision = "a".repeat(40);
-    store.append({
-      runId,
-      type: "plan.created",
-      occurredAt: CLOCK,
-      actor: { role: "architect", id: "architect_1" },
-      idempotencyKey: "plan:1",
-      payload: {
-        revision: 1,
-        tasks: [{
-          id: "implementation-one",
-          objective: "Implement feature",
-          dependencies: [],
-          status: "integrated",
-          requiredCapabilities: ["code"],
-          acceptanceCriteria: [{ id: "done", text: "Feature implemented." }],
-          acceptanceCriteriaVersion: 1,
-          attempt: 1,
-        }],
-      },
-    });
+    integrateReadyContractTasks(store, runId);
     store.append({
       runId,
       type: "integration.revision_advanced",
@@ -2877,7 +2971,7 @@ test("T3a repair B3: final-verification repair tasks are bound to the ready plan
             objective: "Repair the test behavior identified by final verification review.",
             categories: ["tests"],
             evidenceIds: [],
-            dependencies: ["implementation-one"],
+            dependencies: [],
             requiredCapabilities: ["code"],
             acceptanceCriteria: [{
               id: "tests-repaired",
@@ -2889,7 +2983,7 @@ test("T3a repair B3: final-verification repair tasks are bound to the ready plan
             objective: "Repair the browser behavior identified by final verification review.",
             categories: ["browser"],
             evidenceIds: [],
-            dependencies: ["implementation-one"],
+            dependencies: [],
             requiredCapabilities: ["browser", "code"],
             acceptanceCriteria: [{
               id: "browser-repaired",
@@ -2904,12 +2998,14 @@ test("T3a repair B3: final-verification repair tasks are bound to the ready plan
     assert.equal(projection.tasks["repair-browser"]?.status, "planned");
     const ready = readyPlanIdentity(projection)!;
     assert.ok(ready);
-    for (const taskId of ["repair-tests", "repair-browser"]) {
-      assert.deepEqual(
-        projection.readyPlanTaskBindings?.[taskId],
-        { revisionId: ready.revisionId, digest: ready.digest },
-      );
-    }
+    assert.equal(
+      projection.readyPlanTaskBindings?.["repair-tests"]?.revisionId,
+      ready.revisionId,
+    );
+    assert.equal(
+      projection.readyPlanTaskBindings?.["repair-browser"]?.revisionId,
+      ready.revisionId,
+    );
     const driver = new DeferredDriver();
     const scheduler = new TaskScheduler({
       runId,
@@ -2920,10 +3016,16 @@ test("T3a repair B3: final-verification repair tasks are bound to the ready plan
       clock,
     });
     await scheduler.tick();
-    assert.deepEqual([...driver.assignments].sort(), ["repair-browser", "repair-tests"]);
-    driver.resolve("repair-tests", { type: "failed", reason: "fixture_failure" });
-    driver.resolve("repair-browser", { type: "failed", reason: "fixture_failure" });
+    assert.equal(driver.assignments.length, 1);
+    const firstRepair = driver.assignments[0]!;
+    driver.resolve(firstRepair, { type: "failed", reason: "fixture_failure" });
     await scheduler.awaitIdle();
+    await scheduler.tick();
+    assert.equal(driver.assignments.length, 2);
+    const secondRepair = driver.assignments[1]!;
+    driver.resolve(secondRepair, { type: "failed", reason: "fixture_failure" });
+    await scheduler.awaitIdle();
+    assert.deepEqual([...driver.assignments].sort(), ["repair-browser", "repair-tests"]);
   } finally {
     store.close();
   }

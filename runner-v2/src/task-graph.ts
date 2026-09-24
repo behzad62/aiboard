@@ -183,6 +183,35 @@ export function readyTaskIds(tasks: readonly BuildTask[]): string[] {
     .map((task) => task.id);
 }
 
+/**
+ * T4 (EP08/EP13): why a task is not dependency-eligible, or undefined when
+ * its dependencies are complete. A missing reference and an incomplete
+ * dependency both block; phase labels never do â€” two unrelated complete
+ * tasks need no phase-order dependency, and eligibility never follows
+ * from unconditional phase completion.
+ */
+export function dependencyBlockReason(
+  tasks: readonly BuildTask[],
+  taskId: string,
+): string | undefined {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const task = byId.get(taskId);
+  if (!task) return `Unknown task ${taskId}.`;
+  for (const dependency of task.dependencies) {
+    const parent = byId.get(dependency);
+    if (!parent) {
+      return `Task ${taskId} depends on missing task ${dependency}.`;
+    }
+    if (parent.status !== "integrated") {
+      return (
+        `Task ${taskId} waits for dependency ${dependency} ` +
+        `(status ${parent.status}).`
+      );
+    }
+  }
+  return undefined;
+}
+
 export function applyTaskTransition(
   task: BuildTask,
   status: TaskStatus,

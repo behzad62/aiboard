@@ -2618,7 +2618,7 @@ class CountingWorkerDriver implements WorkerRuntimeDriver {
   }
 }
 
-function schedulerTask(id: string, dependencies: string[] = []): BuildTask {
+function _schedulerTask(id: string, dependencies: string[] = []): BuildTask {
   return {
     id,
     objective: `Objective ${id}`,
@@ -2896,16 +2896,8 @@ test("T3b END-TO-END finish: reads, ledger, draft, review, ready, then admission
       "plan_ready",
     ]);
     assert.equal(projectionOf(store, runId).planning!.readiness, "ready");
-    // The T3a seam: scheduler tasks stand in for the T4 bridge; admission
-    // dispatches a planned task against the T3b-produced ready identity.
-    store.append({
-      runId,
-      type: "plan.created",
-      occurredAt: CLOCK,
-      actor: { role: "architect", id: "architect_1" },
-      idempotencyKey: "plan:1",
-      payload: { revision: 1, tasks: [schedulerTask("a"), schedulerTask("b")] },
-    });
+    // T4 bridge: the ready contracts become scheduler tasks and admission
+    // dispatches the first real contract through the scheduler.
     const scheduler = new TaskScheduler({
       runId,
       store,
@@ -2915,7 +2907,7 @@ test("T3b END-TO-END finish: reads, ledger, draft, review, ready, then admission
       clock,
     });
     await scheduler.tick();
-    assert.deepEqual(worker.assignments, ["a"]);
+    assert.deepEqual(worker.assignments, ["T-AUDIT"]);
   } finally {
     harness.close();
     store.close();

@@ -187,11 +187,11 @@ function claim(packetId = "T1", id = "assignment-1", workerOrSessionId = "worker
   return {
     id,
     packetId,
-    laneId: "lane-A",
+    laneId: "BP1",
     workerOrSessionId,
     acceptedBaseRevision: "a".repeat(40),
     branchOrWorktree: `worktrees/${packetId}`,
-    writableSurfaces: ["runner-v2/src/example.ts"],
+    writableSurfaces: [`runner-v2/src/${packetId.toLowerCase()}.ts`],
     forbiddenSurfaces: ["runner-v2/src/scheduler-store.ts"],
     ownershipGeneration: 1,
     state: "claimed",

@@ -199,13 +199,14 @@ export function buildFixtureRequirements(manifest: ApprovedSourceManifest): Sour
 }
 
 function task(overrides: Partial<ExecutionTaskContract> & { id: string }): ExecutionTaskContract {
+  const writableSurface = `runner-v2/src/${overrides.id.toLowerCase()}.ts`;
   return {
     lineage: [],
     accountablePhaseId: "BP1",
     requirementIds: [],
     outcome: { user: "A user-observable outcome.", system: "A system-observable outcome." },
-    scope: { includes: ["runner-v2/src/example.ts"], excludes: ["runner-v2/src/unrelated.ts"] },
-    writableSurfaces: ["runner-v2/src/example.ts"],
+    scope: { includes: [writableSurface], excludes: ["runner-v2/src/unrelated.ts"] },
+    writableSurfaces: [writableSurface],
     forbiddenSurfaces: ["runner-v2/src/scheduler-store.ts"],
     dependencies: [],
     requiredBase: "accepted plan revision revision_1",

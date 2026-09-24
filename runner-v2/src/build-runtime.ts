@@ -227,6 +227,13 @@ export interface BuildRuntimeOptions {
   architectDriver: ArchitectRuntimeDriver;
   integrationDriver: IntegrationRuntimeDriver;
   maxConcurrency: number;
+  /**
+   * T4: actual resource/provider capacity when the host reports one,
+   * forwarded to the scheduler. New-policy pump admission is bounded by
+   * `min(MAX_WORKERS, maxConcurrency, resourceCapacity)`; legacy capacity
+   * is unchanged. Absent means unknown (no further bound).
+   */
+  resourceCapacity?: TaskSchedulerOptions["resourceCapacity"];
   workspaceFor: TaskSchedulerOptions["workspaceFor"];
   maxTaskAttempts?: number;
   architectId?: string;
@@ -327,6 +334,7 @@ export class BuildRuntime {
   private readonly integrationDriver: IntegrationRuntimeDriver;
   private readonly runPolicy: NativeBuildRunPolicy;
   private readonly maxTaskAttempts: number;
+  private readonly resourceCapacity?: TaskSchedulerOptions["resourceCapacity"];
   private readonly architectId: string;
   private readonly clock: () => string;
   private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
@@ -365,6 +373,7 @@ export class BuildRuntime {
     this.integrationDriver = options.integrationDriver;
     this.runPolicy = options.runPolicy ?? "finish";
     this.maxTaskAttempts = options.maxTaskAttempts ?? 2;
+    this.resourceCapacity = options.resourceCapacity;
     this.architectId = options.architectId ?? "architect_1";
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.renewBudgetWindow = options.renewBudgetWindow;
@@ -467,6 +476,8 @@ export class BuildRuntime {
       store: options.store,
       driver: options.workerDriver,
       maxConcurrency: options.maxConcurrency,
+      // T4: host-reported capacity further bounds new-policy admission.
+      resourceCapacity: this.resourceCapacity,
       workspaceFor: options.workspaceFor,
       maxTaskAttempts: options.maxTaskAttempts,
       clock: this.clock,

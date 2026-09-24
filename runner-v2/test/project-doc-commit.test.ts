@@ -183,7 +183,7 @@ test("STATE.md must be newer than the latest canonical integration", () => {
       revision: 1,
       tasks: [integratingTask("task_keep"), integratingTask("task_clear")],
     }));
-    store.append(event("run_docs_currency", "task.transitioned", runner(), "integrate-keep", {
+    store.append(event("run_docs_currency", "task.transitioned", integrationManager(), "integrate-keep", {
       taskId: "task_keep",
       status: "integrated",
       patch: { integrationRevision: "revision_keep" },
@@ -207,7 +207,7 @@ test("STATE.md must be newer than the latest canonical integration", () => {
       "doc_tip",
     );
     assert.equal(integrated.latestIntegratedTaskSequence !== undefined, true);
-    store.append(event("run_docs_currency", "task.transitioned", runner(), "integrate-equal", {
+    store.append(event("run_docs_currency", "task.transitioned", integrationManager(), "integrate-equal", {
       taskId: "task_clear",
       status: "integrated",
       patch: { integrationRevision: "revision_keep" },
@@ -238,7 +238,7 @@ test("a canonical integration after a document commit clears the document tip", 
       parent: "none",
       commit: "doc_first",
     });
-    store.append(event("run_tip_clear", "task.transitioned", runner(), "integrate-old", {
+    store.append(event("run_tip_clear", "task.transitioned", integrationManager(), "integrate-old", {
       taskId: "task_old",
       status: "integrated",
       patch: { integrationRevision: "revision_old" },
@@ -255,7 +255,7 @@ test("a canonical integration after a document commit clears the document tip", 
       parent: "revision_old",
       commit: "doc_second",
     });
-    store.append(event("run_tip_clear", "task.transitioned", runner(), "integrate-new", {
+    store.append(event("run_tip_clear", "task.transitioned", integrationManager(), "integrate-new", {
       taskId: "task_new",
       status: "integrated",
       patch: { integrationRevision: "revision_new" },
@@ -1103,6 +1103,10 @@ function event(
 
 function runner(): SchedulerActor {
   return { role: "runner", id: "build-runtime" };
+}
+
+function integrationManager(): SchedulerActor {
+  return { role: "runner", id: "integration-manager" };
 }
 
 function architect(): SchedulerActor {
