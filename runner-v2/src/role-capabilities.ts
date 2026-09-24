@@ -10,7 +10,7 @@ import type { ToolEffect } from "./agent-contracts.js";
  */
 export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker";
 
-export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "task";
+export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "task";
 
 /**
  * `all` registers every MCP tool the manager exposes (the worker).
@@ -40,6 +40,7 @@ export const ROLE_CAPABILITY_BROKERS = [
   { role: "architect", broker: "planOnly" },
   { role: "verifier", broker: "inspection" },
   { role: "verifier", broker: "expectations" },
+  { role: "verifier", broker: "coverage" },
   { role: "plan-critic", broker: "inspection" },
   { role: "worker", broker: "task" },
 ] as const satisfies readonly { role: RoleCapabilityRole; broker: RoleCapabilityBroker }[];
@@ -142,6 +143,24 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "inspect_evidence",
     "record_verification_expectations",
   ], []),
+  // T3b (OA-1) repair cycle 1 (B2): the independent source-coverage
+  // reviewer. Read-only inspection only: no run_evidence_command, no process
+  // control, no filesystem mutation, no MCP. The blind deriving pass
+  // registers record_coverage_obligations, the re-review own-view pass
+  // record_coverage_correction_view, the verdict pass submit_coverage_verdict
+  // — each pass registers exactly one of the three optional tools.
+  "verifier:coverage": surface("verifier", "coverage", "none", [
+    "artifact.read",
+    "fs.list",
+    "fs.read",
+    "fs.search",
+    "fs.stat",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "inspect_evidence",
+  ], ["record_coverage_correction_view", "record_coverage_obligations", "submit_coverage_verdict"]),
   "plan-critic:inspection": surface("plan-critic", "inspection", "none", [
     "artifact.read",
     "fs.list",

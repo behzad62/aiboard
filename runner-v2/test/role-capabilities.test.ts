@@ -216,6 +216,26 @@ const VERIFIER_EXPECTATIONS = [
   "record_verification_expectations",
 ] as const;
 
+const VERIFIER_COVERAGE_REQUIRED = [
+  "artifact.read",
+  "fs.list",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "git.diff",
+  "git.log",
+  "git.show",
+  "git.status",
+  "inspect_evidence",
+] as const;
+
+const VERIFIER_COVERAGE_FULL = [
+  ...VERIFIER_COVERAGE_REQUIRED,
+  "record_coverage_correction_view",
+  "record_coverage_obligations",
+  "submit_coverage_verdict",
+] as const;
+
 const PLAN_CRITIC = [
   "artifact.read",
   "fs.list",
@@ -327,6 +347,7 @@ const DERIVED: readonly {
   { role: "architect", broker: "planOnly", required: ARCHITECT_PLAN_ONLY_REQUIRED, full: ARCHITECT_PLAN_ONLY_FULL },
   { role: "verifier", broker: "inspection", required: VERIFIER_INSPECTION_REQUIRED, full: VERIFIER_INSPECTION_FULL },
   { role: "verifier", broker: "expectations", required: VERIFIER_EXPECTATIONS, full: VERIFIER_EXPECTATIONS },
+  { role: "verifier", broker: "coverage", required: VERIFIER_COVERAGE_REQUIRED, full: VERIFIER_COVERAGE_FULL },
   { role: "plan-critic", broker: "inspection", required: PLAN_CRITIC, full: PLAN_CRITIC },
   { role: "worker", broker: "task", required: WORKER_REQUIRED, full: WORKER_FULL },
 ];

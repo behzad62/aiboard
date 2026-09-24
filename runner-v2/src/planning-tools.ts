@@ -27,6 +27,7 @@ import {
   computeArtifactDigest,
   type ApprovedSourceManifest,
 } from "./source-manifest.js";
+import { createRequestCoverageReviewTool } from "./planning-review.js";
 
 /**
  * Architect lifecycle tools for evidence-gated planning (Runner V2 P6.6, T3a).
@@ -39,9 +40,10 @@ import {
  * reducer re-validates everything; tool-side checks only produce clearer
  * errors earlier.
  *
- * Coverage review, the reviewer runtime, and the plan_ready transition are
- * T3b's (`planning-review.ts` seam): until T3b exists a plan can never become
- * ready, because `planning.plan_ready` requires a bound coverage review.
+ * Coverage review, the reviewer runtime, and the plan_ready transition live in
+ * `planning-review.ts` (T3b): `planning.plan_ready` requires a bound coverage
+ * review with durably recorded obligations, and the request tool below is the
+ * Architect's step that starts that review.
  */
 
 export const MAX_PLANNING_SOURCE_SECTION_BYTES = 64 * 1024;
@@ -52,6 +54,7 @@ export const PLANNING_TOOL_NAMES = Object.freeze([
   "persist_planning_ledger",
   "read_planning_source_section",
   "record_planning_checkpoint",
+  "request_coverage_review",
   "revise_planning_plan",
 ]);
 
@@ -99,19 +102,17 @@ export function createPlanningTools(
   const clock = options.clock ?? (() => new Date().toISOString());
   const readSource = options.readSource ??
     (options.artifacts ? artifactSourceReader(options.artifacts) : undefined);
-  // Sections the Architect actually read through this tool instance, keyed by
-  // manifest + section + recorded digest. A checkpoint may only count a newly
-  // covered section that was read here against the CURRENT manifest digest,
-  // so an unread or truncated section is never counted as covered. The set is
-  // intentionally not durable: after a restart the Architect re-reads whatever
-  // is not yet durably covered, which fails closed (re-read, never skip).
-  const readReceipts = new Set<string>();
+  // T3b (N2): every full verified read appends a durable
+  // `planning.source_section_read` event bound to the manifest revision and
+  // section digest. Checkpoint coverage and readiness read the durable
+  // projection — there is no in-memory receipt set anymore.
   return [
-    readSourceSectionTool(options.store, readSource, readReceipts),
+    readSourceSectionTool(options.store, readSource, clock),
     persistLedgerTool(options.store, clock),
-    recordCheckpointTool(options.store, clock, readReceipts),
+    recordCheckpointTool(options.store, clock),
     draftPlanTool(options.store, clock),
     revisePlanTool(options.store, clock),
+    createRequestCoverageReviewTool({ store: options.store, clock }),
   ];
 }
 
@@ -119,21 +120,17 @@ function artifactSourceReader(artifacts: ArtifactStore): PlanningSourceReader {
   return async (manifest) => artifacts.get(manifest.artifactDigest);
 }
 
-function receiptKey(manifestId: string, sectionId: string, digest: string): string {
-  return `${manifestId}:${sectionId}:${digest}`;
-}
-
 function readSourceSectionTool(
   store: SchedulerStore,
   readSource: PlanningSourceReader | undefined,
-  readReceipts: Set<string>,
+  clock: () => string,
 ): NativeTool<ReadSourceSectionInput> {
   return lifecycleTool({
     name: "read_planning_source_section",
     description:
       "Read one approved-source section in full over the manifest's complete section inventory, " +
       "or list the inventory when sectionId is omitted. Bounded: a section larger than the byte " +
-      "cap is refused, never truncated. Reading a section records a read receipt that " +
+      "cap is refused, never truncated. A full verified read appends a durable read record that " +
       "record_planning_checkpoint requires before the section counts as covered.",
     schema: {
       type: "object",
@@ -257,7 +254,39 @@ function readSourceSectionTool(
           `Source section ${section.id} does not match its recorded digest (source drift); it never counts as covered.`,
         );
       }
-      readReceipts.add(receiptKey(manifest.manifestId, section.id, section.digest));
+      // T3b (N2): the full verified read is durable. Re-reading the same
+      // section at the same revision is an idempotent no-op.
+      try {
+        assertPendingUserGuidanceAllowsEvent(projection, {
+          type: "planning.source_section_read",
+          actor: { role: "architect", id: context.actor.id },
+          payload: {},
+        });
+        assertOpenArchitectQuestionAllowsEvent(projection, {
+          type: "planning.source_section_read",
+          actor: { role: "architect", id: context.actor.id },
+          payload: {},
+        });
+        store.append({
+          runId: context.runId,
+          type: "planning.source_section_read",
+          occurredAt: clock(),
+          actor: { role: "architect", id: context.actor.id },
+          idempotencyKey: `planning-sourceread:${manifest.manifestId}:${section.id}`,
+          payload: {
+            manifestId: manifest.manifestId,
+            manifestDigest: manifest.artifactDigest,
+            sectionId: section.id,
+            sectionDigest: section.digest,
+            readAt: clock(),
+          },
+        });
+      } catch (error) {
+        return errorOutput(
+          "mechanical_transition_rejected",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
       return {
         content: [{
           type: "json",
@@ -370,7 +399,6 @@ function persistLedgerTool(
 function recordCheckpointTool(
   store: SchedulerStore,
   clock: () => string,
-  readReceipts: Set<string>,
 ): NativeTool<RecordCheckpointInput> {
   return lifecycleTool({
     name: "record_planning_checkpoint",
@@ -446,14 +474,12 @@ function recordCheckpointTool(
           `Planning checkpoint covers unknown source section(s): ${unknown.join(", ")}.`,
         );
       }
-      // Only newly covered sections need a fresh read receipt: durably covered
-      // sections (digest-verified against the current manifest by the resume
-      // index) stay covered across restarts without re-reading.
-      const durablyCovered = new Set(planning.resume.coveredSourceSectionIds);
+      // T3b (N2): the receipt check is a durable projection check. Every
+      // covered section needs a full verified read recorded at the current
+      // manifest revision — reads survive restart, so no re-read is needed.
+      const durableReads = planning.sourceReadIndex[manifest.manifestId] ?? {};
       const missing = input.checkpoint.coveredSourceSectionIds.filter(
-        (id) =>
-          !durablyCovered.has(id) &&
-          !readReceipts.has(receiptKey(manifest.manifestId, id, knownSections.get(id)!)),
+        (id) => durableReads[id] !== knownSections.get(id),
       );
       if (missing.length > 0) {
         return errorOutput(

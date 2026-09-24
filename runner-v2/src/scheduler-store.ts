@@ -1957,6 +1957,8 @@ export function reduceSchedulerEvent(
     event.type !== "verifier.verdict_submitted" &&
     event.type !== "verifier.expectations_recorded" &&
     event.type !== "plan_critique.submitted" &&
+    event.type !== "planning.coverage_obligations_recorded" &&
+    event.type !== "planning.coverage_correction_view_recorded" &&
     event.type !== "planning.coverage_review_recorded"
   ) {
     throw new Error("The verifier has no scheduler lifecycle authority.");

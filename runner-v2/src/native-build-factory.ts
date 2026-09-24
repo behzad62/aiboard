@@ -76,6 +76,12 @@ import {
 } from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
 import {
+  buildCoverageHostCapabilities,
+  NativeCoverageReviewRuntime,
+  SchedulerCoverageReviewAuthority,
+  type CoverageReviewDriver,
+} from "./planning-review.js";
+import {
   NativePlanCriticRuntime,
   type NativePlanCritiqueRequest,
 } from "./native-plan-critic-runtime.js";
@@ -1096,6 +1102,62 @@ export class NativeBuildFactory {
         };
       },
     };
+    // T3b: the independent source-coverage reviewer. Reuses the verifier
+    // candidate pool (the OA-3 selector picks a distinct model when one
+    // exists), the shared sessions/artifacts/evidence/manifests, and the
+    // project root for read-only inspection. Source bytes still come from the
+    // artifact store by digest until T7 provisions the planning source reader.
+    const nativeCoverageReview = new NativeCoverageReviewRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      coverageRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      projectRoot: this.options.projectRoot,
+      authority: new SchedulerCoverageReviewAuthority(schedulerStore),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const coverageReviewDriver: CoverageReviewDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      review: async (input) => {
+        const result = await nativeCoverageReview.review({
+          ...input,
+          providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+            spec.budgetLimits.maxActiveMs,
+            budgetLedger.snapshot(spec.runId).effective.activeMs,
+            Date.now(),
+          ),
+        });
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find(
+            (item) => item.runtimeId === result.runtimeId,
+          );
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `coverage:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
         const projection = rebuildSchedulerProjection(
@@ -1211,6 +1273,11 @@ export class NativeBuildFactory {
       },
       independentVerifier,
       planCritic: planCriticDriver,
+      coverageReview: coverageReviewDriver,
+      planningHostCapabilities: () => buildCoverageHostCapabilities({
+        coverageCandidateRuntimeIds: spec.verifierRuntimeIds,
+        recordedAt: new Date().toISOString(),
+      }),
       repairPlanLimit: spec.repairPlanLimit,
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {

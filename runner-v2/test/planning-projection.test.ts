@@ -27,6 +27,27 @@ function planningEvent(
   };
 }
 
+/** T3b (N2): durable full verified reads must precede any checkpoint coverage claim. */
+function readEventsFor(
+  manifest: { manifestId: string; artifactDigest: string; sections: readonly { id: string; digest: string }[] },
+  sectionIds: readonly string[],
+): PlanningEventInput[] {
+  return sectionIds.map((sectionId, index) => ({
+    runId: "run_fixture",
+    type: "planning.source_section_read",
+    occurredAt: "2026-09-24T00:00:00.000Z",
+    actor: { role: "architect", id: "architect" },
+    idempotencyKey: `read:${manifest.manifestId}:${sectionId}:${index}`,
+    payload: {
+      manifestId: manifest.manifestId,
+      manifestDigest: manifest.artifactDigest,
+      sectionId,
+      sectionDigest: manifest.sections.find((section) => section.id === sectionId)!.digest,
+      readAt: "2026-09-24T00:00:00.000Z",
+    },
+  }));
+}
+
 test("planning projection creates source state and derives the initial resume index", () => {
   const fixture = buildPlanningFixtureScenario();
   const projection = createPlanningProjection(planningEvent(
@@ -74,6 +95,9 @@ test("planning projection derives ownership and cumulative checkpoint views", ()
       nonNormativeSections: [],
     },
   ));
+  for (const read of readEventsFor(fixture.manifest, ["s1"])) {
+    projection = reducePlanningProjection(projection, read);
+  }
   projection = reducePlanningProjection(projection, planningEvent(
     "planning.checkpoint_recorded",
     { role: "architect", id: "architect" },
@@ -211,6 +235,9 @@ test("planning checkpoint coverage is invalidated when an amendment changes a se
       nonNormativeSections: [],
     },
   ));
+  for (const read of readEventsFor(base, ["s1", "s2", "s3"])) {
+    projection = reducePlanningProjection(projection, read);
+  }
   projection = reducePlanningProjection(projection, planningEvent(
     "planning.checkpoint_recorded",
     { role: "architect", id: "architect" },

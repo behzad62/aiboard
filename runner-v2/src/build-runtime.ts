@@ -33,6 +33,16 @@ import {
   repairCyclesExhausted,
 } from "./scheduler-store.js";
 import type { PlanningSourceReader } from "./planning-tools.js";
+import {
+  DEFAULT_COVERAGE_SUSPENDED_RETRY_LIMIT,
+  SchedulerCoverageReviewAuthority,
+  TERMINAL_COVERAGE_GATE_REASONS,
+  type CoverageReviewDriver,
+  type NativeCoverageReviewRequest,
+  type PlanningHostCapabilitiesProvider,
+} from "./planning-review.js";
+import { computePlanReadiness, coverageReviewHoldsReadiness } from "./planning-contracts.js";
+import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./planning-projection.js";
 import type { BuildTask } from "./task-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import type {
@@ -234,6 +244,23 @@ export interface BuildRuntimeOptions {
    * errors explicitly when neither is provisioned.
    */
   planningSourceReader?: PlanningSourceReader;
+  /**
+   * T3b: drives the independent source-coverage review for new-policy runs.
+   * When absent, a requested review records an explicit outstanding gate
+   * instead of running. Legacy runs never consult it.
+   */
+  coverageReview?: CoverageReviewDriver;
+  /**
+   * T3b: supplies host capabilities for the plan_ready transition. Required
+   * before a bound non-blocking review can become ready.
+   */
+  planningHostCapabilities?: PlanningHostCapabilitiesProvider;
+  /**
+   * T3b repair cycle 1 (N6): bound on suspended-review retries per review.
+   * Independent from repairPlanLimit (G-5). On exhaustion the runtime
+   * records an explicit outstanding gate for the owner and never loops.
+   */
+  coverageSuspendedRetryLimit?: number;
 }
 
 export interface ProjectDocsPort {
@@ -291,6 +318,9 @@ export class BuildRuntime {
   private readonly repairPlanLimit: number;
   private readonly architectLifecycleProbe?: BuildRuntimeOptions["architectLifecycleProbe"];
   private readonly planningSourceReader?: PlanningSourceReader;
+  private readonly coverageReview?: CoverageReviewDriver;
+  private readonly planningHostCapabilities?: PlanningHostCapabilitiesProvider;
+  private readonly coverageSuspendedRetryLimit: number;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
   private recordingFailureContext: {
@@ -324,6 +354,25 @@ export class BuildRuntime {
     this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
     this.architectLifecycleProbe = options.architectLifecycleProbe;
     this.planningSourceReader = options.planningSourceReader;
+    this.coverageReview = options.coverageReview;
+    this.planningHostCapabilities = options.planningHostCapabilities;
+    this.coverageSuspendedRetryLimit = options.coverageSuspendedRetryLimit ?? DEFAULT_COVERAGE_SUSPENDED_RETRY_LIMIT;
+    if (!Number.isSafeInteger(this.coverageSuspendedRetryLimit) || this.coverageSuspendedRetryLimit < 0) {
+      throw new Error("coverageSuspendedRetryLimit must be a non-negative integer.");
+    }
+    if (
+      this.coverageReview &&
+      (
+        this.coverageReview.candidateRuntimeIds.length === 0 ||
+        new Set(this.coverageReview.candidateRuntimeIds).size !==
+          this.coverageReview.candidateRuntimeIds.length ||
+        this.coverageReview.candidateRuntimeIds.some((runtimeId) => !runtimeId.trim())
+      )
+    ) {
+      throw new Error(
+        "Coverage review requires unique non-empty candidate runtime IDs.",
+      );
+    }
     if (
       this.independentVerifier &&
       (
@@ -453,6 +502,21 @@ export class BuildRuntime {
     }
     if (projection.repairCycles?.pause) {
       throw new Error("This Build is awaiting the user's repair-cycle decision.");
+    }
+    // R2-1: an owner's resume clears a terminal N6 exhaustion gate durably
+    // (an owner-authorized retry event) and resets the suspended-retry
+    // count, so the next step runs the review again instead of re-pausing.
+    // Non-terminal gates need no clearing: the next step retries them.
+    const terminalGate = projection.planning?.coverageUnavailable;
+    if (
+      terminalGate?.reviewId !== undefined &&
+      (TERMINAL_COVERAGE_GATE_REASONS as readonly string[]).includes(terminalGate.reason)
+    ) {
+      new SchedulerCoverageReviewAuthority(this.store).authorizeCoverageRetry({
+        runId: this.runId,
+        reviewId: terminalGate.reviewId,
+        occurredAt: this.clock(),
+      });
     }
     const occurredAt = this.clock();
     if (
@@ -768,10 +832,13 @@ export class BuildRuntime {
       return this.afterArchitect("acceptance_contract_upgrade_required");
     }
     if (projection.planningPolicyVersion === 1) {
-      // T3a: new-policy runs plan through the planning tools, not plan_tasks,
-      // so legacy planRevision stays 0; planning continues until T3b's ready
-      // plan identity exists (unreachable until T3b lands — correct).
+      // T3a/T3b: new-policy runs plan through the planning tools, not
+      // plan_tasks, so legacy planRevision stays 0; planning continues until
+      // the ready plan identity exists. A requested coverage review is driven
+      // here; otherwise the Architect plans.
       if (!readyPlanIdentity(projection)) {
+        const coverage = await this.advanceCoverageReview(projection);
+        if (coverage) return coverage;
         await this.runArchitect({ type: "plan_required" }, projection);
         return this.afterArchitect("plan_required");
       }
@@ -2085,6 +2152,224 @@ export class BuildRuntime {
     });
   }
 
+  /**
+   * T3b: drives an outstanding coverage review toward plan_ready. Returns a
+   * step result when the coverage path owns this step, or undefined when the
+   * Architect must act (nothing drafted, nothing requested, or blocking
+   * findings/unread sections/readiness blockers to resolve — all visible in
+   * planning-status). Legacy runs never reach here (planningPolicyVersion 1
+   * only).
+   *
+   * Repair cycle 1 (B1): an unavailable gate for the current revision is
+   * outstanding but retryable, never permanent. Each step re-attempts the
+   * still-current review (selection re-checks provider cooldown timing, so a
+   * cooled-down provider is picked up; one attempt per step, no busy loop).
+   * When a reviewer is available the review proceeds and the gate clears
+   * durably via the recorded derivation, delivery, own view, or verdict.
+   * Repair cycle 2 (R2-1): a gate pauses the run with a durable,
+   * owner-visible reason (the verifier selection_required mechanism) — never
+   * a silent blocked while the run shows running. The owner's normal resume
+   * re-drives the retry; resume also clears a terminal N6 exhaustion gate
+   * and resets its count. A non-terminal suspension is transient progress
+   * (the pump retries immediately); only exhaustion pauses.
+   */
+  private async advanceCoverageReview(projection: SchedulerProjection): Promise<BuildStepResult | undefined> {
+    const planning = projection.planning;
+    if (!planning?.plan || !planning.ledger) return undefined;
+    const revisionId = planning.plan.currentRevisionId;
+    const digest = planning.plan.currentDigest;
+    const manifest = planning.source.manifestsById[planning.source.currentManifestId];
+    const review = planning.coverageReview;
+    const bound = review &&
+        review.planRevisionId === revisionId &&
+        review.planRevisionDigest === digest &&
+        review.sourceReadManifestId === manifest.manifestId
+      ? review
+      : undefined;
+    const unavailable = planning.coverageUnavailable;
+    const gateForCurrent = unavailable &&
+        unavailable.planRevisionId === revisionId &&
+        unavailable.sourceManifestId === manifest.manifestId
+      ? unavailable
+      : undefined;
+    // Terminal gates (N6 exhaustion) pause for the owner and never retry
+    // on their own; the owner's resume clears them (see resumeInternal).
+    // Every other gate for the current revision falls through to the retry
+    // attempt below.
+    if (gateForCurrent && (TERMINAL_COVERAGE_GATE_REASONS as readonly string[]).includes(gateForCurrent.reason)) {
+      return this.pauseForCoverageGate(gateForCurrent.reviewId ?? "none", gateForCurrent.reason);
+    }
+    if (bound) {
+      // Blocking verdicts, blocking findings, or cumulative outstanding
+      // blocking prior findings: the Architect resolves by revising
+      // (planning-status shows them with text and rationale).
+      if (coverageReviewHoldsReadiness(bound)) return undefined;
+      if (
+        bound.findings.some(
+          (finding) => finding.severity === "blocking" && finding.disposition?.resolution !== "plan_reconciled",
+        )
+      ) {
+        return undefined;
+      }
+      // Cumulative open blocking findings from earlier reviews (the same
+      // shared helper as the reducer and status; retired excluded). The
+      // bound review's own blocking findings were handled just above.
+      {
+        const outstanding = openBlockingCoverageFindings(planning).filter(
+          (entry) => entry.reviewId !== bound.id,
+        );
+        if (outstanding.length > 0) return undefined;
+      }
+      // Full durable reads, mirroring the reducer pre-check (Architect fixes gaps).
+      const reads = planning.sourceReadIndex[manifest.manifestId] ?? {};
+      if (manifest.sections.some((section) => reads[section.id] !== section.digest)) return undefined;
+      // N2: readiness blockers the runtime did not pre-check (revision
+      // validation, requirement removal, host capabilities) hand control to
+      // the Architect with the blocker text recorded as an explicit
+      // outstanding gate (visible in planning-status) — never throw out of
+      // the step. A later revision/request clears the gate.
+      const readyAuthority = new SchedulerCoverageReviewAuthority(this.store);
+      if (!this.planningHostCapabilities) {
+        readyAuthority.recordUnavailable({
+          runId: this.runId,
+          reviewId: bound.id,
+          reason: "plan_ready_blocked",
+          detail: "No host capabilities provider is configured.",
+          occurredAt: this.clock(),
+        });
+        return undefined;
+      }
+      const history = planning.plan.revisionHistoryIds;
+      const priorRevisionId = history.length > 1 ? history[history.length - 2] : undefined;
+      const hostCapabilities = this.planningHostCapabilities();
+      // N-R2-1: the readiness pre-check builds from the ONE shared helper —
+      // the same input (including amendment history) the reducer decides on.
+      const readinessInput = coveragePlanReadinessInput(planning, priorRevisionId);
+      const readiness = readinessInput
+        ? computePlanReadiness({ ...readinessInput, hostCapabilities })
+        : { ready: false, blockers: ["Plan readiness requires a plan, coverage review, and host capabilities."] };
+      if (!readiness.ready) {
+        readyAuthority.recordUnavailable({
+          runId: this.runId,
+          reviewId: bound.id,
+          reason: "plan_ready_blocked",
+          detail: readiness.blockers.join(" "),
+          occurredAt: this.clock(),
+        });
+        return undefined;
+      }
+      try {
+        readyAuthority.appendPlanReady({
+          runId: this.runId,
+          hostCapabilities,
+          ...(priorRevisionId !== undefined ? { priorRevisionId } : {}),
+          occurredAt: this.clock(),
+        });
+      } catch (error) {
+        readyAuthority.recordUnavailable({
+          runId: this.runId,
+          reviewId: bound.id,
+          reason: "plan_ready_blocked",
+          detail: error instanceof Error ? error.message : String(error),
+          occurredAt: this.clock(),
+        });
+        return undefined;
+      }
+      return { status: "progressed", action: "plan_ready" };
+    }
+    const request = Object.values(planning.coverageRequests).find(
+      (candidate) =>
+        candidate.planRevisionId === revisionId &&
+        candidate.planRevisionDigest === digest &&
+        candidate.sourceManifestId === manifest.manifestId,
+    );
+    if (!request) return undefined;
+    const authority = new SchedulerCoverageReviewAuthority(this.store);
+    if (!this.coverageReview) {
+      authority.recordUnavailable({
+        runId: this.runId,
+        reviewId: request.reviewId,
+        reason: "no_coverage_review_driver",
+        occurredAt: this.clock(),
+      });
+      return this.pauseForCoverageGate(request.reviewId, "no_coverage_review_driver");
+    }
+    const revision = planning.plan.revisionsById[revisionId];
+    const priorReview = request.priorReviewId === undefined
+      ? undefined
+      : [planning.coverageReview, ...planning.coverageReviewHistory]
+        .find((candidate) => candidate?.id === request.priorReviewId);
+    // N2: an unknown prior review hands control to the Architect (whose next
+    // request clears the stale binding) instead of throwing out of the step.
+    if (request.priorReviewId !== undefined && !priorReview) return undefined;
+    const input: NativeCoverageReviewRequest = {
+      runId: this.runId,
+      reviewId: request.reviewId,
+      architectRuntimeId: projection.runtime.architect.runtimeId ?? this.architectId,
+      manifest,
+      planRevision: revision,
+      ledger: {
+        id: planning.ledger.id,
+        requirements: planning.ledger.requirements,
+        phases: planning.ledger.phases,
+      },
+      objective: this.initialObjective ?? projection.initialObjective ?? "",
+      guidance: Object.values(projection.userGuidance).map((guidance) => ({
+        id: `${guidance.guidanceId}:v${guidance.version}`,
+        text: guidance.text,
+      })),
+      ...(priorReview !== undefined ? { priorReview } : {}),
+      signal: this.activeLifecycleSignal(),
+    };
+    const result = await this.coverageReview.review(input);
+    if (result.status === "reviewed") return { status: "progressed", action: "coverage_review_recorded" };
+    if (result.status === "unavailable") return this.pauseForCoverageGate(request.reviewId, result.reason);
+    // A suspension is transient progress: the pump retries with a fresh
+    // attempt on the next step. On N6 exhaustion record an explicit
+    // outstanding gate for the owner and pause instead of looping.
+    if (result.status === "suspended" && result.reason === "cancelled" && this.projection().status === "paused") {
+      return { status: "paused", action: "coverage_review_suspended" };
+    }
+    const suspended = authority.recordSuspended({
+      runId: this.runId,
+      reviewId: request.reviewId,
+      reason: result.reason,
+      runtimeId: result.runtimeId,
+      occurredAt: this.clock(),
+    });
+    if (suspended.attempts >= this.coverageSuspendedRetryLimit) {
+      authority.recordUnavailable({
+        runId: this.runId,
+        reviewId: request.reviewId,
+        reason: "coverage_review_suspended_exhausted",
+        detail: `Suspended ${suspended.attempts} time(s); last reason ${suspended.lastReason}.`,
+        occurredAt: this.clock(),
+      });
+      return this.pauseForCoverageGate(request.reviewId, "coverage_review_suspended_exhausted");
+    }
+    return { status: "progressed", action: "coverage_review_suspended" };
+  }
+
+  /**
+   * R2-1: a coverage gate pauses the run with a durable, owner-visible
+   * reason — the same runner-initiated pause mechanism as the verifier's
+   * selection_required path (a durable event flips the run to paused; the
+   * step returns paused). The verifier/manager path has no timed wake, so
+   * the owner's normal resume re-drives the retry (and clears a terminal
+   * N6 gate — see resumeInternal).
+   */
+  private pauseForCoverageGate(reviewId: string, reason: string): BuildStepResult {
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `coverage-paused:${reviewId}:${reason}:${this.projection().lastSequence}`,
+      payload: { reason: "coverage_reviewer_unavailable" },
+    });
+    return { status: "paused", action: "coverage_reviewer_unavailable" };
+  }
+
   private async advancePlanCritique(projection: SchedulerProjection): Promise<BuildStepResult | undefined> {
     const driver = this.planCritic;
     const state = projection.planCritique;
@@ -2283,6 +2568,7 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "read_planning_source_section",
   "reconcile_plan",
   "record_planning_checkpoint",
+  "request_coverage_review",
   "request_integration",
   "resolve_context_recording",
   "resolve_plan_critique",

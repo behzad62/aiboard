@@ -58,6 +58,7 @@ import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "../src/sqlite-project-memory.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import type { BuildTask } from "../src/task-contracts.js";
+import { seedBoundCoverageAndReady } from "./support/planning-seed.js";
 import {
   TaskScheduler,
   type WorkerAssignment,
@@ -389,8 +390,13 @@ test("T3a source read covers every section in full over the complete inventory",
       texts.push(body.text as string);
     }
     assert.equal(texts.join(""), text);
-    // Reads are not lifecycle decisions: no event is appended by reading.
-    assert.equal(store.readRun(runId).length, 3);
+    // T3b (N2): reads are still not lifecycle decisions (no lifecycle
+    // signal), but each full verified read appends one durable read record.
+    assert.equal(store.readRun(runId).length, 6);
+    assert.deepEqual(
+      store.readRun(runId).slice(3).map((entry) => entry.type),
+      ["planning.source_section_read", "planning.source_section_read", "planning.source_section_read"],
+    );
   } finally {
     store.close();
   }
@@ -781,22 +787,7 @@ test("T3a planning-state predicate: legacy never, new-policy until ready or tria
     );
 
     // The T3b stand-in: a bound coverage review plus plan_ready.
-    store.append({
-      runId,
-      type: "planning.coverage_review_recorded",
-      occurredAt: CLOCK,
-      actor: { role: "verifier", id: "reviewer" },
-      idempotencyKey: "coverage:1",
-      payload: { review: fixture.coverageReview },
-    });
-    store.append({
-      runId,
-      type: "planning.plan_ready",
-      occurredAt: CLOCK,
-      actor: { role: "runner", id: "runner" },
-      idempotencyKey: "ready:1",
-      payload: { hostCapabilities: fixture.hostCapabilities },
-    });
+    seedCoverageStandIn(store, runId, fixture);
     const ready = projectionOf(store, runId);
     assert.equal(isPlanningState(ready), false);
     assert.deepEqual(readyPlanIdentity(ready), {
@@ -1023,10 +1014,11 @@ test("T3a legacy architect turn still lists the command tool", async () => {
 });
 
 test("T3a new-policy planning instructions appear only on new-policy runs", () => {
-  assert.equal(NEW_POLICY_PLANNING_INSTRUCTIONS.split("\n").length, 5);
+  assert.equal(NEW_POLICY_PLANNING_INSTRUCTIONS.split("\n").length, 7);
   assert.match(NEW_POLICY_PLANNING_INSTRUCTIONS, /read_planning_source_section/);
   assert.match(NEW_POLICY_PLANNING_INSTRUCTIONS, /persist_planning_ledger/);
   assert.match(NEW_POLICY_PLANNING_INSTRUCTIONS, /planning state/);
+  assert.match(NEW_POLICY_PLANNING_INSTRUCTIONS, /request_coverage_review/);
   const { manifest } = buildTrackSource();
   const store = new MemorySchedulerStore();
   seedNewPolicySource(store, "run_t3a_prompts", manifest);
@@ -1092,22 +1084,24 @@ function seedReadyPlan(
     idempotencyKey: "plan:revision-1",
     payload: { revision: fixture.revision, expectedRevisionId: null, expectedDigest: null },
   });
-  // T3b stand-in: the coverage review and plan_ready T3b will produce.
-  store.append({
-    runId,
-    type: "planning.coverage_review_recorded",
+  // T3b: the ordered coverage chain (reads → request → obligations → verdict → ready).
+  seedCoverageStandIn(store, runId, fixture);
+}
+
+/** T3b: ordered coverage chain for one review (reads → request → obligations → verdict → ready). */
+function seedCoverageStandIn(
+  store: SchedulerStore,
+  runId: string,
+  fixture: ReturnType<typeof scopedFixture>,
+  review: (typeof fixture)["coverageReview"] = fixture.coverageReview,
+  revision: (typeof fixture)["revision"] = fixture.revision,
+): void {
+  seedBoundCoverageAndReady(store, runId, {
+    revision,
+    manifest: fixture.manifest,
+    review,
+    hostCapabilities: fixture.hostCapabilities,
     occurredAt: CLOCK,
-    actor: { role: "verifier", id: "reviewer" },
-    idempotencyKey: "coverage:1",
-    payload: { review: fixture.coverageReview },
-  });
-  store.append({
-    runId,
-    type: "planning.plan_ready",
-    occurredAt: CLOCK,
-    actor: { role: "runner", id: "runner" },
-    idempotencyKey: "ready:1",
-    payload: { hostCapabilities: fixture.hostCapabilities },
   });
 }
 
@@ -1402,22 +1396,7 @@ test("T3a plan_only new-policy run dispatches zero workers, including after rest
     }
     // The sharp arm: a READY plan plus real scheduler tasks, then a tick.
     // Without the plan_only guards this dispatches.
-    firstStore.append({
-      runId,
-      type: "planning.coverage_review_recorded",
-      occurredAt: CLOCK,
-      actor: { role: "verifier", id: "reviewer" },
-      idempotencyKey: "coverage:1",
-      payload: { review: fixture.coverageReview },
-    });
-    firstStore.append({
-      runId,
-      type: "planning.plan_ready",
-      occurredAt: CLOCK,
-      actor: { role: "runner", id: "runner" },
-      idempotencyKey: "ready:1",
-      payload: { hostCapabilities: fixture.hostCapabilities },
-    });
+    seedCoverageStandIn(firstStore, runId, fixture);
     seedLegacyPlan(firstStore, runId, [planTask("a"), planTask("b")]);
     const scheduler = new TaskScheduler({
       runId,
@@ -1532,22 +1511,7 @@ test("T3a worker admission refused until ready, blocked again after a source cha
     assert.deepEqual(driver.assignments, []);
     assert.deepEqual(Object.keys(projectionOf(store, runId).tasks), []);
 
-    store.append({
-      runId,
-      type: "planning.coverage_review_recorded",
-      occurredAt: CLOCK,
-      actor: { role: "verifier", id: "reviewer" },
-      idempotencyKey: "coverage:1",
-      payload: { review: fixture.coverageReview },
-    });
-    store.append({
-      runId,
-      type: "planning.plan_ready",
-      occurredAt: CLOCK,
-      actor: { role: "runner", id: "runner" },
-      idempotencyKey: "ready:1",
-      payload: { hostCapabilities: fixture.hostCapabilities },
-    });
+    seedCoverageStandIn(store, runId, fixture);
     // Legacy scheduler tasks stand in for the T4 bridge. They may only be
     // seeded once the ready plan exists, and are bound to it at creation.
     seedLegacyPlan(store, runId, [planTask("a"), planTask("b"), planTask("c")]);
@@ -1627,22 +1591,7 @@ test("T3a worker admission blocked again after a plan change, with a ready contr
         revision: withoutDigest(fixture.revision),
       }, runId);
       assert.equal(drafted.isError, false);
-      store.append({
-        runId,
-        type: "planning.coverage_review_recorded",
-        occurredAt: CLOCK,
-        actor: { role: "verifier", id: "reviewer" },
-        idempotencyKey: "coverage:1",
-        payload: { review: fixture.coverageReview },
-      });
-      store.append({
-        runId,
-        type: "planning.plan_ready",
-        occurredAt: CLOCK,
-        actor: { role: "runner", id: "runner" },
-        idempotencyKey: "ready:1",
-        payload: { hostCapabilities: fixture.hostCapabilities },
-      });
+      seedCoverageStandIn(store, runId, fixture);
       // Tasks stand in for the T4 bridge; seeding requires the ready plan.
       seedLegacyPlan(store, runId, [planTask("a"), planTask("b")]);
       const driver = new DeferredDriver();
@@ -2085,22 +2034,7 @@ test("T3a repair B1: no task outside the ready plan is ever dispatched", async (
       revision: withoutDigest(fixture.revision),
     }, runId);
     assert.equal(drafted.isError, false);
-    store.append({
-      runId,
-      type: "planning.coverage_review_recorded",
-      occurredAt: CLOCK,
-      actor: { role: "verifier", id: "reviewer" },
-      idempotencyKey: "coverage:1",
-      payload: { review: fixture.coverageReview },
-    });
-    store.append({
-      runId,
-      type: "planning.plan_ready",
-      occurredAt: CLOCK,
-      actor: { role: "runner", id: "runner" },
-      idempotencyKey: "ready:1",
-      payload: { hostCapabilities: fixture.hostCapabilities },
-    });
+    seedCoverageStandIn(store, runId, fixture);
     const r1 = readyPlanIdentity(projectionOf(store, runId))!;
     assert.ok(r1);
 
@@ -2311,22 +2245,7 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
       revision: withoutDigest(fixture.revision),
     }, runId);
     assert.equal(drafted.isError, false);
-    store.append({
-      runId,
-      type: "planning.coverage_review_recorded",
-      occurredAt: CLOCK,
-      actor: { role: "verifier", id: "reviewer" },
-      idempotencyKey: "coverage:1",
-      payload: { review: fixture.coverageReview },
-    });
-    store.append({
-      runId,
-      type: "planning.plan_ready",
-      occurredAt: CLOCK,
-      actor: { role: "runner", id: "runner" },
-      idempotencyKey: "ready:1",
-      payload: { hostCapabilities: fixture.hostCapabilities },
-    });
+    seedCoverageStandIn(store, runId, fixture);
     const r1 = readyPlanIdentity(projectionOf(store, runId))!;
     assert.ok(r1);
 
@@ -2349,29 +2268,18 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
 
     // Re-ready as R2 through a second T3b stand-in review bound to it.
     const r2plan = projectionOf(store, runId).planning!.plan!;
-    store.append({
+    seedCoverageStandIn(
+      store,
       runId,
-      type: "planning.coverage_review_recorded",
-      occurredAt: CLOCK,
-      actor: { role: "verifier", id: "reviewer" },
-      idempotencyKey: "coverage:2",
-      payload: {
-        review: {
-          ...fixture.coverageReview,
-          id: "coverage_2",
-          planRevisionId: r2plan.currentRevisionId,
-          planRevisionDigest: r2plan.currentDigest,
-        },
+      fixture,
+      {
+        ...fixture.coverageReview,
+        id: "coverage_2",
+        planRevisionId: r2plan.currentRevisionId,
+        planRevisionDigest: r2plan.currentDigest,
       },
-    });
-    store.append({
-      runId,
-      type: "planning.plan_ready",
-      occurredAt: CLOCK,
-      actor: { role: "runner", id: "runner" },
-      idempotencyKey: "ready:2",
-      payload: { hostCapabilities: fixture.hostCapabilities },
-    });
+      r2plan.revisionsById[r2plan.currentRevisionId],
+    );
     assert.equal(projectionOf(store, runId).planning!.readiness, "ready");
     const r2 = readyPlanIdentity(projectionOf(store, runId))!;
     assert.notEqual(r2.revisionId, r1.revisionId);

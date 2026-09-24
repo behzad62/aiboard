@@ -118,6 +118,16 @@ function planningInputs(fixture: PlanningFixtureScenario & { manifest: ApprovedS
       phases: fixture.phases,
       nonNormativeSections: [],
     }),
+    // T3b (N2): durable full verified reads precede any coverage claim and readiness.
+    ...fixture.manifest.sections.map((section) =>
+      event("planning.source_section_read", `read:${section.id}`, { role: "architect", id: "architect" }, {
+        manifestId: fixture.manifest.manifestId,
+        manifestDigest: fixture.manifest.artifactDigest,
+        sectionId: section.id,
+        sectionDigest: section.digest,
+        readAt: "2026-09-24T00:00:30.000Z",
+      }),
+    ),
     event("planning.checkpoint_recorded", "checkpoint:1", { role: "architect", id: "architect" }, {
       checkpoint: {
         id: "checkpoint-1",
@@ -132,6 +142,32 @@ function planningInputs(fixture: PlanningFixtureScenario & { manifest: ApprovedS
       revision: fixture.revision,
       expectedRevisionId: null,
       expectedDigest: null,
+    }),
+    // T3b: request → obligations (record-before-verdict) precede the verdict.
+    event("planning.coverage_review_requested", "coverage-request:1", { role: "architect", id: "architect" }, {
+      reviewId: fixture.coverageReview.id,
+      planRevisionId: fixture.revision.revisionId,
+      planRevisionDigest: fixture.revision.digest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: "2026-09-24T00:02:00.000Z",
+    }),
+    event("planning.coverage_obligations_recorded", "coverage-obligations:1", { role: "verifier", id: "reviewer" }, {
+      reviewId: fixture.coverageReview.id,
+      sourceManifestId: fixture.manifest.manifestId,
+      sourceManifestDigest: fixture.manifest.artifactDigest,
+      obligations: structuredClone(fixture.coverageReview.derivedObligations),
+      sectionCoverage: fixture.manifest.sections.map((section) => ({
+        sectionId: section.id,
+        obligationIds: fixture.coverageReview.derivedObligations.map((obligation) => obligation.id),
+      })),
+      recordedAt: "2026-09-24T00:05:00.000Z",
+    }),
+    event("planning.coverage_plan_delivered", "coverage-plan-delivered:1", { role: "runner", id: "runner" }, {
+      reviewId: fixture.coverageReview.id,
+      planRevisionId: fixture.revision.revisionId,
+      planRevisionDigest: fixture.revision.digest,
+      sourceManifestId: fixture.manifest.manifestId,
+      deliveredAt: "2026-09-24T00:06:00.000Z",
     }),
     event("planning.coverage_review_recorded", "coverage:1", { role: "verifier", id: "reviewer" }, {
       review: fixture.coverageReview,
@@ -698,8 +734,39 @@ test("T2 N1: latest current GREEN supersedes RED history", () => {
       revision: revisionTwo,
       ...currentPlanBinding(oldRedCurrentGreen),
     }));
+    // T3b: the revision-2 verdict needs its own request → obligations chain;
+    // reusing the revision-1 review id would cite a stale request.
+    const reviewTwo = {
+      ...buildFixtureCoverageReview(revisionTwo, fixture.manifest),
+      id: "coverage_2",
+    };
+    oldRedCurrentGreen.append(event("planning.coverage_review_requested", "coverage-request:revision-2", { role: "architect", id: "architect" }, {
+      reviewId: reviewTwo.id,
+      planRevisionId: revisionTwo.revisionId,
+      planRevisionDigest: revisionTwo.digest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: "2026-09-24T00:08:00.000Z",
+    }));
+    oldRedCurrentGreen.append(event("planning.coverage_obligations_recorded", "coverage-obligations:revision-2", { role: "verifier", id: "reviewer" }, {
+      reviewId: reviewTwo.id,
+      sourceManifestId: fixture.manifest.manifestId,
+      sourceManifestDigest: fixture.manifest.artifactDigest,
+      obligations: structuredClone(reviewTwo.derivedObligations),
+      sectionCoverage: fixture.manifest.sections.map((section) => ({
+        sectionId: section.id,
+        obligationIds: reviewTwo.derivedObligations.map((obligation) => obligation.id),
+      })),
+      recordedAt: "2026-09-24T00:08:30.000Z",
+    }));
+    oldRedCurrentGreen.append(event("planning.coverage_plan_delivered", "coverage-plan-delivered:revision-2", { role: "runner", id: "runner" }, {
+      reviewId: reviewTwo.id,
+      planRevisionId: revisionTwo.revisionId,
+      planRevisionDigest: revisionTwo.digest,
+      sourceManifestId: fixture.manifest.manifestId,
+      deliveredAt: "2026-09-24T00:08:40.000Z",
+    }));
     oldRedCurrentGreen.append(event("planning.coverage_review_recorded", "coverage:revision-2", { role: "verifier", id: "reviewer" }, {
-      review: buildFixtureCoverageReview(revisionTwo, fixture.manifest),
+      review: reviewTwo,
     }));
     oldRedCurrentGreen.append(event("planning.plan_ready", "ready:revision-2", { role: "runner", id: "runner" }, {
       hostCapabilities: fixture.hostCapabilities,
@@ -718,7 +785,7 @@ test("T2 N1: latest current GREEN supersedes RED history", () => {
     oldRedCurrentGreen.append(event("planning.acceptance_recorded", "acceptance:old-red-current-green", { role: "runner", id: "runner" }, {
       kind: "task",
       taskId: "T1",
-      acceptance: acceptedTask("T1", "observation-current-green", "integration-1"),
+      acceptance: { ...acceptedTask("T1", "observation-current-green", "integration-1"), reviewId: "coverage_2" },
       ...currentPlanBinding(oldRedCurrentGreen),
     }));
     assert.equal(rebuildSchedulerProjection(oldRedCurrentGreen.readRun(RUN_ID)).planning!.acceptances["task:T1"].status, "accepted");
@@ -1334,7 +1401,8 @@ test("T2 interrupt after one covered section resumes the exact next section with
   try {
     const fixture = fixtureWithScopedAmendment();
     store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
-    appendAll(store, planningInputs(fixture).slice(0, 6));
+    // T3b: ledger (index 4) plus 8 durable reads plus the checkpoint.
+    appendAll(store, planningInputs(fixture).slice(0, 5 + fixture.manifest.sections.length + 1));
     store.close();
     store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
     const resumed = rebuildSchedulerProjection(store.readRun(RUN_ID)).planning!;

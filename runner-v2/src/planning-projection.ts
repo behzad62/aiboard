@@ -16,6 +16,7 @@ import {
   validateValidationObservation,
   type AssignmentClaim,
   type CoverageReview,
+  type DerivedObligation,
   type ExecutionPlanPhase,
   type ExecutionPlanRevision,
   type HostPlanningCapabilities,
@@ -38,11 +39,20 @@ import {
 export const PLANNING_EVENT_TYPES = [
   "planning.source_registered",
   "planning.source_amended",
+  "planning.source_section_read",
   "planning.ledger_persisted",
   "planning.checkpoint_recorded",
   "planning.plan_drafted",
   "planning.plan_revised",
+  "planning.coverage_review_requested",
+  "planning.coverage_obligations_recorded",
+  "planning.coverage_plan_delivered",
+  "planning.coverage_correction_view_recorded",
+  "planning.coverage_prior_findings_released",
   "planning.coverage_review_recorded",
+  "planning.coverage_review_unavailable",
+  "planning.coverage_review_suspended",
+  "planning.coverage_review_retry_authorized",
   "planning.plan_ready",
   "planning.assignment_claimed",
   "planning.assignment_released",
@@ -75,11 +85,20 @@ export interface PlanningEventInput {
 export const PLANNING_EVENT_ACTOR_ROLES: Readonly<Record<PlanningEventType, readonly PlanningActorRole[]>> = {
   "planning.source_registered": ["user"],
   "planning.source_amended": ["user"],
+  "planning.source_section_read": ["architect"],
   "planning.ledger_persisted": ["architect"],
   "planning.checkpoint_recorded": ["architect"],
   "planning.plan_drafted": ["architect"],
   "planning.plan_revised": ["architect"],
+  "planning.coverage_review_requested": ["architect"],
+  "planning.coverage_obligations_recorded": ["verifier"],
+  "planning.coverage_plan_delivered": ["runner"],
+  "planning.coverage_correction_view_recorded": ["verifier"],
+  "planning.coverage_prior_findings_released": ["runner"],
   "planning.coverage_review_recorded": ["verifier"],
+  "planning.coverage_review_unavailable": ["runner"],
+  "planning.coverage_review_suspended": ["runner"],
+  "planning.coverage_review_retry_authorized": ["user"],
   "planning.plan_ready": ["runner"],
   "planning.assignment_claimed": ["runner"],
   "planning.assignment_released": ["runner"],
@@ -96,12 +115,21 @@ export const PLANNING_EVENT_ACTOR_ROLES: Readonly<Record<PlanningEventType, read
 export const PLANNING_EVENT_TRANSITIONS: Readonly<Record<PlanningEventType, string>> = {
   "planning.source_registered": "none -> source_registered",
   "planning.source_amended": "source_registered -> source_amended",
+  "planning.source_section_read": "source_registered|source_amended -> durable read index+",
   "planning.ledger_persisted": "source_registered|source_amended -> ledger_persisted",
   "planning.checkpoint_recorded": "ledger_persisted -> checkpoint_recorded+",
   "planning.plan_drafted": "ledger_persisted -> plan_drafted",
   "planning.plan_revised": "plan_drafted -> plan_revised+",
-  "planning.coverage_review_recorded": "plan_drafted -> coverage_review_recorded+",
-  "planning.plan_ready": "plan_drafted + bound passing coverage_review -> plan_ready",
+  "planning.coverage_review_requested": "plan_drafted -> coverage_review_requested+",
+  "planning.coverage_obligations_recorded": "coverage_review_requested -> blind obligations (before plan delivery)",
+  "planning.coverage_plan_delivered": "obligations|request -> plan delivered to reviewer",
+  "planning.coverage_correction_view_recorded": "request (re-review) + reused blind obligations -> own view",
+  "planning.coverage_prior_findings_released": "correction own view -> prior findings released",
+  "planning.coverage_review_recorded": "obligations + plan binding [+ own view + release + prior checks] -> coverage_review_recorded+",
+  "planning.coverage_review_unavailable": "coverage_review_requested -> explicit outstanding gate",
+  "planning.coverage_review_suspended": "coverage_review_requested -> suspended attempt counted",
+  "planning.coverage_review_retry_authorized": "coverage_review_suspended_exhausted -> owner retry authorized (gate cleared, attempts reset)",
+  "planning.plan_ready": "plan_drafted + bound passing coverage_review + full durable reads -> plan_ready",
   "planning.assignment_claimed": "plan_ready -> assignment_claimed",
   "planning.assignment_released": "assignment_claimed -> assignment_released|stopped_fenced",
   "planning.validation_intent_recorded": "assignment_claimed -> validation_intent_recorded+",
@@ -158,6 +186,141 @@ export interface PlanningCheckpointRecord {
   readonly sectionDigests: Readonly<Record<string, string>>;
 }
 
+/**
+ * T3b (N2): one durable full verified source-section read, bound to the exact
+ * manifest revision and section digest it was verified against. A later
+ * amendment starts a new manifest revision whose sections need their own
+ * reads; old reads never satisfy a new revision.
+ */
+export interface PlanningSourceReadRecord {
+  readonly manifestId: string;
+  readonly manifestDigest: string;
+  readonly sectionId: string;
+  readonly sectionDigest: string;
+  readonly readAt: string;
+}
+
+/** T3b: the Architect's durable request for a coverage review of one plan revision. */
+export interface CoverageReviewRequestRecord {
+  readonly reviewId: string;
+  readonly planRevisionId: string;
+  readonly planRevisionDigest: string;
+  readonly sourceManifestId: string;
+  readonly priorReviewId?: string;
+  readonly requestedAt: string;
+}
+
+/**
+ * T3b repair cycle 1 (N4): how one source section is accounted for by the
+ * blind obligation set. Either at least one obligation id, or an explicit
+ * reviewer reason why the section imposes no obligation.
+ */
+export interface CoverageSectionCoverage {
+  readonly sectionId: string;
+  readonly obligationIds: readonly string[];
+  readonly noObligationReason?: string;
+}
+
+/**
+ * T3b (OA-1) repair cycle 1 (B2): obligations the coverage reviewer derived
+ * from the source alone BEFORE any plan was delivered for this review. Blind
+ * only: no prior review, no correction view. A re-review after a plan
+ * revision reuses the current blind set (see CoverageCorrectionViewRecord)
+ * instead of re-deriving with the plan in context. The verdict is refused
+ * without an applicable blind record (record-before-verdict).
+ */
+export interface CoverageObligationsRecord {
+  readonly reviewId: string;
+  readonly sourceManifestId: string;
+  readonly sourceManifestDigest: string;
+  readonly obligations: readonly DerivedObligation[];
+  readonly sectionCoverage: readonly CoverageSectionCoverage[];
+  readonly recordedAt: string;
+}
+
+/**
+ * T3b repair cycle 1 (B2): durable proof that the plan was delivered to a
+ * review session. Obligations recorded after this event for the same review
+ * are refused: a `recordedBeforePlanOrDiffProvided: true` stamp is only
+ * valid when no plan delivery precedes it.
+ */
+export interface CoveragePlanDeliveredRecord {
+  readonly reviewId: string;
+  readonly planRevisionId: string;
+  readonly planRevisionDigest: string;
+  readonly sourceManifestId: string;
+  readonly sessionId?: string;
+  readonly deliveredAt: string;
+}
+
+/**
+ * T3b repair cycle 1 (B2/EP42): a re-review's own recorded view of the
+ * corrected plan against the reused blind obligations, written BEFORE any
+ * prior findings are released. `reusedFromReviewId` names the blind
+ * obligations record (same manifest id/digest); it may be the review's own
+ * fresh blind record (source changed) or a prior review's blind record
+ * (plan-only revision).
+ */
+export interface CoverageCorrectionViewRecord {
+  readonly reviewId: string;
+  readonly priorReviewId: string;
+  readonly correctionView: string;
+  readonly reusedFromReviewId: string;
+  readonly sourceManifestId: string;
+  readonly sourceManifestDigest: string;
+  readonly recordedAt: string;
+}
+
+/** T3b (OA-10#2): the re-reviewer's check of one prior finding. */
+export interface CoveragePriorFindingCheck {
+  readonly priorFindingId: string;
+  readonly status: "resolved" | "outstanding";
+  readonly rationale: string;
+}
+
+/**
+ * T3b: an explicit outstanding gate — no eligible reviewer, an overflowing
+ * source pack, suspended-retry exhaustion, or another recorded reason.
+ * Readiness stays blocked while set. A new review request, a recorded blind
+ * derivation, a delivered plan, a recorded own view, or a recorded review
+ * clears it (B1: the gate is outstanding but retryable, never permanent).
+ */
+export interface CoverageUnavailableRecord {
+  readonly reviewId?: string;
+  readonly planRevisionId?: string;
+  readonly sourceManifestId?: string;
+  readonly reason: string;
+  readonly detail?: string;
+  readonly recordedAt: string;
+}
+
+/** Terminal coverage gate reasons: recorded for the owner; only an owner-authorized retry clears them (N6/R2-1). */
+export const TERMINAL_COVERAGE_GATE_REASONS: readonly string[] = Object.freeze([
+  "coverage_review_suspended_exhausted",
+]);
+
+/**
+ * T3b repair cycle 2 (N-R2-2): an open finding whose obligation was retired
+ * by a source amendment, closed as retired. Recorded ONLY by the
+ * owner-authorized planning.source_amended reducer case, never silently:
+ * a finding on a still-existing obligation stays open.
+ */
+export interface CoverageRetiredFinding {
+  readonly findingId: string;
+  readonly reviewId: string;
+  readonly retiredByAmendmentId: string;
+  readonly retiredAt: string;
+}
+
+/** T3b repair cycle 1 (N6): durable count of suspended attempts per review. */
+export interface CoverageSuspendedRecord {
+  readonly reviewId: string;
+  readonly attempts: number;
+  readonly lastReason: string;
+  readonly lastRuntimeId?: string;
+  readonly updatedAt: string;
+}
+
 export interface PlanningResumeIndex {
   readonly coveredSourceSectionIds: readonly string[];
   readonly remainingSourceSectionIds: readonly string[];
@@ -187,6 +350,8 @@ export interface PlanningProjection {
     readonly revisionsById: Readonly<Record<string, ExecutionPlanRevision>>;
   };
   readonly checkpoints: readonly PlanningCheckpointRecord[];
+  /** T3b (N2): durable read index, manifest revision -> section id -> verified section digest. */
+  readonly sourceReadIndex: Readonly<Record<string, Readonly<Record<string, string>>>>;
   readonly assignments: Readonly<Record<string, PlanningAssignmentState>>;
   readonly validations: Readonly<Record<string, PlanningValidationState>>;
   readonly observationSequence: number;
@@ -194,6 +359,26 @@ export interface PlanningProjection {
   readonly acceptances: Readonly<Record<string, PlanningAcceptanceState>>;
   readonly readiness: "not_ready" | "ready";
   readonly coverageReview?: CoverageReview;
+  /** T3b: prior coverage reviews, oldest first; the current review is `coverageReview`. */
+  readonly coverageReviewHistory: readonly CoverageReview[];
+  /** T3b: coverage review requests by review id. */
+  readonly coverageRequests: Readonly<Record<string, CoverageReviewRequestRecord>>;
+  /** T3b: recorded blind obligations (record-before-verdict) by review id. */
+  readonly coverageObligations: Readonly<Record<string, CoverageObligationsRecord>>;
+  /** T3b repair cycle 1 (B2): plan-delivery record by review id. */
+  readonly coveragePlanDelivered: Readonly<Record<string, CoveragePlanDeliveredRecord>>;
+  /** T3b repair cycle 1 (B2/EP42): re-review own views by review id. */
+  readonly coverageCorrectionViews: Readonly<Record<string, CoverageCorrectionViewRecord>>;
+  /** T3b (OA-10#2): review id -> prior review id whose findings were released after the own view. */
+  readonly coveragePriorFindingsReleased: Readonly<Record<string, string>>;
+  /** T3b (OA-10#2): review id -> per-prior-finding checks supplied with the verdict. */
+  readonly coveragePriorFindingChecks: Readonly<Record<string, readonly CoveragePriorFindingCheck[]>>;
+  /** T3b: set while coverage review is explicitly unavailable; blocks plan_ready. */
+  readonly coverageUnavailable?: CoverageUnavailableRecord;
+  /** T3b repair cycle 1 (N6): suspended attempts by review id. */
+  readonly coverageSuspended: Readonly<Record<string, CoverageSuspendedRecord>>;
+  /** T3b repair cycle 2 (N-R2-2): findings retired by a source amendment, by finding id. */
+  readonly coverageRetiredFindings: Readonly<Record<string, CoverageRetiredFinding>>;
   readonly hostCapabilities?: HostPlanningCapabilities;
   readonly resume: PlanningResumeIndex;
   readonly references: Readonly<Record<string, PlanningReferenceRecord>>;
@@ -618,14 +803,412 @@ function amendmentHistory(projection: PlanningProjection): SourceManifestAmendme
   });
 }
 
-function assertMonotonicCheckpoint(previous: PlanningCheckpoint | undefined, next: PlanningCheckpoint): void {
+export interface CoveragePlanReadinessInput {
+  readonly manifest: ApprovedSourceManifest;
+  readonly revision: ExecutionPlanRevision;
+  readonly coverageReview: CoverageReview;
+  readonly priorRevision?: ExecutionPlanRevision;
+  readonly amendmentHistory: readonly SourceManifestAmendment[];
+}
+
+/**
+ * T3b repair cycle 2 (N-R2-1): the ONE shared plan-readiness input builder.
+ * The plan_ready reducer, the runtime pre-check, and renderPlanningStatus
+ * all build from here, so the amendment history (and prior revision) can
+ * never diverge again. Returns undefined when no plan or review exists yet.
+ */
+export function coveragePlanReadinessInput(
+  planning: PlanningProjection,
+  priorRevisionId: string | undefined,
+): CoveragePlanReadinessInput | undefined {
+  if (!planning.plan || !planning.coverageReview) return undefined;
+  const manifest = planning.source.manifestsById[planning.source.currentManifestId];
+  const revision = planning.plan.revisionsById[planning.plan.currentRevisionId];
+  if (!manifest || !revision) return undefined;
+  const priorRevision = priorRevisionId ? planning.plan.revisionsById[priorRevisionId] : undefined;
+  return {
+    manifest,
+    revision,
+    coverageReview: planning.coverageReview,
+    ...(priorRevision ? { priorRevision } : {}),
+    amendmentHistory: amendmentHistory(planning),
+  };
+}
+
+/**
+ * T3b repair cycle 2 (N-R2-2): findings retired by an owner-authorized
+ * source amendment. A finding cites its obligation's ledger requirement
+ * (finding.requirementId); the obligation is retired when EVERY section of
+ * that requirement is structurally absent from the new manifest — the N6
+ * rule (no trust in the amendment's recorded impact). Findings without a
+ * requirement id, on unknown requirements, on requirements with a surviving
+ * section, or already resolved stay open. Only open findings close here.
+ */
+function retireFindingsForAmendment(
+  projection: PlanningProjection,
+  manifest: ApprovedSourceManifest,
+  retiredAt: string,
+): Record<string, CoverageRetiredFinding> {
+  const retired: Record<string, CoverageRetiredFinding> = {};
+  if (!projection.ledger) return retired;
+  const surviving = new Set(manifest.sections.map((section) => section.id));
+  const retiredRequirements = new Set<string>();
+  for (const requirement of projection.ledger.requirements) {
+    if (
+      requirement.reference?.sourceId === manifest.sourceId &&
+      requirement.reference.sectionIds.length > 0 &&
+      requirement.reference.sectionIds.every((sectionId) => !surviving.has(sectionId))
+    ) {
+      retiredRequirements.add(requirement.id);
+    }
+  }
+  if (retiredRequirements.size === 0) return retired;
+  const resolved = new Set<string>();
+  for (const checks of Object.values(projection.coveragePriorFindingChecks)) {
+    for (const check of checks) {
+      if (check.status === "resolved") resolved.add(check.priorFindingId);
+    }
+  }
+  const amendmentId = manifest.amendment?.id ?? manifest.manifestId;
+  const reviews = projection.coverageReview
+    ? [...projection.coverageReviewHistory, projection.coverageReview]
+    : [...projection.coverageReviewHistory];
+  for (const review of reviews) {
+    for (const finding of review.findings) {
+      if (
+        finding.requirementId !== undefined &&
+        retiredRequirements.has(finding.requirementId) &&
+        !resolved.has(finding.id) &&
+        projection.coverageRetiredFindings[finding.id] === undefined
+      ) {
+        retired[finding.id] = {
+          findingId: finding.id,
+          reviewId: review.id,
+          retiredByAmendmentId: amendmentId,
+          retiredAt,
+        };
+      }
+    }
+  }
+  return retired;
+}
+
+/**
+ * T3b (N6 rule): checkpoints are monotonic over source sections that STILL
+ * EXIST in the current manifest revision. A section retired by an amendment is
+ * dropped from coverage (it no longer exists to cover); every other
+ * previously covered section must be retained. Histories without a retiring
+ * amendment behave exactly as before, so old logs replay identically.
+ */
+function assertMonotonicCheckpoint(
+  previous: PlanningCheckpoint | undefined,
+  next: PlanningCheckpoint,
+  stillExists: ReadonlySet<string>,
+): void {
   if (!previous) return;
-  if (previous.coveredSourceSectionIds.some((id) => !next.coveredSourceSectionIds.includes(id))) {
+  if (
+    previous.coveredSourceSectionIds
+      .filter((id) => stillExists.has(id))
+      .some((id) => !next.coveredSourceSectionIds.includes(id))
+  ) {
     throw new Error("Planning checkpoints cannot drop covered source sections.");
   }
   if (previous.completedPlanningContractIds.some((id) => !next.completedPlanningContractIds.includes(id))) {
     throw new Error("Planning checkpoints cannot drop completed planning contracts.");
   }
+}
+
+/**
+ * T3b: sections of the current manifest without a durable full verified read
+ * at this exact manifest revision (N2). Old reads never satisfy a new
+ * revision; a digest mismatch means the section changed and needs a re-read.
+ */
+function unreadSectionIdsAtCurrentManifest(projection: PlanningProjection): string[] {
+  const manifest = projection.source.manifestsById[projection.source.currentManifestId];
+  const reads = projection.sourceReadIndex[manifest.manifestId] ?? {};
+  return manifest.sections
+    .filter((section) => reads[section.id] !== section.digest)
+    .map((section) => section.id);
+}
+
+function assertDurableSectionReads(
+  projection: PlanningProjection,
+  sectionIds: readonly string[],
+  label: string,
+): void {
+  const manifest = projection.source.manifestsById[projection.source.currentManifestId];
+  const reads = projection.sourceReadIndex[manifest.manifestId] ?? {};
+  const missing = sectionIds.filter((id) => {
+    const section = manifest.sections.find((candidate) => candidate.id === id);
+    return !section || reads[id] !== section.digest;
+  });
+  if (missing.length > 0) {
+    throw new Error(
+      `${label} counts source section(s) without a durable full read at the current manifest revision: ${missing.join(", ")}.`,
+    );
+  }
+}
+
+/** T3b: resolve a prior coverage review from the current review or its history. */
+function recordedCoverageReview(
+  projection: PlanningProjection,
+  reviewId: string,
+): CoverageReview | undefined {
+  if (projection.coverageReview?.id === reviewId) return projection.coverageReview;
+  return projection.coverageReviewHistory.find((review) => review.id === reviewId);
+}
+
+/**
+ * T3b: validate recorded obligations at the reducer gate. Mirrors T1's
+ * derived-obligation rules (planning-contracts.ts is read-only here): every
+ * obligation must be stamped as recorded before the plan/diff was provided —
+ * a direct event with a false stamp is a forged record-before-verdict claim
+ * and is refused.
+ */
+function parseRecordedObligations(value: unknown): DerivedObligation[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error("Coverage review requires durably recorded derived obligations.");
+  }
+  const seen = new Set<string>();
+  return value.map((candidate, index) => {
+    if (!isRecord(candidate)) throw new Error(`Derived obligation ${index} is invalid.`);
+    const id = candidate.id;
+    const description = candidate.description;
+    const recordedAt = candidate.recordedAt;
+    if (
+      typeof id !== "string" || id.trim().length === 0 ||
+      typeof description !== "string" || description.trim().length === 0 ||
+      typeof recordedAt !== "string" || recordedAt.trim().length === 0
+    ) {
+      throw new Error("Derived obligation requires id, description, and a valid recordedAt timestamp.");
+    }
+    if (seen.has(id)) throw new Error(`Duplicate derived obligation id ${id}.`);
+    seen.add(id);
+    if (candidate.recordedBeforePlanOrDiffProvided !== true) {
+      throw new Error(
+        `Derived obligation ${id} was not recorded before the plan/diff was provided (record-before-verdict gate).`,
+      );
+    }
+    const requirementId = candidate.requirementId;
+    if (requirementId !== undefined && (typeof requirementId !== "string" || requirementId.trim().length === 0)) {
+      throw new Error(`Derived obligation ${id} has an invalid requirementId.`);
+    }
+    return {
+      id,
+      ...(requirementId === undefined ? {} : { requirementId: requirementId as string }),
+      description: description as string,
+      recordedBeforePlanOrDiffProvided: true as const,
+      recordedAt: recordedAt as string,
+    };
+  });
+}
+
+function assertObligationSetsMatch(recorded: readonly DerivedObligation[], review: CoverageReview): void {
+  const recordedIds = new Set(recorded.map((obligation) => obligation.id));
+  const verdictIds = new Set(
+    (Array.isArray(review.obligationVerdicts) ? review.obligationVerdicts : [])
+      .filter(isRecord)
+      .map((verdict) => (verdict as { obligationId?: unknown }).obligationId)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  const derivedIds = new Set(
+    (Array.isArray(review.derivedObligations) ? review.derivedObligations : [])
+      .filter(isRecord)
+      .map((obligation) => (obligation as { id?: unknown }).id)
+      .filter((id): id is string => typeof id === "string"),
+  );
+  for (const id of recordedIds) {
+    if (!derivedIds.has(id) || !verdictIds.has(id)) {
+      throw new Error(
+        `Coverage review ${review.id} has no verdict for recorded obligation ${id} (record-before-verdict gate).`,
+      );
+    }
+  }
+  for (const id of derivedIds) {
+    if (!recordedIds.has(id)) {
+      throw new Error(
+        `Coverage review ${review.id} cites obligation ${id}, which was never durably recorded before the verdict.`,
+      );
+    }
+  }
+}
+
+/**
+ * T3b repair cycle 1 (N4): every manifest section is accounted for exactly
+ * once — either by at least one recorded obligation id, or by an explicit
+ * reviewer reason why the section imposes no obligation. Every recorded
+ * obligation must be cited by at least one section (no orphan obligations).
+ */
+function parseSectionCoverage(
+  value: unknown,
+  manifest: ApprovedSourceManifest,
+  obligationIds: ReadonlySet<string>,
+): CoverageSectionCoverage[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Coverage obligations require section coverage for every source section (N4).");
+  }
+  const manifestIds = new Set(manifest.sections.map((section) => section.id));
+  const seen = new Set<string>();
+  const cited = new Set<string>();
+  const coverage = value.map((candidate, index) => {
+    if (!isRecord(candidate)) throw new Error(`Coverage section entry ${index} is invalid.`);
+    const sectionId = candidate.sectionId;
+    const ids = candidate.obligationIds;
+    const reason = candidate.noObligationReason;
+    if (typeof sectionId !== "string" || !manifestIds.has(sectionId)) {
+      throw new Error(`Coverage section entry ${index} cites an unknown source section.`);
+    }
+    if (seen.has(sectionId)) throw new Error(`Duplicate coverage entry for source section ${sectionId}.`);
+    seen.add(sectionId);
+    if (!Array.isArray(ids)) throw new Error(`Coverage for section ${sectionId} requires obligationIds.`);
+    for (const id of ids) {
+      if (typeof id !== "string" || !obligationIds.has(id)) {
+        throw new Error(`Coverage for section ${sectionId} cites unknown obligation ${String(id)}.`);
+      }
+      cited.add(id);
+    }
+    if (ids.length === 0) {
+      if (typeof reason !== "string" || reason.trim().length === 0) {
+        throw new Error(
+          `Source section ${sectionId} has no covering obligation and no explicit no-obligation reason (N4).`,
+        );
+      }
+      return { sectionId, obligationIds: [] as readonly string[], noObligationReason: reason };
+    }
+    if (reason !== undefined) {
+      throw new Error(`Source section ${sectionId} cannot name both obligations and a no-obligation reason.`);
+    }
+    return { sectionId, obligationIds: [...ids] as readonly string[] };
+  });
+  for (const id of manifestIds) {
+    if (!seen.has(id)) {
+      throw new Error(`Source section ${id} is unaccounted: no covering obligation or no-obligation reason (N4).`);
+    }
+  }
+  for (const id of obligationIds) {
+    if (!cited.has(id)) {
+      throw new Error(`Derived obligation ${id} is cited by no source section (N4).`);
+    }
+  }
+  return coverage;
+}
+
+/**
+ * T3b repair cycle 1 (B3): cumulative open blocking findings — every blocking
+ * finding in any recorded review that no re-review verdict has explicitly
+ * checked `resolved`. Resolved findings stay resolved; outstanding or never
+ * checked findings stay open across further revisions until resolved.
+ * Repair cycle 2: finding ids are unique across all reviews of the run (R2-2
+ * refusal), so keying by id names exactly one finding; findings retired by a
+ * source amendment (N-R2-2) are closed and never open.
+ */
+export function openBlockingCoverageFindings(
+  projection: Pick<PlanningProjection, "coverageReview" | "coverageReviewHistory" | "coveragePriorFindingChecks" | "coverageRetiredFindings">,
+): { readonly reviewId: string; readonly findingId: string }[] {
+  const resolved = new Set<string>();
+  for (const checks of Object.values(projection.coveragePriorFindingChecks)) {
+    for (const check of checks) {
+      if (check.status === "resolved") resolved.add(check.priorFindingId);
+    }
+  }
+  const retired = projection.coverageRetiredFindings ?? {};
+  const open: { reviewId: string; findingId: string }[] = [];
+  const reviews = projection.coverageReview
+    ? [...projection.coverageReviewHistory, projection.coverageReview]
+    : [...projection.coverageReviewHistory];
+  for (const review of reviews) {
+    for (const finding of review.findings) {
+      if (finding.severity === "blocking" && !resolved.has(finding.id) && retired[finding.id] === undefined) {
+        open.push({ reviewId: review.id, findingId: finding.id });
+      }
+    }
+  }
+  return open;
+}
+
+/**
+ * T3b repair cycle 2 (R2-2): a finding id already used by any earlier review
+ * of the same run is refused — a reused id would let one finding's
+ * resolution close a different finding (B3/EP44 laundering).
+ */
+function assertFindingIdsUnused(projection: PlanningProjection, review: CoverageReview): void {
+  const usedByReviewId = new Map<string, string>();
+  const known = projection.coverageReview
+    ? [...projection.coverageReviewHistory, projection.coverageReview]
+    : [...projection.coverageReviewHistory];
+  for (const recorded of known) {
+    for (const finding of recorded.findings) {
+      if (!usedByReviewId.has(finding.id)) usedByReviewId.set(finding.id, recorded.id);
+    }
+  }
+  for (const finding of review.findings) {
+    const earlier = usedByReviewId.get(finding.id);
+    if (earlier !== undefined) {
+      throw new Error(
+        `Coverage review ${review.id} reuses finding id ${finding.id} from earlier review ${earlier}; finding ids must be unique across all reviews of the run.`,
+      );
+    }
+  }
+}
+
+/**
+ * T3b repair cycle 1 (B3): finding ids a re-review verdict must check — the
+ * immediate prior review's every finding (blocking and advisory, as before)
+ * plus every cumulative open blocking finding from older reviews.
+ */
+function requiredPriorFindingIds(
+  projection: PlanningProjection,
+  prior: CoverageReview,
+): ReadonlySet<string> {
+  const retired = projection.coverageRetiredFindings ?? {};
+  const required = new Set<string>(
+    prior.findings.filter((finding) => retired[finding.id] === undefined).map((finding) => finding.id),
+  );
+  for (const entry of openBlockingCoverageFindings(projection)) {
+    required.add(entry.findingId);
+  }
+  return required;
+}
+
+/** T3b (OA-10#2) repair cycle 1 (B3): every required prior finding is checked exactly once. */
+function parsePriorFindingChecks(
+  value: unknown,
+  prior: CoverageReview,
+  requiredIds: ReadonlySet<string>,
+): CoveragePriorFindingCheck[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Re-review ${prior.id} requires a prior-finding check for every prior finding.`);
+  }
+  const priorIds = new Set(requiredIds);
+  const seen = new Set<string>();
+  const checks = value.map((candidate, index) => {
+    if (!isRecord(candidate)) throw new Error(`Prior-finding check ${index} is invalid.`);
+    const priorFindingId = candidate.priorFindingId;
+    const status = candidate.status;
+    const rationale = candidate.rationale;
+    if (typeof priorFindingId !== "string" || !priorIds.has(priorFindingId)) {
+      throw new Error(`Prior-finding check ${index} cites an unknown prior finding.`);
+    }
+    if (seen.has(priorFindingId)) throw new Error(`Duplicate prior-finding check for ${priorFindingId}.`);
+    seen.add(priorFindingId);
+    if (status !== "resolved" && status !== "outstanding") {
+      throw new Error(`Prior-finding check for ${priorFindingId} has an invalid status.`);
+    }
+    if (typeof rationale !== "string" || rationale.trim().length === 0) {
+      throw new Error(`Prior-finding check for ${priorFindingId} requires a rationale.`);
+    }
+    return {
+      priorFindingId: priorFindingId as string,
+      status: status as "resolved" | "outstanding",
+      rationale: rationale as string,
+    };
+  });
+  for (const id of priorIds) {
+    if (!seen.has(id)) {
+      throw new Error(`Re-review leaves prior finding ${id} unchecked (every prior finding must be checked).`);
+    }
+  }
+  return checks;
 }
 
 const PLANNING_REFERENCE_KINDS: ReadonlySet<PlanningReferenceRecord["kind"]> = new Set([
@@ -724,12 +1307,22 @@ export function createPlanningProjection(event: PlanningEventInput): PlanningPro
       manifestsById: { [manifest.manifestId]: cloneManifest(manifest) },
     },
     checkpoints: [],
+    sourceReadIndex: {},
     assignments: {},
     validations: {},
     observationSequence: 0,
     observationOrderByObservationId: {},
     acceptances: {},
     readiness: "not_ready",
+    coverageReviewHistory: [],
+    coverageRequests: {},
+    coverageObligations: {},
+    coveragePlanDelivered: {},
+    coverageCorrectionViews: {},
+    coveragePriorFindingsReleased: {},
+    coveragePriorFindingChecks: {},
+    coverageSuspended: {},
+    coverageRetiredFindings: {},
     resume: {
       coveredSourceSectionIds: [],
       remainingSourceSectionIds: manifest.sections.map((section) => section.id),
@@ -765,6 +1358,9 @@ export function reducePlanningProjection(
       if (manifest.sourceId !== next.source.sourceId) throw new Error("Source amendment changed source identity.");
       verifyAmendmentReferencesPredecessor(manifest, prior);
       assertRecordedImpact(manifest.amendment, "Source amendment");
+      // N-R2-2: open findings on retired obligations close as retired here —
+      // the only place retirement happens (owner-authorized amendment event).
+      const retiredFindings = retireFindingsForAmendment(next, manifest, event.occurredAt);
       next = {
         ...next,
         source: {
@@ -774,6 +1370,7 @@ export function reducePlanningProjection(
           manifestHistoryIds: [...next.source.manifestHistoryIds, manifest.manifestId],
           manifestsById: { ...next.source.manifestsById, [manifest.manifestId]: cloneManifest(manifest) },
         },
+        coverageRetiredFindings: { ...next.coverageRetiredFindings, ...retiredFindings },
         readiness: "not_ready",
       };
       break;
@@ -800,6 +1397,32 @@ export function reducePlanningProjection(
       };
       break;
     }
+    case "planning.source_section_read": {
+      const manifest = next.source.manifestsById[next.source.currentManifestId];
+      const manifestId = requiredString(event.payload, "manifestId");
+      const manifestDigest = requiredString(event.payload, "manifestDigest");
+      const sectionId = requiredString(event.payload, "sectionId");
+      const sectionDigest = requiredString(event.payload, "sectionDigest");
+      requiredString(event.payload, "readAt");
+      if (manifestId !== manifest.manifestId || manifestDigest !== manifest.artifactDigest) {
+        throw new Error("Source section read cites a stale manifest revision; re-read at the current manifest.");
+      }
+      const section = manifest.sections.find((candidate) => candidate.id === sectionId);
+      if (!section) throw new Error(`Source section read references unknown source section ${sectionId}.`);
+      if (sectionDigest !== section.digest) {
+        throw new Error(`Source section read for ${sectionId} does not match its recorded digest (source drift).`);
+      }
+      const priorReads = next.sourceReadIndex[manifest.manifestId] ?? {};
+      if (priorReads[sectionId] === section.digest) break;
+      next = {
+        ...next,
+        sourceReadIndex: {
+          ...next.sourceReadIndex,
+          [manifest.manifestId]: { ...priorReads, [sectionId]: section.digest },
+        },
+      };
+      break;
+    }
     case "planning.checkpoint_recorded": {
       if (!next.ledger) throw new Error("Planning checkpoint requires a persisted ledger.");
       if (next.readiness === "ready") {
@@ -807,9 +1430,10 @@ export function reducePlanningProjection(
       }
       const checkpoint = structuredClone(event.payload.checkpoint) as PlanningCheckpoint;
       assertValidation(validatePlanningCheckpoint(checkpoint), "Planning checkpoint");
-      assertMonotonicCheckpoint(next.checkpoints.at(-1)?.checkpoint, checkpoint);
       const sectionIds = new Set(next.source.manifestsById[next.source.currentManifestId].sections.map((section) => section.id));
+      assertMonotonicCheckpoint(next.checkpoints.at(-1)?.checkpoint, checkpoint, sectionIds);
       if (checkpoint.coveredSourceSectionIds.some((id) => !sectionIds.has(id))) throw new Error("Planning checkpoint references an unknown source section.");
+      assertDurableSectionReads(next, checkpoint.coveredSourceSectionIds, "Planning checkpoint");
       const manifest = next.source.manifestsById[next.source.currentManifestId];
       next = {
         ...next,
@@ -859,15 +1483,310 @@ export function reducePlanningProjection(
       };
       break;
     }
+    case "planning.coverage_review_requested": {
+      if (!next.plan) throw new Error("Coverage review requires a drafted plan.");
+      const reviewId = requiredString(event.payload, "reviewId");
+      const planRevisionId = requiredString(event.payload, "planRevisionId");
+      const planRevisionDigest = requiredString(event.payload, "planRevisionDigest");
+      const sourceManifestId = requiredString(event.payload, "sourceManifestId");
+      const requestedAt = requiredString(event.payload, "requestedAt");
+      const priorReviewId = event.payload.priorReviewId === undefined
+        ? undefined
+        : requiredString(event.payload, "priorReviewId");
+      if (
+        planRevisionId !== next.plan.currentRevisionId ||
+        planRevisionDigest !== next.plan.currentDigest ||
+        sourceManifestId !== next.source.currentManifestId
+      ) {
+        throw new Error("Coverage review request cites a stale plan revision or source manifest.");
+      }
+      if (priorReviewId !== undefined && !recordedCoverageReview(next, priorReviewId)) {
+        throw new Error(`Coverage re-review cites unknown prior review ${priorReviewId}.`);
+      }
+      const prior = next.coverageRequests[reviewId];
+      const record: CoverageReviewRequestRecord = {
+        reviewId,
+        planRevisionId,
+        planRevisionDigest,
+        sourceManifestId,
+        ...(priorReviewId === undefined ? {} : { priorReviewId }),
+        requestedAt,
+      };
+      if (prior) {
+        if (JSON.stringify(prior) !== JSON.stringify(record)) {
+          throw new Error(`Coverage review request ${reviewId} conflicts with the recorded request.`);
+        }
+        break;
+      }
+      next = {
+        ...next,
+        coverageRequests: { ...next.coverageRequests, [reviewId]: record },
+        coverageUnavailable: undefined,
+      };
+      break;
+    }
+    case "planning.coverage_obligations_recorded": {
+      if (!next.plan) throw new Error("Coverage obligations require a drafted plan.");
+      const reviewId = requiredString(event.payload, "reviewId");
+      const request = next.coverageRequests[reviewId];
+      if (!request) {
+        throw new Error(`Coverage obligations cite unrequested review ${reviewId}; request the review first.`);
+      }
+      if (
+        request.planRevisionId !== next.plan.currentRevisionId ||
+        request.planRevisionDigest !== next.plan.currentDigest ||
+        request.sourceManifestId !== next.source.currentManifestId
+      ) {
+        throw new Error("Coverage obligations cite a stale plan revision or source manifest; request the review again.");
+      }
+      // B2: a true stamp is only valid before any plan delivery for this
+      // review. The deriving turn's context contained no plan; once the plan
+      // is delivered, fresh derivation with a true stamp is refused (reuse
+      // the blind set via the correction view instead).
+      if (next.coveragePlanDelivered[reviewId]) {
+        throw new Error(
+          `Coverage obligations for ${reviewId} were recorded after the plan was delivered (true stamp refused; reuse the blind set).`,
+        );
+      }
+      const manifest = next.source.manifestsById[next.source.currentManifestId];
+      const sourceManifestId = requiredString(event.payload, "sourceManifestId");
+      const sourceManifestDigest = requiredString(event.payload, "sourceManifestDigest");
+      if (sourceManifestId !== manifest.manifestId || sourceManifestDigest !== manifest.artifactDigest) {
+        throw new Error("Coverage obligations cite a stale source manifest; derive them from the current source.");
+      }
+      const obligations = parseRecordedObligations(event.payload.obligations);
+      const sectionCoverage = parseSectionCoverage(
+        event.payload.sectionCoverage,
+        manifest,
+        new Set(obligations.map((obligation) => obligation.id)),
+      );
+      const recordedAt = requiredString(event.payload, "recordedAt");
+      const prior = next.coverageObligations[reviewId];
+      const record: CoverageObligationsRecord = {
+        reviewId,
+        sourceManifestId,
+        sourceManifestDigest,
+        obligations,
+        sectionCoverage,
+        recordedAt,
+      };
+      if (prior) {
+        if (JSON.stringify(prior) !== JSON.stringify(record)) {
+          throw new Error(`Coverage obligations for ${reviewId} conflict with the recorded obligations.`);
+        }
+        break;
+      }
+      next = {
+        ...next,
+        coverageObligations: { ...next.coverageObligations, [reviewId]: record },
+        coverageUnavailable: undefined,
+      };
+      break;
+    }
+    case "planning.coverage_plan_delivered": {
+      if (!next.plan) throw new Error("Coverage plan delivery requires a drafted plan.");
+      const reviewId = requiredString(event.payload, "reviewId");
+      const request = next.coverageRequests[reviewId];
+      if (!request) {
+        throw new Error(`Coverage plan delivery cites unrequested review ${reviewId}.`);
+      }
+      const planRevisionId = requiredString(event.payload, "planRevisionId");
+      const planRevisionDigest = requiredString(event.payload, "planRevisionDigest");
+      const sourceManifestId = requiredString(event.payload, "sourceManifestId");
+      const deliveredAt = requiredString(event.payload, "deliveredAt");
+      const sessionId = event.payload.sessionId === undefined
+        ? undefined
+        : requiredString(event.payload, "sessionId");
+      if (
+        planRevisionId !== request.planRevisionId ||
+        planRevisionDigest !== request.planRevisionDigest ||
+        sourceManifestId !== request.sourceManifestId ||
+        planRevisionId !== next.plan.currentRevisionId ||
+        planRevisionDigest !== next.plan.currentDigest ||
+        sourceManifestId !== next.source.currentManifestId
+      ) {
+        throw new Error("Coverage plan delivery cites a stale plan revision or source manifest.");
+      }
+      const prior = next.coveragePlanDelivered[reviewId];
+      const record: CoveragePlanDeliveredRecord = {
+        reviewId,
+        planRevisionId,
+        planRevisionDigest,
+        sourceManifestId,
+        ...(sessionId === undefined ? {} : { sessionId }),
+        deliveredAt,
+      };
+      if (prior) {
+        if (JSON.stringify(prior) !== JSON.stringify(record)) {
+          throw new Error(`Coverage plan delivery for ${reviewId} conflicts with the recorded delivery.`);
+        }
+        break;
+      }
+      next = {
+        ...next,
+        coveragePlanDelivered: { ...next.coveragePlanDelivered, [reviewId]: record },
+        coverageUnavailable: undefined,
+      };
+      break;
+    }
+    case "planning.coverage_correction_view_recorded": {
+      if (!next.plan) throw new Error("Coverage correction view requires a drafted plan.");
+      const reviewId = requiredString(event.payload, "reviewId");
+      const request = next.coverageRequests[reviewId];
+      if (!request) {
+        throw new Error(`Coverage correction view cites unrequested review ${reviewId}.`);
+      }
+      if (
+        request.planRevisionId !== next.plan.currentRevisionId ||
+        request.planRevisionDigest !== next.plan.currentDigest ||
+        request.sourceManifestId !== next.source.currentManifestId
+      ) {
+        throw new Error("Coverage correction view cites a stale plan revision or source; request the review again.");
+      }
+      const priorReviewId = requiredString(event.payload, "priorReviewId");
+      if (request.priorReviewId !== priorReviewId) {
+        throw new Error("Coverage correction view disagrees with the recorded request about the prior review.");
+      }
+      if (!recordedCoverageReview(next, priorReviewId)) {
+        throw new Error(`Coverage re-review cites unknown prior review ${priorReviewId}.`);
+      }
+      const reusedFromReviewId = requiredString(event.payload, "reusedFromReviewId");
+      const reused = next.coverageObligations[reusedFromReviewId];
+      if (!reused) {
+        throw new Error(`Coverage re-review reuses unknown blind obligations ${reusedFromReviewId}.`);
+      }
+      const manifest = next.source.manifestsById[next.source.currentManifestId];
+      const sourceManifestId = requiredString(event.payload, "sourceManifestId");
+      const sourceManifestDigest = requiredString(event.payload, "sourceManifestDigest");
+      if (
+        sourceManifestId !== manifest.manifestId ||
+        sourceManifestDigest !== manifest.artifactDigest ||
+        reused.sourceManifestId !== manifest.manifestId ||
+        reused.sourceManifestDigest !== manifest.artifactDigest
+      ) {
+        throw new Error("Coverage re-review reuses blind obligations bound to a stale source manifest.");
+      }
+      const correctionView = requiredString(event.payload, "correctionView");
+      const recordedAt = requiredString(event.payload, "recordedAt");
+      const prior = next.coverageCorrectionViews[reviewId];
+      const record: CoverageCorrectionViewRecord = {
+        reviewId,
+        priorReviewId,
+        correctionView,
+        reusedFromReviewId,
+        sourceManifestId,
+        sourceManifestDigest,
+        recordedAt,
+      };
+      if (prior) {
+        if (JSON.stringify(prior) !== JSON.stringify(record)) {
+          throw new Error(`Coverage correction view for ${reviewId} conflicts with the recorded view.`);
+        }
+        break;
+      }
+      next = {
+        ...next,
+        coverageCorrectionViews: { ...next.coverageCorrectionViews, [reviewId]: record },
+        coverageUnavailable: undefined,
+      };
+      break;
+    }
+    case "planning.coverage_prior_findings_released": {
+      const reviewId = requiredString(event.payload, "reviewId");
+      const priorReviewId = requiredString(event.payload, "priorReviewId");
+      const view = next.coverageCorrectionViews[reviewId];
+      if (!view || view.priorReviewId !== priorReviewId) {
+        throw new Error(
+          "Prior findings cannot be released before the re-review records its own view of the correction (OA-10 #2).",
+        );
+      }
+      if (!recordedCoverageReview(next, priorReviewId)) {
+        throw new Error(`Coverage re-review cites unknown prior review ${priorReviewId}.`);
+      }
+      const prior = next.coveragePriorFindingsReleased[reviewId];
+      if (prior !== undefined && prior !== priorReviewId) {
+        throw new Error(`Prior findings for ${reviewId} were already released for another review.`);
+      }
+      next = {
+        ...next,
+        coveragePriorFindingsReleased: { ...next.coveragePriorFindingsReleased, [reviewId]: priorReviewId },
+      };
+      break;
+    }
     case "planning.coverage_review_recorded": {
       if (!next.plan) throw new Error("Coverage review requires a drafted plan.");
       const review = structuredClone(event.payload.review) as CoverageReview;
       assertValidation(validateCoverageReview(review), "Coverage review");
       const revision = next.plan.revisionsById[next.plan.currentRevisionId];
       assertValidation(validateCoverageReviewBinding(review, revision, next.source.manifestsById[next.source.currentManifestId]), "Coverage review binding");
+      assertFindingIdsUnused(next, review);
+      const request = next.coverageRequests[review.id];
+      if (!request) {
+        throw new Error(`Coverage review ${review.id} was never requested; request the review first.`);
+      }
+      if (
+        request.planRevisionId !== next.plan.currentRevisionId ||
+        request.planRevisionDigest !== next.plan.currentDigest ||
+        request.sourceManifestId !== next.source.currentManifestId
+      ) {
+        throw new Error(
+          `Coverage review ${review.id} was requested for a stale plan revision or source; request the review again.`,
+        );
+      }
+      // Effective blind obligations: own record for an initial review, the
+      // reused blind record named by the correction view for a re-review.
+      // A re-review never re-derives with the plan in context (B2).
+      let effective: CoverageObligationsRecord | undefined;
+      if (review.priorReviewId === undefined) {
+        effective = next.coverageObligations[review.id];
+        if (!effective) {
+          throw new Error(
+            `Coverage verdict ${review.id} has no durably recorded obligations (record-before-verdict gate).`,
+          );
+        }
+      } else {
+        const view = next.coverageCorrectionViews[review.id];
+        if (!view || view.priorReviewId !== review.priorReviewId) {
+          throw new Error(
+            `Coverage re-review ${review.id} has no durably recorded own view of the correction (OA-10 #2).`,
+          );
+        }
+        effective = next.coverageObligations[view.reusedFromReviewId];
+        if (!effective) {
+          throw new Error(`Coverage re-review ${review.id} reuses unknown blind obligations ${view.reusedFromReviewId}.`);
+        }
+      }
+      if (
+        effective.sourceManifestId !== review.sourceReadManifestId ||
+        effective.sourceManifestId !== next.source.currentManifestId
+      ) {
+        throw new Error(`Coverage verdict ${review.id} is bound to a stale source manifest.`);
+      }
+      assertObligationSetsMatch(effective.obligations, review);
+      let priorChecks: Record<string, readonly CoveragePriorFindingCheck[]> = {};
+      if (review.priorReviewId !== undefined) {
+        if (next.coveragePriorFindingsReleased[review.id] !== review.priorReviewId) {
+          throw new Error(
+            `Coverage re-review ${review.id} verdict requires the prior findings to be released after its recorded own view (OA-10 #2).`,
+          );
+        }
+        const prior = recordedCoverageReview(next, review.priorReviewId);
+        if (!prior) throw new Error(`Coverage re-review cites unknown prior review ${review.priorReviewId}.`);
+        const checks = parsePriorFindingChecks(
+          event.payload.priorFindingChecks,
+          prior,
+          requiredPriorFindingIds(next, prior),
+        );
+        priorChecks = { [review.id]: checks };
+      }
       next = {
         ...next,
         coverageReview: review,
+        coverageReviewHistory: next.coverageReview
+          ? [...next.coverageReviewHistory, next.coverageReview]
+          : next.coverageReviewHistory,
+        coveragePriorFindingChecks: { ...next.coveragePriorFindingChecks, ...priorChecks },
+        coverageUnavailable: undefined,
         readiness: "not_ready",
         references: {
           ...next.references,
@@ -876,26 +1795,146 @@ export function reducePlanningProjection(
       };
       break;
     }
+    case "planning.coverage_review_suspended": {
+      const reviewId = requiredString(event.payload, "reviewId");
+      if (!next.coverageRequests[reviewId]) {
+        throw new Error(`Coverage suspension cites unrequested review ${reviewId}.`);
+      }
+      const reason = requiredString(event.payload, "reason");
+      // R2-3: the idempotent payload carries no timestamp; fall back to the
+      // event time (old events with updatedAt replay identically).
+      const updatedAt = typeof event.payload.updatedAt === "string" && event.payload.updatedAt.trim().length > 0
+        ? event.payload.updatedAt
+        : event.occurredAt;
+      const runtimeId = event.payload.runtimeId === undefined
+        ? undefined
+        : requiredString(event.payload, "runtimeId");
+      const prior = next.coverageSuspended[reviewId];
+      const attempts = (prior?.attempts ?? 0) + 1;
+      next = {
+        ...next,
+        coverageSuspended: {
+          ...next.coverageSuspended,
+          [reviewId]: {
+            reviewId,
+            attempts,
+            lastReason: reason,
+            ...(runtimeId === undefined ? {} : { lastRuntimeId: runtimeId }),
+            updatedAt,
+          },
+        },
+        coverageUnavailable: undefined,
+      };
+      break;
+    }
+    case "planning.coverage_review_retry_authorized": {
+      const reviewId = requiredString(event.payload, "reviewId");
+      const gate = next.coverageUnavailable;
+      if (
+        !gate ||
+        gate.reviewId !== reviewId ||
+        !(TERMINAL_COVERAGE_GATE_REASONS as readonly string[]).includes(gate.reason)
+      ) {
+        throw new Error(
+          `Coverage retry for ${reviewId} requires the owner's terminal suspended-exhaustion gate for that review.`,
+        );
+      }
+      const suspended = { ...next.coverageSuspended };
+      delete suspended[reviewId];
+      next = {
+        ...next,
+        coverageUnavailable: undefined,
+        coverageSuspended: suspended,
+      };
+      break;
+    }
+    case "planning.coverage_review_unavailable": {
+      const reason = requiredString(event.payload, "reason");
+      // R2-3: the idempotent payload carries no timestamp; fall back to the
+      // event time (old events with recordedAt replay identically).
+      const recordedAt = typeof event.payload.recordedAt === "string" && event.payload.recordedAt.trim().length > 0
+        ? event.payload.recordedAt
+        : event.occurredAt;
+      const reviewId = typeof event.payload.reviewId === "string" && event.payload.reviewId.trim().length > 0
+        ? event.payload.reviewId
+        : undefined;
+      const detail = typeof event.payload.detail === "string" && event.payload.detail.trim().length > 0
+        ? event.payload.detail
+        : undefined;
+      next = {
+        ...next,
+        coverageUnavailable: {
+          ...(reviewId === undefined ? {} : { reviewId }),
+          ...(next.plan
+            ? {
+                planRevisionId: next.plan.currentRevisionId,
+                sourceManifestId: next.source.currentManifestId,
+              }
+            : {}),
+          reason,
+          ...(detail === undefined ? {} : { detail }),
+          recordedAt,
+        },
+        readiness: "not_ready",
+      };
+      break;
+    }
     case "planning.plan_ready": {
       if (!next.plan || !next.coverageReview || !isRecord(event.payload.hostCapabilities)) {
         throw new Error("Plan readiness requires a plan, coverage review, and host capabilities.");
       }
+      // N-R3-1: a recorded plan_ready_blocked gate is a cached signal, not
+      // a refusal — readiness re-evaluates the actual blockers below, and
+      // the gate clears durably when they are gone. Without this exemption
+      // the gate refuses its own resolution for the same review, and the
+      // runtime overwrites the original detail with the self-referential
+      // refusal text. Every other outstanding gate still refuses.
+      const gate = next.coverageUnavailable;
+      const staleReadyGate = gate !== undefined &&
+        gate.reason === "plan_ready_blocked" &&
+        gate.planRevisionId === next.plan.currentRevisionId &&
+        gate.sourceManifestId === next.source.currentManifestId &&
+        (gate.reviewId === undefined || gate.reviewId === next.coverageReview.id);
+      if (gate && !staleReadyGate) {
+        throw new Error(
+          `Plan readiness is blocked by an explicit outstanding coverage gate: ${gate.reason}.`,
+        );
+      }
+      const unreadSections = unreadSectionIdsAtCurrentManifest(next);
+      if (unreadSections.length > 0) {
+        throw new Error(
+          `Plan readiness requires a durable full read of every source section at the current manifest revision; unread: ${unreadSections.join(", ")}.`,
+        );
+      }
+      // B3: cumulative open blocking findings from every prior review
+      // (not one review back) must be explicitly resolved. The current
+      // review's own blocking findings are covered by computePlanReadiness
+      // below; priors are covered here. Repair cycle 2: the same shared
+      // helper as the runtime mirror and status (retired findings excluded).
+      {
+        const currentReviewId = next.coverageReview.id;
+        const outstandingBlocking = openBlockingCoverageFindings(next)
+          .filter((entry) => entry.reviewId !== currentReviewId)
+          .map((entry) => entry.findingId);
+        if (outstandingBlocking.length > 0) {
+          throw new Error(
+            `Plan readiness requires every blocking prior finding to be resolved by the re-review; outstanding: ${outstandingBlocking.join(", ")}.`,
+          );
+        }
+      }
       const hostCapabilities = structuredClone(event.payload.hostCapabilities) as unknown as HostPlanningCapabilities;
       assertValidation(validateHostPlanningCapabilities(hostCapabilities), "Host planning capabilities");
-      const revision = next.plan.revisionsById[next.plan.currentRevisionId];
       const priorRevisionId = typeof event.payload.priorRevisionId === "string" ? event.payload.priorRevisionId : undefined;
       const priorRevision = priorRevisionId ? next.plan.revisionsById[priorRevisionId] : undefined;
       if (priorRevisionId && !priorRevision) throw new Error("Plan readiness references an unknown prior revision.");
-      const readiness = computePlanReadiness({
-        manifest: next.source.manifestsById[next.source.currentManifestId],
-        revision,
-        coverageReview: next.coverageReview,
-        hostCapabilities,
-        ...(priorRevision ? { priorRevision } : {}),
-        amendmentHistory: amendmentHistory(next),
-      });
+      const readinessInput = coveragePlanReadinessInput(next, priorRevisionId);
+      if (!readinessInput) throw new Error("Plan readiness requires a plan, coverage review, and host capabilities.");
+      const readiness = computePlanReadiness({ ...readinessInput, hostCapabilities });
       if (!readiness.ready) throw new Error(`Plan is not ready: ${readiness.blockers.join(" ")}`);
-      next = { ...next, hostCapabilities, readiness: "ready" };
+      // N-R3-1: reaching here means no non-exempt gate is set, so the
+      // exempted plan_ready_blocked gate (if any) clears durably now that
+      // readiness re-evaluated the actual blockers and found none.
+      next = { ...next, hostCapabilities, readiness: "ready", coverageUnavailable: undefined };
       break;
     }
     case "planning.assignment_claimed": {
