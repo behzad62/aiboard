@@ -1,3 +1,40 @@
+import {
+  DELIVERY_ACCEPTANCE_RUNNER_ID,
+  DELIVERY_REVIEW_RUNNER_ID,
+  assertContractTaskRevisionAllowed,
+  assertTestsOutcome,
+  assessDeliveryRisk,
+  taskAcceptedFailuresUsed,
+  boundaryNeedsArchitect,
+  boundaryResolutionGeneration,
+  deliveryBoundaryAction,
+  deliveryBoundaryId,
+  deliveryReviewApprovalIssues,
+  deliveryReviewDepthForTier,
+  deliveryReviewId,
+  emptyDeliveryState,
+  evaluatePhaseAcceptance,
+  finalReadyCoverageIssues,
+  finalReadyRequirementIssues,
+  latestBoundary,
+  latestCompletedReview,
+  openBlockingFindings,
+  phaseAcceptanceKey,
+  unverifiedClaims,
+  validateDeliveryFindings,
+  validateDeliveryObligations,
+  type DeliveryAffectedTestsRecord,
+  type DeliveryBoundaryCheck,
+  type DeliveryBoundaryRecord,
+  type DeliveryClaim,
+  type DeliveryClaimVerdict,
+  type DeliveryDepthRecord,
+  type DeliveryPriorFindingCheck,
+  type DeliveryProbeRecord,
+  type DeliveryReviewRecord,
+  type DeliveryState,
+  type DeliveryTestReport,
+} from "./delivery-acceptance.js";
 import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
 import { createHash } from "node:crypto";
 import { PROJECT_DOC_MAX_BYTES, validateProjectDocPath } from "./project-docs.js";
@@ -67,6 +104,7 @@ import {
 } from "./worker-identity.js";
 import {
   assertExactVerifierCriteria,
+  canonicalModelIdentity,
   cloneVerifierProjection,
   cloneVerifierReview,
   expectedVerifierCriteria,
@@ -185,6 +223,18 @@ export type SchedulerEventType =
   | "project_doc.committed"
   | "project_doc.abandoned"
   | "project_docs.policy_configured"
+  | "delivery.review_started"
+  | "delivery.review_requested"
+  | "delivery.obligations_recorded"
+  | "delivery.criteria_and_diff_delivered"
+  | "delivery.findings_recorded"
+  | "delivery.report_delivered"
+  | "delivery.review_recorded"
+  | "delivery.boundary_started"
+  | "delivery.boundary_checked"
+  | "delivery.boundary_failure_resolved"
+  | "task.acceptance_recorded"
+  | "phase.acceptance_recorded"
   | "planning.policy_configured"
   | "request.triaged"
   | "request.answered"
@@ -761,6 +811,11 @@ export interface SchedulerProjection {
   /** Set when this run was stamped `project_docs.policy_configured`. Legacy runs omit it. */
   projectDocsPolicyVersion?: number;
   planningPolicyVersion?: 1;
+  /**
+   * T6a: mandatory deliverable review, integrated-boundary checks, and
+   * task/phase acceptance. New-policy runs only; legacy runs omit it.
+   */
+  delivery?: DeliveryState;
   planning?: PlanningProjection;
   /** Durable triage decision (T9 `request.triaged`); undefined ("no decision yet") until then. */
   planningTriageDecision?: PlanningTriageDecision;
@@ -1136,10 +1191,10 @@ export function newPolicyTaskAdmissionBlocked(
  * relative to the CURRENT ready plan revision.
  * - `member`: its contract is in the current revision (or, for bindings
  *   stamped before T4 that carry no contract id, its scheduler id is).
- * - `dropped`: its contract was removed by a later revision â€” the task is
+ * - `dropped`: its contract was removed by a later revision — the task is
  *   non-admissible and surfaced to the Architect, never silently lost.
  * - `unmapped`: no ready contract (for example a post-ready rogue
- *   `plan_tasks` task) â€” never admissible.
+ *   `plan_tasks` task) — never admissible.
  * Kernel-created repair tasks carry no revision contract of their own and
  * classify `unmapped` here; admission exempts them explicitly while they
  * stay bound to the ready identity.
@@ -1200,14 +1255,18 @@ export function droppedReadyContractTasks(
  * Verifier repairs cite their parent task directly; final-verification
  * repairs resolve through their first dependency that maps to a ready
  * contract (repair-of-repair resolves transitively). Undefined when the
- * parent has no contract (legacy-seeded parents) â€” the repair then stays
+ * parent has no contract (legacy-seeded parents) — the repair then stays
  * identity-bound and admissible.
  */
 export function repairParentContractId(
   projection: SchedulerProjection,
   task: BuildTask,
 ): string | undefined {
-  const verifierParent = task.verifierRepair?.criteria[0]?.taskId;
+  const retainedContractId = projection.readyPlanTaskBindings?.[task.id]?.contractId;
+  if (retainedContractId !== undefined) return retainedContractId;
+  // T6a: a boundary-failure repair cites the integrated task it repairs.
+  const verifierParent = task.verifierRepair?.criteria[0]?.taskId ??
+    task.deliveryRepair?.sourceTaskId;
   const candidates = verifierParent !== undefined
     ? [verifierParent]
     : task.dependencies;
@@ -1220,7 +1279,7 @@ export function repairParentContractId(
       continue;
     }
     const membership = taskPlanMembership(projection, parentId);
-    if (membership.status === "member" && membership.contractId !== undefined) {
+    if (membership.contractId !== undefined) {
       return membership.contractId;
     }
   }
@@ -1245,7 +1304,7 @@ function schedulerTaskFromContract(contract: ExecutionTaskContract): BuildTask {
 
 /**
  * T4 bridge (carry-forward): when a new-policy plan becomes ready, its
- * task contracts become scheduler tasks through the kernel â€” one
+ * task contracts become scheduler tasks through the kernel — one
  * authority, deterministic ids derived from contract ids (the scheduler
  * id IS the contract id), replay-safe (rebuilding the same log
  * materializes the same tasks; pre-existing tasks win and are adopted
@@ -1309,7 +1368,7 @@ function materializeReadyPlanTasks(projection: SchedulerProjection): void {
  * T4: replaces T3a rebind-all rule with true membership. At re-readiness,
  * only tasks whose contract is STILL in the current revision are rebound;
  * a revision that drops a contract leaves that task on its stale binding
- * â€” non-admissible and surfaced, never silently re-admitted. Repair tasks
+ * — non-admissible and surfaced, never silently re-admitted. Repair tasks
  * keep their ready-identity binding (parent contract recorded when
  * resolvable). Pure function of the post-event projection: deterministic
  * and replay-safe.
@@ -1575,6 +1634,12 @@ export function architectLifecycleEventMatchesReason(
       return event.type === "context_manifest.recording_resolved" &&
         (event.actor.role === "architect" || event.actor.role === "user") &&
         event.payload.noteSequence === reason.noteSequence;
+    case "delivery_boundary_failed":
+      return event.actor.role === "architect" &&
+        event.type === "delivery.boundary_failure_resolved" &&
+        event.payload.taskId === reason.taskId &&
+        event.payload.boundaryId === reason.boundaryId &&
+        event.payload.resolutionGeneration === reason.resolutionGeneration;
   }
 }
 
@@ -1605,6 +1670,7 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
     "task.revised",
     "plan_critique.resolved",
     "context_manifest.recording_resolved",
+    "delivery.boundary_failure_resolved",
   ].includes(event.type) ||
     (event.type === "task.transitioned" &&
       event.actor.role === "architect" && event.payload.status === "integrating");
@@ -1712,7 +1778,67 @@ function architectActionReasonIsApplicable(
       return projection.status === "paused" &&
         projection.pauseReason?.reason === "context_recording_failed" &&
         latestUnresolvedContextRecordingNote(projection)?.sequence === reason.noteSequence;
+    case "delivery_boundary_failed": {
+      const boundary = latestBoundary(projection.delivery, reason.taskId);
+      return projection.tasks[reason.taskId]?.status === "integrated" &&
+        projection.delivery?.taskAcceptances[reason.taskId] === undefined &&
+        boundary?.boundaryId === reason.boundaryId &&
+        boundaryNeedsArchitect(boundary, (id) => projection.tasks[id]?.status) &&
+        boundaryResolutionGeneration(boundary) === reason.resolutionGeneration &&
+        boundary.integrationRevision === reason.integrationRevision &&
+        projection.integrationRevision === reason.integrationRevision;
+    }
   }
+}
+
+/**
+ * T6a: a new-policy submission is approved or integrated only after its
+ * mandatory deliverable review completed with no open blocking finding and
+ * no unverified worker claim (the Architect may dispose of either).
+ */
+function assertDeliveryReviewAllowsTask(projection: SchedulerProjection, task: BuildTask): void {
+  if (projection.planningPolicyVersion !== 1 || task.kind === "final_verification") return;
+  const issues = deliveryReviewApprovalIssues(projection.delivery, task);
+  if (issues.length > 0) {
+    throw new Error(`Deliverable review blocks approval or integration: ${issues.join(" ")}`);
+  }
+}
+
+/** T6a: completion issues for new-policy delivery acceptance. */
+function deliveryCompletionIssues(projection: SchedulerProjection): string[] {
+  const issues: string[] = [];
+  const plan = projection.planning?.plan;
+  const currentRevision = plan?.revisionsById[plan.currentRevisionId];
+  if (!currentRevision) {
+    issues.push("Delivery acceptance requires the current plan revision.");
+    return issues;
+  }
+  const statuses = new Map(Object.entries(projection.tasks).map(([taskId, task]) => [taskId, task.status]));
+  for (const phase of currentRevision.phases) {
+    const acceptance = projection.delivery?.phaseAcceptances[
+      phaseAcceptanceKey(currentRevision.revisionId, phase.id)
+    ];
+    if (acceptance) continue;
+    issues.push(`Phase ${phase.id} lacks durable acceptance for plan revision ${currentRevision.revisionId}.`);
+    // R4-B2: say why, with the exact blocking words.
+    issues.push(...evaluatePhaseAcceptance({
+      phase,
+      requirements: currentRevision.requirements,
+      taskStatuses: statuses,
+      state: projection.delivery,
+      integrationRevision: projection.integrationRevision,
+    }).issues);
+  }
+  const taskStatuses = new Map(Object.entries(projection.tasks).map(([taskId, task]) => [taskId, task.status]));
+  issues.push(...finalReadyRequirementIssues(currentRevision.requirements));
+  issues.push(...finalReadyCoverageIssues(currentRevision.requirements, taskStatuses));
+  for (const task of Object.values(projection.tasks).sort((left, right) => left.id.localeCompare(right.id))) {
+    if (task.kind === "final_verification" || task.status === "cancelled") continue;
+    if (!projection.delivery?.taskAcceptances[task.id]) {
+      issues.push(`Task ${task.id} lacks durable post-integration acceptance.`);
+    }
+  }
+  return issues;
 }
 
 export interface BuildCompletionReadiness {
@@ -1755,6 +1881,12 @@ export function buildCompletionReadiness(
     return { ready: issues.length === 0, issues };
   }
 
+  // T6a: new-policy final-ready needs every phase accepted for the current
+  // plan revision, every ordinary task accepted after its integrated
+  // boundary, and no pending/unauthorized requirement.
+  if (projection.planningPolicyVersion === 1) {
+    issues.push(...deliveryCompletionIssues(projection));
+  }
   const nonterminal = Object.values(projection.tasks).find(
     (task) => task.kind !== "final_verification" &&
       task.status !== "integrated" && task.status !== "cancelled",
@@ -1994,6 +2126,65 @@ function latestProjectStateCommit(
   return latest;
 }
 
+/**
+ * T6a: every command outcome a deliverable review or boundary check records
+ * must resolve to durable command evidence in this run, and the last cited
+ * command's exit code must be the recorded exit code (exit code governs).
+ */
+function validateDeliveryCommandEvidence(
+  event: SchedulerEvent,
+  evidenceStore: EvidenceStore,
+): void {
+  const commandOutcomes: Array<{ label: string; evidenceIds: string[]; exitCode: unknown }> = [];
+  if (event.type === "delivery.findings_recorded") {
+    const depth = event.payload.depth;
+    if (!isRecord(depth)) return;
+    if (isRecord(depth.affectedTests)) {
+      commandOutcomes.push({
+        label: "affected-test command",
+        evidenceIds: stringArray(depth.affectedTests, "evidenceIds"),
+        exitCode: depth.affectedTests.exitCode,
+      });
+    }
+    if (isRecord(depth.probe)) {
+      commandOutcomes.push({
+        label: "OA-11 probe",
+        evidenceIds: stringArray(depth.probe, "evidenceIds"),
+        exitCode: undefined,
+      });
+    }
+  } else if (Array.isArray(event.payload.checks)) {
+    for (const check of event.payload.checks) {
+      if (!isRecord(check)) continue;
+      commandOutcomes.push({
+        label: `boundary check ${String(check.checkId)}`,
+        evidenceIds: stringArray(check, "evidenceIds"),
+        exitCode: check.exitCode,
+      });
+    }
+  }
+  for (const outcome of commandOutcomes) {
+    if (outcome.evidenceIds.length === 0) continue;
+    const unique = [...new Set(outcome.evidenceIds)];
+    const records = evidenceStore.getByIds({ runId: event.runId, ids: unique });
+    if (records.length !== unique.length) {
+      throw new Error(`The ${outcome.label} cites missing or foreign evidence.`);
+    }
+    const byId = new Map(records.map((record) => [record.id, record]));
+    for (const id of unique) {
+      if (byId.get(id)?.fact.kind !== "command") {
+        throw new Error(`The ${outcome.label} evidence ${id} is not command evidence.`);
+      }
+    }
+    if (outcome.exitCode !== undefined) {
+      const last = byId.get(outcome.evidenceIds.at(-1)!)!.fact as { exitCode: number | null };
+      if (last.exitCode !== outcome.exitCode) {
+        throw new Error(`The ${outcome.label} exit code does not match its command evidence.`);
+      }
+    }
+  }
+}
+
 export function rebuildSchedulerProjection(
   events: readonly SchedulerEvent[]
 ): SchedulerProjection {
@@ -2014,6 +2205,10 @@ export function validateSchedulerEvidenceEvent(
   evidenceStore: EvidenceStore
 ): void {
   if (!projection) return;
+  if (event.type === "delivery.findings_recorded" || event.type === "delivery.boundary_checked") {
+    validateDeliveryCommandEvidence(event, evidenceStore);
+    return;
+  }
   if (event.type === "user.guidance_acknowledged") {
     const resolution = event.payload.resolution;
     if (isRecord(resolution) && resolution.type === "no_plan_change") {
@@ -2358,6 +2553,14 @@ function validateFinalVerificationEvidenceSet(input: {
 }
 
 export function finalVerificationEventArtifactHashes(event: SchedulerEvent): string[] {
+  // T6a (real counts): the test report a delivery record read must exist as
+  // a durable artifact.
+  if (event.type === "delivery.findings_recorded" || event.type === "delivery.boundary_checked") {
+    const reports: unknown[] = event.type === "delivery.findings_recorded"
+      ? [isRecord(event.payload.depth) && isRecord(event.payload.depth.affectedTests) ? event.payload.depth.affectedTests.report : undefined]
+      : (Array.isArray(event.payload.checks) ? event.payload.checks : []).map((check) => isRecord(check) ? check.report : undefined);
+    return reports.flatMap((report) => isRecord(report) && typeof report.artifactHash === "string" ? [report.artifactHash] : []);
+  }
   const checks: unknown[] = [];
   if (event.type === "final_verification.check_completed") checks.push(event.payload.result);
   if (event.type === "final_verification.submitted" && isRecord(event.payload.submissionResult)) {
@@ -2569,7 +2772,10 @@ export function reduceSchedulerEvent(
     event.type !== "planning.coverage_correction_view_recorded" &&
     event.type !== "planning.coverage_review_recorded" &&
     event.type !== "answer.review_findings_recorded" &&
-    event.type !== "answer.review_recorded"
+    event.type !== "answer.review_recorded" &&
+    event.type !== "delivery.obligations_recorded" &&
+    event.type !== "delivery.findings_recorded" &&
+    event.type !== "delivery.review_recorded"
   ) {
     throw new Error("The verifier has no scheduler lifecycle authority.");
   }
@@ -2660,6 +2866,7 @@ export function reduceSchedulerEvent(
       ? { answerReviewReleases: { ...current.answerReviewReleases } }
       : {}),
     ...(current.answerReviews ? { answerReviews: { ...current.answerReviews } } : {}),
+    ...(current.delivery ? { delivery: structuredClone(current.delivery) } : {}),
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
@@ -3585,11 +3792,25 @@ export function reduceSchedulerEvent(
         throw new Error(`Task ${taskId} must be planned, failed, or rejected before revision.`);
       }
       const patch = (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+      const revisionMembership = taskPlanMembership(current, taskId);
+      const revisionContract = revisionMembership.contractId
+        ? current.planning?.plan?.revisionsById[current.planning.plan.currentRevisionId]?.tasks.find((candidate) => candidate.id === revisionMembership.contractId)
+        : undefined;
+      assertContractTaskRevisionAllowed({
+        taskId,
+        patch: {
+          ...(Object.hasOwn(patch, "dependencies") ? { dependencies: patch.dependencies } : {}),
+          ...(Object.hasOwn(patch, "acceptanceCriteria") ? { acceptanceCriteria: patch.acceptanceCriteria } : {}),
+          ...(Object.hasOwn(patch, "requiredCapabilities") ? { requiredCapabilities: patch.requiredCapabilities } : {}),
+        },
+        ...(revisionContract ? { contract: revisionContract } : {}),
+      });
       if (
         task.kind === "verification_repair" &&
         (
           Object.hasOwn(patch, "verificationRepair") ||
           Object.hasOwn(patch, "verifierRepair") ||
+          Object.hasOwn(patch, "deliveryRepair") ||
           Object.hasOwn(patch, "kind")
         )
       ) {
@@ -3661,6 +3882,7 @@ export function reduceSchedulerEvent(
       if (!task) throw new Error(`Unknown task ${taskId}.`);
       const status = requiredString(event.payload, "status") as BuildTask["status"];
       assertTransitionAuthority(status, event.actor);
+      if (status === "integrating") assertDeliveryReviewAllowsTask(current, task);
       if (
         current.planningPolicyVersion === 1 &&
         (status === "assigned" || status === "running")
@@ -4204,6 +4426,10 @@ export function reduceSchedulerEvent(
         task = applyTaskTransition(task, "architect_review");
       }
       const decision = requiredString(event.payload, "decision");
+      // T6a (B7): the Architect disposes of open blocking findings and
+      // unverified claims independently; approval then needs neither left.
+      applyDeliveryDispositions(next, task, event);
+      if (decision === "approved") assertDeliveryReviewAllowsTask(next, task);
       if (decision !== "approved" && decision !== "rejected") {
         throw new Error(`Review decision ${decision} is invalid.`);
       }
@@ -4591,6 +4817,20 @@ export function reduceSchedulerEvent(
       applyProjectDocAbandoned(next, event);
       break;
     }
+    case "delivery.review_started":
+    case "delivery.review_requested":
+    case "delivery.obligations_recorded":
+    case "delivery.criteria_and_diff_delivered":
+    case "delivery.findings_recorded":
+    case "delivery.report_delivered":
+    case "delivery.review_recorded":
+    case "delivery.boundary_started":
+    case "delivery.boundary_checked":
+    case "delivery.boundary_failure_resolved":
+    case "task.acceptance_recorded":
+    case "phase.acceptance_recorded":
+      reduceDeliveryEvent(current, next, event);
+      break;
     case "project_docs.policy_configured": {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may configure project document policy.");
@@ -5539,6 +5779,960 @@ function createVerifierRepairTasks(
   }
   current.repairTaskIds = tasks.map((task) => task.id);
   projection.planRevision = revision;
+}
+
+// ---------------------------------------------------------------------------
+// T6a: mandatory deliverable review and post-integration acceptance kernel.
+// The pure record shapes and shared rules live in delivery-acceptance.ts.
+// ---------------------------------------------------------------------------
+
+function reduceDeliveryEvent(
+  current: SchedulerProjection,
+  next: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (current.planningPolicyVersion !== 1) {
+    throw new Error("Deliverable review and acceptance events apply only to new-policy runs.");
+  }
+  const state = next.delivery ?? emptyDeliveryState();
+  next.delivery = state;
+  switch (event.type) {
+    case "delivery.review_started":
+      deliveryReviewStarted(current, state, event);
+      return;
+    case "delivery.review_requested":
+      deliveryReviewRequested(current, state, event);
+      return;
+    case "delivery.obligations_recorded":
+      deliveryObligationsRecorded(state, event);
+      return;
+    case "delivery.criteria_and_diff_delivered":
+      deliveryDiffDelivered(state, event);
+      return;
+    case "delivery.findings_recorded":
+      deliveryFindingsRecorded(state, event);
+      return;
+    case "delivery.report_delivered":
+      deliveryReportDelivered(state, event);
+      return;
+    case "delivery.review_recorded":
+      deliveryReviewRecorded(state, event);
+      return;
+    case "delivery.boundary_started":
+      deliveryBoundaryStarted(current, state, event);
+      return;
+    case "delivery.boundary_checked":
+      deliveryBoundaryChecked(current, state, event);
+      return;
+    case "delivery.boundary_failure_resolved":
+      deliveryBoundaryFailureResolved(current, next, state, event);
+      return;
+    case "task.acceptance_recorded":
+      deliveryTaskAccepted(current, state, event);
+      return;
+    case "phase.acceptance_recorded":
+      deliveryPhaseAccepted(current, state, event);
+      return;
+    default:
+      throw new Error(`Unhandled delivery event ${event.type}.`);
+  }
+}
+
+function requireDeliveryRunner(event: SchedulerEvent, runnerId: string): void {
+  if (event.actor.role !== "runner" || event.actor.id !== runnerId) {
+    throw new Error(`Only the ${runnerId} authority may record ${event.type}.`);
+  }
+}
+
+function requireDeliveryReview(
+  state: DeliveryState,
+  event: SchedulerEvent,
+  stages: readonly DeliveryReviewRecord["stage"][],
+): DeliveryReviewRecord {
+  const taskId = requiredString(event.payload, "taskId");
+  const reviewId = requiredString(event.payload, "reviewId");
+  const review = state.reviews[taskId];
+  if (!review || review.reviewId !== reviewId) {
+    throw new Error(`Deliverable review ${reviewId} is not the current review of task ${taskId}.`);
+  }
+  if (!stages.includes(review.stage)) {
+    throw new Error(
+      `Deliverable review ${reviewId} is at stage ${review.stage}; ${event.type} is out of order.`,
+    );
+  }
+  return review;
+}
+
+function requireDeliveryReviewer(event: SchedulerEvent, review: DeliveryReviewRecord): void {
+  if (event.actor.role !== "verifier" || event.actor.id !== review.reviewerRuntimeId) {
+    throw new Error(`Only the bound reviewer runtime may record ${event.type}.`);
+  }
+}
+
+/**
+ * Every reviewer pass runs in its own new session (fresh-context device).
+ * A session id may never serve two passes or two reviews.
+ */
+function requireFreshDeliverySession(state: DeliveryState, event: SchedulerEvent): string {
+  const sessionId = requiredString(event.payload, "sessionId");
+  const used = [
+    ...Object.values(state.reviews),
+    ...Object.values(state.reviewHistory).flat(),
+  ].some((review) => review.sessionIds.includes(sessionId));
+  if (used) throw new Error(`Reviewer session ${sessionId} was already used; each pass needs a fresh session.`);
+  return sessionId;
+}
+
+function canonicalIdentity(payload: Record<string, unknown>, key: string): string {
+  const value = requiredString(payload, key);
+  if (canonicalModelIdentity(value) !== value) {
+    throw new Error(`${key} must be a canonical model identity.`);
+  }
+  return value;
+}
+
+function deliveryReviewStarted(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "submitted" || !task.changeSetId) {
+    throw new Error(`Deliverable review requires submitted task ${taskId}.`);
+  }
+  const attempt = requiredPositiveInteger(event.payload, "attempt");
+  const changeSetId = requiredString(event.payload, "changeSetId");
+  if (attempt !== task.attempt || changeSetId !== task.changeSetId) {
+    throw new Error("Deliverable review must bind the current submission.");
+  }
+  const criteriaIds = stringArray(event.payload, "criteriaIds");
+  const expectedCriteria = (task.acceptanceCriteria ?? []).map((criterion) => criterion.id).sort();
+  if (expectedCriteria.length === 0 || !sameValue([...criteriaIds].sort(), expectedCriteria)) {
+    throw new Error("Deliverable review must bind the task's exact acceptance criteria.");
+  }
+  const diffArtifactHash = requiredString(event.payload, "diffArtifactHash");
+  if (!/^[a-f0-9]{64}$/.test(diffArtifactHash)) {
+    throw new Error("Deliverable review requires the submitted diff artifact hash.");
+  }
+  const authorRuntimeId = requiredString(event.payload, "authorRuntimeId");
+  const assignment = current.runtime.workerAssignments[`${taskId}:${attempt}`];
+  if (!assignment || assignment.runtimeId !== authorRuntimeId) {
+    throw new Error("Deliverable review must record the submission's recorded author runtime.");
+  }
+  const architectRuntimeId = requiredString(event.payload, "architectRuntimeId");
+  if (
+    current.runtime.architect.runtimeId !== undefined &&
+    current.runtime.architect.runtimeId !== architectRuntimeId
+  ) {
+    throw new Error("Deliverable review must record the current Architect runtime.");
+  }
+  const authorModelIdentity = canonicalIdentity(event.payload, "authorModelIdentity");
+  const architectModelIdentity = canonicalIdentity(event.payload, "architectModelIdentity");
+  const existing = state.reviews[taskId];
+  if (
+    existing?.stage === "completed" &&
+    existing.submissionAttempt === attempt &&
+    existing.changeSetId === changeSetId
+  ) {
+    throw new Error(`Task ${taskId} submission already has a completed deliverable review.`);
+  }
+  const history = state.reviewHistory[taskId] ?? [];
+  const expectedGeneration = Math.max(
+    0,
+    ...history.map((review) => review.generation),
+    existing?.generation ?? 0,
+  ) + 1;
+  const generation = requiredPositiveInteger(event.payload, "generation");
+  if (generation !== expectedGeneration) {
+    throw new Error(`Deliverable review generation must be ${expectedGeneration}.`);
+  }
+  const reviewId = requiredString(event.payload, "reviewId");
+  if (reviewId !== deliveryReviewId(taskId, attempt, generation)) {
+    throw new Error("Deliverable review id does not match its task, attempt, and generation.");
+  }
+  if (existing) {
+    // An unfinished generation is abandoned, never resumed: its sessions
+    // stay recorded as used, so a fresh-context retry opens new sessions.
+    state.reviewHistory[taskId] = [
+      ...history,
+      existing.stage === "completed" ? existing : { ...existing, stage: "abandoned" },
+    ];
+  }
+  state.authorModelIdentities[authorRuntimeId] = authorModelIdentity;
+  state.reviews[taskId] = {
+    taskId,
+    reviewId,
+    generation,
+    submissionAttempt: attempt,
+    changeSetId,
+    diffArtifactHash,
+    criteriaIds: [...criteriaIds],
+    authorRuntimeId,
+    authorModelIdentity,
+    architectRuntimeId,
+    architectModelIdentity,
+    stage: "started",
+    startedSequence: event.sequence,
+    sessionIds: [],
+  };
+}
+
+function reviewsOfTask(projection: SchedulerProjection, taskId: string): ReviewProjection[] {
+  return [
+    ...(projection.reviewHistory?.[taskId] ?? []),
+    ...(projection.reviews[taskId] ? [projection.reviews[taskId]!] : []),
+  ];
+}
+
+function deliveryReviewRequested(current: SchedulerProjection, state: DeliveryState, event: SchedulerEvent): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const review = requireDeliveryReview(state, event, ["started"]);
+  const reviewerRuntimeId = requiredString(event.payload, "reviewerRuntimeId");
+  const reviewerModelIdentity = canonicalIdentity(event.payload, "reviewerModelIdentity");
+  const independence = event.payload.independence;
+  if (independence !== "distinct_model" && independence !== "fresh_context") {
+    throw new Error("Deliverable review independence must be distinct_model or fresh_context.");
+  }
+  // B6: distinct_model must not match any recorded change-author runtime or
+  // model identity, nor the Architect's. fresh_context may reuse the author
+  // or Architect model, but only in new sessions (requireFreshDeliverySession).
+  if (independence === "distinct_model") {
+    const authorRuntimeIds = new Set(Object.keys(state.authorModelIdentities));
+    const excludedIdentities = new Set([
+      ...Object.values(state.authorModelIdentities),
+      review.architectModelIdentity,
+    ]);
+    if (
+      authorRuntimeIds.has(reviewerRuntimeId) ||
+      reviewerRuntimeId === review.architectRuntimeId ||
+      excludedIdentities.has(reviewerModelIdentity)
+    ) {
+      throw new Error(
+        "Self-review is impossible: a distinct_model reviewer must differ from every change author and the Architect.",
+      );
+    }
+  }
+  const tier = event.payload.reviewTier;
+  if (tier !== "low" && tier !== "medium" && tier !== "high") {
+    throw new Error("Deliverable review tier is invalid.");
+  }
+  // B8: the tier is recorded on the request and recomputed here from the
+  // recorded T5 risk inputs of the real change.
+  const riskInput = event.payload.riskInput;
+  if (!isRecord(riskInput)) throw new Error("Deliverable review requires its T5 risk input.");
+  const changedFiles = stringArray(riskInput, "changedFiles");
+  const linesAdded = requiredNumber(riskInput, "linesAdded");
+  const linesRemoved = requiredNumber(riskInput, "linesRemoved");
+  const attempts = requiredPositiveInteger(riskInput, "attempts");
+  const authorModelId = requiredString(riskInput, "authorModelId");
+  if (typeof riskInput.acceptedFailuresUsed !== "boolean") {
+    throw new Error("Deliverable review risk input requires acceptedFailuresUsed.");
+  }
+  if (attempts !== review.submissionAttempt || authorModelId !== review.authorModelIdentity) {
+    throw new Error("Deliverable review risk input must describe the recorded submission.");
+  }
+  if (riskInput.acceptedFailuresUsed !== taskAcceptedFailuresUsed(reviewsOfTask(current, review.taskId))) {
+    throw new Error("Deliverable review risk input must state whether an accepted evidence failure was used.");
+  }
+  if (
+    changedFiles.length === 0 ||
+    !Number.isSafeInteger(linesAdded) || !Number.isSafeInteger(linesRemoved) ||
+    linesAdded < 0 || linesRemoved < 0
+  ) {
+    throw new Error("Deliverable review risk input requires the real changed files and line counts.");
+  }
+  const risk = assessDeliveryRisk({
+    authorModelId,
+    changedFiles,
+    linesAdded,
+    linesRemoved,
+    attempts,
+    acceptedFailuresUsed: riskInput.acceptedFailuresUsed,
+  });
+  if (risk.tier !== tier || risk.digest !== requiredString(event.payload, "riskDigest")) {
+    throw new Error("Deliverable review tier must equal the deterministic T5 risk tier of the recorded change.");
+  }
+  const prior = latestCompletedReview(state, review.taskId);
+  const priorReviewId = event.payload.priorReviewId;
+  if (prior ? priorReviewId !== prior.reviewId : priorReviewId !== undefined) {
+    throw new Error("A fix re-review must name exactly the latest completed review of the task.");
+  }
+  review.reviewerRuntimeId = reviewerRuntimeId;
+  review.reviewerModelIdentity = reviewerModelIdentity;
+  review.independence = independence;
+  review.risk = risk;
+  if (prior) review.priorReviewId = prior.reviewId;
+  review.stage = "requested";
+}
+
+function deliveryObligationsRecorded(state: DeliveryState, event: SchedulerEvent): void {
+  const review = requireDeliveryReview(state, event, ["requested"]);
+  requireDeliveryReviewer(event, review);
+  if (review.risk?.tier !== "high") {
+    throw new Error("Only a high-tier review records obligations before the diff.");
+  }
+  const sessionId = requireFreshDeliverySession(state, event);
+  review.obligations = validateDeliveryObligations(event.payload.obligations, event.occurredAt);
+  review.sessionIds.push(sessionId);
+  review.stage = "obligations_recorded";
+}
+
+function deliveryDiffDelivered(state: DeliveryState, event: SchedulerEvent): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const review = requireDeliveryReview(state, event, ["requested", "obligations_recorded"]);
+  const depth = deliveryReviewDepthForTier(review.risk!.tier);
+  if (depth.obligationsFirst && review.stage !== "obligations_recorded") {
+    throw new Error("High-tier obligations must be recorded before the diff is delivered.");
+  }
+  if (!depth.obligationsFirst && review.stage !== "requested") {
+    throw new Error("Criteria and diff delivery is out of order.");
+  }
+  if (requiredString(event.payload, "diffArtifactHash") !== review.diffArtifactHash) {
+    throw new Error("The delivered diff must be the submitted change's diff artifact.");
+  }
+  review.stage = "diff_delivered";
+}
+
+function deliveryFindingsRecorded(state: DeliveryState, event: SchedulerEvent): void {
+  const review = requireDeliveryReview(state, event, ["diff_delivered"]);
+  requireDeliveryReviewer(event, review);
+  const sessionId = requireFreshDeliverySession(state, event);
+  const findings = validateDeliveryFindings(event.payload.findings);
+  const depth = parseDeliveryDepth(event.payload.depth);
+  const required = deliveryReviewDepthForTier(review.risk!.tier);
+  if (required.repositoryInspection && depth.inspectionToolCalls < 1) {
+    throw new Error("A medium/high deliverable review requires at least one real inspection tool call.");
+  }
+  if (required.affectedTests && !depth.affectedTests) {
+    throw new Error("A high-tier deliverable review requires the affected-test run.");
+  }
+  if (required.probe && !depth.probe) {
+    throw new Error("A high-tier deliverable review requires the OA-11 probe result.");
+  }
+  review.findings = findings;
+  review.depth = depth;
+  review.sessionIds.push(sessionId);
+  review.stage = "findings_recorded";
+}
+
+function deliveryReportDelivered(state: DeliveryState, event: SchedulerEvent): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const review = requireDeliveryReview(state, event, ["findings_recorded"]);
+  if (!Array.isArray(event.payload.claims) || event.payload.claims.length === 0) {
+    throw new Error("The worker report must carry the worker's claims.");
+  }
+  const seen = new Set<string>();
+  const claims: DeliveryClaim[] = event.payload.claims.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Worker claim is invalid.");
+    const id = requiredString(candidate, "id");
+    if (seen.has(id)) throw new Error(`Duplicate worker claim ${id}.`);
+    seen.add(id);
+    return { id, text: requiredString(candidate, "text"), evidenceIds: stringArray(candidate, "evidenceIds") };
+  });
+  for (const criterionId of review.criteriaIds) {
+    if (!seen.has(`claim:${criterionId}`)) {
+      throw new Error(`The worker report must carry the claim for criterion ${criterionId}.`);
+    }
+  }
+  review.claims = claims;
+  review.stage = "report_delivered";
+}
+
+function deliveryReviewRecorded(state: DeliveryState, event: SchedulerEvent): void {
+  const review = requireDeliveryReview(state, event, ["report_delivered"]);
+  requireDeliveryReviewer(event, review);
+  const sessionId = requireFreshDeliverySession(state, event);
+  const summary = requiredString(event.payload, "summary");
+  if (typeof event.payload.satisfied !== "boolean") {
+    throw new Error("Deliverable review verdict requires satisfied.");
+  }
+  const claims = review.claims ?? [];
+  if (!Array.isArray(event.payload.claimVerdicts)) {
+    throw new Error("Deliverable review verdict requires a verdict per worker claim.");
+  }
+  const verdicts: DeliveryClaimVerdict[] = event.payload.claimVerdicts.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Worker claim verdict is invalid.");
+    const claimId = requiredString(candidate, "claimId");
+    const claim = claims.find((item) => item.id === claimId);
+    if (!claim) throw new Error(`Unknown worker claim ${claimId}.`);
+    if (candidate.status !== "verified" && candidate.status !== "unverified") {
+      throw new Error(`Worker claim ${claimId} verdict status is invalid.`);
+    }
+    return { claimId, claim: claim.text, status: candidate.status, rationale: requiredString(candidate, "rationale") };
+  });
+  if (!sameValue(verdicts.map((verdict) => verdict.claimId).sort(), claims.map((claim) => claim.id).sort())) {
+    throw new Error("Deliverable review verdict must judge every worker claim exactly once.");
+  }
+  const findings = [...(review.findings ?? [])];
+  if (review.priorReviewId !== undefined) {
+    const prior = (state.reviewHistory[review.taskId] ?? []).find((item) => item.reviewId === review.priorReviewId);
+    if (!prior) throw new Error("A fix re-review requires its durable prior review.");
+    if (!Array.isArray(event.payload.priorFindingChecks)) {
+      throw new Error("A fix re-review must check every prior finding.");
+    }
+    const checks: DeliveryPriorFindingCheck[] = event.payload.priorFindingChecks.map((candidate) => {
+      if (!isRecord(candidate)) throw new Error("Prior finding check is invalid.");
+      if (candidate.resolution !== "resolved" && candidate.resolution !== "outstanding") {
+        throw new Error("Prior finding check resolution is invalid.");
+      }
+      return {
+        findingId: requiredString(candidate, "findingId"),
+        resolution: candidate.resolution,
+        rationale: requiredString(candidate, "rationale"),
+      };
+    });
+    if (!sameValue(checks.map((check) => check.findingId).sort(), (prior.findings ?? []).map((finding) => finding.id).sort())) {
+      throw new Error("A fix re-review must check every prior finding exactly once.");
+    }
+    // An outstanding prior blocking finding that nobody disposed carries
+    // forward as an open blocking finding of this review.
+    for (const check of checks) {
+      if (check.resolution !== "outstanding") continue;
+      const priorFinding = prior.findings?.find((finding) => finding.id === check.findingId);
+      if (!priorFinding || priorFinding.severity !== "blocking" || priorFinding.disposition) continue;
+      findings.push({
+        id: `carried:${priorFinding.id}`,
+        category: priorFinding.category,
+        severity: "blocking",
+        ...(priorFinding.requirementId ? { requirementId: priorFinding.requirementId } : {}),
+        ...(priorFinding.location ? { location: priorFinding.location } : {}),
+        claim: `Outstanding from ${prior.reviewId}: ${priorFinding.claim}`,
+        evidenceRefs: [...priorFinding.evidenceRefs],
+      });
+    }
+    review.priorFindingChecks = checks;
+  } else if (event.payload.priorFindingChecks !== undefined) {
+    throw new Error("Only a fix re-review checks prior findings.");
+  }
+  const blocked = findings.some((finding) => finding.severity === "blocking") ||
+    verdicts.some((verdict) => verdict.status === "unverified");
+  if (event.payload.satisfied === blocked) {
+    throw new Error(
+      "Deliverable review verdict must be unsatisfied exactly when a blocking finding or unverified claim exists.",
+    );
+  }
+  review.findings = findings;
+  review.claimVerdicts = verdicts;
+  review.summary = summary;
+  review.satisfied = event.payload.satisfied;
+  review.sessionIds.push(sessionId);
+  review.stage = "completed";
+  review.completedSequence = event.sequence;
+}
+
+function parseDeliveryTestReport(value: unknown, label: string): DeliveryTestReport {
+  if (!isRecord(value) || (value.status !== "passed" && value.status !== "failed" && value.status !== "unknown")) {
+    throw new Error(`${label} is invalid.`);
+  }
+  const counts = value.counts;
+  if (counts !== undefined && (!isRecord(counts) || !["selected", "passed", "failed", "skipped"].every((key) => Number.isSafeInteger(counts[key]) && (counts[key] as number) >= 0))) {
+    throw new Error(`${label} counts are invalid.`);
+  }
+  return {
+    status: value.status,
+    runner: requiredString(value, "runner"),
+    ...(value.format === "junit" || value.format === "trx" ? { format: value.format } : {}),
+    ...(typeof value.path === "string" ? { path: value.path } : {}),
+    ...(typeof value.artifactHash === "string" ? { artifactHash: value.artifactHash } : {}),
+    ...(isRecord(counts) ? { counts: { selected: counts.selected as number, passed: counts.passed as number, failed: counts.failed as number, skipped: counts.skipped as number } } : {}),
+    ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
+    ...(value.reporterUnsupported === true ? { reporterUnsupported: true } : {}),
+  };
+}
+
+function parseDeliveryDepth(value: unknown): DeliveryDepthRecord {
+  if (!isRecord(value)) throw new Error("Deliverable findings require the review depth record.");
+  const inspectionToolCalls = value.inspectionToolCalls;
+  if (!Number.isSafeInteger(inspectionToolCalls) || (inspectionToolCalls as number) < 0) {
+    throw new Error("Deliverable review depth requires the inspection tool call count.");
+  }
+  const depth: DeliveryDepthRecord = { inspectionToolCalls: inspectionToolCalls as number };
+  if (value.affectedTests !== undefined) {
+    const record = value.affectedTests;
+    if (!isRecord(record)) throw new Error("Affected-test record is invalid.");
+    const exitCode = record.exitCode;
+    if (exitCode !== null && !Number.isSafeInteger(exitCode)) {
+      throw new Error("Affected-test exit code is invalid.");
+    }
+    const outcome = record.outcome;
+    const evidenceIds = stringArray(record, "evidenceIds");
+    if (exitCode !== null && evidenceIds.length === 0) {
+      throw new Error("An executed affected-test command requires its evidence.");
+    }
+    const report = parseDeliveryTestReport(record.report, "Affected-test report");
+    assertTestsOutcome("Affected-test", exitCode as number | null, outcome, report);
+    if (record.executedScope !== "full_test_script") {
+      throw new Error("Affected-test record must state that the whole project test script ran.");
+    }
+    const affectedTests: DeliveryAffectedTestsRecord = {
+      executedScope: "full_test_script",
+      selectionRung: requiredString(record, "selectionRung"),
+      changedFiles: stringArray(record, "changedFiles"),
+      selectedTests: stringArray(record, "selectedTests"),
+      fullSuiteCount: requiredNumber(record, "fullSuiteCount"),
+      command: requiredString(record, "command"),
+      args: stringArray(record, "args"),
+      evidenceIds,
+      exitCode: exitCode as number | null,
+      outcome: outcome as DeliveryAffectedTestsRecord["outcome"],
+      report,
+    };
+    if (affectedTests.changedFiles.length === 0) {
+      throw new Error("Affected-test selection requires the real changed files.");
+    }
+    depth.affectedTests = affectedTests;
+  }
+  if (value.probe !== undefined) {
+    const record = value.probe;
+    if (!isRecord(record)) throw new Error("Probe record is invalid.");
+    const probe: DeliveryProbeRecord = {
+      rung: requiredString(record, "rung"),
+      mutantsGenerated: requiredNumber(record, "mutantsGenerated"),
+      mutantsExecuted: requiredNumber(record, "mutantsExecuted"),
+      mutantsCaught: requiredNumber(record, "mutantsCaught"),
+      survivors: stringArray(record, "survivors"),
+      partial: record.partial === true,
+      evidenceIds: stringArray(record, "evidenceIds"),
+      notes: stringArray(record, "notes"),
+    };
+    if (probe.mutantsExecuted > 0 && probe.evidenceIds.length === 0) {
+      throw new Error("An executed OA-11 probe requires its command evidence.");
+    }
+    depth.probe = probe;
+  }
+  return depth;
+}
+
+/**
+ * T6a (B7): `review.decided` may carry the Architect's dispositions of
+ * blocking deliverable findings and of unverified worker claims. Each list
+ * is applied on its own; an unknown or already-disposed id is refused.
+ */
+function applyDeliveryDispositions(
+  next: SchedulerProjection,
+  task: BuildTask,
+  event: SchedulerEvent,
+): void {
+  const findingDispositions = event.payload.findingDispositions;
+  const claimDispositions = event.payload.claimDispositions;
+  if (findingDispositions === undefined && claimDispositions === undefined) return;
+  if (next.planningPolicyVersion !== 1) {
+    throw new Error("Deliverable dispositions apply only to new-policy runs.");
+  }
+  const review = next.delivery?.reviews[task.id];
+  if (
+    !review || review.stage !== "completed" ||
+    review.submissionAttempt !== task.attempt || review.changeSetId !== task.changeSetId
+  ) {
+    throw new Error("Dispositions require the completed deliverable review of the current submission.");
+  }
+  if (findingDispositions !== undefined) {
+    if (!Array.isArray(findingDispositions)) throw new Error("findingDispositions must be an array.");
+    const open = new Set(openBlockingFindings(review).map((finding) => finding.id));
+    for (const raw of findingDispositions) {
+      if (!isRecord(raw)) throw new Error("Deliverable finding disposition is invalid.");
+      const findingId = requiredString(raw, "findingId");
+      if (!open.has(findingId)) {
+        throw new Error(`Deliverable finding ${findingId} is not an open blocking finding.`);
+      }
+      open.delete(findingId);
+      const resolution = raw.resolution;
+      if (resolution !== "plan_reconciled" && resolution !== "rejected" && resolution !== "deferred") {
+        throw new Error("Deliverable finding disposition resolution is invalid.");
+      }
+      const rationale = requiredString(raw, "rationale");
+      review.findings = (review.findings ?? []).map((finding) => finding.id === findingId
+        ? {
+            ...finding,
+            disposition: {
+              resolution,
+              rationale,
+              resolvedAt: event.occurredAt,
+              resolvedByReviewId: review.reviewId,
+            },
+          }
+        : finding);
+    }
+  }
+  if (claimDispositions !== undefined) {
+    if (!Array.isArray(claimDispositions)) throw new Error("claimDispositions must be an array.");
+    const open = new Set(unverifiedClaims(review).map((claim) => claim.claimId));
+    for (const raw of claimDispositions) {
+      if (!isRecord(raw)) throw new Error("Worker claim disposition is invalid.");
+      const claimId = requiredString(raw, "claimId");
+      if (!open.has(claimId)) throw new Error(`Worker claim ${claimId} is not an unverified claim.`);
+      open.delete(claimId);
+      if (raw.status !== "verified") {
+        throw new Error("The Architect disposes of an unverified claim only by verifying it.");
+      }
+      const rationale = requiredString(raw, "rationale");
+      review.claimVerdicts = (review.claimVerdicts ?? []).map((verdict) => verdict.claimId === claimId
+        ? { ...verdict, disposition: { status: "verified" as const, rationale, resolvedAt: event.occurredAt } }
+        : verdict);
+    }
+  }
+}
+
+/**
+ * N-R4-3: every boundary run is durably started before any command runs, so
+ * a retry after an interruption gets a fresh attempt id (fresh process and
+ * evidence keys) instead of colliding with the interrupted run.
+ */
+function deliveryBoundaryStarted(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "integrated" || state.taskAcceptances[taskId]) {
+    throw new Error(`Boundary runs require integrated, unaccepted task ${taskId}.`);
+  }
+  const integrationRevision = requiredString(event.payload, "integrationRevision");
+  if (integrationRevision !== current.integrationRevision) {
+    throw new Error("Boundary runs must target the current integration revision.");
+  }
+  if (deliveryBoundaryAction(state, taskId, integrationRevision, (id) => current.tasks[id]?.status).type !== "run") {
+    throw new Error(`Task ${taskId} boundary on ${integrationRevision} may not run again.`);
+  }
+  const boundaryId = requiredString(event.payload, "boundaryId");
+  if (boundaryId !== deliveryBoundaryId(taskId, (state.boundaries[taskId]?.length ?? 0) + 1)) {
+    throw new Error("Boundary run id does not match the next boundary generation.");
+  }
+  const starts = state.boundaryStarts ?? {};
+  const attempt = requiredPositiveInteger(event.payload, "attempt");
+  if (attempt !== (starts[boundaryId] ?? 0) + 1) {
+    throw new Error(`Boundary run attempt must be ${(starts[boundaryId] ?? 0) + 1}.`);
+  }
+  state.boundaryStarts = { ...starts, [boundaryId]: attempt };
+}
+
+function deliveryBoundaryChecked(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "integrated") {
+    throw new Error(`Boundary checks require integrated task ${taskId}.`);
+  }
+  if (state.taskAcceptances[taskId]) throw new Error(`Task ${taskId} is already accepted.`);
+  const integrationRevision = requiredString(event.payload, "integrationRevision");
+  if (integrationRevision !== current.integrationRevision) {
+    throw new Error("Boundary checks must run on the current integration revision.");
+  }
+  // B4: a failed boundary is never re-run on the same revision without a
+  // state change (a new revision, or one Architect recheck grant).
+  const action = deliveryBoundaryAction(state, taskId, integrationRevision, (id) => current.tasks[id]?.status);
+  if (action.type !== "run") {
+    throw new Error(`Task ${taskId} boundary on ${integrationRevision} may not run again (${action.type}).`);
+  }
+  const previous = state.boundaries[taskId] ?? [];
+  const generation = requiredPositiveInteger(event.payload, "generation");
+  const attempt = requiredPositiveInteger(event.payload, "attempt");
+  if (attempt !== state.boundaryStarts?.[deliveryBoundaryId(taskId, generation)]) {
+    throw new Error("Boundary checks must record the latest durably started attempt.");
+  }
+  if (event.payload.executedScope !== "full_test_script") {
+    throw new Error("Boundary checks must state that the whole project scripts ran.");
+  }
+  if (generation !== previous.length + 1) {
+    throw new Error(`Boundary generation must be ${previous.length + 1}.`);
+  }
+  const boundaryId = requiredString(event.payload, "boundaryId");
+  if (boundaryId !== deliveryBoundaryId(taskId, generation)) {
+    throw new Error("Boundary id does not match its task and generation.");
+  }
+  if (!Array.isArray(event.payload.checks) || event.payload.checks.length === 0) {
+    throw new Error("Boundary checks require real check outcomes.");
+  }
+  const checkIds = new Set<string>();
+  const checks: DeliveryBoundaryCheck[] = event.payload.checks.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Boundary check is invalid.");
+    const checkId = requiredString(candidate, "checkId");
+    if (checkIds.has(checkId)) throw new Error(`Duplicate boundary check ${checkId}.`);
+    checkIds.add(checkId);
+    const exitCode = candidate.exitCode;
+    if (exitCode !== null && !Number.isSafeInteger(exitCode)) throw new Error("Boundary check exit code is invalid.");
+    const outcome = candidate.outcome;
+    if (outcome !== "passed" && outcome !== "failed" && outcome !== "unknown") {
+      throw new Error("Boundary check outcome is invalid.");
+    }
+    const evidenceIds = stringArray(candidate, "evidenceIds");
+    if (outcome === "passed" && (exitCode !== 0 || evidenceIds.length === 0)) {
+      throw new Error("A passed boundary check requires exit code 0 and its evidence.");
+    }
+    const report = candidate.report === undefined ? undefined : parseDeliveryTestReport(candidate.report, "Boundary test report");
+    if (checkId === "tests") {
+      // Owner decision "real counts": tests pass only on this run's report.
+      if (!report) throw new Error("The boundary tests check requires this run's test report reading.");
+      assertTestsOutcome("Boundary tests", exitCode as number | null, outcome, report);
+    }
+    if (outcome === "failed" && evidenceIds.length === 0 && typeof candidate.reason !== "string") {
+      throw new Error("A failed boundary check requires its evidence or reason.");
+    }
+    return {
+      checkId,
+      ...(typeof candidate.command === "string" ? { command: candidate.command } : {}),
+      ...(Array.isArray(candidate.args) ? { args: stringArray(candidate, "args") } : {}),
+      evidenceIds,
+      exitCode: exitCode as number | null,
+      outcome,
+      ...(typeof candidate.reason === "string" ? { reason: candidate.reason } : {}),
+      ...(report ? { report } : {}),
+    };
+  });
+  const passed = event.payload.passed;
+  if (typeof passed !== "boolean" || passed !== checks.every((check) => check.outcome === "passed")) {
+    throw new Error("Boundary passed must equal every check passing.");
+  }
+  const selection = event.payload.selection;
+  if (!isRecord(selection)) throw new Error("Boundary checks require the affected-test selection.");
+  const last = previous.at(-1);
+  if (last?.resolution?.resolution === "recheck" && last.integrationRevision === integrationRevision) {
+    last.resolution = { ...last.resolution, consumed: true };
+  }
+  state.boundaries[taskId] = [...previous, {
+    taskId,
+    boundaryId,
+    generation,
+    attempt,
+    integrationRevision,
+    changedFiles: stringArray(event.payload, "changedFiles"),
+    executedScope: "full_test_script",
+    selection: { rung: requiredString(selection, "rung"), selectedTests: stringArray(selection, "selectedTests") },
+    checks,
+    passed,
+    sequence: event.sequence,
+  }];
+}
+
+function deliveryBoundaryFailureResolved(
+  current: SchedulerProjection,
+  next: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "architect") {
+    throw new Error("Only the Architect may resolve a failed boundary check.");
+  }
+  const taskId = requiredString(event.payload, "taskId");
+  const boundaryId = requiredString(event.payload, "boundaryId");
+  const boundary = latestBoundary(state, taskId);
+  if (
+    !boundary || boundary.boundaryId !== boundaryId ||
+    !boundaryNeedsArchitect(boundary, (id) => current.tasks[id]?.status) ||
+    boundary.integrationRevision !== current.integrationRevision ||
+    current.tasks[taskId]?.status !== "integrated" || state.taskAcceptances[taskId]
+  ) {
+    throw new Error("Only the current failed boundary awaiting the Architect can be resolved.");
+  }
+  if (requiredPositiveInteger(event.payload, "resolutionGeneration") !== boundaryResolutionGeneration(boundary)) {
+    throw new Error(`Boundary resolution generation must be ${boundaryResolutionGeneration(boundary)}.`);
+  }
+  const rationale = requiredString(event.payload, "rationale");
+  const resolution = event.payload.resolution;
+  // N-R4-2: repairs that ended without re-running the boundary are
+  // superseded by this new resolution, kept durably in the history.
+  const supersede = () => {
+    if (boundary.resolution) {
+      boundary.resolutionHistory = [...(boundary.resolutionHistory ?? []), boundary.resolution];
+    }
+  };
+  if (resolution === "recheck") {
+    const rechecked = (state.boundaries[taskId] ?? []).some((candidate) =>
+      candidate.integrationRevision === boundary.integrationRevision &&
+      [candidate.resolution, ...(candidate.resolutionHistory ?? [])].some((item) => item?.resolution === "recheck"));
+    if (rechecked) {
+      throw new Error("A failed boundary may be rechecked once per integration revision; plan a repair instead.");
+    }
+    supersede();
+    boundary.resolution = { resolution, rationale, sequence: event.sequence };
+    return;
+  }
+  if (resolution !== "repair_planned") {
+    throw new Error("Boundary failure resolution must be recheck or repair_planned.");
+  }
+  const repairTaskIds = createDeliveryRepairTasks(next, event.payload, taskId, boundary);
+  supersede();
+  boundary.resolution = { resolution, rationale, repairTaskIds, sequence: event.sequence };
+}
+
+/**
+ * T6a: repairs for a failed boundary are ordinary worker tasks bound to the
+ * failed task's parent contract, created like verifier repairs (ready plan,
+ * one repair cycle, validated graph). T6b adds the repair-approach decision
+ * and budget at the beforeRepairDecisionDispatch seam.
+ */
+function createDeliveryRepairTasks(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+  sourceTaskId: string,
+  boundary: DeliveryBoundaryRecord,
+): string[] {
+  const ready = readyPlanIdentity(projection);
+  if (!ready) throw new Error("Boundary repairs on a new-policy run require a ready plan revision.");
+  const revision = requiredNumber(payload, "revision");
+  if (revision !== projection.planRevision + 1) throw new Error("Boundary repair plan revision is stale.");
+  if (!Array.isArray(payload.tasks) || payload.tasks.length === 0) {
+    throw new Error("Boundary repairs require at least one task.");
+  }
+  consumeRepairCycle(projection);
+  const evidenceIds = [...new Set(boundary.checks
+    .filter((check) => check.outcome !== "passed")
+    .flatMap((check) => check.evidenceIds))].sort();
+  const tasks = payload.tasks.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Boundary repair task is invalid.");
+    if (!Array.isArray(candidate.acceptanceCriteria)) {
+      throw new Error("Boundary repair task requires acceptance criteria.");
+    }
+    const acceptanceCriteria = candidate.acceptanceCriteria as AcceptanceCriterion[];
+    const criteriaValidation = validateAcceptanceCriteria(acceptanceCriteria);
+    if (!criteriaValidation.valid) {
+      throw new Error(`Boundary repair acceptance criteria are invalid: ${criteriaValidation.issues.join(" ")}`);
+    }
+    const requiredCapabilities = stringArray(candidate, "requiredCapabilities");
+    if (requiredCapabilities.length === 0 || requiredCapabilities.some((capability) => !capability.trim())) {
+      throw new Error("Boundary repair task requires non-empty capabilities.");
+    }
+    return {
+      id: requiredString(candidate, "id"),
+      kind: "verification_repair" as const,
+      objective: requiredString(candidate, "objective"),
+      dependencies: stringArray(candidate, "dependencies"),
+      status: "planned" as const,
+      requiredCapabilities,
+      acceptanceCriteria: acceptanceCriteria.map((criterion) => ({ ...criterion })),
+      acceptanceCriteriaVersion: 1,
+      attempt: 0,
+      deliveryRepair: {
+        sourceTaskId,
+        boundaryId: boundary.boundaryId,
+        integrationRevision: boundary.integrationRevision,
+        evidenceIds,
+      },
+    } satisfies BuildTask;
+  });
+  for (const task of tasks) {
+    if (projection.tasks[task.id]) throw new Error(`Duplicate task ${task.id}.`);
+  }
+  const validation = validateTaskGraph(
+    [...Object.values(projection.tasks), ...tasks],
+    { requireAcceptanceCriteria: true },
+  );
+  if (!validation.valid) {
+    throw new Error(`Boundary repair plan is invalid: ${validation.issues.map((issue) => issue.message).join(" ")}`);
+  }
+  for (const task of tasks) projection.tasks[task.id] = task;
+  const bindings = { ...projection.readyPlanTaskBindings };
+  for (const task of tasks) {
+    const parent = repairParentContractId(projection, task);
+    bindings[task.id] = parent !== undefined
+      ? { revisionId: ready.revisionId, digest: ready.digest, contractId: parent }
+      : { revisionId: ready.revisionId, digest: ready.digest };
+  }
+  projection.readyPlanTaskBindings = bindings;
+  projection.planRevision = revision;
+  return tasks.map((task) => task.id);
+}
+
+function deliveryTaskAccepted(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "integrated") {
+    throw new Error(`Task acceptance requires integrated task ${taskId}.`);
+  }
+  if (state.taskAcceptances[taskId]) throw new Error(`Task ${taskId} is already accepted.`);
+  const issues = deliveryReviewApprovalIssues(state, task);
+  if (issues.length > 0) throw new Error(`Task acceptance is blocked: ${issues.join(" ")}`);
+  const review = state.reviews[taskId]!;
+  if (requiredString(event.payload, "reviewId") !== review.reviewId) {
+    throw new Error("Task acceptance must cite the completed review of the current submission.");
+  }
+  const boundary = latestBoundary(state, taskId);
+  if (
+    !boundary || !boundary.passed ||
+    boundary.boundaryId !== requiredString(event.payload, "boundaryId") ||
+    boundary.integrationRevision !== current.integrationRevision
+  ) {
+    throw new Error("Task acceptance requires a passed boundary check on the current integration revision.");
+  }
+  const requiredChecks = [
+    ...review.criteriaIds.map((criterionId) => {
+      const verdict = review.claimVerdicts?.find((candidate) => candidate.claimId === `claim:${criterionId}`);
+      if (!verdict || (verdict.status !== "verified" && verdict.disposition?.status !== "verified")) {
+        throw new Error(`Criterion ${criterionId} has no verified claim.`);
+      }
+      return { kind: "criterion", refId: criterionId, outcome: "passed" as const };
+    }),
+    ...boundary.checks.map((check) => ({ kind: "integration_check", refId: check.checkId, outcome: "passed" as const })),
+  ];
+  state.taskAcceptances[taskId] = {
+    taskId,
+    reviewId: review.reviewId,
+    submissionAttempt: review.submissionAttempt,
+    changeSetId: review.changeSetId,
+    boundaryId: boundary.boundaryId,
+    integrationRevision: boundary.integrationRevision,
+    requiredChecks,
+    acceptedAt: event.occurredAt,
+    sequence: event.sequence,
+  };
+}
+
+function deliveryPhaseAccepted(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+  const plan = current.planning?.plan;
+  const revision = plan?.revisionsById[plan.currentRevisionId];
+  const planRevisionId = requiredString(event.payload, "planRevisionId");
+  if (!revision || revision.revisionId !== planRevisionId || !readyPlanIdentity(current)) {
+    throw new Error("Phase acceptance must bind the current ready plan revision.");
+  }
+  const phaseId = requiredString(event.payload, "phaseId");
+  const phase = revision.phases.find((candidate) => candidate.id === phaseId);
+  if (!phase) throw new Error(`Unknown phase ${phaseId}.`);
+  const key = phaseAcceptanceKey(planRevisionId, phaseId);
+  if (state.phaseAcceptances[key]) throw new Error(`Phase ${phaseId} is already accepted for ${planRevisionId}.`);
+  const evaluation = evaluatePhaseAcceptance({
+    phase,
+    requirements: revision.requirements,
+    taskStatuses: new Map(Object.entries(current.tasks).map(([id, task]) => [id, task.status])),
+    state,
+    integrationRevision: current.integrationRevision,
+  });
+  if (!evaluation.ready) {
+    throw new Error(`Phase ${phaseId} is not acceptable: ${evaluation.issues.join(" ")}`);
+  }
+  if (
+    !sameValue(stringArray(event.payload, "taskAcceptanceRefs"), evaluation.taskAcceptanceRefs) ||
+    !sameValue(event.payload.exitChecks, evaluation.exitChecks)
+  ) {
+    throw new Error("Phase acceptance must record exactly the kernel-evaluated task acceptances and exit checks.");
+  }
+  state.phaseAcceptances[key] = {
+    phaseId,
+    planRevisionId,
+    integrationRevision: current.integrationRevision!,
+    requirementIds: [...phase.requirementIds],
+    taskAcceptanceRefs: evaluation.taskAcceptanceRefs,
+    exitChecks: evaluation.exitChecks,
+    acceptedAt: event.occurredAt,
+    sequence: event.sequence,
+  };
 }
 
 function verifierCriterionKey(criterion: VerifierCriterionReference): string {
@@ -7852,6 +9046,9 @@ function cloneBuildTask(task: BuildTask): BuildTask {
             evidenceIds: [...task.verifierRepair.evidenceIds],
           },
         }
+      : {}),
+    ...(task.deliveryRepair
+      ? { deliveryRepair: { ...task.deliveryRepair, evidenceIds: [...task.deliveryRepair.evidenceIds] } }
       : {}),
     ...(task.conflictPaths ? { conflictPaths: [...task.conflictPaths] } : {}),
   };

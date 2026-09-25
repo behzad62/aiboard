@@ -6,10 +6,10 @@ import { requireGitRunner } from "./git-command.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { createHash, randomBytes } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { statSync } from "node:fs";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { copyFile, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +22,17 @@ import {
   type ModelCostBasisSnapshot,
 } from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
+import {
+  createDeliveryBoundaryDriver,
+  createDeliveryDepthRunner,
+  createDeliveryWorkspaceSlot,
+  currentWorkerAuthor,
+  loadDeliverableReviewInputs,
+  submitTaskSummary,
+  type DurableSubmission,
+} from "./delivery-execution.js";
+import { NativeDeliverableReviewRuntime } from "./native-deliverable-review.js";
+import type { MutationFileSystem } from "./mutation-probe.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
 import { CapabilityRegistry } from "./capability-registry.js";
 import {
@@ -29,6 +40,8 @@ import {
   type FinalVerificationCheckDriver,
   type IndependentVerifierDriver,
   type IntegrationRuntimeDriver,
+  type DeliveryBoundaryDriver,
+  type DeliveryReviewDriver,
   type PlanCriticDriver,
 } from "./build-runtime.js";
 import type { AgentSessionProjection } from "./agent-session-store.js";
@@ -665,13 +678,33 @@ export class NativeBuildFactory {
       kind: "independent-verifier",
       workspaceSuffix: "architect-commands",
     });
+    const deliveryWorkspaceFor = (suffix: string) => (targetRevision?: string) => new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      kind: "independent-verifier",
+      workspaceSuffix: suffix,
+      // Pinned to the exact task or integration revision under check.
+      ...(targetRevision ? { targetRevision } : { integrationManager }),
+    });
+    const deliveryReviewWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-review"));
+    const deliveryBoundaryWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-boundary"));
     constructionResources.add(
       "independent_verifier_workspace",
       async () => {
         try {
           await verifierWorkspace.cleanup();
         } finally {
-          await architectCommandWorkspace.cleanup();
+          try {
+            await architectCommandWorkspace.cleanup();
+          } finally {
+            try {
+              await deliveryReviewWorkspace.cleanup();
+            } finally {
+              await deliveryBoundaryWorkspace.cleanup();
+            }
+          }
         }
       },
     );
@@ -1221,6 +1254,115 @@ export class NativeBuildFactory {
         return result;
       },
     };
+    // T6a: the mandatory deliverable reviewer (a sibling of the coverage and
+    // answer reviewers with the same router/session/budget wiring) and the
+    // post-integration boundary checks. Reviewer inputs are read from durable
+    // state only (session change set, diff artifact, submit_task summary);
+    // commands run through FinalVerificationRuntime and the audited executor
+    // in disposable checkouts (independent-verifier kind).
+    const durableSubmission = async (projection: SchedulerProjection, taskId: string): Promise<DurableSubmission> => {
+      const task = projection.tasks[taskId];
+      if (!task) throw new Error(`Unknown task ${taskId}.`);
+      const author = currentWorkerAuthor(projection, task);
+      if (!author) throw new Error(`Task ${taskId} has no recorded author runtime.`);
+      const session = await sessions.load(resolveWorkerSessionId(
+        spec.runId,
+        task.id,
+        task.attempt,
+        task.assignedWorkerId ?? standardWorkerId(task.id, task.attempt),
+        projection.runtime.workerAssignments[`${task.id}:${task.attempt}`]?.sessionId,
+      ));
+      if (!session.changeSet || session.changeSet.id !== task.changeSetId) {
+        throw new Error(`Submitted change set ${task.changeSetId} is unavailable.`);
+      }
+      const summary = submitTaskSummary(session.checkpoint?.messages ?? []);
+      if (!summary) throw new Error(`Task ${taskId} submit_task summary is not in its durable session.`);
+      return { changeSet: session.changeSet, summary, authorRuntimeId: author };
+    };
+    const deliveryGit = requireGitRunner(gitContext).lifecycle("verification").run;
+    // The same ambient source the audited executor uses for children, so the
+    // project's own NODE_OPTIONS is kept when the reporter flags are added.
+    const deliveryNodeOptions = () => {
+      const source = this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment();
+      // Windows environment names are case-insensitive.
+      const name = Object.keys(source).find((key) => key.toUpperCase() === "NODE_OPTIONS");
+      return name ? source[name] : undefined;
+    };
+    const nativeDeliverableReview = new NativeDeliverableReviewRuntime({
+      store: schedulerStore,
+      architectRuntimeId: spec.architectRuntimeId,
+      git: gitContext,
+      executionGrants,
+      execution: commandExecution,
+      permissionProfile: spec.permissionProfile,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      router: verifierRouter,
+      candidates,
+      models,
+      reviewerRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      loadInputs: async ({ task, projection }) => await loadDeliverableReviewInputs({
+        task,
+        submission: await durableSubmission(projection, task.id),
+        artifacts: this.artifacts,
+      }),
+      workspace: {
+        create: async (taskRevision) => ({ path: (await deliveryReviewWorkspace.create(taskRevision)).path }),
+        cleanup: () => deliveryReviewWorkspace.cleanup(),
+      },
+      depth: createDeliveryDepthRunner({
+        runId: spec.runId,
+        git: deliveryGit,
+        artifacts: this.artifacts,
+        evidenceStore,
+        execution: commandExecution,
+        reviewWorkspace: deliveryReviewWorkspace,
+        probeFileSystem: deliveryProbeFileSystem,
+        ambientNodeOptions: deliveryNodeOptions,
+      }),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const deliveryReviewDriver: DeliveryReviewDriver = {
+      review: async (input) => {
+        const result = await nativeDeliverableReview.review(input);
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find((item) => item.runtimeId === result.runtimeId);
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `delivery:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
+    const deliveryBoundaryDriver: DeliveryBoundaryDriver = createDeliveryBoundaryDriver({
+      runId: spec.runId,
+      git: deliveryGit,
+      artifacts: this.artifacts,
+      evidenceStore,
+      execution: commandExecution,
+      boundaryWorkspace: deliveryBoundaryWorkspace,
+      ambientNodeOptions: deliveryNodeOptions,
+      changedFilesFor: async (taskId) => {
+        const projection = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
+        return [...(await durableSubmission(projection, taskId)).changeSet.changedPaths];
+      },
+    });
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
         const projection = rebuildSchedulerProjection(
@@ -1338,6 +1480,8 @@ export class NativeBuildFactory {
       planCritic: planCriticDriver,
       coverageReview: coverageReviewDriver,
       answerReview: answerReviewDriver,
+      deliveryReview: deliveryReviewDriver,
+      deliveryBoundary: deliveryBoundaryDriver,
       planningHostCapabilities: () => buildCoverageHostCapabilities({
         coverageCandidateRuntimeIds: spec.verifierRuntimeIds,
         recordedAt: new Date().toISOString(),
@@ -3470,4 +3614,20 @@ function assertHistoricalTerminalState(value: unknown): asserts value is Histori
   if (value !== "completed" && value !== "failed" && value !== "stopped") {
     throw new Error("Historical Build requires an authoritative terminal RunSupervisor state.");
   }
+}
+
+/**
+ * T6a: the OA-11 probe's file system on the disposable review checkout. The
+ * probe applies each mutant there and restores the original bytes; this file
+ * is the filesystem-mutation owner for those writes.
+ */
+function deliveryProbeFileSystem(workspacePath: string): MutationFileSystem {
+  return {
+    // The probe reads originals by project-relative path.
+    readFile: (path) => readFileSync(isAbsolute(path) ? path : join(workspacePath, path), "utf8"),
+    writeFile: (path, content) => writeFileSync(path, content, "utf8"),
+    createDisposableCopy: () => workspacePath,
+    cleanupDisposableCopy: () => undefined,
+    join: (root, path) => join(root, path),
+  };
 }

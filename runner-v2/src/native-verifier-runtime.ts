@@ -1043,7 +1043,7 @@ function evidenceCommandTool(tools: readonly NativeTool<unknown>[]): NativeTool<
   return tool;
 }
 
-class LayeredToolRuntime implements AgentToolRuntime {
+export class LayeredToolRuntime implements AgentToolRuntime {
   private readonly owner = new Map<string, AgentToolRuntime>();
 
   constructor(...layers: AgentToolRuntime[]) {

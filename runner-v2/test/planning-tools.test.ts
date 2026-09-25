@@ -1,3 +1,4 @@
+import { seedCompletedDeliveryReview } from "./support/delivery-seed.js";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2680,6 +2681,11 @@ function appendTaskTransition(
   });
 }
 
+function appendCompletedDeliveryReview(store: SchedulerStore, runId: string, task: BuildTask): void {
+  // T6a: the mandatory deliverable review, stage by stage, through the kernel.
+  seedCompletedDeliveryReview(store, runId, task.id, { clock: CLOCK });
+}
+
 function integrateReadyContractTasks(
   store: SchedulerStore,
   runId: string,
@@ -2717,6 +2723,7 @@ function integrateReadyContractTasks(
           artifactHashes: [String(index + 1).repeat(64)],
         })),
       }, "submitted");
+      appendCompletedDeliveryReview(store, runId, task);
       appendTaskTransition(store, runId, task.id, "architect_review", {
         role: "architect",
         id: "architect_1",

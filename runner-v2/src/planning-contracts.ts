@@ -2300,6 +2300,48 @@ export interface PlanReadinessResult {
  * disposition, or silently marking an obligation not_applicable without an
  * authorized disposition must each make this return ready:false.
  */
+/**
+ * T6a (R4-B2): the fixed vocabulary of phase `requiredCombinedValidation`
+ * words the runner can check mechanically after integration, mapped to the
+ * runner boundary check that satisfies each (`typecheck` is satisfied by the
+ * project build command). A plan whose phase names any other word never
+ * becomes ready, so the Architect revises it while planning instead of the
+ * phase silently never being accepted.
+ */
+export const PHASE_VALIDATION_CHECKS: Readonly<Record<string, "build" | "tests">> = Object.freeze({
+  build: "build",
+  compile: "build",
+  typecheck: "build",
+  "type-check": "build",
+  tests: "tests",
+  test: "tests",
+  "targeted-tests": "tests",
+  "affected-tests": "tests",
+  "unit-tests": "tests",
+});
+
+export function phaseValidationCheckId(validation: string): "build" | "tests" | undefined {
+  return Object.hasOwn(PHASE_VALIDATION_CHECKS, validation.trim().toLowerCase())
+    ? PHASE_VALIDATION_CHECKS[validation.trim().toLowerCase()]
+    : undefined;
+}
+
+export function unmappedPhaseValidationIssues(phases: readonly ExecutionPlanPhase[]): string[] {
+  const allowed = Object.keys(PHASE_VALIDATION_CHECKS).join(", ");
+  const issues: string[] = [];
+  for (const phase of Array.isArray(phases) ? phases : []) {
+    if (!isObj(phase) || !Array.isArray(phase.requiredCombinedValidation)) continue;
+    for (const word of phase.requiredCombinedValidation) {
+      if (typeof word !== "string" || phaseValidationCheckId(word) === undefined) {
+        issues.push(
+          `Phase ${phase.id} requiredCombinedValidation "${String(word)}" is not a runner-checkable validation; use only: ${allowed}.`,
+        );
+      }
+    }
+  }
+  return issues;
+}
+
 export function computePlanReadiness(input: PlanReadinessInput): PlanReadinessResult {
   // NEW-2: computePlanReadiness is the composite gate — exactly where a
   // malformed durable record would arrive — so it must never throw on a
@@ -2339,6 +2381,11 @@ export function computePlanReadiness(input: PlanReadinessInput): PlanReadinessRe
 
   const hostValidation = validateHostPlanningCapabilities(input.hostCapabilities);
   blockers.push(...hostValidation.issues.map((issue) => issue.message));
+
+  // T6a (R4-B2): every phase exit check must be one the runner can run.
+  if (isObj(input.revision) && Array.isArray(input.revision.phases)) {
+    blockers.push(...unmappedPhaseValidationIssues(input.revision.phases));
+  }
 
   // B1 (revision-to-revision guard): when a prior revision is supplied,
   // every requirement it named must survive or be authorized-removed.

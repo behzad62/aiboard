@@ -355,6 +355,15 @@ function requiresAuthoritativeEvidenceStore(
   event: SchedulerEvent,
 ): boolean {
   if (!projection) return false;
+  // T6a: command outcomes of deliverable reviews and boundary checks must
+  // resolve to durable evidence.
+  if (event.type === "delivery.boundary_checked") return true;
+  if (event.type === "delivery.findings_recorded") {
+    const depth = event.payload.depth;
+    return typeof depth === "object" && depth !== null && !Array.isArray(depth) &&
+      ((depth as Record<string, unknown>).affectedTests !== undefined ||
+        (depth as Record<string, unknown>).probe !== undefined);
+  }
   if (event.type === "user.guidance_acknowledged") {
     const resolution = event.payload.resolution;
     return typeof resolution === "object" &&

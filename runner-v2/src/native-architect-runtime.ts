@@ -796,7 +796,9 @@ export function architectInspectionWorkspace(
     reason.type === "final_verification_review_required" ||
     reason.type === "final_verification_repair_plan_required" ||
     reason.type === "verifier_repair_plan_required" ||
-    reason.type === "plan_critique_resolution_required"
+    reason.type === "plan_critique_resolution_required" ||
+    // T6a: a failed boundary is judged on the integrated revision.
+    reason.type === "delivery_boundary_failed"
   ) {
     return canonicalProjectRoot?.trim() || projectRoot;
   }

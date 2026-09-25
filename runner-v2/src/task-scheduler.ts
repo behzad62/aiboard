@@ -84,7 +84,7 @@ export interface TaskSchedulerOptions {
    * New-policy admission is bounded by
    * `min(MAX_WORKERS, maxConcurrency, resourceCapacity)`; legacy runs
    * ignore it. Absent means unknown (no further bound, recorded as
-   * procedural â€” never invented).
+   * procedural — never invented).
    */
   resourceCapacity?: number | (() => number | undefined);
 }
@@ -182,7 +182,7 @@ export class TaskScheduler {
           if (newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
           // T4: restart reconciliation with authenticated ownership. A
           // live claim owned by another writer, or an unknown running
-          // writer with no durable claim, blocks reassignment â€” competing
+          // writer with no durable claim, blocks reassignment — competing
           // controllers are refused, never silently adopted.
           const restartBlock = this.restartOwnership(projection, task);
           if (restartBlock !== undefined) {
@@ -248,7 +248,7 @@ export class TaskScheduler {
           // transition/dispatch below are synchronous, so no change can land
           // between them and tick() never throws an admission error.
           if (newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
-          // T4: the restart path reuses the durable packet claim â€” it never
+          // T4: the restart path reuses the durable packet claim — it never
           // appends a competing reservation for the same packet.
           this.dispatch(projection.tasks[task.id], workspacePath);
         }
@@ -301,7 +301,7 @@ export class TaskScheduler {
         if (newPolicyAdmissionClosed(projection)) return;
         if (newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
         const current = projection.tasks[taskId];
-        // T4: dependency/resource admission â€” overlapping writes, aliased
+        // T4: dependency/resource admission — overlapping writes, aliased
         // paths, shared DB/port/schema/config resources, a shared
         // worktree, or an unknown running writer each prevent dual
         // admission. Skipped cleanly, never thrown.
@@ -449,7 +449,7 @@ export class TaskScheduler {
     outcome: WorkerOutcome
   ): void {
     if (outcome.type === "submitted") {
-      // T4: the worker is done writing â€” release the packet claim so later
+      // T4: the worker is done writing — release the packet claim so later
       // tasks can reuse its files/resources (best-effort, idempotent).
       this.transition(taskId, "submitted", attempt, {
         changeSetId: outcome.changeSetId,
@@ -505,7 +505,7 @@ export class TaskScheduler {
       return;
     }
     // T4: a failed writer must prove stopped/fenced before its packet can
-    // be reassigned â€” record that evidence now (best-effort, idempotent).
+    // be reassigned — record that evidence now (best-effort, idempotent).
     this.transition(taskId, "failed", attempt, {
       failureReason: outcome.reason,
     }, workerId);
@@ -564,7 +564,7 @@ export class TaskScheduler {
   }
 
   /**
-   * T4: the ready-plan contract behind a scheduler task â€” directly for
+   * T4: the ready-plan contract behind a scheduler task — directly for
    * bridged tasks, through the parent for kernel-created repair tasks.
    * Undefined on legacy runs and for tasks with no ready contract.
    */
@@ -620,7 +620,7 @@ export class TaskScheduler {
   }
 
   /**
-   * T4: effective write claims of every OTHER active writer â€” durable
+   * T4: effective write claims of every OTHER active writer — durable
    * packet claims where they exist (files/resources from the ready
    * contract, worktree from the recorded claim), worktree-only where the
    * writer is unknown (fail closed on a shared worktree; files unknown).
@@ -695,7 +695,7 @@ export class TaskScheduler {
    * sole controller serializes across appends (procedural). Reuses a
    * live claim when one exists; repair tasks carry no durable packet
    * claim (their packet is not a revision contract) and are checked
-   * ephemerally instead. Throws when no claim can be reserved â€” the
+   * ephemerally instead. Throws when no claim can be reserved — the
    * caller skips cleanly, so tick() never throws an admission error.
    */
   private ensurePacketClaim(
@@ -804,7 +804,7 @@ export class TaskScheduler {
    * T4: best-effort idempotent packet-claim release. Never throws: a
    * leaked claim only ever blocks while its task is active (conflict
    * checks scope to active writers), and the terminal sweep retries.
-   * Ending a caller never releases anything â€” only these explicit
+   * Ending a caller never releases anything — only these explicit
    * terminal events do.
    */
   private recordAssignmentClaimFailure(taskId: string, error: unknown): void {
@@ -866,7 +866,7 @@ export class TaskScheduler {
   }
 
   /**
-   * T4: active writers with no ready contract and no durable claim â€”
+   * T4: active writers with no ready contract and no durable claim —
    * their files are unknown, so only same-worktree admission is refused
    * for them and their own task is never re-dispatched.
    */

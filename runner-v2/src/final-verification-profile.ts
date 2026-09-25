@@ -546,7 +546,15 @@ function validCommand(value: unknown): value is FinalVerificationCommand {
   return typeof command.label === "string" && command.label.trim().length > 0 &&
     typeof command.executable === "string" && command.executable.trim().length > 0 &&
     Array.isArray(command.args) && command.args.every((arg) => typeof arg === "string") &&
-    (command.timeoutMs === undefined || (Number.isSafeInteger(command.timeoutMs) && (command.timeoutMs as number) > 0));
+    (command.timeoutMs === undefined || (Number.isSafeInteger(command.timeoutMs) && (command.timeoutMs as number) > 0)) &&
+    validCommandEnvironment(command.environment);
+}
+/** T6a: an optional map of environment names to strings, or `undefined` for a removal. */
+function validCommandEnvironment(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.entries(value as Record<string, unknown>).every(([name, entry]) =>
+    /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && (entry === undefined || typeof entry === "string"));
 }
 function validSmoke(value: unknown): value is FinalVerificationRuntimeSmokeInput {
   if (!validCommand(value)) return false;
@@ -582,7 +590,9 @@ function validPortLease(value: unknown, targetRevision: string): value is FinalV
     (lease.port as number) >= 1_024 && (lease.port as number) <= 65_535 &&
     typeof lease.leaseId === "string" && Boolean(lease.leaseId.trim());
 }
-function cloneCommand(command: FinalVerificationCommand): FinalVerificationCommand { return { ...command, args: [...command.args] }; }
+function cloneCommand(command: FinalVerificationCommand): FinalVerificationCommand {
+  return { ...command, args: [...command.args], ...(command.environment ? { environment: { ...command.environment } } : {}) };
+}
 function cloneSmoke(smoke: FinalVerificationRuntimeSmokeInput): FinalVerificationRuntimeSmokeInput {
   return { ...smoke, args: [...smoke.args], readiness: { ...smoke.readiness } };
 }

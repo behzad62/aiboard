@@ -67,6 +67,12 @@ export interface FinalVerificationCommand {
   executable: string;
   args: string[];
   timeoutMs?: number;
+  /**
+   * T6a (real counts): explicit child-environment overrides for this command
+   * (an `undefined` value removes the name). Passed to the audited executor,
+   * which still applies its forbidden-name policy.
+   */
+  environment?: Readonly<Record<string, string | undefined>>;
 }
 
 export interface FinalVerificationManagedProcessInput {
@@ -1385,6 +1391,20 @@ function authoritativeExecutionInput(
   };
 }
 
+/** Key-order independent; a removal (`undefined`) differs from an absent name. */
+function sameEnvironment(
+  left: Readonly<Record<string, string | undefined>> | undefined,
+  right: Readonly<Record<string, string | undefined>> | undefined,
+): boolean {
+  const entries = (value: Readonly<Record<string, string | undefined>> | undefined) =>
+    Object.entries(value ?? {})
+      .map(([name, entry]) => `${name}\u0000${entry === undefined ? "\u0001removed" : `=${entry}`}`)
+      .sort();
+  const leftEntries = entries(left);
+  const rightEntries = entries(right);
+  return leftEntries.length === rightEntries.length && leftEntries.every((entry, index) => entry === rightEntries[index]);
+}
+
 function sameCommands(
   left: readonly FinalVerificationCommand[] | undefined,
   right: readonly FinalVerificationCommand[] | undefined,
@@ -1393,7 +1413,8 @@ function sameCommands(
   return left.length === right.length && left.every((command, index) => {
     const expected = right[index]!;
     return command.label === expected.label && command.executable === expected.executable &&
-      command.timeoutMs === expected.timeoutMs && sameStringArray(command.args, expected.args);
+      command.timeoutMs === expected.timeoutMs && sameStringArray(command.args, expected.args) &&
+      sameEnvironment(command.environment, expected.environment);
   });
 }
 
@@ -1522,6 +1543,7 @@ async function executeCommand(
       arguments: command.args,
       workingDirectory: cwd,
       timeoutMs,
+      ...(command.environment ? { explicitEnvironment: command.environment } : {}),
       context: {
         runId: identity.runId,
         sessionId: identity.sessionId,

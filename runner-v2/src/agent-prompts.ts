@@ -24,6 +24,7 @@ import {
   T1A_SEEDED_HOST_PLANNING_CAPABILITIES,
 } from "./planning-contracts.js";
 import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./planning-projection.js";
+import { evaluatePhaseAcceptance, phaseAcceptanceKey } from "./delivery-acceptance.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -749,7 +750,34 @@ export function renderPlanningStatus(projection: SchedulerProjection): string {
   const boundRequestSequence = planning.coverageReview === undefined
     ? null
     : (planning.coverageRequests[planning.coverageReview.id]?.requestedSequence ?? 0);
+  // T6a (B7): open blocking deliverable findings and unverified worker claims,
+  // with the ids the Architect disposes of through review_task.
+  const deliveryReviewStatus = Object.values(projection.delivery?.reviews ?? {}).map((delivery) => ({
+    taskId: delivery.taskId,
+    reviewId: delivery.reviewId,
+    stage: delivery.stage,
+    ...(delivery.risk ? { tier: delivery.risk.tier } : {}),
+    openFindings: (delivery.findings ?? [])
+      .filter((finding) => finding.severity === "blocking" && !finding.disposition)
+      .map((finding) => ({ id: finding.id, claim: finding.claim })),
+    unverifiedClaims: (delivery.claimVerdicts ?? [])
+      .filter((claim) => claim.status === "unverified" && !claim.disposition)
+      .map((claim) => ({ id: claim.claimId, claim: claim.claim, rationale: claim.rationale })),
+  }));
+  const deliveryBoundaries = Object.values(projection.delivery?.boundaries ?? {})
+    .map((boundaries) => boundaries.at(-1)!)
+    .filter((boundary) => !boundary.passed && !projection.delivery?.taskAcceptances[boundary.taskId])
+    .map((boundary) => ({
+      taskId: boundary.taskId,
+      boundaryId: boundary.boundaryId,
+      integrationRevision: boundary.integrationRevision,
+      checks: boundary.checks.map((check) => ({ checkId: check.checkId, outcome: check.outcome, ...(check.reason ? { reason: check.reason } : {}) })),
+      ...(boundary.resolution ? { resolution: boundary.resolution.resolution } : {}),
+    }));
   return JSON.stringify({
+    deliveryReviews: deliveryReviewStatus,
+    failedDeliveryBoundaries: deliveryBoundaries,
+    unacceptedPhases: unacceptedPhaseStatus(projection),
     readiness: planning.readiness,
     manifestId: manifest.manifestId,
     currentRevisionId: planning.plan?.currentRevisionId ?? null,
@@ -975,4 +1003,29 @@ export function buildAnswerReviewVerdictContext(
       ]
       : []),
   ]);
+}
+
+/**
+ * T6a (R4-B2): for each phase of the current plan revision that is not yet
+ * accepted, the exact reasons (including any exit-check word the runner
+ * cannot check), so the Architect can act on them.
+ */
+function unacceptedPhaseStatus(projection: SchedulerProjection): Array<{ phaseId: string; issues: string[] }> {
+  if (projection.planningPolicyVersion !== 1) return [];
+  const plan = projection.planning?.plan;
+  const revision = plan?.revisionsById[plan.currentRevisionId];
+  if (!revision) return [];
+  const statuses = new Map(Object.entries(projection.tasks).map(([taskId, task]) => [taskId, task.status]));
+  return revision.phases
+    .filter((phase) => !projection.delivery?.phaseAcceptances[phaseAcceptanceKey(revision.revisionId, phase.id)])
+    .map((phase) => ({
+      phaseId: phase.id,
+      issues: evaluatePhaseAcceptance({
+        phase,
+        requirements: revision.requirements,
+        taskStatuses: statuses,
+        state: projection.delivery,
+        integrationRevision: projection.integrationRevision,
+      }).issues,
+    }));
 }

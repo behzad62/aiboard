@@ -47,6 +47,20 @@ import {
   type PlanningHostCapabilitiesProvider,
 } from "./planning-review.js";
 import {
+  DELIVERY_ACCEPTANCE_RUNNER_ID,
+  beforeFailingCheckRepairCharge,
+  beforeRepairDecisionDispatch,
+  currentSubmissionReview,
+  deliveryBoundaryAction,
+  deliveryBoundaryId,
+  evaluatePhaseAcceptance,
+  openBlockingFindings,
+  phaseAcceptanceKey,
+  unverifiedClaims,
+  type DeliveryBoundaryCheck,
+} from "./delivery-acceptance.js";
+import type { NativeDeliverableReviewResult } from "./native-deliverable-review.js";
+import {
   SchedulerAnswerReviewAuthority,
   type AnswerReviewAuthority,
   type AnswerReviewDriver,
@@ -218,6 +232,36 @@ export interface PlanCriticDriver {
   }): Promise<PlanCriticResult>;
 }
 
+/** T6a: the mandatory deliverable reviewer (NativeDeliverableReviewRuntime in production). */
+export interface DeliveryReviewDriver {
+  review(input: {
+    runId: string;
+    taskId: string;
+    signal?: AbortSignal;
+    providerRetryDeadlineMs?: number;
+  }): Promise<NativeDeliverableReviewResult>;
+}
+
+/**
+ * T6a: runs the affected checks for an integrated task at the CURRENT
+ * integration revision through the audited executor and returns the real
+ * outcomes (never placeholders; a check that cannot run is `unknown`).
+ */
+export interface DeliveryBoundaryDriver {
+  check(input: {
+    runId: string;
+    taskId: string;
+    boundaryId: string;
+    /** N-R4-3: the durably started attempt; scopes process and evidence keys. */
+    attempt: number;
+    integrationRevision: string;
+    signal?: AbortSignal;
+  }): Promise<{
+    changedFiles: string[];
+    selection: { rung: string; selectedTests: string[] };
+    checks: DeliveryBoundaryCheck[];
+  }>;
+}
 export interface BuildRuntimeOptions {
   runId: string;
   initialObjective?: string;
@@ -226,6 +270,8 @@ export interface BuildRuntimeOptions {
   workerDriver: WorkerRuntimeDriver;
   architectDriver: ArchitectRuntimeDriver;
   integrationDriver: IntegrationRuntimeDriver;
+  deliveryReview?: DeliveryReviewDriver;
+  deliveryBoundary?: DeliveryBoundaryDriver;
   maxConcurrency: number;
   /**
    * T4: actual resource/provider capacity when the host reports one,
@@ -332,6 +378,8 @@ export class BuildRuntime {
   private readonly scheduler: TaskScheduler;
   private readonly architectDriver: ArchitectRuntimeDriver;
   private readonly integrationDriver: IntegrationRuntimeDriver;
+  private readonly deliveryReview?: DeliveryReviewDriver;
+  private readonly deliveryBoundary?: DeliveryBoundaryDriver;
   private readonly runPolicy: NativeBuildRunPolicy;
   private readonly maxTaskAttempts: number;
   private readonly resourceCapacity?: TaskSchedulerOptions["resourceCapacity"];
@@ -371,6 +419,8 @@ export class BuildRuntime {
     this.store = options.store;
     this.architectDriver = options.architectDriver;
     this.integrationDriver = options.integrationDriver;
+    this.deliveryReview = options.deliveryReview;
+    this.deliveryBoundary = options.deliveryBoundary;
     this.runPolicy = options.runPolicy ?? "finish";
     this.maxTaskAttempts = options.maxTaskAttempts ?? 2;
     this.resourceCapacity = options.resourceCapacity;
@@ -940,11 +990,15 @@ export class BuildRuntime {
 
     const submitted = firstTask(projection, "submitted");
     if (submitted?.changeSetId) {
-      await this.runArchitect({
-        type: "review_required",
-        taskId: submitted.id,
-        changeSetId: submitted.changeSetId,
-      }, projection);
+      // T6a: a new-policy submission reaches the Architect only after its
+      // mandatory deliverable review completed.
+      if (
+        projection.planningPolicyVersion === 1 &&
+        currentSubmissionReview(projection.delivery, submitted)?.stage !== "completed"
+      ) {
+        return await this.advanceDeliveryReview(submitted);
+      }
+      await this.runArchitect(this.reviewRequiredReason(submitted, projection), projection);
       return this.afterArchitect("review_required");
     }
 
@@ -1007,6 +1061,10 @@ export class BuildRuntime {
       return { status: "progressed", action: `integration_${result.status}` };
     }
 
+    const acceptance = await this.advanceDeliveryAcceptance(projection);
+    if (acceptance) return acceptance;
+    const phaseAcceptance = this.recordPhaseAcceptancesIfReady(projection);
+    if (phaseAcceptance) return phaseAcceptance;
     const conflict = firstTask(projection, "integration_resolution");
     if (conflict) {
       await this.runArchitect({
@@ -1190,7 +1248,7 @@ export class BuildRuntime {
             submissionId: generation.submission.submissionId,
             reviewId: generation.review.reviewId,
           },
-          failedCategories: [...decision.failedCategories],
+          failedCategories: [...beforeRepairDecisionDispatch(decision.failedCategories)],
           evidenceIds: [...new Set(decision.categoryReviews.flatMap(
             (review) => review.verdict === "repair_required" ? review.evidenceIds : [],
           ))],
@@ -1361,7 +1419,7 @@ export class BuildRuntime {
       const status = this.projection().status === "paused" ? "paused" : "progressed";
       return {
         status,
-        action: result.check.green
+        action: beforeFailingCheckRepairCharge(result.check).green
           ? "final_verification_check_completed"
           : "final_verification_check_non_green",
       };
@@ -1984,6 +2042,8 @@ export class BuildRuntime {
         reason.type === "final_verification_repair_plan_required",
       verifierRepairPlanAvailable:
         reason.type === "verifier_repair_plan_required",
+      deliveryBoundaryResolutionAvailable:
+        reason.type === "delivery_boundary_failed",
       planCritiqueResolutionAvailable:
         projection.planCritique?.current?.status === "submitted",
       architectAction: {
@@ -2142,6 +2202,209 @@ export class BuildRuntime {
       this.lifecycleController = new AbortController();
     }
     return this.lifecycleController.signal;
+  }
+
+  /**
+   * T6a: drive the mandatory deliverable review of the current submission.
+   * The reviewer runtime writes every stage durably; a pass that cannot
+   * finish pauses the run with a delivery-specific, owner-visible reason and
+   * owner resume starts a new durable generation (no controller self-review).
+   */
+  private async advanceDeliveryReview(task: BuildTask): Promise<BuildStepResult> {
+    if (!this.deliveryReview) {
+      throw new Error("New-policy task review requires the mandatory deliverable reviewer.");
+    }
+    const providerRetryDeadlineMs = this.providerRetryDeadlineMs?.();
+    let result: Awaited<ReturnType<DeliveryReviewDriver["review"]>>;
+    try {
+      result = await this.deliveryReview.review({
+        runId: this.runId,
+        taskId: task.id,
+        signal: this.activeLifecycleSignal(),
+        ...(providerRetryDeadlineMs !== undefined ? { providerRetryDeadlineMs } : {}),
+      });
+    } catch (error) {
+      return this.pauseForDeliveryGate(task.id, "delivery_review_failed", error instanceof Error ? error.message : String(error));
+    }
+    if (result.status === "reviewed") {
+      return { status: "progressed", action: "deliverable_review_recorded" };
+    }
+    return this.pauseForDeliveryGate(
+      task.id,
+      result.status === "suspended" ? `delivery_review_suspended:${result.reason}` : result.reason,
+      result.status === "suspended" ? result.error : result.detail,
+    );
+  }
+
+  /** The review_required reason carries what the deliverable review left open. */
+  private reviewRequiredReason(task: BuildTask, projection: SchedulerProjection): ArchitectActionReason {
+    const review = projection.planningPolicyVersion === 1
+      ? currentSubmissionReview(projection.delivery, task)
+      : undefined;
+    return {
+      type: "review_required",
+      taskId: task.id,
+      changeSetId: task.changeSetId!,
+      ...(review
+        ? {
+            delivery: {
+              reviewId: review.reviewId,
+              openFindingIds: openBlockingFindings(review).map((finding) => finding.id),
+              unverifiedClaimIds: unverifiedClaims(review).map((claim) => claim.claimId),
+            },
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * T6a (B3/B4): post-integration boundary checks and task acceptance.
+   * A failed/unknown boundary keeps the task `integrated` (no illegal
+   * transition), routes to the Architect once, and is never re-run on the same
+   * revision without a state change. Returns undefined when nothing applies.
+   */
+  private async advanceDeliveryAcceptance(projection: SchedulerProjection): Promise<BuildStepResult | undefined> {
+    if (projection.planningPolicyVersion !== 1) return undefined;
+    const integrationRevision = projection.integrationRevision;
+    if (!integrationRevision) return undefined;
+    const pending = Object.values(projection.tasks)
+      .filter((task) => task.kind !== "final_verification" && task.status === "integrated" && !projection.delivery?.taskAcceptances[task.id])
+      .sort((left, right) => left.id.localeCompare(right.id));
+    for (const task of pending) {
+      const action = deliveryBoundaryAction(
+        projection.delivery,
+        task.id,
+        integrationRevision,
+        (id) => projection.tasks[id]?.status,
+      );
+      if (action.type === "wait") continue;
+      if (action.type === "accept") {
+        const review = projection.delivery!.reviews[task.id]!;
+        this.store.append({
+          runId: this.runId,
+          type: "task.acceptance_recorded",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: DELIVERY_ACCEPTANCE_RUNNER_ID },
+          idempotencyKey: `delivery-acceptance:${task.id}:${action.boundary.boundaryId}`,
+          payload: { taskId: task.id, reviewId: review.reviewId, boundaryId: action.boundary.boundaryId },
+        });
+        return { status: "progressed", action: "task_acceptance_recorded" };
+      }
+      if (action.type === "architect") {
+        await this.runArchitect({
+          type: "delivery_boundary_failed",
+          taskId: task.id,
+          boundaryId: action.boundary.boundaryId,
+          integrationRevision,
+          resolutionGeneration: action.resolutionGeneration,
+        }, projection);
+        return this.afterArchitect("delivery_boundary_failed");
+      }
+      if (!this.deliveryBoundary) {
+        throw new Error("New-policy task acceptance requires the integrated-boundary check driver.");
+      }
+      const generation = (projection.delivery?.boundaries[task.id]?.length ?? 0) + 1;
+      const boundaryId = deliveryBoundaryId(task.id, generation);
+      // N-R4-3: durably start the attempt before any command runs.
+      const attempt = (projection.delivery?.boundaryStarts?.[boundaryId] ?? 0) + 1;
+      this.store.append({
+        runId: this.runId,
+        type: "delivery.boundary_started",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: DELIVERY_ACCEPTANCE_RUNNER_ID },
+        idempotencyKey: `delivery-boundary-start:${boundaryId}:${attempt}`,
+        payload: { taskId: task.id, boundaryId, attempt, integrationRevision },
+      });
+      let outcome: Awaited<ReturnType<DeliveryBoundaryDriver["check"]>>;
+      try {
+        outcome = await this.deliveryBoundary.check({
+          runId: this.runId,
+          taskId: task.id,
+          boundaryId,
+          attempt,
+          integrationRevision,
+          signal: this.activeLifecycleSignal(),
+        });
+      } catch (error) {
+        return this.pauseForDeliveryGate(task.id, "delivery_boundary_unavailable", error instanceof Error ? error.message : String(error));
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "delivery.boundary_checked",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: DELIVERY_ACCEPTANCE_RUNNER_ID },
+        idempotencyKey: `delivery-boundary:${boundaryId}`,
+        payload: {
+          taskId: task.id,
+          boundaryId,
+          generation,
+          attempt,
+          integrationRevision,
+          executedScope: "full_test_script",
+          changedFiles: [...outcome.changedFiles],
+          selection: { rung: outcome.selection.rung, selectedTests: [...outcome.selection.selectedTests] },
+          checks: outcome.checks.map((check) => ({ ...check, evidenceIds: [...check.evidenceIds] })),
+          passed: outcome.checks.every((check) => check.outcome === "passed"),
+        },
+      });
+      return { status: "progressed", action: "delivery_boundary_checked" };
+    }
+    return undefined;
+  }
+
+  /**
+   * T6a (N4): phase acceptance is bound to the current plan revision and
+   * re-evaluated on every pump step, so any relevant input change (a task
+   * acceptance, a new boundary run, a new revision) is picked up.
+   */
+  private recordPhaseAcceptancesIfReady(projection: SchedulerProjection): BuildStepResult | undefined {
+    if (projection.planningPolicyVersion !== 1) return undefined;
+    const plan = projection.planning?.plan;
+    const revision = plan?.revisionsById[plan.currentRevisionId];
+    if (!revision || !readyPlanIdentity(projection)) return undefined;
+    const taskStatuses = new Map(Object.entries(projection.tasks).map(([id, task]) => [id, task.status]));
+    for (const phase of revision.phases) {
+      if (projection.delivery?.phaseAcceptances[phaseAcceptanceKey(revision.revisionId, phase.id)]) continue;
+      const evaluation = evaluatePhaseAcceptance({
+        phase,
+        requirements: revision.requirements,
+        taskStatuses,
+        state: projection.delivery,
+        integrationRevision: projection.integrationRevision,
+      });
+      if (!evaluation.ready) continue;
+      this.store.append({
+        runId: this.runId,
+        type: "phase.acceptance_recorded",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: DELIVERY_ACCEPTANCE_RUNNER_ID },
+        idempotencyKey: `phase-acceptance:${revision.revisionId}:${phase.id}`,
+        payload: {
+          phaseId: phase.id,
+          planRevisionId: revision.revisionId,
+          taskAcceptanceRefs: evaluation.taskAcceptanceRefs,
+          exitChecks: evaluation.exitChecks,
+        },
+      });
+      return { status: "progressed", action: "phase_acceptance_recorded" };
+    }
+    return undefined;
+  }
+
+  private pauseForDeliveryGate(taskId: string, reason: string, detail?: string): BuildStepResult {
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `delivery-paused:${taskId}:${reason}:${this.projection().lastSequence}`,
+      payload: {
+        reason: reason.startsWith("delivery_") ? reason : `delivery_${reason}`,
+        taskId,
+        ...(detail ? { detail } : {}),
+      },
+    });
+    return { status: "paused", action: reason.startsWith("delivery_") ? reason : `delivery_${reason}` };
   }
 
   private afterArchitect(action: string): BuildStepResult {
@@ -2793,6 +3056,7 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "request_coverage_review",
   "request_integration",
   "resolve_context_recording",
+  "resolve_delivery_boundary_failure",
   "resolve_plan_critique",
   "review_final_verification",
   "review_task",
@@ -2891,6 +3155,15 @@ const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store"
         targetRevision: "rev",
         unsatisfiedCriteria: [],
       },
+      sequence: 0,
+    },
+  },
+  {
+    // T6a: the failed integrated-boundary turn.
+    runPolicy: "finish",
+    deliveryBoundaryResolutionAvailable: true,
+    architectAction: {
+      reason: { type: "delivery_boundary_failed", taskId: "task", boundaryId: "boundary", integrationRevision: "rev", resolutionGeneration: 1 },
       sequence: 0,
     },
   },

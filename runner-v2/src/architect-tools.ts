@@ -61,6 +61,7 @@ import {
   type PlanningSourceReader,
 } from "./planning-tools.js";
 import { createRequestTriageTools } from "./request-triage.js";
+import { boundaryResolutionGeneration, latestBoundary } from "./delivery-acceptance.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
@@ -71,6 +72,8 @@ export interface ArchitectToolsOptions {
   finalVerificationReviewAvailable?: boolean;
   finalVerificationRepairPlanAvailable?: boolean;
   verifierRepairPlanAvailable?: boolean;
+  /** T6a: offered on a `delivery_boundary_failed` turn. */
+  deliveryBoundaryResolutionAvailable?: boolean;
   evidenceStore?: EvidenceStore;
   architectAction?: {
     reason: ArchitectActionReason;
@@ -176,6 +179,8 @@ interface ReviewTaskInput {
   evidenceArtifactHashes: string[];
   criterionVerdicts?: CriterionReviewVerdict[];
   planReconciliation?: PlanReconciliation;
+  findingDispositions?: Array<{ findingId: string; resolution: "plan_reconciled" | "rejected" | "deferred"; rationale: string }>;
+  claimDispositions?: Array<{ claimId: string; status: "verified"; rationale: string }>;
 }
 
 interface TaskIdInput { taskId: string }
@@ -561,9 +566,12 @@ export function createArchitectTools(
   const verifierRepairPlanning = options.verifierRepairPlanAvailable && !answerPath
     ? [...repairPlanning, planVerifierRepairsTool(options.store, clock)]
     : repairPlanning;
-  const critiqueResolution = options.planCritiqueResolutionAvailable && !answerPath
-    ? [...verifierRepairPlanning, resolvePlanCritiqueTool(options.store, clock)]
+  const boundaryResolution = options.deliveryBoundaryResolutionAvailable && !answerPath
+    ? [...verifierRepairPlanning, resolveDeliveryBoundaryFailureTool(options.store, clock)]
     : verifierRepairPlanning;
+  const critiqueResolution = options.planCritiqueResolutionAvailable && !answerPath
+    ? [...boundaryResolution, resolvePlanCritiqueTool(options.store, clock)]
+    : boundaryResolution;
   const tools = options.runPolicy === "plan_only"
     ? options.planOnlyCompletionAvailable
       ? [...critiqueResolution, completeRunTool(options.store, clock, "plan_only")]
@@ -942,6 +950,113 @@ function planVerifierRepairsTool(
         type: "architect_action",
         action: "verification_repairs_planned",
         referenceId: current.reviewId,
+      });
+    },
+  });
+}
+
+interface ResolveDeliveryBoundaryFailureInput {
+  taskId: string;
+  boundaryId: string;
+  resolution: "recheck" | "repair_planned";
+  rationale: string;
+  tasks?: Array<{
+    id: string;
+    objective: string;
+    dependencies: string[];
+    requiredCapabilities: string[];
+    acceptanceCriteria: AcceptanceCriterion[];
+  }>;
+}
+
+/**
+ * T6a (B3/B4): the Architect's legal responses to a failed or unknown
+ * integrated-boundary check. `recheck` grants one more run on the same
+ * integration revision (once per revision); `repair_planned` creates repair
+ * tasks bound to the failed task's parent contract. The task stays
+ * `integrated` and unaccepted until a later boundary passes.
+ */
+function resolveDeliveryBoundaryFailureTool(
+  store: SchedulerStore,
+  clock: () => string,
+): NativeTool<ResolveDeliveryBoundaryFailureInput> {
+  return lifecycleTool({
+    name: "resolve_delivery_boundary_failure",
+    description:
+      "Resolve a failed or unknown post-integration boundary check: recheck once on the same revision, or plan repair tasks",
+    schema: objectSchema({
+      taskId: { type: "string", minLength: 1 },
+      boundaryId: { type: "string", minLength: 1 },
+      resolution: { type: "string", enum: ["recheck", "repair_planned"] },
+      rationale: { type: "string", minLength: 1 },
+      tasks: { type: "array", minItems: 1, items: taskSchema() },
+    }, ["taskId", "boundaryId", "resolution", "rationale"]),
+    validate: (input) => validateObject(input, (value) => {
+      if (!nonEmpty(value.taskId) || !nonEmpty(value.boundaryId) || !nonEmpty(value.rationale)) return null;
+      if (value.resolution !== "recheck" && value.resolution !== "repair_planned") return null;
+      if (value.resolution === "recheck") {
+        if (value.tasks !== undefined) return null;
+        return {
+          taskId: value.taskId,
+          boundaryId: value.boundaryId,
+          resolution: "recheck" as const,
+          rationale: value.rationale,
+        };
+      }
+      if (!Array.isArray(value.tasks) || value.tasks.length === 0) return null;
+      const tasks: NonNullable<ResolveDeliveryBoundaryFailureInput["tasks"]> = [];
+      for (const candidate of value.tasks) {
+        if (!isRecord(candidate) || !nonEmpty(candidate.id) || !nonEmpty(candidate.objective)) return null;
+        const dependencies = stringList(candidate.dependencies);
+        const requiredCapabilities = stringList(candidate.requiredCapabilities);
+        const acceptanceCriteria = parseAcceptanceCriteria(candidate.acceptanceCriteria);
+        if (!dependencies || !requiredCapabilities || !acceptanceCriteria) return null;
+        tasks.push({ id: candidate.id, objective: candidate.objective, dependencies, requiredCapabilities, acceptanceCriteria });
+      }
+      return {
+        taskId: value.taskId,
+        boundaryId: value.boundaryId,
+        resolution: "repair_planned" as const,
+        rationale: value.rationale,
+        tasks,
+      };
+    }, "taskId, boundaryId, resolution, rationale, and repair tasks for repair_planned are required"),
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const boundary = latestBoundary(projection.delivery, input.taskId);
+      const resolutionGeneration = boundary?.boundaryId === input.boundaryId
+        ? boundaryResolutionGeneration(boundary)
+        : 1;
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "delivery.boundary_failure_resolved",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `delivery-boundary-resolution:${input.boundaryId}:${resolutionGeneration}`,
+        payload: {
+          taskId: input.taskId,
+          boundaryId: input.boundaryId,
+          resolutionGeneration,
+          resolution: input.resolution,
+          rationale: input.rationale,
+          ...(input.tasks
+            ? {
+                revision: projection.planRevision + 1,
+                tasks: input.tasks.map((task) => ({
+                  ...task,
+                  dependencies: [...task.dependencies],
+                  requiredCapabilities: [...task.requiredCapabilities],
+                  acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+                })),
+              }
+            : {}),
+        },
+      }, {
+        type: "architect_action",
+        action: "delivery_boundary_failure_resolved",
+        referenceId: input.boundaryId,
       });
     },
   });
@@ -1659,6 +1774,22 @@ function reviewTaskTool(
         items: criterionReviewVerdictSchema(),
       },
       planReconciliation: planReconciliationSchema(),
+      findingDispositions: {
+        type: "array",
+        items: objectSchema({
+          findingId: { type: "string", minLength: 1 },
+          resolution: { type: "string", enum: ["plan_reconciled", "rejected", "deferred"] },
+          rationale: { type: "string", minLength: 1 },
+        }, ["findingId", "resolution", "rationale"]),
+      },
+      claimDispositions: {
+        type: "array",
+        items: objectSchema({
+          claimId: { type: "string", minLength: 1 },
+          status: { type: "string", enum: ["verified"] },
+          rationale: { type: "string", minLength: 1 },
+        }, ["claimId", "status", "rationale"]),
+      },
     }, ["taskId", "decision", "summary", "evidenceArtifactHashes"]),
     validate: validateReview,
     execute: async (input, context) => {
@@ -1774,6 +1905,8 @@ function reviewTaskTool(
           ...(input.planReconciliation
             ? { planReconciliation: input.planReconciliation }
             : {}),
+          ...(input.findingDispositions ? { findingDispositions: input.findingDispositions } : {}),
+          ...(input.claimDispositions ? { claimDispositions: input.claimDispositions } : {}),
         },
       }, {
         type: "architect_action",
@@ -2154,6 +2287,11 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
       ? undefined
       : parsePlanReconciliation(value.planReconciliation);
     if (value.planReconciliation !== undefined && !planReconciliation) return null;
+    const rawFindingDispositions: unknown = value.findingDispositions;
+    const findingDispositions = rawFindingDispositions === undefined ? undefined : Array.isArray(rawFindingDispositions) ? rawFindingDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.findingId) && (candidate.resolution === "plan_reconciled" || candidate.resolution === "rejected" || candidate.resolution === "deferred") && nonEmpty(candidate.rationale) ? { findingId: candidate.findingId, resolution: candidate.resolution as "plan_reconciled" | "rejected" | "deferred", rationale: candidate.rationale } : null) : null;
+    if (findingDispositions === null || findingDispositions?.some((candidate) => candidate === null)) return null;
+    const claimDispositions = value.claimDispositions === undefined ? undefined : Array.isArray(value.claimDispositions) ? value.claimDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.claimId) && candidate.status === "verified" && nonEmpty(candidate.rationale) ? { claimId: candidate.claimId, status: "verified" as const, rationale: candidate.rationale } : null) : null;
+    if (claimDispositions === null || claimDispositions?.some((candidate) => candidate === null)) return null;
     return {
       taskId: value.taskId,
       decision: value.decision,
@@ -2161,6 +2299,8 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
       evidenceArtifactHashes: hashes,
       ...(criterionVerdicts !== undefined ? { criterionVerdicts } : {}),
       ...(planReconciliation ? { planReconciliation } : {}),
+      ...(findingDispositions ? { findingDispositions: findingDispositions.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null) } : {}),
+      ...(claimDispositions ? { claimDispositions: claimDispositions.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null) } : {}),
     };
   }, "taskId, decision, summary, and valid evidenceArtifactHashes are required");
 }

@@ -257,6 +257,37 @@ const VERIFIER_ANSWER_FULL = [
   "submit_answer_review_verdict",
 ] as const;
 
+// T6a (OA-3/OA-4/OA-10): the deliverable reviewer. The findings and verdict
+// passes inspect read-only; only the high-tier findings pass adds
+// run_evidence_command. Each pass registers exactly one lifecycle tool.
+const VERIFIER_DELIVERY_REQUIRED = [...VERIFIER_ANSWER_REQUIRED] as const;
+
+const VERIFIER_DELIVERY_FULL = [
+  ...VERIFIER_DELIVERY_REQUIRED,
+  "record_deliverable_findings",
+  "submit_deliverable_verdict",
+] as const;
+
+const VERIFIER_DELIVERY_COMMANDS_REQUIRED = [
+  ...VERIFIER_DELIVERY_REQUIRED,
+  "run_evidence_command",
+] as const;
+
+const VERIFIER_DELIVERY_COMMANDS_FULL = [
+  "artifact.read",
+  "fs.list",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "git.diff",
+  "git.log",
+  "git.show",
+  "git.status",
+  "inspect_evidence",
+  "record_deliverable_findings",
+  "run_evidence_command",
+] as const;
+
 const PLAN_CRITIC = [
   "artifact.read",
   "fs.list",
@@ -370,6 +401,9 @@ const DERIVED: readonly {
   { role: "verifier", broker: "expectations", required: VERIFIER_EXPECTATIONS, full: VERIFIER_EXPECTATIONS },
   { role: "verifier", broker: "coverage", required: VERIFIER_COVERAGE_REQUIRED, full: VERIFIER_COVERAGE_FULL },
   { role: "verifier", broker: "answer", required: VERIFIER_ANSWER_REQUIRED, full: VERIFIER_ANSWER_FULL },
+  { role: "verifier", broker: "delivery_obligations", required: [], full: ["record_deliverable_obligations"] },
+  { role: "verifier", broker: "delivery", required: VERIFIER_DELIVERY_REQUIRED, full: VERIFIER_DELIVERY_FULL },
+  { role: "verifier", broker: "delivery_commands", required: VERIFIER_DELIVERY_COMMANDS_REQUIRED, full: VERIFIER_DELIVERY_COMMANDS_FULL },
   { role: "plan-critic", broker: "inspection", required: PLAN_CRITIC, full: PLAN_CRITIC },
   { role: "worker", broker: "task", required: WORKER_REQUIRED, full: WORKER_FULL },
 ];
@@ -397,6 +431,8 @@ test("assertRoleToolSurface throws when a required tool is removed or an unliste
         `Role ${entry.role} broker ${entry.broker} registered tool unlisted\\.tool is not on the allow-list\\.`,
       ),
     );
+    // The criteria-only obligations pass has no required tools to remove.
+    if (entry.required.length === 0) continue;
     assert.throws(
       () => assertRoleToolSurface(
         entry.role,

@@ -75,7 +75,7 @@ export class WorkspaceManager {
   private readonly beforeWorkspaceRootRemoval?: WorkspaceManagerOptions["beforeWorkspaceRootRemoval"];
   private operationQueue: Promise<void> = Promise.resolve();
   /**
-   * T4 (EP11): exclusive worktree ownership â€” resolved worktree path to
+   * T4 (EP11): exclusive worktree ownership — resolved worktree path to
    * owning task id. No two writers share one worktree; defense in depth
    * behind the scheduler claim gate, which refuses the second writer
    * before a workspace is even allocated.

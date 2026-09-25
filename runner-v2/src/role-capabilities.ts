@@ -10,7 +10,7 @@ import type { ToolEffect } from "./agent-contracts.js";
  */
 export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker";
 
-export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "answer" | "task";
+export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "answer" | "delivery_obligations" | "delivery" | "delivery_commands" | "task";
 
 /**
  * `all` registers every MCP tool the manager exposes (the worker).
@@ -42,6 +42,9 @@ export const ROLE_CAPABILITY_BROKERS = [
   { role: "verifier", broker: "expectations" },
   { role: "verifier", broker: "coverage" },
   { role: "verifier", broker: "answer" },
+  { role: "verifier", broker: "delivery_obligations" },
+  { role: "verifier", broker: "delivery" },
+  { role: "verifier", broker: "delivery_commands" },
   { role: "plan-critic", broker: "inspection" },
   { role: "worker", broker: "task" },
 ] as const satisfies readonly { role: RoleCapabilityRole; broker: RoleCapabilityBroker }[];
@@ -179,6 +182,40 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "git.status",
     "inspect_evidence",
   ], ["record_answer_review_findings", "submit_answer_review_verdict"]),
+  // T6a (OA-3/OA-4/OA-10): the mandatory deliverable reviewer, one broker per
+  // kernel-ordered pass. The high-tier obligations pass sees criteria only and
+  // has no inspection tools. The findings pass inspects the task-revision
+  // checkout read-only; at high tier it may also run audited evidence
+  // commands. The verdict pass is read-only. No filesystem mutation, process
+  // control, or MCP; each pass registers exactly one optional lifecycle tool.
+  "verifier:delivery_obligations": surface("verifier", "delivery_obligations", "none", [], [
+    "record_deliverable_obligations",
+  ]),
+  "verifier:delivery": surface("verifier", "delivery", "none", [
+    "artifact.read",
+    "fs.list",
+    "fs.read",
+    "fs.search",
+    "fs.stat",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "inspect_evidence",
+  ], ["record_deliverable_findings", "submit_deliverable_verdict"]),
+  "verifier:delivery_commands": surface("verifier", "delivery_commands", "none", [
+    "artifact.read",
+    "fs.list",
+    "fs.read",
+    "fs.search",
+    "fs.stat",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "inspect_evidence",
+    "run_evidence_command",
+  ], ["record_deliverable_findings"]),
   "plan-critic:inspection": surface("plan-critic", "inspection", "none", [
     "artifact.read",
     "fs.list",
