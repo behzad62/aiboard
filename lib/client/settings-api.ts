@@ -37,9 +37,12 @@ import {
   CUSTOM_PROVIDER_ID,
   FOUNDRY_PROVIDER_ID,
   NVIDIA_PROVIDER_ID,
+  OPENROUTER_PROVIDER_ID,
   getAllProviders,
   getProvider,
   listFoundryModelInfos,
+  normalizeOpenRouterModelId,
+  listOpenRouterModelInfos,
   listNvidiaModelInfos,
   resolveModelCapabilities,
 } from "./providers";
@@ -55,7 +58,7 @@ export interface ProviderConfig {
   keyHint?: string | null;
   baseURL?: string | null;
   runnerTokenHint?: string | null;
-  /** User-defined model ids (gateway providers like Foundry). */
+  /** Optional extra model ids saved for providers that support user additions. */
   modelIds?: string[];
   defaultModel?: string | null;
   enabled: boolean;
@@ -86,6 +89,8 @@ export function loadProviders(): {
       models:
         p.id === FOUNDRY_PROVIDER_ID
           ? listFoundryModelInfos().map(withContext)
+          : p.id === OPENROUTER_PROVIDER_ID
+            ? listOpenRouterModelInfos().map(withContext)
           : p.id === NVIDIA_PROVIDER_ID
             ? listNvidiaModelInfos().map(withContext)
           : p.listModels().map(withContext),
@@ -161,6 +166,141 @@ export function saveProviderKey(input: {
   } else {
     throw new Error("API key required");
   }
+}
+
+interface OpenRouterModelsResponse {
+  data?: Array<{
+    id?: string;
+    name?: string;
+    description?: string;
+    supported_parameters?: string[];
+    architecture?: {
+      input_modalities?: string[];
+    };
+  }>;
+}
+
+export interface OpenRouterCatalogModel {
+  id: string;
+  name: string;
+  description?: string;
+  inputModalities: string[];
+  supportedParameters: string[];
+  supportsImageInput: boolean;
+  supportsDocumentInput: boolean;
+  supportsAudioInput: boolean;
+  supportsVideoInput: boolean;
+  supportsTools: boolean;
+  supportsStructuredOutputs: boolean;
+  supportsReasoning: boolean;
+  supportsReasoningEffort: boolean;
+}
+
+function normalizeOpenRouterSupportedParameters(
+  parameters?: string[]
+): Set<string> {
+  return new Set(
+    (parameters ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean)
+  );
+}
+
+function normalizeOpenRouterInputModalities(modalities?: string[]): Set<string> {
+  return new Set(
+    (modalities ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean)
+  );
+}
+
+export function buildOpenRouterCatalogModel(
+  entry: NonNullable<OpenRouterModelsResponse["data"]>[number] & { id: string }
+): OpenRouterCatalogModel {
+  const inputModalities = [...(entry.architecture?.input_modalities ?? [])];
+  const modalitySet = normalizeOpenRouterInputModalities(inputModalities);
+  const supportedParameters = [...(entry.supported_parameters ?? [])];
+  const parameterSet = normalizeOpenRouterSupportedParameters(supportedParameters);
+  return {
+    id: entry.id,
+    name: entry.name?.trim() || entry.id,
+    description: entry.description?.trim() || undefined,
+    inputModalities,
+    supportedParameters,
+    supportsImageInput: modalitySet.has("image"),
+    supportsDocumentInput: modalitySet.has("file"),
+    supportsAudioInput: modalitySet.has("audio"),
+    supportsVideoInput: modalitySet.has("video"),
+    supportsTools: parameterSet.has("tools"),
+    supportsStructuredOutputs: parameterSet.has("structured_outputs"),
+    supportsReasoning: parameterSet.has("reasoning"),
+    supportsReasoningEffort: parameterSet.has("reasoning_effort"),
+  };
+}
+
+async function fetchOpenRouterModelsPayload(): Promise<OpenRouterModelsResponse> {
+  const response = await fetch("https://openrouter.ai/api/v1/models");
+  if (!response.ok) {
+    throw new Error(`OpenRouter model catalog request failed (${response.status})`);
+  }
+  return (await response.json()) as OpenRouterModelsResponse;
+}
+
+export async function fetchOpenRouterModelCatalog(): Promise<OpenRouterCatalogModel[]> {
+  const payload = await fetchOpenRouterModelsPayload();
+  return (payload.data ?? [])
+    .filter(
+      (
+        entry
+      ): entry is NonNullable<OpenRouterModelsResponse["data"]>[number] & { id: string } =>
+        typeof entry.id === "string" && entry.id.length > 0
+    )
+    .map(buildOpenRouterCatalogModel)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function openRouterCapabilitiesFromModalities(modalities?: string[]) {
+  const supported = new Set((modalities ?? []).map((value) => value.trim().toLowerCase()));
+  return {
+    image: supported.has("image"),
+    document: supported.has("file"),
+    audio: supported.has("audio"),
+    video: supported.has("video"),
+  };
+}
+
+export async function refreshOpenRouterModelCapabilities(
+  modelIds?: string[]
+): Promise<{ synced: number; missing: string[] }> {
+  const targets = (modelIds ?? getProviderKey(OPENROUTER_PROVIDER_ID)?.models ?? [])
+    .map(normalizeOpenRouterModelId)
+    .filter((id, index, all) => id.length > 0 && all.indexOf(id) === index);
+  if (targets.length === 0) return { synced: 0, missing: [] };
+
+  const payload = await fetchOpenRouterModelsPayload();
+  const modelIndex = new Map(
+    (payload.data ?? [])
+      .filter((entry): entry is NonNullable<OpenRouterModelsResponse["data"]>[number] & { id: string } =>
+        typeof entry.id === "string" && entry.id.length > 0
+      )
+      .map((entry) => [entry.id, entry])
+  );
+
+  const next = { ...(getUserSettings().discoveredModelCapabilities ?? {}) };
+  const missing: string[] = [];
+  let synced = 0;
+  const updatedAt = new Date().toISOString();
+  for (const id of targets) {
+    const entry = modelIndex.get(id);
+    if (!entry) {
+      missing.push(id);
+      continue;
+    }
+    next[formatModelId(OPENROUTER_PROVIDER_ID, id)] = {
+      ...openRouterCapabilitiesFromModalities(entry.architecture?.input_modalities),
+      updatedAt,
+      source: "openrouter-models",
+    };
+    synced += 1;
+  }
+  updateUserSettings({ discoveredModelCapabilities: next });
+  return { synced, missing };
 }
 
 const TEST_IMAGE: AttachmentPayload = {
@@ -349,6 +489,8 @@ export async function validateProvider(input: {
     provider.listModels()[0]?.id ??
     (input.providerId === FOUNDRY_PROVIDER_ID
       ? listFoundryModelInfos()[0]?.id
+      : input.providerId === OPENROUTER_PROVIDER_ID
+        ? listOpenRouterModelInfos()[0]?.id
       : input.providerId === NVIDIA_PROVIDER_ID
         ? listNvidiaModelInfos()[0]?.id
       : undefined);
@@ -359,6 +501,8 @@ export async function validateProvider(input: {
       error:
         input.providerId === FOUNDRY_PROVIDER_ID
           ? "Add at least one model id (e.g. claude-opus-4-5) and save first"
+          : input.providerId === OPENROUTER_PROVIDER_ID
+            ? "Add an OpenRouter model id (e.g. qwen/qwen3-coder) or pick a built-in OpenRouter model"
           : input.providerId === NVIDIA_PROVIDER_ID
             ? "Add at least one NVIDIA model id (e.g. z-ai/glm-5.2) and save first"
             : "No model available",

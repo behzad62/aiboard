@@ -133,8 +133,10 @@ for await (const _chunk of streamOpenAICompatibleChat(
 }
 
 check(
-  "Kimi K3 transport sends max reasoning",
-  captured?.reasoning_effort === "max",
+  "Kimi K3 transport sends nested max reasoning",
+  !!captured &&
+    typeof captured.reasoning === "object" &&
+    (captured.reasoning as { effort?: string }).effort === "max",
   captured
 );
 check(

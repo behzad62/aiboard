@@ -282,9 +282,10 @@ export async function* streamOpenAICompatibleChat(
         ? { max_tokens: params.maxTokens }
         : { max_completion_tokens: params.maxTokens };
 
-  // reasoning_effort only for OpenAI / OpenRouter — custom local endpoints
-  // tend to reject unknown params. Cast keeps newer values (e.g. "xhigh") past
-  // the pinned SDK's narrower enum type.
+  // OpenAI uses the top-level `reasoning_effort` field. OpenRouter's current
+  // docs and live model metadata are more consistent on the nested
+  // `reasoning.effort` shape across model families like Gemini and MiniMax,
+  // which avoids structured-output routing failures when require_parameters is on.
   const reasoningValue =
     providerId === "openai"
       ? openAIReasoningEffort(params.reasoningEffort ?? "default", params.model)
@@ -294,8 +295,10 @@ export async function* streamOpenAICompatibleChat(
             params.model
           )
         : null;
-  const reasoningField: Record<string, string> = reasoningValue
-    ? { reasoning_effort: reasoningValue }
+  const reasoningField: Record<string, unknown> = reasoningValue
+    ? providerId === "openrouter"
+      ? { reasoning: { effort: reasoningValue } }
+      : { reasoning_effort: reasoningValue }
     : {};
 
   // Temperature: omitted for OpenAI (newer models reject the parameter), but

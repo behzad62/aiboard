@@ -302,6 +302,11 @@ export const PROVIDER_DEFINITIONS = {
     id: "openrouter",
     name: "OpenRouter",
     modelSource: "catalog",
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "qwen/qwen3-coder",
+      hint: "Built-in OpenRouter models stay available automatically. Add any newer OpenRouter model ids here, one per line, when the catalog has not caught up yet.",
+    },
     nativeWebSearch: true,
     reasoningEffort: true,
     maxTokens: true,

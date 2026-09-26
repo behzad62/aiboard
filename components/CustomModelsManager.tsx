@@ -192,7 +192,8 @@ export function CustomModelsManager({
         </code>
         ), otherwise the browser blocks the connection with a CORS error. Use
         the Supported inputs toggles to declare which media types the model
-        accepts.
+        accepts. If you just want to use a newer OpenRouter model, add its id on
+        the OpenRouter tab instead of creating a custom endpoint here.
       </div>
 
       {models.length > 0 && (
