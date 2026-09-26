@@ -262,9 +262,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         enabled,
       });
       let savedMessage = "Saved successfully";
-      if (provider.providerId === "openrouter" && parsedModelIds.length > 0) {
+      if (provider.providerId === "openrouter" && selectableModels.length > 0) {
         try {
-          const sync = await refreshOpenRouterModelCapabilities(parsedModelIds);
+          const sync = await refreshOpenRouterModelCapabilities(
+            selectableModels.map((model) => model.id)
+          );
           if (sync.synced > 0 && sync.missing.length === 0) {
             savedMessage = `Saved successfully. Synced OpenRouter capabilities for ${sync.synced} model${sync.synced === 1 ? "" : "s"}.`;
           } else if (sync.synced > 0) {

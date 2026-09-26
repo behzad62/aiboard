@@ -191,9 +191,12 @@ export interface OpenRouterCatalogModel {
   supportsAudioInput: boolean;
   supportsVideoInput: boolean;
   supportsTools: boolean;
+  supportsToolChoice: boolean;
   supportsStructuredOutputs: boolean;
   supportsReasoning: boolean;
   supportsReasoningEffort: boolean;
+  supportsTemperature: boolean;
+  supportsMaxTokens: boolean;
 }
 
 function normalizeOpenRouterSupportedParameters(
@@ -228,9 +231,12 @@ export function buildOpenRouterCatalogModel(
     supportsAudioInput: modalitySet.has("audio"),
     supportsVideoInput: modalitySet.has("video"),
     supportsTools: parameterSet.has("tools"),
+    supportsToolChoice: parameterSet.has("tool_choice"),
     supportsStructuredOutputs: parameterSet.has("structured_outputs"),
     supportsReasoning: parameterSet.has("reasoning"),
     supportsReasoningEffort: parameterSet.has("reasoning_effort"),
+    supportsTemperature: parameterSet.has("temperature"),
+    supportsMaxTokens: parameterSet.has("max_tokens"),
   };
 }
 
@@ -255,13 +261,23 @@ export async function fetchOpenRouterModelCatalog(): Promise<OpenRouterCatalogMo
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function openRouterCapabilitiesFromModalities(modalities?: string[]) {
-  const supported = new Set((modalities ?? []).map((value) => value.trim().toLowerCase()));
+function openRouterCapabilitiesFromEntry(
+  entry: NonNullable<OpenRouterModelsResponse["data"]>[number]
+) {
+  const modalities = normalizeOpenRouterInputModalities(entry.architecture?.input_modalities);
+  const parameters = normalizeOpenRouterSupportedParameters(entry.supported_parameters);
   return {
-    image: supported.has("image"),
-    document: supported.has("file"),
-    audio: supported.has("audio"),
-    video: supported.has("video"),
+    image: modalities.has("image"),
+    document: modalities.has("file"),
+    audio: modalities.has("audio"),
+    video: modalities.has("video"),
+    tools: parameters.has("tools"),
+    toolChoice: parameters.has("tool_choice"),
+    structuredOutputs: parameters.has("structured_outputs"),
+    reasoning: parameters.has("reasoning"),
+    reasoningEffort: parameters.has("reasoning_effort"),
+    temperature: parameters.has("temperature"),
+    maxTokens: parameters.has("max_tokens"),
   };
 }
 
@@ -293,7 +309,7 @@ export async function refreshOpenRouterModelCapabilities(
       continue;
     }
     next[formatModelId(OPENROUTER_PROVIDER_ID, id)] = {
-      ...openRouterCapabilitiesFromModalities(entry.architecture?.input_modalities),
+      ...openRouterCapabilitiesFromEntry(entry),
       updatedAt,
       source: "openrouter-models",
     };

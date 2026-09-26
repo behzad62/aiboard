@@ -53,6 +53,7 @@ export class ToolRegistry implements AgentToolRuntime {
   definitions(): ToolDefinition[] {
     return [...this.tools.values()]
       .map((tool) => tool.definition)
+      .filter((definition) => definition.modelVisible !== false)
       .sort((left, right) => left.name.localeCompare(right.name));
   }
 

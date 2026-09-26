@@ -31,6 +31,7 @@ import type {
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import {
+  getDiscoveredOpenRouterApiCapabilities,
   resolveClientModelContextProfile,
   resolveModelCapabilities,
   resolveModelName,
@@ -4186,9 +4187,17 @@ export async function runBuildDiscussion(
     round += 1;
     const messageId = uuidv4();
     const { providerId, model: rawModel } = parseModelId(model.modelId);
+    const discoveredOpenRouterTools =
+      providerId === "openrouter"
+        ? getDiscoveredOpenRouterApiCapabilities(rawModel)?.tools
+        : undefined;
     const nativeTools =
       opts.nativeTools?.length &&
-      providerSupportsNativeBuildToolsFeature(providerId, rawModel)
+      providerSupportsNativeBuildToolsFeature(
+        providerId,
+        rawModel,
+        discoveredOpenRouterTools
+      )
         ? opts.nativeTools
         : undefined;
     const hostedBuildTools =

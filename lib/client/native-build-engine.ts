@@ -4,7 +4,10 @@ import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 import { parseModelId } from "@/lib/providers/base";
 import { MODEL_CATALOG } from "@/lib/providers/catalog";
 import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
-import { getProviderDefinition } from "@/lib/providers/provider-registry";
+import {
+  getProviderDefinition,
+  providerSupportsNativeBuildToolsFeature,
+} from "@/lib/providers/provider-registry";
 import {
   getMessagesForDiscussion,
   getCustomModelById,
@@ -513,7 +516,11 @@ export function createNativeProviderConfig(
   const catalogModel = MODEL_CATALOG.find(
     (candidate) => candidate.providerId === providerId && candidate.id === model
   );
-  const inputCapabilities = catalogModel?.capabilities ?? {
+  const discoveredOpenRouter =
+    providerId === "openrouter"
+      ? getUserSettings().discoveredModelCapabilities?.[runtimeId]
+      : undefined;
+  const inputCapabilities = discoveredOpenRouter ?? catalogModel?.capabilities ?? {
     image: false,
     document: false,
     audio: false,
@@ -540,6 +547,19 @@ export function createNativeProviderConfig(
     // the descriptive labels the Architect chooses for a task.
     capabilities: ["*"],
     inputCapabilities: nativeInputCapabilities(inputCapabilities),
+    ...(providerId === "openrouter"
+      ? {
+          supportsTools:
+            discoveredOpenRouter?.tools ??
+            providerSupportsNativeBuildToolsFeature(providerId, model),
+          hostedTools: [
+            { type: "web_search" as const },
+            { type: "web_fetch" as const },
+            { type: "shell" as const, parameters: { engine: "openrouter" } },
+            { type: "datetime" as const },
+          ],
+        }
+      : {}),
     priority,
     ...pricing,
     ...(reasoningEffort && reasoningEffort !== "default"
@@ -596,6 +616,7 @@ export function nativeProviderProtocol(
   providerId: string,
   modelId: string
 ): "chat-completions" | "responses" {
+  if (providerId === "openrouter") return "responses";
   return providerId === "openai" &&
     MODEL_CATALOG.some((model) =>
       model.providerId === "openai" && model.id === modelId && model.api === "responses"

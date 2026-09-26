@@ -2978,6 +2978,8 @@ export function createProviderModel(
     apiKey: config.secret,
     modelId: config.modelId,
     providerId: config.providerId,
+    ...(config.supportsTools !== undefined ? { supportsTools: config.supportsTools } : {}),
+    ...(config.hostedTools ? { hostedTools: config.hostedTools } : {}),
     ...(config.protocol
       ? { protocol: config.protocol }
       : config.providerId === "xai"

@@ -300,6 +300,13 @@ export interface UserSettings {
       document: boolean;
       audio: boolean;
       video: boolean;
+      tools?: boolean;
+      toolChoice?: boolean;
+      structuredOutputs?: boolean;
+      reasoning?: boolean;
+      reasoningEffort?: boolean;
+      temperature?: boolean;
+      maxTokens?: boolean;
       updatedAt: string;
       source: "openrouter-models";
     }

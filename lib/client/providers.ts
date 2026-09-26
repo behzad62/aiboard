@@ -12,7 +12,7 @@ import type {
   ModelInfo,
   StreamChunk,
 } from "@/lib/providers/base";
-import { parseModelId } from "@/lib/providers/base";
+import { formatModelId, parseModelId } from "@/lib/providers/base";
 import {
   resolveModelContextProfile,
   type ModelContextOverrides,
@@ -53,6 +53,14 @@ const TEXT_ONLY = {
 
 function getDiscoveredCapabilities(fullModelId: string): ModelCapabilities | null {
   return getUserSettings().discoveredModelCapabilities?.[fullModelId] ?? null;
+}
+
+export function getDiscoveredOpenRouterApiCapabilities(modelId: string) {
+  return (
+    getUserSettings().discoveredModelCapabilities?.[
+      formatModelId(OPENROUTER_PROVIDER_ID, normalizeOpenRouterModelId(modelId))
+    ] ?? null
+  );
 }
 
 // Foundry serves Claude models, which accept image + document inputs.

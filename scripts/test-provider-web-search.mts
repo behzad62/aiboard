@@ -33,6 +33,7 @@ const searchableModels: Array<{ providerId: string; model: string }> = [
   { providerId: "anthropic", model: "claude-opus-4-8" },
   { providerId: "google", model: "gemini-3.6-flash" },
   { providerId: "openrouter", model: "qwen/qwen3.7-max" },
+  { providerId: "openrouter", model: "nex-agi/nex-n2-pro:free" },
   { providerId: "chatgpt", model: "gpt-5.4" },
   { providerId: "github-copilot", model: "gemini-3.5-flash" },
 ];
@@ -53,7 +54,6 @@ const nonSearchableModels: Array<{ providerId: string; model: string }> = [
   { providerId: "foundry", model: "claude-opus-4-8" },
   { providerId: "openai", model: "gpt-5.3-codex" },
   { providerId: "chatgpt", model: "gpt-5.3-codex-spark" },
-  { providerId: "openrouter", model: "nex-agi/nex-n2-pro:free" },
 ];
 
 for (const { providerId, model } of nonSearchableModels) {
@@ -134,6 +134,20 @@ check(
       tool_choice: "auto",
     }),
   openAIResponsesWebSearchField(true)
+);
+check(
+  "OpenRouter Responses web search field uses server tool",
+  JSON.stringify(openAIResponsesWebSearchField(true, "openrouter")) ===
+    JSON.stringify({
+      tools: [
+        {
+          type: "openrouter:web_search",
+          parameters: { search_context_size: "medium" },
+        },
+      ],
+      tool_choice: "auto",
+    }),
+  openAIResponsesWebSearchField(true, "openrouter")
 );
 
 check(

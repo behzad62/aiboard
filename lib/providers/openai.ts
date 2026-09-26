@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type {
   AIProvider,
   ChatParams,
+  HostedToolDefinition,
   ModelCapabilities,
   NativeToolCall,
   NativeToolDefinition,
@@ -9,10 +10,16 @@ import type {
 } from "./base";
 import { getCatalogModelsForProvider, MODEL_CATALOG } from "./catalog";
 import { streamOpenAICompatibleChat } from "./openai-compat";
-import { openAIReasoningEffort } from "./reasoning";
+import { openAIReasoningEffort, openRouterReasoningEffort } from "./reasoning";
 import { openAIResponsesTextFormatField } from "./structured-output";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import { safeProviderErrorMetadata } from "./base";
+import {
+  DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS,
+  openRouterFunctionToolsForResponses,
+  openRouterHostedToolsForApi,
+  toolChoiceForResponses,
+} from "./openrouter-tools";
 
 type OpenAIResponseInputMessage = {
   role: "user" | "assistant";
@@ -80,14 +87,11 @@ export function buildOpenAIResponsesInput(
   });
 }
 
-/**
- * Stream via the Responses API. Attachments aren't mapped here — the only
- * models on this path are text-only Codex models, and the engine filters
- * attachments by capability before the provider is called.
- */
-async function* streamOpenAIResponses(
+/** Stream through the OpenAI-style Responses API for OpenAI or OpenRouter. */
+export async function* streamOpenAIResponses(
   client: OpenAI,
-  params: ChatParams
+  params: ChatParams,
+  providerId: "openai" | "openrouter" = "openai"
 ): AsyncIterable<StreamChunk> {
   const instructions = params.messages
     .filter((m) => m.role === "system")
@@ -95,7 +99,7 @@ async function* streamOpenAIResponses(
     .join("\n\n");
   const caps =
     params.capabilities ??
-    MODEL_CATALOG.find((m) => m.providerId === "openai" && m.id === params.model)
+    MODEL_CATALOG.find((m) => m.providerId === providerId && m.id === params.model)
       ?.capabilities ?? {
       image: false,
       document: false,
@@ -104,32 +108,43 @@ async function* streamOpenAIResponses(
     };
   const input = buildOpenAIResponsesInput(params, caps);
 
-  const reasoningValue = openAIReasoningEffort(
-    params.reasoningEffort ?? "default",
-    params.model
-  );
+  const reasoningValue =
+    providerId === "openrouter"
+      ? openRouterReasoningEffort(params.reasoningEffort ?? "default", params.model)
+      : openAIReasoningEffort(params.reasoningEffort ?? "default", params.model);
   const structuredOutputField = openAIResponsesTextFormatField(
     params.structuredOutput
   );
   const webSearchField = openAIResponsesWebSearchField(
-    params.webSearch && !params.structuredOutput
+    params.webSearch && !params.structuredOutput,
+    providerId
   );
   const nativeToolField = openAIResponsesNativeToolField(
-    params.structuredOutput ? undefined : params.nativeTools
+    params.structuredOutput ? undefined : params.nativeTools,
+    { providerId, toolChoice: params.toolChoice }
   );
-  const hostedBuildToolsField = openAIResponsesHostedBuildToolsField(
-    params.hostedBuildTools && !params.structuredOutput
-  );
-  const combinedTools = [
+  const requestedHostedTools =
+    providerId === "openrouter" && !params.structuredOutput
+      ? [
+          ...(params.hostedBuildTools ? DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS : []),
+          ...(params.hostedTools ?? []),
+        ]
+      : [];
+  const hostedToolField = openRouterHostedToolField(requestedHostedTools);
+  const combinedTools = dedupeResponseTools([
     ...((webSearchField.tools as unknown[] | undefined) ?? []),
     ...((nativeToolField.tools as unknown[] | undefined) ?? []),
-    ...((hostedBuildToolsField.tools as unknown[] | undefined) ?? []),
-  ];
+    ...((hostedToolField.tools as unknown[] | undefined) ?? []),
+  ]);
   const combinedToolField =
     combinedTools.length > 0
       ? {
           tools: combinedTools,
-          tool_choice: "auto",
+          tool_choice:
+            nativeToolField.tool_choice ??
+            (providerId === "openrouter"
+              ? toolChoiceForResponses(params.toolChoice)
+              : params.toolChoice ?? "auto"),
           ...(nativeToolField.parallel_tool_calls
             ? { parallel_tool_calls: nativeToolField.parallel_tool_calls }
             : {}),
@@ -146,13 +161,23 @@ async function* streamOpenAIResponses(
     let reportedTotalTokens: number | undefined;
     let reportedReasoningTokens: number | undefined;
     let reportedCachedInputTokens: number | undefined;
+    let reportedCacheWriteInputTokens: number | undefined;
+    let reportedProviderCost: number | undefined;
     const stream = await client.responses.create(
       {
         model: params.model,
         ...(instructions ? { instructions } : {}),
         input: input as never,
+        ...(providerId === "openrouter"
+          ? ({ cache_control: { type: "ephemeral" } } as unknown as Record<string, never>)
+          : {}),
         ...(params.maxTokens != null
           ? { max_output_tokens: params.maxTokens }
+          : {}),
+        ...(providerId === "openrouter" &&
+          params.temperature != null &&
+          params.model.trim().toLowerCase() !== "moonshotai/kimi-k3"
+          ? { temperature: params.temperature }
           : {}),
         ...(reasoningValue
           ? {
@@ -162,6 +187,9 @@ async function* streamOpenAIResponses(
             }
           : {}),
         ...(structuredOutputField as Record<string, never>),
+        ...(providerId === "openrouter" && params.structuredOutput
+          ? ({ provider: { require_parameters: true } } as unknown as Record<string, never>)
+          : {}),
         ...(combinedToolField as Record<string, never>),
         stream: true,
       },
@@ -196,8 +224,12 @@ async function* streamOpenAIResponses(
               input_tokens?: number;
               output_tokens?: number;
               total_tokens?: number;
-              input_tokens_details?: { cached_tokens?: number };
+              input_tokens_details?: {
+                cached_tokens?: number;
+                cache_write_tokens?: number;
+              };
               output_tokens_details?: { reasoning_tokens?: number };
+              cost?: number;
             } | null;
           };
         }
@@ -222,6 +254,15 @@ async function* streamOpenAIResponses(
         ) {
           reportedReasoningTokens =
             responseUsage.output_tokens_details.reasoning_tokens;
+        }
+        if (
+          typeof responseUsage.input_tokens_details?.cache_write_tokens === "number"
+        ) {
+          reportedCacheWriteInputTokens =
+            responseUsage.input_tokens_details.cache_write_tokens;
+        }
+        if (typeof responseUsage.cost === "number") {
+          reportedProviderCost = responseUsage.cost;
         }
       }
       if (event.type === "response.output_text.delta" && event.delta) {
@@ -297,7 +338,9 @@ async function* streamOpenAIResponses(
       reportedOutputTokens != null ||
       reportedTotalTokens != null ||
       reportedReasoningTokens != null ||
-      reportedCachedInputTokens != null
+      reportedCachedInputTokens != null ||
+      reportedCacheWriteInputTokens != null ||
+      reportedProviderCost != null
     ) {
       yield {
         type: "usage",
@@ -307,6 +350,11 @@ async function* streamOpenAIResponses(
           totalTokens: reportedTotalTokens,
           reasoningTokens: reportedReasoningTokens,
           cachedInputTokens: reportedCachedInputTokens,
+          cacheWriteInputTokens: reportedCacheWriteInputTokens,
+          providerCost: reportedProviderCost,
+          ...(reportedProviderCost != null && providerId === "openrouter"
+            ? { providerCostUnit: "credits" as const }
+            : {}),
         },
       };
     }
@@ -314,44 +362,88 @@ async function* streamOpenAIResponses(
   } catch (err) {
     yield {
       type: "error",
-      error: err instanceof Error ? err.message : "OpenAI request failed",
+      error:
+        err instanceof Error
+          ? err.message
+          : `${providerId === "openrouter" ? "OpenRouter" : "OpenAI"} request failed`,
       errorMetadata: safeProviderErrorMetadata(err),
     };
   }
 }
 
 export function openAIResponsesWebSearchField(
-  enabled?: boolean
+  enabled?: boolean,
+  providerId: "openai" | "openrouter" = "openai"
 ): Record<string, unknown> {
   if (!enabled) return {};
   return {
-    tools: [{ type: "web_search_preview" }],
+    tools:
+      providerId === "openrouter"
+        ? [{ type: "openrouter:web_search", parameters: { search_context_size: "medium" } }]
+        : [{ type: "web_search_preview" }],
     tool_choice: "auto",
   };
 }
 
 export function openAIResponsesNativeToolField(
-  tools: NativeToolDefinition[] | undefined
+  tools: NativeToolDefinition[] | undefined,
+  options: {
+    providerId?: "openai" | "openrouter";
+    toolChoice?: ChatParams["toolChoice"];
+  } = {}
 ): Record<string, unknown> {
   if (!tools?.length) return {};
+  const providerId = options.providerId ?? "openai";
+  const mapped =
+    providerId === "openrouter"
+      ? openRouterFunctionToolsForResponses(tools).tools
+      : tools.map((tool) => ({
+          type: "function",
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+          strict: tool.strict ?? false,
+        }));
   return {
-    tools: tools.map((tool) => ({
-      type: "function",
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      strict: tool.strict ?? false,
-    })),
-    tool_choice: "auto",
+    tools: mapped,
+    tool_choice:
+      providerId === "openrouter"
+        ? toolChoiceForResponses(options.toolChoice)
+        : typeof options.toolChoice === "object"
+          ? { type: "function", name: options.toolChoice.name }
+          : options.toolChoice ?? "auto",
     parallel_tool_calls: true,
   };
 }
 
-export function openAIResponsesHostedBuildToolsField(
-  enabled?: boolean
+export function openRouterHostedToolField(
+  tools: readonly HostedToolDefinition[] | undefined
 ): Record<string, unknown> {
-  void enabled;
-  return {};
+  const mapped = openRouterHostedToolsForApi(tools, "responses");
+  return mapped.length > 0 ? { tools: mapped } : {};
+}
+
+export function openAIResponsesHostedBuildToolsField(
+  enabled?: boolean,
+  providerId: "openai" | "openrouter" = "openai"
+): Record<string, unknown> {
+  if (!enabled || providerId !== "openrouter") return {};
+  return openRouterHostedToolField(DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS);
+}
+
+function dedupeResponseTools(tools: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  return tools.filter((tool, index) => {
+    if (!tool || typeof tool !== "object") return true;
+    const record = tool as Record<string, unknown>;
+    const type = String(record.type ?? "unknown");
+    const key = type.startsWith("openrouter:")
+      ? type
+      : `${type}:${String(record.name ?? index)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export const openaiProvider: AIProvider = {

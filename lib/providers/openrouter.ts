@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { AIProvider, ChatParams } from "./base";
 import { getCatalogModelsForProvider } from "./catalog";
 import { streamOpenAICompatibleChat } from "./openai-compat";
+import { streamOpenAIResponses } from "./openai";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
@@ -16,6 +17,12 @@ function createOpenRouterClient(apiKey: string, disableAutomaticRetries = false)
       "X-Title": "AI Board",
     },
   });
+}
+
+const RESPONSES_COMPATIBILITY_STATUSES = new Set([400, 404, 405, 415, 422, 501]);
+
+function isResponsesCompatibilityError(statusCode?: number): boolean {
+  return statusCode != null && RESPONSES_COMPATIBILITY_STATUSES.has(statusCode);
 }
 
 export const openrouterProvider: AIProvider = {
@@ -44,12 +51,40 @@ export const openrouterProvider: AIProvider = {
       params.apiKey,
       params.disableAutomaticRetries
     );
-    yield* streamOpenAICompatibleChat(
-      client,
-      params,
-      "openrouter",
-      "OpenRouter",
-      "max_tokens"
+    const requiresChatMultimodal = (params.attachments ?? []).some(
+      (attachment) =>
+        !!attachment.base64Data &&
+        ((attachment.category === "audio" && params.capabilities?.audio !== false) ||
+          (attachment.category === "video" && params.capabilities?.video !== false))
     );
+    if (requiresChatMultimodal) {
+      yield* streamOpenAICompatibleChat(
+        client,
+        params,
+        "openrouter",
+        "OpenRouter",
+        "max_tokens"
+      );
+      return;
+    }
+    let responseStarted = false;
+    for await (const chunk of streamOpenAIResponses(client, params, "openrouter")) {
+      if (
+        chunk.type === "error" &&
+        !responseStarted &&
+        isResponsesCompatibilityError(chunk.errorMetadata?.statusCode)
+      ) {
+        yield* streamOpenAICompatibleChat(
+          client,
+          params,
+          "openrouter",
+          "OpenRouter",
+          "max_tokens"
+        );
+        return;
+      }
+      if (chunk.type !== "error") responseStarted = true;
+      yield chunk;
+    }
   },
 };

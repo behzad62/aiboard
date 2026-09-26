@@ -43,11 +43,36 @@ export interface StructuredOutputFormat {
   strict?: boolean;
 }
 
+export type NativeToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | { type: "function"; name: string };
+
+export type HostedToolType =
+  | "web_search"
+  | "web_fetch"
+  | "shell"
+  | "apply_patch"
+  | "datetime"
+  | "image_generation"
+  | "advisor"
+  | "subagent"
+  | "fusion"
+  | "tool_search";
+
+export interface HostedToolDefinition {
+  type: HostedToolType;
+  parameters?: Record<string, unknown>;
+}
+
 export interface NativeToolDefinition {
   name: string;
   description: string;
   parameters: JsonSchemaObject;
   strict?: boolean;
+  /** OpenRouter Responses extension: keep false for core tools that must stay eager. */
+  deferLoading?: boolean;
 }
 
 export interface NativeToolCall {
@@ -70,6 +95,10 @@ export interface ChatParams {
   webSearch?: boolean;
   /** Provider-native function/tool definitions available for this call. */
   nativeTools?: NativeToolDefinition[];
+  /** Controls whether local function tools may/must be called. Defaults to auto. */
+  toolChoice?: NativeToolChoice;
+  /** Provider-hosted tools requested explicitly for this call. */
+  hostedTools?: HostedToolDefinition[];
   /** Provider-hosted Build tools for providers that still support them. */
   hostedBuildTools?: boolean;
   /** Explicit capabilities — used for custom models not in the static catalog. */

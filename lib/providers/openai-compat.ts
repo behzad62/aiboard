@@ -11,6 +11,11 @@ import { safeProviderErrorMetadata } from "./base";
 import { openAIReasoningEffort, openRouterReasoningEffort } from "./reasoning";
 import { DISCUSSION_TRANSCRIPT_MARKER } from "../orchestrator/prompts";
 import { openAICompatibleStructuredOutputField } from "./structured-output";
+import {
+  DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS,
+  openRouterHostedToolsForApi,
+  toolChoiceForChatCompletions,
+} from "./openrouter-tools";
 
 // Non-cryptographic stable hash (browser-safe — avoids Node's crypto module).
 // Only used to derive a stable OpenAI prompt_cache_key string.
@@ -97,12 +102,34 @@ export function buildOpenAIUserContent(
           file_data: `data:${file.mimeType};base64,${file.base64Data}`,
         },
       });
+    } else if (file.category === "audio" && caps?.audio && file.base64Data) {
+      parts.push({
+        type: "input_audio",
+        input_audio: {
+          data: file.base64Data,
+          format: audioFormat(file),
+        },
+      });
+    } else if (file.category === "video" && caps?.video && file.base64Data) {
+      parts.push({
+        type: "video_url",
+        video_url: {
+          url: `data:${file.mimeType};base64,${file.base64Data}`,
+        },
+      });
     }
   }
 
   return parts.length === 1 && parts[0].type === "text"
     ? text
     : (parts as unknown as OpenAI.Chat.Completions.ChatCompletionContentPart[]);
+}
+
+function audioFormat(file: AttachmentPayload): string {
+  const mimeSubtype = file.mimeType.split("/")[1]?.split(";")[0]?.trim().toLowerCase();
+  const extension = file.filename.split(".").pop()?.trim().toLowerCase();
+  const normalized = mimeSubtype === "mpeg" ? "mp3" : mimeSubtype;
+  return normalized || extension || "wav";
 }
 
 // OpenRouter caches OpenAI/DeepSeek/Grok-style models automatically, but
@@ -140,7 +167,8 @@ export function openAICompatibleWebSearchField(
 
 export function openAICompatibleNativeToolField(
   providerId: string,
-  tools: NativeToolDefinition[] | undefined
+  tools: NativeToolDefinition[] | undefined,
+  toolChoice: ChatParams["toolChoice"] = "auto"
 ): Record<string, unknown> {
   if (
     !tools?.length ||
@@ -158,11 +186,35 @@ export function openAICompatibleNativeToolField(
         strict: tool.strict ?? false,
       },
     })),
-    tool_choice: "auto",
+    tool_choice:
+      providerId === "openrouter"
+        ? toolChoiceForChatCompletions(toolChoice)
+        : typeof toolChoice === "object"
+          ? { type: "function", function: { name: toolChoice.name } }
+          : toolChoice,
     parallel_tool_calls: true,
   };
 }
 
+function dedupeOpenAICompatibleTools(tools: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  return tools.filter((tool, index) => {
+    if (!tool || typeof tool !== "object") return true;
+    const record = tool as Record<string, unknown>;
+    const nestedFunction =
+      record.function && typeof record.function === "object"
+        ? (record.function as Record<string, unknown>)
+        : undefined;
+    const type = String(record.type ?? "unknown");
+    const name = record.name ?? nestedFunction?.name;
+    const key = type.startsWith("openrouter:")
+      ? type
+      : `${type}:${String(name ?? index)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 export function openAICompatibleStreamOptionsField(
   providerId: string,
   structuredOutput?: ChatParams["structuredOutput"]
@@ -238,7 +290,9 @@ export function buildOpenAIMessages(
       const multimodal = params.attachments.some(
         (a) =>
           (a.category === "image" && caps.image && !!a.base64Data) ||
-          (a.category === "document" && caps.document && !!a.base64Data)
+          (a.category === "document" && caps.document && !!a.base64Data) ||
+          (a.category === "audio" && caps.audio && !!a.base64Data) ||
+          (a.category === "video" && caps.video && !!a.base64Data)
       );
       return {
         role: "user",
@@ -326,18 +380,37 @@ export async function* streamOpenAICompatibleChat(
   );
   const nativeToolField = openAICompatibleNativeToolField(
     providerId,
-    params.structuredOutput ? undefined : params.nativeTools
+    params.structuredOutput ? undefined : params.nativeTools,
+    params.toolChoice
   );
-  const combinedTools = [
+  const requestedHostedTools =
+    providerId === "openrouter"
+      ? [
+          ...(params.hostedBuildTools ? DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS : []),
+          ...(params.hostedTools ?? []),
+        ]
+      : [];
+  const hostedTools = openRouterHostedToolsForApi(
+    requestedHostedTools,
+    "chat-completions"
+  );
+  const combinedTools = dedupeOpenAICompatibleTools([
     ...((webSearchField.tools as unknown[] | undefined) ?? []),
+    ...hostedTools,
     ...((nativeToolField.tools as unknown[] | undefined) ?? []),
-  ];
+  ]);
   const combinedToolField =
     combinedTools.length > 0
       ? {
           tools: combinedTools,
-          ...(nativeToolField.tool_choice
-            ? { tool_choice: nativeToolField.tool_choice }
+          ...((nativeToolField.tool_choice ?? params.toolChoice)
+            ? {
+                tool_choice:
+                  nativeToolField.tool_choice ??
+                  (providerId === "openrouter"
+                    ? toolChoiceForChatCompletions(params.toolChoice)
+                    : params.toolChoice),
+              }
             : {}),
           ...(nativeToolField.parallel_tool_calls
             ? { parallel_tool_calls: nativeToolField.parallel_tool_calls }
