@@ -293,6 +293,24 @@ export interface UserSettings {
   defaultBuildAlwaysRequireIndependentVerifier?: boolean;
   modelPricingOverrides?: Record<string, ModelPricingOverride>;
   modelContextOverrides?: ModelContextOverrides;
+  discoveredModelCapabilities?: Record<
+    string,
+    {
+      image: boolean;
+      document: boolean;
+      audio: boolean;
+      video: boolean;
+      tools?: boolean;
+      toolChoice?: boolean;
+      structuredOutputs?: boolean;
+      reasoning?: boolean;
+      reasoningEffort?: boolean;
+      temperature?: boolean;
+      maxTokens?: boolean;
+      updatedAt: string;
+      source: "openrouter-models";
+    }
+  >;
 }
 
 export interface ProviderKey {

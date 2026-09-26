@@ -34,9 +34,11 @@ import {
   CUSTOM_PROVIDER_ID,
   FOUNDRY_PROVIDER_ID,
   NVIDIA_PROVIDER_ID,
+  OPENROUTER_PROVIDER_ID,
   getCustomModelByFullId,
   getProvider,
   listFoundryModelInfos,
+  listOpenRouterModelInfos,
   listNvidiaModelInfos,
   streamCustomChat,
 } from "./providers";
@@ -121,6 +123,8 @@ function resolveProbeTarget(fullModelId: string): ProbeTarget {
   const gatewayModelInfo =
     providerId === FOUNDRY_PROVIDER_ID
       ? listFoundryModelInfos().find((m) => m.id === model)
+      : providerId === OPENROUTER_PROVIDER_ID
+        ? listOpenRouterModelInfos().find((m) => m.id === model)
       : providerId === NVIDIA_PROVIDER_ID
         ? listNvidiaModelInfos().find((m) => m.id === model)
         : undefined;

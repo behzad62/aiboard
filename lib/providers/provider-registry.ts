@@ -183,8 +183,11 @@ const MODEL_TOOL_SUPPORT: Partial<
     hostedBuildTools: isGemini25OrNewer,
   },
   openrouter: {
-    nativeWebSearch: listedModel(OPENROUTER_MODELS_WITH_FUNCTION_TOOLS),
+    // OpenRouter executes web search as a server tool; it is not gated by the
+    // model's own `tools` parameter. Local function tools still are.
+    nativeWebSearch: true,
     nativeBuildTools: listedModel(OPENROUTER_MODELS_WITH_FUNCTION_TOOLS),
+    hostedBuildTools: true,
   },
   xai: {
     // xAI docs list function calling and the web_search server tool on current Grok models.
@@ -302,6 +305,11 @@ export const PROVIDER_DEFINITIONS = {
     id: "openrouter",
     name: "OpenRouter",
     modelSource: "catalog",
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "qwen/qwen3-coder",
+      hint: "Built-in OpenRouter models stay available automatically. Add any newer OpenRouter model ids here, one per line, when the catalog has not caught up yet.",
+    },
     nativeWebSearch: true,
     reasoningEffort: true,
     maxTokens: true,
@@ -520,8 +528,12 @@ export function providerSupportsMaxTokensFeature(
 
 export function providerSupportsNativeBuildToolsFeature(
   providerId: string,
-  modelId = ""
+  modelId = "",
+  discoveredOpenRouterTools?: boolean
 ): boolean {
+  if (providerId === "openrouter" && discoveredOpenRouterTools !== undefined) {
+    return discoveredOpenRouterTools;
+  }
   return modelSupportsToolFeature(providerId, modelId, "nativeBuildTools");
 }
 

@@ -1368,3 +1368,393 @@ function toolResult(callId: string, hash: string): ToolResult {
     isError: false,
   };
 }
+
+
+test("OpenRouter Responses transport falls back to Chat Completions on protocol incompatibility", async () => {
+  const urls: string[] = [];
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://openrouter.example/api/v1",
+    apiKey: "openrouter-secret",
+    modelId: "vendor/model",
+    providerId: "openrouter",
+    protocol: "responses",
+    fetch: async (input) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.endsWith("/responses")) {
+        return Response.json(
+          { error: { message: "Responses API is not supported for this route." } },
+          { status: 404 }
+        );
+      }
+      return Response.json({
+        id: "fallback_chat",
+        choices: [{
+          finish_reason: "stop",
+          message: { content: "Fallback worked." },
+        }],
+        usage: { prompt_tokens: 12, completion_tokens: 3 },
+      });
+    },
+  });
+
+  const turn = await model.complete({
+    sessionId: "openrouter_fallback",
+    messages: [{ id: "u", role: "user", content: "Hello" }],
+    tools: [],
+  });
+
+  assert.deepEqual(urls, [
+    "https://openrouter.example/api/v1/responses",
+    "https://openrouter.example/api/v1/chat/completions",
+  ]);
+  assert.deepEqual(turn.blocks, [{ type: "text", text: "Fallback worked." }]);
+  assert.equal(turn.providerRequestId, "fallback_chat");
+});
+
+test("OpenRouter Responses transport does not fall back on throttling", async () => {
+  const urls: string[] = [];
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://openrouter.example/api/v1",
+    apiKey: "openrouter-secret",
+    modelId: "vendor/model",
+    providerId: "openrouter",
+    protocol: "responses",
+    fetch: async (input) => {
+      urls.push(String(input));
+      return Response.json(
+        { error: { message: "Rate limited" } },
+        { status: 429, headers: { "retry-after": "2" } }
+      );
+    },
+  });
+
+  await assert.rejects(
+    () => model.complete({
+      sessionId: "openrouter_no_fallback",
+      messages: [{ id: "u", role: "user", content: "Hello" }],
+      tools: [],
+    }),
+    (error: unknown) =>
+      error instanceof ProviderTransportError &&
+      error.status === 429 &&
+      error.retryAfterMs === 2_000
+  );
+  assert.deepEqual(urls, ["https://openrouter.example/api/v1/responses"]);
+});
+
+
+test("OpenRouter Responses transport sends the runner session id for sticky routing", async () => {
+  let body: { session_id?: string; cache_control?: { type?: string } } | undefined;
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://openrouter.example/api/v1",
+    apiKey: "openrouter-secret",
+    modelId: "openai/gpt-5.6",
+    providerId: "openrouter",
+    protocol: "responses",
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as { session_id?: string; cache_control?: { type?: string } };
+      return Response.json({
+        id: "openrouter_responses",
+        status: "completed",
+        output: [{ type: "message", content: [{ type: "output_text", text: "Done." }] }],
+        usage: { input_tokens: 4, output_tokens: 2 },
+      });
+    },
+  });
+
+  await model.complete({
+    sessionId: "runner-session-123",
+    messages: [{ id: "u", role: "user", content: "Hello" }],
+    tools: [],
+  });
+
+  assert.equal(body?.session_id, "runner-session-123");
+  assert.deepEqual(body?.cache_control, { type: "ephemeral" });
+});
+
+
+test("OpenRouter Chat compatibility transport preserves sticky routing and cache hints", async () => {
+  let body: {
+    session_id?: string;
+    cache_control?: { type?: string };
+  } | undefined;
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://openrouter.example/api/v1",
+    apiKey: "openrouter-secret",
+    modelId: "vendor/legacy-model",
+    providerId: "openrouter",
+    protocol: "chat-completions",
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as typeof body;
+      return Response.json({
+        id: "openrouter_chat",
+        choices: [{ finish_reason: "stop", message: { content: "Done." } }],
+        usage: { prompt_tokens: 4, completion_tokens: 2 },
+      });
+    },
+  });
+
+  await model.complete({
+    sessionId: "runner-chat-session-123",
+    messages: [{ id: "u", role: "user", content: "Hello" }],
+    tools: [],
+  });
+
+  assert.equal(body?.session_id, "runner-chat-session-123");
+  assert.deepEqual(body?.cache_control, { type: "ephemeral" });
+});
+
+
+test("OpenRouter Runner preserves strict tool schemas and required tool choice", async () => {
+  let body: Record<string, unknown> | undefined;
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://openrouter.example/api/v1",
+    apiKey: "openrouter-secret",
+    modelId: "xiaomi/mimo-v2.6-pro",
+    providerId: "openrouter",
+    protocol: "responses",
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({
+        id: "strict_tools",
+        status: "completed",
+        output: [{ type: "message", content: [{ type: "output_text", text: "Done." }] }],
+      });
+    },
+  });
+
+  await model.complete({
+    sessionId: "strict-session",
+    messages: [{ id: "u", role: "user", content: "Use the tool." }],
+    tools: [{
+      name: "read",
+      description: "Read a file",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      effect: "none",
+      strict: true,
+      deferLoading: false,
+    }],
+    toolChoice: "required",
+  });
+
+  const tools = body?.tools as Array<Record<string, unknown>> | undefined;
+  assert.equal(tools?.[0]?.strict, true);
+  assert.equal(body?.tool_choice, "required");
+});
+
+
+test("OpenRouter Runner enables Tool Search for large deferred tool catalogs", async () => {
+  let body: Record<string, unknown> | undefined;
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://openrouter.example/api/v1",
+    apiKey: "openrouter-secret",
+    modelId: "xiaomi/mimo-v2.6-pro",
+    providerId: "openrouter",
+    protocol: "responses",
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({ id: "tool_search", status: "completed", output: [] });
+    },
+  });
+
+  await model.complete({
+    sessionId: "tool-search-session",
+    messages: [{ id: "u", role: "user", content: "Do the task." }],
+    hostedTools: [{ type: "tool_search" }],
+    tools: Array.from({ length: 18 }, (_, index) => ({
+      name: index === 0 ? "read" : `tool_${index}`,
+      description: `Tool ${index}`,
+      inputSchema: { type: "object", properties: {} },
+      readOnly: index === 0,
+      effect: "none" as const,
+      ...(index === 0 ? { deferLoading: false } : {}),
+    })),
+  });
+
+  const tools = body?.tools as Array<Record<string, unknown>> | undefined;
+  assert.equal(
+    tools?.filter((tool) => tool.type === "openrouter:tool_search").length,
+    1,
+    "Tool Search should be emitted once even when explicitly requested and auto-enabled"
+  );
+  assert.equal(tools?.find((tool) => tool.name === "read")?.defer_loading, undefined);
+  assert.equal(tools?.find((tool) => tool.name === "tool_1")?.defer_loading, true);
+});
+
+
+test("OpenRouter Runner suppresses local tools when discovery marks tools unsupported", async () => {
+  let body: Record<string, unknown> | undefined;
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://openrouter.example/api/v1",
+    apiKey: "openrouter-secret",
+    modelId: "vendor/no-tools",
+    providerId: "openrouter",
+    protocol: "responses",
+    supportsTools: false,
+    fetch: async (_input, init) => {
+      body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return Response.json({ id: "no-tools", status: "completed", output: [] });
+    },
+  });
+  await model.complete({
+    sessionId: "no-tools-session",
+    messages: [{ id: "u", role: "user", content: "Hello" }],
+    tools: [{
+      name: "read",
+      description: "Read",
+      inputSchema: { type: "object", properties: {} },
+      readOnly: true,
+      effect: "none",
+    }],
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(body ?? {}, "tools"), false);
+});
+
+
+test("OpenRouter Runner maps apply_patch calls and results on Responses", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  let call = 0;
+  const model = new OpenAICompatibleModel({
+    baseUrl: "https://openrouter.example/api/v1",
+    apiKey: "openrouter-secret",
+    modelId: "xiaomi/mimo-v2.6-pro",
+    providerId: "openrouter",
+    protocol: "responses",
+    fetch: async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      call += 1;
+      if (call === 1) {
+        return Response.json({
+          id: "patch_call",
+          status: "completed",
+          output: [{
+            type: "apply_patch_call",
+            id: "ap_1",
+            call_id: "patch_1",
+            status: "completed",
+            operation: { type: "update_file", path: "README.md", diff: "@@" },
+          }],
+        });
+      }
+      return Response.json({ id: "patch_done", status: "completed", output: [] });
+    },
+  });
+
+  const first = await model.complete({
+    sessionId: "patch-session",
+    messages: [{ id: "u", role: "user", content: "Patch README." }],
+    tools: [],
+    hostedTools: [{ type: "apply_patch" }],
+  });
+  const patch = first.blocks.find((block) => block.type === "tool_call");
+  assert.equal(patch?.type === "tool_call" ? patch.name : undefined, "openrouter.apply_patch");
+
+  await model.complete({
+    sessionId: "patch-session",
+    messages: [
+      { id: "u", role: "user", content: "Patch README." },
+      { id: "a", role: "assistant", content: first.blocks },
+      {
+        id: "t",
+        role: "tool",
+        content: {
+          callId: "patch_1",
+          toolName: "openrouter.apply_patch",
+          content: [{ type: "text", text: "Done" }],
+          isError: false,
+        },
+      },
+    ],
+    tools: [],
+  });
+  const secondInput = bodies[1]?.input as Array<Record<string, unknown>> | undefined;
+  const replayedPatchCall = secondInput?.find((item) => item.type === "apply_patch_call");
+  assert.equal(replayedPatchCall?.call_id, "patch_1");
+  assert.equal(replayedPatchCall?.status, "completed");
+  assert.deepEqual(replayedPatchCall?.operation, {
+    type: "update_file",
+    path: "README.md",
+    diff: "@@",
+  });
+  const patchOutput = secondInput?.find((item) => item.type === "apply_patch_call_output");
+  assert.equal(patchOutput?.status, "completed");
+  assert.equal(patchOutput?.output, "Done");
+});
+
+
+test("native Build factory forwards discovered tool support into OpenRouter transport", async () => {
+  const originalFetch = globalThis.fetch;
+  let body: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({ id: "factory-no-tools", status: "completed", output: [] });
+  };
+  try {
+    const model = createProviderModel({
+      runtimeId: "openrouter:vendor/no-tools",
+      providerId: "openrouter",
+      modelId: "vendor/no-tools",
+      transport: "openai-compatible",
+      baseUrl: "https://openrouter.example/api/v1",
+      secret: "secret",
+      capabilities: ["*"],
+      supportsTools: false,
+      priority: 1,
+      protocol: "responses",
+    });
+    await model.complete({
+      sessionId: "factory-no-tools",
+      messages: [{ id: "u", role: "user", content: "Hello" }],
+      tools: [{
+        name: "read",
+        description: "Read",
+        inputSchema: { type: "object", properties: {} },
+        readOnly: true,
+        effect: "none",
+      }],
+    });
+    assert.equal(Object.prototype.hasOwnProperty.call(body ?? {}, "tools"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("native Build factory forwards configured OpenRouter hosted tools", async () => {
+  const originalFetch = globalThis.fetch;
+  let body: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({ id: "factory-hosted", status: "completed", output: [] });
+  };
+  try {
+    const model = createProviderModel({
+      runtimeId: "openrouter:xiaomi/mimo-v2.6-pro",
+      providerId: "openrouter",
+      modelId: "xiaomi/mimo-v2.6-pro",
+      transport: "openai-compatible",
+      baseUrl: "https://openrouter.example/api/v1",
+      secret: "secret",
+      capabilities: ["*"],
+      supportsTools: true,
+      hostedTools: [
+        { type: "web_fetch" },
+        { type: "shell", parameters: { engine: "openrouter" } },
+      ],
+      priority: 1,
+      protocol: "responses",
+    });
+    await model.complete({
+      sessionId: "factory-hosted",
+      messages: [{ id: "u", role: "user", content: "Research and inspect." }],
+      tools: [],
+    });
+    const tools = body?.tools as Array<Record<string, unknown>> | undefined;
+    assert.equal(tools?.some((tool) => tool.type === "openrouter:web_fetch"), true);
+    assert.equal(tools?.some((tool) => tool.type === "openrouter:shell"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

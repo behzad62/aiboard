@@ -260,6 +260,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         skillCatalog: this.options.skillCatalog,
         memoryStore: this.options.memoryStore,
         projectId: this.options.projectId,
+        ...(candidate.providerId === "openrouter"
+          ? { hostedTools: [{ type: "apply_patch" as const }] }
+          : {}),
         initialMessages: [
           {
             id: "worker-system",

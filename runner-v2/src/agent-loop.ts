@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   AgentMessage,
   AgentModel,
+  AgentModelRequest,
   AgentLifecycleSignal,
   ToolCallBlock,
   ToolExecutionContext,
@@ -125,6 +126,7 @@ export interface RunAgentLoopOptions {
   idFactory?: () => string;
   onCheckpoint?: (checkpoint: AgentLoopCheckpoint) => Promise<void>;
   workingSet?: AgentWorkingSetLimits;
+  hostedTools?: AgentModelRequest["hostedTools"];
   readOnlyStall?: {
     warnTurns: number;
     suspendTurns: number;
@@ -274,6 +276,7 @@ export async function runAgentLoop(
         sessionId: options.context.sessionId,
         messages: compactAgentMessages(messages, options.workingSet),
         tools: options.registry.definitions(),
+        ...(options.hostedTools ? { hostedTools: options.hostedTools } : {}),
         signal: options.signal,
       };
       turn = options.providerRetry

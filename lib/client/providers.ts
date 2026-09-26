@@ -12,7 +12,7 @@ import type {
   ModelInfo,
   StreamChunk,
 } from "@/lib/providers/base";
-import { parseModelId } from "@/lib/providers/base";
+import { formatModelId, parseModelId } from "@/lib/providers/base";
 import {
   resolveModelContextProfile,
   type ModelContextOverrides,
@@ -42,6 +42,7 @@ export const FOUNDRY_PROVIDER_ID = "foundry";
 export const CHATGPT_PROVIDER_ID = "chatgpt";
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 export const NVIDIA_PROVIDER_ID = "nvidia";
+export const OPENROUTER_PROVIDER_ID = "openrouter";
 
 const TEXT_ONLY = {
   image: false,
@@ -49,6 +50,18 @@ const TEXT_ONLY = {
   audio: false,
   video: false,
 } as const;
+
+function getDiscoveredCapabilities(fullModelId: string): ModelCapabilities | null {
+  return getUserSettings().discoveredModelCapabilities?.[fullModelId] ?? null;
+}
+
+export function getDiscoveredOpenRouterApiCapabilities(modelId: string) {
+  return (
+    getUserSettings().discoveredModelCapabilities?.[
+      formatModelId(OPENROUTER_PROVIDER_ID, normalizeOpenRouterModelId(modelId))
+    ] ?? null
+  );
+}
 
 // Foundry serves Claude models, which accept image + document inputs.
 const FOUNDRY_CAPABILITIES = {
@@ -143,6 +156,30 @@ export function listFoundryModelInfos(): ModelInfo[] {
     }));
 }
 
+export function normalizeOpenRouterModelId(id: string): string {
+  const trimmed = id.trim();
+  const parsed = parseModelId(trimmed);
+  return parsed.providerId === OPENROUTER_PROVIDER_ID ? parsed.model : trimmed;
+}
+
+export function listOpenRouterModelInfos(): ModelInfo[] {
+  const catalogModels = openrouterProvider.listModels();
+  const knownIds = new Set(catalogModels.map((model) => model.id));
+  const customModels = (getProviderKey(OPENROUTER_PROVIDER_ID)?.models ?? [])
+    .map(normalizeOpenRouterModelId)
+    .filter((id) => id.length > 0 && !knownIds.has(id))
+    .map((id) => ({
+      id,
+      name: id,
+      providerId: OPENROUTER_PROVIDER_ID,
+      description: "User-added OpenRouter model",
+      capabilities:
+        getDiscoveredCapabilities(formatModelId(OPENROUTER_PROVIDER_ID, id)) ??
+        { ...TEXT_ONLY },
+    }));
+  return [...catalogModels, ...customModels];
+}
+
 /** User-defined NVIDIA NIM model ids (from the provider key). */
 export function normalizeNvidiaModelId(id: string): string {
   const trimmed = id.trim();
@@ -176,6 +213,9 @@ export function getAllModels(): ModelInfo[] {
     [
       ...getAllProviders().flatMap((p) => p.listModels()),
       ...listFoundryModelInfos(),
+      ...listOpenRouterModelInfos().filter(
+        (model) => !getProvider(model.providerId)?.listModels().some((builtin) => builtin.id === model.id)
+      ),
       ...listNvidiaModelInfos(),
       ...listCustomModelInfos(),
     ],
@@ -211,11 +251,16 @@ export function getEnabledModels(): ModelInfo[] {
   const foundry = keyed.includes(FOUNDRY_PROVIDER_ID)
     ? listFoundryModelInfos()
     : [];
+  const openrouter = keyed.includes(OPENROUTER_PROVIDER_ID)
+    ? listOpenRouterModelInfos().filter(
+        (model) => !openrouterProvider.listModels().some((builtin) => builtin.id === model.id)
+      )
+    : [];
   const nvidia = keyed.includes(NVIDIA_PROVIDER_ID)
     ? listNvidiaModelInfos()
     : [];
   return withContextProfiles(
-    [...builtin, ...foundry, ...nvidia, ...listCustomModelInfos()],
+    [...builtin, ...foundry, ...openrouter, ...nvidia, ...listCustomModelInfos()],
     overrides
   );
 }
@@ -236,6 +281,9 @@ export function resolveModelName(fullId: string): string {
   }
   // Foundry model ids are user-defined (not in the catalog) — show the id.
   if (providerId === FOUNDRY_PROVIDER_ID) return model;
+  if (providerId === OPENROUTER_PROVIDER_ID) {
+    return listOpenRouterModelInfos().find((entry) => entry.id === model)?.name ?? model;
+  }
   if (providerId === NVIDIA_PROVIDER_ID) return model;
   const providerModel = getProvider(providerId)
     ?.listModels()
@@ -251,6 +299,12 @@ export function resolveModelName(fullId: string): string {
 export function resolveModelCapabilities(fullId: string) {
   const { providerId, model } = parseModelId(fullId);
   if (providerId === FOUNDRY_PROVIDER_ID) return { ...FOUNDRY_CAPABILITIES };
+  if (providerId === OPENROUTER_PROVIDER_ID) {
+    return (
+      listOpenRouterModelInfos().find((entry) => entry.id === model)?.capabilities ??
+      null
+    );
+  }
   if (providerId === NVIDIA_PROVIDER_ID) return nvidiaCapabilitiesForModel(model);
   if (providerId === CUSTOM_PROVIDER_ID) {
     return getCustomModelById(model)?.capabilities ?? { ...TEXT_ONLY };
