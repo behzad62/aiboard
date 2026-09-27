@@ -21,7 +21,7 @@ import type {
   FinalVerificationGenerationProjection,
   SchedulerProjection,
 } from "./scheduler-store.js";
-import { assertBuildCompletionReady, assertHandoffSnapshotGate } from "./scheduler-store.js";
+import { assertProjectHandoffSelectionAccepted, handoffSnapshotAtCurrentStop } from "./scheduler-store.js";
 import type {
   IntegrationFileSnapshot,
   ProjectHandoffResult,
@@ -567,11 +567,18 @@ export class NativeBuildManager implements BuildControlPlane {
       if (projection.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");
       }
-      assertBuildCompletionReady(projection);
-      // C2a repair (B1): check the kernel snapshot gate BEFORE the handle
-      // can mutate the project -- a missing snapshot refuses here, so a
-      // failed snapshot commit never leaves a mutated project behind.
-      assertHandoffSnapshotGate(projection, projection.integrationRevision);
+      // C2b (N1): the manager pre-check IS the kernel acceptance -- the one
+      // shared predicate, called here BEFORE the handle can mutate the
+      // project and by the reducer when the selection is recorded. The
+      // revision is the one the selection will carry: the current-stop
+      // snapshot head when a snapshot was committed, else the canonical
+      // integration revision. A snapshot that does not continue the chain
+      // (probe G) is refused here, so the project is never mutated first
+      // and refused after.
+      assertProjectHandoffSelectionAccepted(
+        projection,
+        handoffSnapshotAtCurrentStop(projection)?.head ?? projection.integrationRevision,
+      );
       const result = await handle.projectHandoff(choice);
       const selected = handle.runtime.selectProjectHandoff(
         choice,

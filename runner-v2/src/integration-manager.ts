@@ -4,6 +4,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  readlink,
   rename,
   rm,
   rmdir,
@@ -20,8 +21,10 @@ import {
 import type { GitRunner } from "./git-repository.js";
 import {
   agentsMarkedSectionSatisfies,
+  agentsMarkedSectionSatisfiesV2,
   claudePointerSatisfies,
-  spliceMarkedArchitectSection,
+  claudePointerSatisfiesV2,
+  spliceMarkedArchitectSectionBytes,
   validateProjectDocPath,
   type DocumentTipRelation,
   type ProjectDocCommitRequest,
@@ -77,6 +80,32 @@ interface OwnedProjectApplyJournal extends ProjectApplyJournalBase {
 }
 
 type ProjectApplyJournal = LegacyProjectApplyJournal | OwnedProjectApplyJournal;
+
+interface CommitBody {
+  revision: string;
+  authorName: string;
+  authorEmail: string;
+  committerName: string;
+  committerEmail: string;
+  body: string;
+}
+
+/**
+ * The commit message trailer block (C2b N4): the trailing contiguous run
+ * of `Key: value` lines. Lines quoted anywhere else in the message --
+ * for example a cherry-picked worker summary -- are not trailers.
+ */
+function commitTrailerBlock(body: string): Set<string> {
+  const lines = body.split(/\r?\n/).map((line) => line.trim());
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const block = new Set<string>();
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]!;
+    if (!/^[A-Za-z0-9-]+:[ \t]+\S/.test(line)) break;
+    block.add(line);
+  }
+  return block;
+}
 
 /** Kernel handoff snapshot commit (docs policy v2, C2a: STATE.md only). */
 export interface HandoffSnapshotCommitRequest {
@@ -637,24 +666,33 @@ export class IntegrationManager {
       await this.ensureIntegrationWorkspace();
       const existing = await this.findSnapshotCommit(input.snapshotKey, input.runId);
       if (existing) {
-        return await this.documentCommitResult(existing);
+        // C2b repair m2: a reused commit still describes the committed tree.
+        // The caller derives previousSnapshotEdited and specCopied from the
+        // read-back, never from fresh reads, so the reuse is marked.
+        const reusedResult = await this.documentCommitResult(existing);
+        reusedResult.reused = true;
+        return reusedResult;
       }
-      const writes = input.writes.map((write) => {
-        const checked = validateProjectDocPath(write.path);
-        if (!checked.ok) {
-          throw new Error(`Project document path is refused: ${checked.reason}.`);
-        }
-        return { path: checked.path, content: write.content };
-      });
-      for (const write of writes) {
-        await this.refuseProjectDocLink(write.path);
+      // C2b (M7): entry files go through the marked-section splice, never a
+      // whole-file overwrite -- the same staging the Architect path uses, so
+      // bytes outside the markers survive every kernel commit.
+      const { staged: paths, skipped } = await this.stageProjectDocWrites(
+        input.writes.filter((write) => !isHandoffSpecCopyPath(write.path)),
+        { skipClaudeAgentsLink: true },
+      );
+      // C2b repair N-1/N-2: the spec copy is conditional, the snapshot is
+      // not. A spec write that cannot be staged (a blocked directory, a
+      // user's own bytes at the path) is skipped with a recorded reason
+      // instead of failing the snapshot; entry writes still throw exactly
+      // as before.
+      const specStaging = await this.stageHandoffSpecCopies(
+        input.writes.filter((write) => isHandoffSpecCopyPath(write.path)),
+      );
+      paths.push(...specStaging.staged);
+      skipped.push(...specStaging.skipped);
+      if (paths.length === 0) {
+        throw new Error(`Project document commit wrote nothing: ${skipped.map((entry) => entry.reason).join(" ") || "every write was skipped."}`);
       }
-      for (const write of writes) {
-        const absolute = this.containedProjectDocPath(write.path);
-        await mkdir(dirname(absolute), { recursive: true });
-        await writeFile(absolute, write.content);
-      }
-      const paths = writes.map((write) => write.path);
       await this.git(this.path, ["add", "--", ...paths]);
       try {
         await this.execute({
@@ -684,8 +722,96 @@ export class IntegrationManager {
       }
       const commit = await this.head();
       this.currentRevision = commit;
-      return await this.documentCommitResult(commit);
+      const committed = await this.documentCommitResult(commit);
+      // A skipped spec copy (N-1/N-2) is recorded on the result so the skip
+      // is never silent; the runtime maps it to specCopySkipped.
+      if (skipped.length > 0) committed.skipped = skipped;
+      return committed;
     });
+  }
+
+  /**
+   * Stage the kernel's spec-copy writes without ever failing the snapshot
+   * (C2b repair N-1/N-2). Each write is validated, link-refused, and
+   * written like the shared staging, but a failure is reported instead of
+   * thrown. A user's own file holding different bytes is never overwritten:
+   * the copy moves to a digest-suffixed sibling, or is skipped as
+   * path_occupied when even that is taken.
+   */
+  private async stageHandoffSpecCopies(
+    writes: readonly ProjectDocWrite[],
+  ): Promise<{ staged: string[]; skipped: Array<{ path: string; reason: string }> }> {
+    const staged: string[] = [];
+    const skipped: Array<{ path: string; reason: string }> = [];
+    for (const write of writes) {
+      const checked = validateProjectDocPath(write.path);
+      if (!checked.ok) {
+        skipped.push({ path: write.path, reason: `spec copy skipped (write_failed): refused path (${checked.reason}).` });
+        continue;
+      }
+      const path = checked.path;
+      try {
+        await this.refuseProjectDocLink(path);
+      } catch (error) {
+        skipped.push({ path, reason: `spec copy skipped (write_failed): ${briefErrorDetail(error)}.` });
+        continue;
+      }
+      const outcome = await this.writeHandoffSpecCopy(path, write.content);
+      if ("skipped" in outcome) {
+        skipped.push({ path, reason: outcome.skipped });
+        continue;
+      }
+      staged.push(outcome.staged);
+    }
+    return { staged, skipped };
+  }
+
+  private async writeHandoffSpecCopy(
+    path: string,
+    content: string,
+  ): Promise<{ staged: string } | { skipped: string }> {
+    const absolute = this.containedProjectDocPath(path);
+    const wanted = Buffer.from(content, "utf8");
+    let existing: Buffer | null = null;
+    try {
+      existing = await readFile(absolute);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") {
+        return { skipped: `spec copy skipped (write_failed): cannot read ${path} (${briefErrorDetail(error)}).` };
+      }
+    }
+    if (existing !== null && existing.equals(wanted)) {
+      return { staged: path };
+    }
+    if (existing !== null) {
+      const sibling = path.replace(/\.md$/, `-${createHash("sha256").update(wanted).digest("hex").slice(0, 16)}.md`);
+      const siblingAbsolute = this.containedProjectDocPath(sibling);
+      let siblingExisting: Buffer | null = null;
+      try {
+        siblingExisting = await readFile(siblingAbsolute);
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== "ENOENT") {
+          return { skipped: `spec copy skipped (write_failed): cannot read ${sibling} (${briefErrorDetail(error)}).` };
+        }
+      }
+      if (siblingExisting !== null && !siblingExisting.equals(wanted)) {
+        return { skipped: `spec copy skipped (path_occupied): ${path} holds different bytes and so does ${sibling}.` };
+      }
+      try {
+        await mkdir(dirname(siblingAbsolute), { recursive: true });
+        await writeFile(siblingAbsolute, wanted);
+      } catch (error) {
+        return { skipped: `spec copy skipped (write_failed): cannot stage ${sibling} (${briefErrorDetail(error)}).` };
+      }
+      return { staged: sibling };
+    }
+    try {
+      await mkdir(dirname(absolute), { recursive: true });
+      await writeFile(absolute, wanted);
+    } catch (error) {
+      return { skipped: `spec copy skipped (write_failed): cannot stage ${path} (${briefErrorDetail(error)}).` };
+    }
+    return { staged: path };
   }
 
   /**
@@ -727,6 +853,141 @@ export class IntegrationManager {
   }
 
   /**
+   * Read a file from the integration tip commit (C2b AR-R07): blob bytes,
+   * never the working tree. The caller detects a hand-edited previous
+   * snapshot from these bytes. Runs through the audited git path.
+   */
+  async readIntegrationTipFile(input: {
+    path: string;
+  }): Promise<{ content: string | null; commit: string }> {
+    return await this.serialized(async () => {
+      const checked = validateProjectDocPath(input.path);
+      if (!checked.ok) {
+        throw new Error(`Project document path is refused: ${checked.reason}.`);
+      }
+      await this.ensureIntegrationWorkspace();
+      const commit = await this.head();
+      const stored = await this.git(
+        this.path,
+        ["show", `${commit}:${checked.path}`],
+        true,
+      );
+      return { content: stored.exitCode === 0 ? stored.stdout : null, commit };
+    });
+  }
+
+  /**
+   * Find a tracked file at the integration tip whose bytes hash to the
+   * given sha256 (C2b CD-5): the approved source is "already a repository
+   * file" exactly when this returns a path, so the kernel skips the spec
+   * copy. Bounded: only same-byte-length blobs are read and hashed, all
+   * through the audited git path.
+   */
+  async findTrackedFileWithDigest(input: {
+    digest: string;
+    byteLength: number;
+  }): Promise<{ path: string } | null> {
+    return await this.serialized(async () => {
+      if (!/^[a-f0-9]{64}$/.test(input.digest)) {
+        throw new Error("Tracked file digest is invalid.");
+      }
+      if (!Number.isSafeInteger(input.byteLength) || input.byteLength <= 0) {
+        throw new Error("Tracked file byte length is invalid.");
+      }
+      await this.ensureIntegrationWorkspace();
+      const listing = await this.git(this.path, [
+        "ls-tree",
+        "-r",
+        "-l",
+        "-z",
+        "HEAD",
+        "--",
+      ]);
+      const entries = listing.stdout.split("\0").filter(Boolean);
+      const candidates: string[] = [];
+      for (const entry of entries) {
+        const tab = entry.lastIndexOf("\t");
+        if (tab < 0) continue;
+        const meta = entry.slice(0, tab).split(/ +/);
+        const path = entry.slice(tab + 1);
+        if (meta.length < 4 || meta[1] !== "blob") continue;
+        if (Number(meta[3]) !== input.byteLength) continue;
+        if (!path || path.includes("\n") || path.includes("\r")) continue;
+        candidates.push(path);
+      }
+      for (const path of candidates) {
+        const stored = await this.git(this.path, ["show", `HEAD:${path}`], true);
+        if (stored.exitCode !== 0) continue;
+        if (createHash("sha256").update(stored.stdout, "utf8").digest("hex") === input.digest) {
+          return { path };
+        }
+      }
+      return null;
+    });
+  }
+
+  /**
+   * Validate, link-refuse and stage project-document writes in the
+   * integration worktree. AGENTS.md and CLAUDE.md go through the
+   * marked-section splice (never a whole-file overwrite): a missing file is
+   * created with just the section, and bytes outside the markers are kept
+   * byte-for-byte. Shared by the Architect path and the kernel handoff path
+   * (C2b M7: one splice implementation, not two).
+   */
+  private async stageProjectDocWrites(
+    writes: readonly ProjectDocWrite[],
+    options: { skipClaudeAgentsLink?: boolean } = {},
+  ): Promise<{ staged: string[]; skipped: Array<{ path: string; reason: string }> }> {
+    const skipped: Array<{ path: string; reason: string }> = [];
+    const staged = writes.map((write) => {
+      const checked = validateProjectDocPath(write.path);
+      if (!checked.ok) {
+        throw new Error(`Project document path is refused: ${checked.reason}.`);
+      }
+      return { path: checked.path, content: write.content };
+    });
+    // C2b repair N-4: only the kernel snapshot path skips a CLAUDE.md link
+    // to AGENTS.md. The v1 Architect path keeps the HEAD refusal below
+    // (refuseProjectDocLink throws exactly as before).
+    const skipClaudeAgentsLink = options.skipClaudeAgentsLink === true;
+    for (const write of staged) {
+      if (skipClaudeAgentsLink && write.path === "CLAUDE.md" && (await this.claudeLinksAgents())) {
+        skipped.push({
+          path: write.path,
+          reason: "CLAUDE.md is a symbolic link to AGENTS.md; the pointer is satisfied through the link.",
+        });
+        continue;
+      }
+      await this.refuseProjectDocLink(write.path);
+    }
+    const stagedPaths: string[] = [];
+    for (const write of staged) {
+      if (skipped.some((entry) => entry.path === write.path)) continue;
+      const absolute = this.containedProjectDocPath(write.path);
+      if (write.path === "AGENTS.md" || write.path === "CLAUDE.md") {
+        // C2b repair m3: splice on bytes, never through a string decode. The
+        // markers and section bodies are ASCII, so bytes outside the markers
+        // survive untouched even when the file is not valid UTF-8, and the
+        // inserted section takes the file's own line ending. This is strictly
+        // safer for the v1 Architect path too (same preservation; UTF-8 files
+        // behave exactly as before), so both paths share it.
+        let existing: Buffer | null = null;
+        try {
+          existing = await readFile(absolute);
+        } catch (error) {
+          if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+        }
+        await writeFile(absolute, spliceMarkedArchitectSectionBytes(existing, write.content));
+      } else {
+        await mkdir(dirname(absolute), { recursive: true });
+        await writeFile(absolute, write.content);
+      }
+      stagedPaths.push(write.path);
+    }
+    return { staged: stagedPaths, skipped };
+  }
+
+  /**
    * Commit Architect project documents on the integration branch.
    * A request id already present in a commit body is returned unchanged.
    * A new request still commits when the tree is unchanged.
@@ -752,32 +1013,12 @@ export class IntegrationManager {
       if (existing) {
         return await this.documentCommitResult(existing);
       }
-      const writes = input.writes.map((write) => {
-        const checked = validateProjectDocPath(write.path);
-        if (!checked.ok) {
-          throw new Error(`Project document path is refused: ${checked.reason}.`);
-        }
-        return { path: checked.path, content: write.content };
-      });
-      for (const write of writes) {
-        await this.refuseProjectDocLink(write.path);
+      // C2b repair N-4: the v1 Architect path never skips a link; a
+      // CLAUDE.md link to AGENTS.md is refused exactly as at HEAD.
+      const { staged: paths, skipped } = await this.stageProjectDocWrites(input.writes, { skipClaudeAgentsLink: false });
+      if (paths.length === 0) {
+        throw new Error(`Project document commit wrote nothing: ${skipped.map((entry) => entry.reason).join(" ") || "every write was skipped."}`);
       }
-      for (const write of writes) {
-        const absolute = this.containedProjectDocPath(write.path);
-        if (write.path === "AGENTS.md" || write.path === "CLAUDE.md") {
-          let existingText = "";
-          try {
-            existingText = await readFile(absolute, "utf8");
-          } catch (error) {
-            if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-          }
-          await writeFile(absolute, spliceMarkedArchitectSection(existingText, write.content));
-        } else {
-          await mkdir(dirname(absolute), { recursive: true });
-          await writeFile(absolute, write.content);
-        }
-      }
-      const paths = writes.map((write) => write.path);
       await this.git(this.path, ["add", "--", ...paths]);
       try {
         await this.execute({
@@ -805,7 +1046,11 @@ export class IntegrationManager {
       }
       const commit = await this.head();
       this.currentRevision = commit;
-      return await this.documentCommitResult(commit);
+      const committed = await this.documentCommitResult(commit);
+      // C2b repair m5: a skipped CLAUDE.md link is recorded on the result
+      // so the skip is never silent; the v1 checks themselves are unchanged.
+      if (skipped.length > 0) committed.skipped = skipped;
+      return committed;
     });
   }
 
@@ -1877,35 +2122,58 @@ export class IntegrationManager {
    * with `-x`): the candidate must carry every runner trailer. The
    * caller additionally verifies the committed tree (B4) before
    * recording anything about it.
+   *
+   * C2b (N4): the trailer lines must sit in the commit's trailer block
+   * (the trailing contiguous `Key: value` lines), never anywhere in the
+   * body, and the commit must carry the runner author/committer identity.
+   * A cherry-picked worker commit quoting all four lines in its summary
+   * is not reused.
    */
   private async findSnapshotCommit(snapshotKey: string, runId: string): Promise<string | null> {
-    const trailers = new Set([
+    const trailers = [
       `AIBoard-Run: ${runId}`,
       "AIBoard-Author: runner",
       "AIBoard-Generated: handoff-snapshot",
       `AIBoard-Snapshot-Key: ${snapshotKey}`,
-    ]);
+    ];
     for (const commit of await this.commitBodies()) {
-      const lines = new Set(commit.body.split(/\r?\n/).map((line) => line.trim()));
-      if ([...trailers].every((trailer) => lines.has(trailer))) {
+      if (
+        commit.authorName !== RUNNER_IDENTITY.GIT_AUTHOR_NAME ||
+        commit.authorEmail !== RUNNER_IDENTITY.GIT_AUTHOR_EMAIL ||
+        commit.committerName !== RUNNER_IDENTITY.GIT_COMMITTER_NAME ||
+        commit.committerEmail !== RUNNER_IDENTITY.GIT_COMMITTER_EMAIL
+      ) {
+        continue;
+      }
+      const block = commitTrailerBlock(commit.body);
+      if (trailers.every((trailer) => block.has(trailer))) {
         return commit.revision;
       }
     }
     return null;
   }
 
-  private async commitBodies(): Promise<Array<{ revision: string; body: string }>> {
+  private async commitBodies(): Promise<CommitBody[]> {
     const history = await this.git(this.path, [
       "log",
       "--reverse",
-      "--format=%H%x00%B%x00",
+      "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x00",
       `${this.baselineRevision}..HEAD`,
     ]);
     const fields = history.stdout.split("\0");
-    const commits: Array<{ revision: string; body: string }> = [];
-    for (let index = 0; index + 1 < fields.length; index += 2) {
+    const commits: CommitBody[] = [];
+    for (let index = 0; index + 5 < fields.length; index += 6) {
       const revision = fields[index].trim();
-      if (revision) commits.push({ revision, body: fields[index + 1] ?? "" });
+      if (revision) {
+        commits.push({
+          revision,
+          authorName: (fields[index + 1] ?? "").trim(),
+          authorEmail: (fields[index + 2] ?? "").trim(),
+          committerName: (fields[index + 3] ?? "").trim(),
+          committerEmail: (fields[index + 4] ?? "").trim(),
+          body: fields[index + 5] ?? "",
+        });
+      }
     }
     return commits;
   }
@@ -1916,12 +2184,22 @@ export class IntegrationManager {
     ).stdout.trim();
     const head = await this.head();
     this.currentRevision = head;
-    return {
-      commit,
-      parent,
-      head,
-      entryPoint: await this.projectDocEntryPointFacts(commit),
-    };
+    const entryPoint = await this.projectDocEntryPointFacts(commit);
+    // C2b repair m5: a CLAUDE.md that links to AGENTS.md satisfies the v2
+    // pointer through the link. The blob itself holds no marked line, so
+    // that fact stays false and this separate flag carries the reason; the
+    // runtime records it and the gate accepts it. Never write through it.
+    // C2b repair B3/N-6: the link fact comes from the COMMIT tree (mode
+    // 120000 with an AGENTS.md target), never the worktree checkout, so a
+    // link-mode entry checked out as a plain file still counts. A real
+    // worktree symlink (C2b repair m5) never reaches any commit tree -- the
+    // kernel skips the write without staging it -- so the live worktree
+    // determination covers that case too. Either source refuses the write
+    // above; either source satisfies the pointer here.
+    if ((await this.commitClaudeLinksAgents(commit)) || (await this.claudeLinksAgents())) {
+      entryPoint.claudePointerV2ViaAgentsLink = true;
+    }
+    return { commit, parent, head, entryPoint };
   }
 
   private async projectDocEntryPointFacts(revision: string): Promise<ProjectDocCommitResult["entryPoint"]> {
@@ -1936,6 +2214,8 @@ export class IntegrationManager {
       readme: readme.exitCode === 0,
       agentsMarkedSection: agents !== null && agentsMarkedSectionSatisfies(agents),
       claudePointer: claude !== null && claudePointerSatisfies(claude),
+      agentsMarkedSectionV2: agents !== null && agentsMarkedSectionSatisfiesV2(agents),
+      claudePointerV2: claude !== null && claudePointerSatisfiesV2(claude),
     };
   }
 
@@ -1957,6 +2237,137 @@ export class IntegrationManager {
     return absolute;
   }
 
+  /**
+   * True when the worktree CLAUDE.md is a symbolic link resolving to the
+   * worktree AGENTS.md (C2b repair m5). Any other link (or a dangling one)
+   * is not this layout and keeps the existing refusal below.
+   * C2b repair B3: a link-mode index entry (mode 120000) is a link even
+   * when core.symlinks=false checked it out as a plain file, so the index
+   * is consulted too -- either source refuses the write.
+   */
+  private async claudeLinksAgents(): Promise<boolean> {
+    const claude = this.containedProjectDocPath("CLAUDE.md");
+    let stats;
+    try {
+      stats = await lstat(claude);
+    } catch (error) {
+      if (isNodeError(error) && error.code === "ENOENT") {
+        return await this.indexClaudeLinksAgents();
+      }
+      throw error;
+    }
+    if (stats.isSymbolicLink()) {
+      let target: string;
+      try {
+        target = await readlink(claude);
+      } catch (error) {
+        if (isNodeError(error) && error.code === "ENOENT") return await this.indexClaudeLinksAgents();
+        throw error;
+      }
+      if (resolve(dirname(claude), target) === this.containedProjectDocPath("AGENTS.md")) return true;
+      return false;
+    }
+    return await this.indexClaudeLinksAgents();
+  }
+
+  /**
+   * True when the index holds CLAUDE.md as a link (mode 120000) whose
+   * target resolves to AGENTS.md (C2b repair B3). Read from git, never the
+   * worktree, so a link-mode entry checked out as a plain file still
+   * counts. A worktree symlink that was never staged is invisible here;
+   * the lstat check above owns that case.
+   */
+  private async indexClaudeLinksAgents(): Promise<boolean> {
+    const modes = await this.indexEntryModes(["CLAUDE.md"]);
+    if (modes.get("CLAUDE.md") !== "120000") return false;
+    const target = await this.indexBlobText("CLAUDE.md");
+    return target !== null && linkTargetPointsAtAgentsDotMd(target);
+  }
+
+  /**
+   * True when the COMMIT tree holds CLAUDE.md as a link (mode 120000)
+   * whose target resolves to AGENTS.md (C2b repair B3/N-6). The gate reads
+   * this fact from the commit, never the checkout.
+   */
+  private async commitClaudeLinksAgents(commit: string): Promise<boolean> {
+    const tree = await this.git(this.path, ["ls-tree", commit, "--", "CLAUDE.md"], true);
+    if (tree.exitCode !== 0) return false;
+    const line = tree.stdout.split("\n").map((entry) => entry.trim()).find(Boolean) ?? "";
+    const match = /^120000 blob ([a-f0-9]{40,64})\t(\S.*)$/.exec(line);
+    if (!match) return false;
+    const target = await this.blobText(match[1] ?? "");
+    return target !== null && linkTargetPointsAtAgentsDotMd(target);
+  }
+
+  /** Blob bytes for an index entry path, or null when it is not staged. */
+  private async indexBlobText(path: string): Promise<string | null> {
+    const listing = await this.git(this.path, ["ls-files", "-s", "-z", "--", path], true);
+    if (listing.exitCode !== 0) return null;
+    for (const record of listing.stdout.split("\0")) {
+      if (!record) continue;
+      const tab = record.lastIndexOf("\t");
+      if (tab < 0) continue;
+      if (record.slice(tab + 1) !== path) continue;
+      const hash = record.slice(0, tab).split(" ")[1] ?? "";
+      return await this.blobText(hash);
+    }
+    return null;
+  }
+
+  /** Raw text of one blob by hash, or null. Link targets are short text. */
+  private async blobText(hash: string): Promise<string | null> {
+    if (!/^[a-f0-9]{40,64}$/.test(hash)) return null;
+    const stored = await this.git(this.path, ["cat-file", "-p", hash], true);
+    return stored.exitCode === 0 ? stored.stdout : null;
+  }
+
+  /** Index entry modes for paths (missing paths are absent from the map). */
+  private async indexEntryModes(paths: readonly string[]): Promise<Map<string, string>> {
+    const modes = new Map<string, string>();
+    if (paths.length === 0) return modes;
+    const listing = await this.git(this.path, ["ls-files", "-s", "-z", "--", ...paths], true);
+    if (listing.exitCode !== 0) return modes;
+    for (const record of listing.stdout.split("\0")) {
+      if (!record) continue;
+      const tab = record.lastIndexOf("\t");
+      if (tab < 0) continue;
+      const entryPath = record.slice(tab + 1);
+      const mode = record.slice(0, tab).split(" ")[0] ?? "";
+      if (entryPath && mode) modes.set(entryPath, mode);
+    }
+    return modes;
+  }
+
+  /**
+   * Lookup-only snapshot find for a stop key (C2b repair B1): the runner
+   * snapshot commit carrying the key, or null. Never commits. The runtime
+   * reconciles withdrawn stops' landed commits through this before the next
+   * stop commits, so a commit that landed but was never recorded still moves
+   * the document chain instead of breaking it.
+   */
+  async findHandoffSnapshotCommit(input: {
+    snapshotKey: string;
+  }): Promise<ProjectDocCommitResult | null> {
+    return await this.serialized(async () => {
+      if (!input.snapshotKey.trim() || /[\r\n\0]/.test(input.snapshotKey)) {
+        throw new Error("Handoff snapshot key is invalid.");
+      }
+      await this.ensureIntegrationWorkspace();
+      const existing = await this.findSnapshotCommit(input.snapshotKey, this.runId);
+      if (!existing) return null;
+      return await this.documentCommitResult(existing);
+    });
+  }
+
+  /**
+   * The recorded integration baseline revision (C2b repair CD-14/N6): the
+   * handed-off revision for a docs-v2 run with no plan revision and no
+   * integration revision yet, so it never spins in a snapshot-failure pause.
+   */
+  async readIntegrationBaselineRevision(): Promise<{ revision: string }> {
+    return { revision: this.baselineRevision };
+  }
+
   private async refuseProjectDocLink(relativePath: string): Promise<void> {
     const parts = relativePath.split("/");
     const targets: string[] = [];
@@ -1971,16 +2382,21 @@ export class IntegrationManager {
         }
       }
     }
+    // C2b repair B3: link-ness comes from the worktree AND the git index,
+    // so a link-mode entry (mode 120000) checked out as a plain file under
+    // core.symlinks=false is still refused. The refusal message is
+    // unchanged from HEAD.
+    const modes = await this.indexEntryModes(targets);
     for (const target of targets) {
       const absolute = this.containedProjectDocPath(target);
       let stats;
       try {
         stats = await lstat(absolute);
       } catch (error) {
-        if (isNodeError(error) && error.code === "ENOENT") return;
-        throw error;
+        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+        stats = undefined;
       }
-      if (stats.isSymbolicLink()) {
+      if (stats?.isSymbolicLink() || modes.get(target) === "120000") {
         throw new Error(
           `Project document path ${relativePath} is refused because ${target} is a symbolic link or junction.`,
         );
@@ -2080,6 +2496,39 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Kernel spec-copy writes live under docs/project/specs/ (C2b CD-5). Only
+ * these writes get the conditional-copy tolerance in commitHandoffSnapshot;
+ * entry writes keep their strict staging.
+ */
+function isHandoffSpecCopyPath(path: string): boolean {
+  return path.startsWith("docs/project/specs/") && path.endsWith(".md");
+}
+
+/**
+ * True when a link target resolves to the sibling AGENTS.md (C2b repair
+ * B3): "AGENTS.md" (also "./AGENTS.md" or other dot-only spellings), never
+ * an escape (".."), an absolute path, or a backslash layout.
+ */
+function linkTargetPointsAtAgentsDotMd(target: string): boolean {
+  const trimmed = target.trim();
+  if (!trimmed || trimmed.includes("\0") || trimmed.includes("\\")) return false;
+  if (trimmed.startsWith("/")) return false;
+  const parts: string[] = [];
+  for (const segment of trimmed.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") return false;
+    parts.push(segment);
+  }
+  return parts.length === 1 && parts[0] === "AGENTS.md";
+}
+
+/** Bounded, message-only error detail for recorded skip reasons. */
+function briefErrorDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/\s+/g, " ").trim().slice(0, 160) || "unknown error";
 }
 
 function isRevision(value: unknown): value is string {

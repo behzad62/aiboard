@@ -67,6 +67,13 @@ export interface NativeBuildSpec {
   maxConcurrency: number;
   permissionProfile: PermissionProfile;
   runPolicy: NativeBuildRunPolicy;
+  /**
+   * C2b run options (CD-5): verbatim approved-spec copy (default true) and
+   * handoff file handling (default "commit"). Absent on legacy specs, which
+   * stay valid and read exactly as before.
+   */
+  specCopy?: boolean;
+  handoffFiles?: "commit" | "export_only";
   /** Digest-only manifests by default; "full" also stores rendered pack text. */
   contextRecording?: "manifest" | "full";
   /** Plan-critique policy; omitted means the runtime default of risk_based. */
@@ -152,6 +159,16 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
   }
   if (!(["finish", "budgeted", "plan_only"] as unknown[]).includes(spec.runPolicy)) {
     throw new Error("Build spec run policy is invalid.");
+  }
+  if (spec.specCopy !== undefined && typeof spec.specCopy !== "boolean") {
+    throw new Error("Build spec specCopy must be a boolean.");
+  }
+  if (
+    spec.handoffFiles !== undefined &&
+    spec.handoffFiles !== "commit" &&
+    spec.handoffFiles !== "export_only"
+  ) {
+    throw new Error("Build spec handoffFiles must be commit or export_only.");
   }
   if (
     spec.contextRecording !== undefined &&

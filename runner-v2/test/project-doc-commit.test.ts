@@ -440,6 +440,10 @@ test("restart recovery commits a pending document request once", async () => {
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
         commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
         readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
+        readIntegrationTipFile: (input) => fixture.integration.readIntegrationTipFile(input),
+        findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
+        findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
+        readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
       },
     });
     assert.equal(runtime.events()[0]?.type, "project_docs.policy_configured");
@@ -498,6 +502,10 @@ test("restart recovery commits a pending document request once", async () => {
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
         commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
         readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
+        readIntegrationTipFile: (input) => fixture.integration.readIntegrationTipFile(input),
+        findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
+        findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
+        readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
       },
     });
     await recovered.step();
@@ -581,6 +589,10 @@ test("same-turn project document commit is durable before complete_run returns",
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
         commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
         readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
+        readIntegrationTipFile: (input) => fixture.integration.readIntegrationTipFile(input),
+        findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
+        findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
+        readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
       },
     });
     assert.equal((await runtime.step()).action, "plan_required");
@@ -644,6 +656,18 @@ test("plan_only completion without documents names STATE.md", async () => {
           throw new Error("complete_run must not commit when the tool refuses");
         },
         readHandoffSnapshotFile: async () => {
+          throw new Error("complete_run must not commit when the tool refuses");
+        },
+        readIntegrationTipFile: async () => {
+          throw new Error("complete_run must not commit when the tool refuses");
+        },
+        findTrackedFileWithDigest: async () => {
+          throw new Error("complete_run must not commit when the tool refuses");
+        },
+        findHandoffSnapshotCommit: async () => {
+          throw new Error("complete_run must not commit when the tool refuses");
+        },
+        readIntegrationBaselineRevision: async () => {
           throw new Error("complete_run must not commit when the tool refuses");
         },
       },
@@ -842,6 +866,10 @@ test("identical STATE.md content in a second request commits after integration a
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
         commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
         readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
+        readIntegrationTipFile: (input) => fixture.integration.readIntegrationTipFile(input),
+        findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
+        findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
+        readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
       },
     });
     for (let index = 0; index < 24; index += 1) {
@@ -1063,6 +1091,10 @@ test("handoff after STATE.md keeps final verification current", async () => {
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
         commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
         readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
+        readIntegrationTipFile: (input) => fixture.integration.readIntegrationTipFile(input),
+        findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
+        findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
+        readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
       },
     });
     for (let index = 0; index < 24; index += 1) {
@@ -1336,3 +1368,27 @@ function emptyChangeSet(
     unresolvedConcerns: [],
   };
 }
+
+test("v1 Architect documents keep the HEAD refusal for a CLAUDE.md link to AGENTS.md (C2b repair N-4)", async () => {
+  const fixture = await openGitFixture("v1link");
+  try {
+    symlinkSync("AGENTS.md", join(fixture.integration.path, "CLAUDE.md"), "file");
+    const before = await gitText(fixture.integration.path, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    // The v1 behavior at HEAD d35371a1 is a refusal, never a silent skip:
+    // the exact refusal message is unchanged.
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: entryPointWrites(),
+        summary: "Record documents",
+        runId: fixture.runId,
+        requestId: "project-doc:1:docs/project/STATE.md",
+      }),
+      /Project document path CLAUDE\.md is refused because CLAUDE\.md is a symbolic link or junction\./,
+    );
+    const after = await gitText(fixture.integration.path, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    assert.equal(after, before, "the refused batch commits nothing");
+  } finally {
+    rmSync(join(fixture.integration.path, "CLAUDE.md"), { force: true });
+    fixture.close();
+  }
+});

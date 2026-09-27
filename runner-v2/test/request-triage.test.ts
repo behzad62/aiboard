@@ -248,17 +248,29 @@ function stubProjectDocsPort() {
       commit: createHash("sha256").update(`commit:${input.requestId}`).digest("hex").slice(0, 40),
       parent: createHash("sha256").update(`parent:${input.requestId}`).digest("hex").slice(0, 40),
       head: createHash("sha256").update(`head:${input.requestId}`).digest("hex").slice(0, 40),
-      entryPoint: { readme: true, agentsMarkedSection: true, claudePointer: true },
+      entryPoint: { readme: true, agentsMarkedSection: true, claudePointer: true, agentsMarkedSectionV2: false, claudePointerV2: false },
     }),
     relateRevision: async () => "equal_to_tip" as const,
     readHandoffSnapshotFile: async () => {
       throw new Error("request-triage stubs never reach the handoff snapshot read");
     },
+    readIntegrationTipFile: async () => {
+      throw new Error("request-triage stubs never reach the integration tip read");
+    },
+    findTrackedFileWithDigest: async () => {
+      throw new Error("request-triage stubs never reach the tracked file search");
+    },
+    findHandoffSnapshotCommit: async () => {
+      throw new Error("request-triage stubs never reach the handoff snapshot lookup");
+    },
+    readIntegrationBaselineRevision: async () => {
+      throw new Error("request-triage stubs never reach the baseline revision read");
+    },
     commitHandoffSnapshot: async (input: { writes: { path: string; content: string }[]; summary: string; runId: string; snapshotKey: string }) => ({
       commit: createHash("sha256").update(`snapshot:${input.snapshotKey}`).digest("hex").slice(0, 40),
       parent: createHash("sha256").update(`parent:${input.snapshotKey}`).digest("hex").slice(0, 40),
       head: createHash("sha256").update(`head:${input.snapshotKey}`).digest("hex").slice(0, 40),
-      entryPoint: { readme: false, agentsMarkedSection: false, claudePointer: false },
+      entryPoint: { readme: false, agentsMarkedSection: false, claudePointer: false, agentsMarkedSectionV2: false, claudePointerV2: false },
     }),
   };
 }

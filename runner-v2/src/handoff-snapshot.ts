@@ -205,6 +205,12 @@ export interface HandoffSnapshotInput {
    */
   readonly pauseReason?: string;
   /**
+   * C2b (AR-R07): the previous snapshot was edited outside AIBoard. Renders
+   * the fixed notice line after the header. Optional so every existing
+   * input renders byte-identical when it is absent.
+   */
+  readonly previousSnapshotEdited?: boolean;
+  /**
    * Present for plan-only runs (the plan is the product), with the revision's
    * real readiness (`ready` from the ready-plan identity, not a default).
    */
@@ -232,6 +238,11 @@ export interface HandoffSnapshotFacts {
   readonly testCommand?: string;
   /** Repo path of the approved spec or of its verbatim copy. */
   readonly specPath?: string;
+  /**
+   * C2b (AR-R07): the tip STATE.md was edited outside AIBoard. The renderer
+   * names it with the fixed line below. Absent means clean or first.
+   */
+  readonly previousSnapshotEdited?: boolean;
   /** Overrides the default "no notes" reason. */
   readonly notesAbsentReason?: string;
 }
@@ -246,6 +257,15 @@ export const HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH = 2000;
 export const HANDOFF_SNAPSHOT_NOTES_MAX_LINES = 30;
 
 const NOT_RECORDED = "not recorded";
+
+/**
+ * The fixed hand-edit notice line (C2b AR-R07, repair m2): static text the
+ * renderer emits when the tip STATE.md was edited outside AIBoard. Readers
+ * detect it in committed bytes to derive previousSnapshotEdited from the
+ * commit itself, never from fresh reads.
+ */
+export const PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE =
+  "The previous snapshot was edited outside AIBoard; see this file's git history.";
 
 /**
  * Neutralize untrusted text for prose: FIRST drop C0/C1 controls and
@@ -469,6 +489,12 @@ function buildBody(input: HandoffSnapshotInput, budgets: TruncationBudgets): str
   lines.push(`stop: ${input.stopKind} — ${singleLine(input.stopReason)}`);
   lines.push(`stop at: ${singleLine(input.stopAt, 120)}`);
   lines.push(``);
+  // C2b (AR-R07): the hand-edit notice is a fixed, never-truncated line --
+  // static text, so untrusted input can never forge or suppress it.
+  if (input.previousSnapshotEdited === true) {
+    lines.push(PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE);
+    lines.push(``);
+  }
   // What was asked.
   lines.push(`## What was asked`);
   lines.push(`source: ${singleLine(input.sourceTitle, fixedCap)} (digest ${singleLine(input.sourceDigest, 120)})`);
@@ -1298,6 +1324,7 @@ export function handoffSnapshotInputFromProjection(
       ?? (notes !== undefined ? "" : "no handoff summary recorded for this stop"),
     nextAction,
     ...(pauseReason !== undefined ? { pauseReason } : {}),
+    ...(facts.previousSnapshotEdited === true ? { previousSnapshotEdited: true as const } : {}),
     ...(planOnly && revisionRecord !== undefined
       ? {
         plan: {

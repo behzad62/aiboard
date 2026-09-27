@@ -9,12 +9,17 @@ import { ANSWER_PATH_LIFECYCLE_TOOLS, ARCHITECT_LIFECYCLE_TOOLS } from "./role-c
 import type { NativeBuildRunPolicy } from "./build-spec.js";
 import type {
   BuildRiskAssessmentProjection,
+  HandoffFilesOption,
   ProjectHandoffChoice,
   SchedulerActor,
   SchedulerEvent,
   SchedulerProjection,
   SchedulerStore,
 } from "./scheduler-store.js";
+import {
+  V2_AGENTS_SECTION_BODY,
+  V2_CLAUDE_POINTER_LINE,
+} from "./project-docs.js";
 import {
   clearContextRecordingSuspension,
   ContextManifestRecordingError,
@@ -27,8 +32,11 @@ import {
   currentAnswerReviewVerdict,
   DEFAULT_REPAIR_PLAN_LIMIT,
   deriveFinalVerificationFailure,
+  handoffFilesOf,
+  handoffSnapshotRetryPending,
   isAnsweredRun,
   isPlanningState,
+  specCopyOf,
   latestAnswerReviewVerdict,
   latestUnresolvedContextRecordingNote,
   newPolicyStaleTasksRequireArchitect,
@@ -73,6 +81,7 @@ import { computePlanReadiness, coverageReviewHoldsReadiness } from "./planning-c
 import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./planning-projection.js";
 import type { BuildTask } from "./task-contracts.js";
 import {
+  PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE,
   handoffSnapshotInputFromProjection,
   renderHandoffSnapshot,
   verifyHandoffSnapshotDigest,
@@ -102,6 +111,7 @@ import { ToolRegistry } from "./tool-registry.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
 import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 import type { ArtifactStore } from "./artifact-store.js";
+import { ArtifactNotFoundError } from "./artifact-store.js";
 import type { ArchitectActionReason } from "./user-steering-contracts.js";
 import {
   assessBuildRisk,
@@ -316,6 +326,13 @@ export interface BuildRuntimeOptions {
   runId: string;
   initialObjective?: string;
   runPolicy?: NativeBuildRunPolicy;
+  /**
+   * C2b run options (CD-5): verbatim spec copy (default true) and handoff
+   * file handling (default "commit"). Recorded durably in
+   * `run.policy_configured`; the recorded values govern the run.
+   */
+  specCopy?: boolean;
+  handoffFiles?: HandoffFilesOption;
   store: SchedulerStore;
   workerDriver: WorkerRuntimeDriver;
   architectDriver: ArchitectRuntimeDriver;
@@ -410,11 +427,64 @@ function snapshotFailureDetail(cause: unknown): string {
   return singleLine.slice(0, HANDOFF_SNAPSHOT_FAILURE_DETAIL_MAX_LENGTH) || "handoff snapshot failed";
 }
 
+/** Windows reserved device names: never a spec file stem, with or without an extension. */
+const WINDOWS_RESERVED_FILE_STEMS: ReadonlySet<string> = new Set([
+  "CON", "PRN", "AUX", "NUL",
+  "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+]);
+
+/** C2b repair m4: spec file stems are capped so the copy path stays portable. */
+const SPEC_SOURCE_ID_MAX_LENGTH = 100;
+
+/**
+ * C2b (CD-5): the `docs/project/specs/<source-id>.md` file stem for an
+ * approved source id. Path-unsafe characters become `_`, capped in length;
+ * a Windows reserved stem (any case, with or without an extension), an
+ * empty result, or a dot-only result falls back to a digest-based name so
+ * the copy never fails the snapshot commit. Without a digest there is no
+ * fallback, and the copy is skipped with a recorded reason instead.
+ */
+export function sanitizeSpecSourceId(sourceId: string, digest?: string): string | undefined {
+  const trimmed = sourceId.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  const safe = trimmed.slice(0, SPEC_SOURCE_ID_MAX_LENGTH);
+  const head = (safe.split(".")[0] ?? "").toUpperCase();
+  if (!safe || safe === '.' || safe === '..' || WINDOWS_RESERVED_FILE_STEMS.has(head)) {
+    if (digest !== undefined && /^[a-f0-9]{64}$/.test(digest)) return `spec-${digest.slice(0, 16)}`;
+    return undefined;
+  }
+  return safe;
+}
+
 export interface ProjectDocsPort {
   commit(input: ProjectDocCommitRequest): Promise<ProjectDocCommitResult>;
   commitHandoffSnapshot(input: HandoffSnapshotCommitRequest): Promise<ProjectDocCommitResult>;
   readHandoffSnapshotFile(input: { commit: string; path: string }): Promise<{ content: string | null; paths: string[] }>;
   relateRevision(input: { revision: string; tip: string }): Promise<DocumentTipRelation>;
+  /**
+   * C2b (AR-R07): read a file from the integration tip commit (blob bytes,
+   * never the working tree) for hand-edit detection.
+   */
+  readIntegrationTipFile(input: { path: string }): Promise<{ content: string | null; commit: string }>;
+  /**
+   * C2b (CD-5): find a tracked file at the integration tip whose bytes hash
+   * to the digest, or null. Bounds the "already a repository file" decision.
+   */
+  findTrackedFileWithDigest(input: { digest: string; byteLength: number }): Promise<{ path: string } | null>;
+  /**
+   * C2b repair B1 (required): lookup-only snapshot find for a stop key --
+   * the runner snapshot commit carrying the key, or null. Never commits.
+   * Required so a missing factory wiring is a type error, never a silent
+   * skip of withdrawn-stop reconciliation (C2b repair B1-R).
+   */
+  findHandoffSnapshotCommit(input: { snapshotKey: string }): Promise<ProjectDocCommitResult | null>;
+  /**
+   * C2b repair CD-14/N6 (required): the recorded integration baseline
+   * revision, the handed-off revision when a docs-v2 run has no plan
+   * revision and no integration revision yet. Required for the same
+   * reason: production always wires it.
+   */
+  readIntegrationBaselineRevision(): Promise<{ revision: string }>;
 }
 
 export interface BuildStepResult {
@@ -460,6 +530,8 @@ export class BuildRuntime {
   private readonly deliveryReview?: DeliveryReviewDriver;
   private readonly deliveryBoundary?: DeliveryBoundaryDriver;
   private readonly runPolicy: NativeBuildRunPolicy;
+  private readonly specCopy: boolean;
+  private readonly handoffFiles: HandoffFilesOption;
   private readonly maxTaskAttempts: number;
   private readonly resourceCapacity?: TaskSchedulerOptions["resourceCapacity"];
   private readonly architectId: string;
@@ -513,6 +585,8 @@ export class BuildRuntime {
     this.deliveryReview = options.deliveryReview;
     this.deliveryBoundary = options.deliveryBoundary;
     this.runPolicy = options.runPolicy ?? "finish";
+    this.specCopy = options.specCopy ?? true;
+    this.handoffFiles = options.handoffFiles ?? "commit";
     this.maxTaskAttempts = options.maxTaskAttempts ?? 2;
     this.resourceCapacity = options.resourceCapacity;
     this.architectId = options.architectId ?? "architect_1";
@@ -692,8 +766,15 @@ export class BuildRuntime {
       this.lifecycleController = new AbortController();
     }
     // C2a: a failed kernel snapshot pauses the handoff instead of blocking it;
-    // the owner's resume retries the commit.
-    if (projection.projectHandoff?.status === "requested" && projection.pauseReason?.reason !== "handoff_snapshot_failed") {
+    // the owner's resume retries the commit. C2b (N2): the exemption is
+    // "docs v2, handoff requested, no snapshot for the current stop", not
+    // the current pause reason alone -- an owner pause stacked on a
+    // snapshot failure still allows resume to retry.
+    if (
+      projection.projectHandoff?.status === "requested" &&
+      projection.pauseReason?.reason !== "handoff_snapshot_failed" &&
+      !handoffSnapshotRetryPending(projection)
+    ) {
       throw new Error(
         "This Build is awaiting the user's final project handoff selection."
       );
@@ -1984,6 +2065,12 @@ export class BuildRuntime {
    * with the bounded cause in its detail (M4). Called from
    * `afterArchitect` (the same step that records the stop) and from the
    * top of `dispatchStep` (resume retries and crash recovery).
+   *
+   * C2b: the same commit also carries the static v2 AGENTS.md section and
+   * the marked `@AGENTS.md` line (AR-R04, spliced, never overwritten),
+   * the verbatim spec copy when due (CD-5), and the hand-edit notice line
+   * when the tip STATE.md was edited outside AIBoard (AR-R07). With
+   * `handoffFiles: "export_only"` nothing is written at any stop.
    */
   private async maybeCommitHandoffSnapshot(
     projection: SchedulerProjection,
@@ -1991,6 +2078,9 @@ export class BuildRuntime {
     if (projection.projectDocsPolicyVersion !== 2) return undefined;
     if (isAnsweredRun(projection)) return undefined;
     if (projection.projectHandoff?.status !== "requested") return undefined;
+    // C2b (CD-5): `export_only` writes no handoff file at any stop; the
+    // recorded run option satisfies the AR-R05 gate on its own.
+    if (handoffFilesOf(projection) !== "commit") return undefined;
     const events = this.store.readRun(this.runId);
     const stop = [...events].reverse().find((event) => event.type === "project.handoff_requested");
     if (!stop) return undefined;
@@ -1998,33 +2088,132 @@ export class BuildRuntime {
     if ((projection.projectDocs?.snapshots ?? []).some((record) => record.stopSequence === stopSequence)) {
       return undefined;
     }
-    const lastSequence = events[events.length - 1]!.sequence;
+    // C2b repair B1: a kernel commit that landed but was never recorded (a
+    // read failure after the commit, or a crash before the append) still
+    // belongs to the chain once its stop is withdrawn. Record every
+    // withdrawn stop's landed commit as history BEFORE the next stop
+    // commits, so the new snapshot continues the documents instead of
+    // breaking them.
+    // C2b repair B2: reconciliation runs before the current stop commits,
+    // and a withdrawn stop that cannot be classified fails closed -- the
+    // current stop pauses with the reconciliation failure named, and the
+    // next resume retries. The chain never breaks on a transient error.
+    let lastSequence = events[events.length - 1]!.sequence;
+    let reconciled = false;
+    try {
+      reconciled = await this.reconcileWithdrawnSnapshotCommits(projection, stopSequence);
+    } catch (error) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, error);
+    }
+    if (reconciled) {
+      const fresh = this.store.readRun(this.runId);
+      lastSequence = fresh[fresh.length - 1]!.sequence;
+    }
     const stopProjection = rebuildSchedulerProjection(events.filter((event) => event.sequence <= stopSequence));
     const stopKind = stopProjection.runPolicy === "plan_only" ? "plan_only" : "completed";
-    const revision = stopProjection.integrationRevision
-      ?? stopProjection.planning?.plan?.currentRevisionId
-      ?? "";
+    // C2b repair CD-14 (N6): a docs-v2 run without a plan revision hands
+    // off the integration revision, or the recorded baseline when even that
+    // is absent (legacy planning, no integration revision yet) -- never an
+    // endless snapshot-failure pause. The pause below stays as fail-closed
+    // fallback for ports without the baseline lookup.
+    const revision = await this.handedOffRevision(stopProjection);
     if (!revision.trim()) {
       return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "no handed-off revision recorded at the stop");
+    }
+    if (!this.projectDocs) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "the project document port is unavailable");
+    }
+    const port = this.projectDocs;
+    // C2b (AR-R07): hand-edit detection reads STATE.md from the integration
+    // tip COMMIT (blob bytes, not the working tree). A tip file that exists
+    // but fails the digest check -- or has no generated header, which also
+    // fails the check -- was edited outside AIBoard and is named in the new
+    // snapshot. No tip file means this is the first snapshot: not an edit.
+    let previousSnapshotEdited = false;
+    try {
+      const tip = await port.readIntegrationTipFile({ path: "docs/project/STATE.md" });
+      previousSnapshotEdited = tip.content !== null && !verifyHandoffSnapshotDigest(tip.content);
+    } catch (error) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, error);
+    }
+    // C2b (CD-5): the verbatim spec copy decision. The approved source's
+    // bytes live in the artifact store under the manifest artifact digest;
+    // the source is "already a repository file" exactly when a tracked file
+    // at the integration tip hashes to the same digest (same-byte-length
+    // blobs only). Opted out, missing bytes, a digest mismatch, or a
+    // non-text source means no copy -- recorded, never a handoff failure.
+    let specWrite: { path: string; content: string } | undefined;
+    let specPath: string | undefined;
+    let specCopySkipped: string | undefined;
+    const manifest = stopProjection.planning === undefined
+      ? undefined
+      : stopProjection.planning.source.manifestsById[stopProjection.planning.source.currentManifestId];
+    // C2b repair m4: every non-copy outcome records its bounded reason, and
+    // a spec-copy failure never fails the snapshot commit -- the copy is
+    // conditional, the snapshot is not.
+    if (!specCopyOf(projection)) {
+      specCopySkipped = "opted_out";
+    } else if (manifest === undefined) {
+      specCopySkipped = "no_manifest";
+    } else {
+      const specBytes = await this.readApprovedSourceBytes(manifest.artifactDigest);
+      if (specBytes === null) {
+        specCopySkipped = "missing_bytes";
+      } else if (createHash("sha256").update(specBytes).digest("hex") !== manifest.artifactDigest) {
+        specCopySkipped = "digest_mismatch";
+      } else if (!manifest.mediaType.startsWith("text/")) {
+        specCopySkipped = "non_text_source";
+      } else if (manifest.encoding !== "utf-8") {
+        specCopySkipped = "unsupported_encoding";
+      } else {
+        let existing: { path: string } | null = null;
+        try {
+          existing = await port.findTrackedFileWithDigest({
+            digest: manifest.artifactDigest,
+            byteLength: specBytes.byteLength,
+          });
+        } catch {
+          specCopySkipped = "tracked_search_failed";
+        }
+        if (specCopySkipped === undefined) {
+          if (existing !== null) {
+            specPath = existing.path;
+          } else {
+            const stem = sanitizeSpecSourceId(manifest.sourceId, manifest.artifactDigest);
+            if (stem === undefined) {
+              specCopySkipped = "unusable_source_id";
+            } else {
+              specPath = `docs/project/specs/${stem}.md`;
+              specWrite = { path: specPath, content: specBytes.toString("utf8") };
+            }
+          }
+        }
+      }
     }
     const snapshotKey = `handoff-snapshot:${stopSequence}`;
     let body: string;
     try {
-      body = renderHandoffSnapshot(handoffSnapshotInputFromProjection(stopProjection, { stopAt: stop.occurredAt, revision }));
+      body = renderHandoffSnapshot(handoffSnapshotInputFromProjection(stopProjection, {
+        stopAt: stop.occurredAt,
+        revision,
+        ...(specPath !== undefined ? { specPath } : {}),
+        ...(previousSnapshotEdited ? { previousSnapshotEdited: true as const } : {}),
+      }));
     } catch (error) {
       return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, error);
     }
     if (!verifyHandoffSnapshotDigest(body)) {
       return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "the rendered snapshot failed its digest check");
     }
-    if (!this.projectDocs) {
-      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "the project document port is unavailable");
-    }
-    const port = this.projectDocs;
     let result: ProjectDocCommitResult;
     try {
       result = await port.commitHandoffSnapshot({
-        writes: [{ path: "docs/project/STATE.md", content: body }],
+        writes: [
+          { path: "docs/project/STATE.md", content: body },
+          { path: "AGENTS.md", content: V2_AGENTS_SECTION_BODY },
+          { path: "CLAUDE.md", content: V2_CLAUDE_POINTER_LINE },
+          ...(specWrite !== undefined ? [specWrite] : []),
+        ],
         summary: `AIBoard handoff snapshot (${stopKind}) for run ${this.runId}`,
         runId: this.runId,
         snapshotKey,
@@ -2061,24 +2250,80 @@ export class BuildRuntime {
         `commit ${result.commit} lists no docs/project/STATE.md path`,
       );
     }
-    this.store.append({
-      runId: this.runId,
-      type: "project_docs.handoff_snapshot_committed",
-      occurredAt: this.clock(),
-      actor: { role: "runner", id: "build-runtime" },
-      idempotencyKey: snapshotKey,
-      payload: {
+    // C2b (AR-R05): the full gate needs the v2 entry lines in the commit's
+    // own tree. The entry-point facts above were read back from the commit
+    // (never the checkout); a commit without them fails the snapshot like a
+    // missing STATE.md -- recorded, never silently accepted.
+    // C2b repair m5: a CLAUDE.md that links to AGENTS.md satisfies the line
+    // through the link (recorded below); any other missing line still fails.
+    const claudeLineViaLink = result.entryPoint.claudePointerV2ViaAgentsLink === true
+      ? "CLAUDE.md is a symbolic link to AGENTS.md"
+      : undefined;
+    if (
+      !result.entryPoint.agentsMarkedSectionV2 ||
+      (!result.entryPoint.claudePointerV2 && claudeLineViaLink === undefined)
+    ) {
+      return this.pauseForHandoffSnapshotFailure(
         stopSequence,
-        stopKind,
-        revision,
-        commit: result.commit,
-        parent: result.parent,
-        head: result.head,
-        bodyDigest: committedDigest,
-        paths: stored.paths,
-      },
+        lastSequence,
+        `commit ${result.commit} lacks the v2 AGENTS.md section or the CLAUDE.md line`,
+      );
+    }
+    // C2b repair m2/m4: the event describes the committed tree. On a reused
+    // commit the pre-commit reads are stale (the tip is the commit itself),
+    // so previousSnapshotEdited comes from the notice line in the committed
+    // STATE.md, and a spec copy is claimed only after the committed blob
+    // hashes to the source digest.
+    const commitClaim = await this.specCopyClaimFromCommit(
+      result.commit,
+      stored.paths,
+      manifest?.artifactDigest,
+    );
+    // C2b repair N-1/N-2: the kernel reports an unstageable spec copy on
+    // the commit result (never by failing the snapshot). A skipped spec
+    // path surfaces as specCopySkipped -- write_failed, or path_occupied
+    // when the kernel names it -- unless the committed tree proves the
+    // copy after all (a reused commit staged on an earlier attempt).
+    const stagedSpecSkip = (result.skipped ?? []).find((entry) => entry.path.startsWith("docs/project/specs/"));
+    const stagedSpecSkipped = stagedSpecSkip === undefined
+      ? undefined
+      : stagedSpecSkip.reason.includes("(path_occupied)") ? "path_occupied" : "write_failed";
+    const eventSpecPath = commitClaim.specPath ?? specPath;
+    const eventSpecCopySkipped = commitClaim.specCopied
+      ? undefined
+      : (commitClaim.specCopySkipped ?? stagedSpecSkipped ?? specCopySkipped);
+    this.appendHandoffSnapshotCommitted({
+      stopSequence,
+      stopKind,
+      revision,
+      commit: result.commit,
+      parent: result.parent,
+      head: result.head,
+      bodyDigest: committedDigest,
+      paths: stored.paths,
+      previousSnapshotEdited: stored.content.includes(PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE),
+      ...(eventSpecPath !== undefined ? { specPath: eventSpecPath } : {}),
+      ...(commitClaim.specCopied ? { specCopied: true as const } : {}),
+      ...(eventSpecCopySkipped !== undefined ? { specCopySkipped: eventSpecCopySkipped } : {}),
+      ...(claudeLineViaLink !== undefined ? { claudeLineViaLink } : {}),
     });
     return { status: "paused", action: "handoff_snapshot_committed" };
+  }
+
+  /**
+   * C2b (CD-5): the approved source's verbatim bytes from the artifact
+   * store, or null when the store is not provisioned or the bytes are
+   * missing. A missing artifact skips the spec copy; it never fails the
+   * handoff (the copy is explicitly conditional).
+   */
+  private async readApprovedSourceBytes(artifactDigest: string): Promise<Buffer | null> {
+    if (!this.artifacts) return null;
+    try {
+      return await this.artifacts.get(artifactDigest);
+    } catch (error) {
+      if (error instanceof ArtifactNotFoundError) return null;
+      throw error;
+    }
   }
 
   /**
@@ -2087,6 +2332,189 @@ export class BuildRuntime {
    * and the next resume retries. The bounded, message-only cause travels
    * in the pause detail.
    */
+  /**
+   * C2b repair CD-14 (N6): the handed-off revision for a stop. A docs-v2
+   * run without a plan revision uses the integration revision, or the
+   * recorded baseline when even that is absent (legacy planning, no
+   * integration revision yet). The baseline lookup is required on the
+   * port (C2b repair B1-R), so this is empty only without a docs port;
+   * the caller then pauses fail-closed.
+   */
+  private async handedOffRevision(stopProjection: SchedulerProjection): Promise<string> {
+    const direct = stopProjection.integrationRevision
+      ?? stopProjection.planning?.plan?.currentRevisionId
+      ?? "";
+    if (direct.trim()) return direct;
+    const baseline = await this.projectDocs?.readIntegrationBaselineRevision();
+    return baseline?.revision ?? "";
+  }
+
+  /**
+   * C2b repair m4: the spec-copy claim for a committed snapshot. A specs
+   * path in the commit whose blob hashes to the source digest was copied
+   * by this snapshot; anything else is reported without the copy claim.
+   * Blob read failures and digest mismatches skip the claim with a reason
+   * instead of failing the snapshot. No commit specs path means this
+   * helper claims nothing (the caller keeps its already-a-repo-file path).
+   */
+  private async specCopyClaimFromCommit(
+    commit: string,
+    commitPaths: string[],
+    manifestDigest: string | undefined,
+  ): Promise<{ specPath?: string; specCopied: boolean; specCopySkipped?: string }> {
+    const commitSpecPath = commitPaths.find((path) => path.startsWith("docs/project/specs/") && path.endsWith(".md"));
+    if (commitSpecPath === undefined || manifestDigest === undefined) return { specCopied: false };
+    let blob: { content: string | null };
+    try {
+      blob = await this.projectDocs!.readHandoffSnapshotFile({ commit, path: commitSpecPath });
+    } catch {
+      return { specPath: commitSpecPath, specCopied: false, specCopySkipped: "spec_blob_unreadable" };
+    }
+    if (blob.content !== null && createHash("sha256").update(blob.content, "utf8").digest("hex") === manifestDigest) {
+      return { specPath: commitSpecPath, specCopied: true };
+    }
+    return { specPath: commitSpecPath, specCopied: false, specCopySkipped: "commit_blob_mismatch" };
+  }
+
+  /**
+   * C2b repair B1: record every withdrawn stop's landed commit as history
+   * before the next stop commits. A kernel snapshot commit that landed but
+   * whose event was never appended (a read failure after the commit, or a
+   * crash before the append) is found by its stop key through the
+   * lookup-only port method -- never by committing -- and appended as a
+   * history event. The record moves the document tip but satisfies no later
+   * gate (the gate binds to the latest request), so the next stop's
+   * snapshot continues the chain.
+   * C2b repair B2: fail closed. A withdrawn stop with no landed commit is
+   * simply not there yet (skip), but a stop that cannot be classified -- a
+   * lookup or read-back throw, an unreadable or entry-less commit, or
+   * missing stop facts -- throws, and the caller pauses the current stop
+   * before committing. Resume retries.
+   */
+  private async reconcileWithdrawnSnapshotCommits(
+    projection: SchedulerProjection,
+    currentStopSequence: number,
+  ): Promise<boolean> {
+    const port = this.projectDocs;
+    if (!port) return false;
+    const recorded = new Set(
+      (projection.projectDocs?.snapshots ?? []).map((record) => record.stopSequence),
+    );
+    let appended = false;
+    for (const handoff of projection.projectHandoffHistory ?? []) {
+      const stopSequence = handoff.requestedSequence;
+      if (stopSequence === undefined || stopSequence === currentStopSequence || recorded.has(stopSequence)) continue;
+      let found: ProjectDocCommitResult | null;
+      try {
+        found = await port.findHandoffSnapshotCommit({ snapshotKey: `handoff-snapshot:${stopSequence}` });
+      } catch (error) {
+        throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: lookup threw (${snapshotFailureDetail(error)}).`);
+      }
+      if (!found) continue;
+      let stored: { content: string | null; paths: string[] };
+      try {
+        stored = await port.readHandoffSnapshotFile({ commit: found.commit, path: "docs/project/STATE.md" });
+      } catch (error) {
+        throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: read-back threw (${snapshotFailureDetail(error)}).`);
+      }
+      if (stored.content === null || !verifyHandoffSnapshotDigest(stored.content)) {
+        throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: commit ${found.commit} holds no verifiable STATE.md.`);
+      }
+      const committedDigest = /body_sha256: ([a-f0-9]{64})/.exec(stored.content.split("\n")[0] ?? "")?.[1] ?? "";
+      if (!committedDigest || !stored.paths.includes("docs/project/STATE.md")) {
+        throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: commit ${found.commit} cannot be recorded.`);
+      }
+      if (
+        !found.entryPoint.agentsMarkedSectionV2 ||
+        (!found.entryPoint.claudePointerV2 && found.entryPoint.claudePointerV2ViaAgentsLink !== true)
+      ) {
+        throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: commit ${found.commit} lacks the v2 entry lines.`);
+      }
+      const facts = await this.withdrawnStopFacts(stopSequence);
+      if (!facts) {
+        throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: no handed-off revision recorded at the stop.`);
+      }
+      const claim = await this.specCopyClaimFromCommit(found.commit, stored.paths, facts.manifestDigest);
+      this.appendHandoffSnapshotCommitted({
+        stopSequence,
+        stopKind: facts.stopKind,
+        revision: facts.revision,
+        commit: found.commit,
+        parent: found.parent,
+        head: found.head,
+        bodyDigest: committedDigest,
+        paths: stored.paths,
+        previousSnapshotEdited: stored.content.includes(PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE),
+        ...(claim.specPath !== undefined ? { specPath: claim.specPath } : {}),
+        ...(claim.specCopied ? { specCopied: true as const } : {}),
+        ...(claim.specCopied || claim.specCopySkipped === undefined ? {} : { specCopySkipped: claim.specCopySkipped }),
+        ...(found.entryPoint.claudePointerV2ViaAgentsLink === true
+          ? { claudeLineViaLink: "CLAUDE.md is a symbolic link to AGENTS.md" }
+          : {}),
+      });
+      recorded.add(stopSequence);
+      appended = true;
+    }
+    return appended;
+  }
+
+  /** Stop facts for a withdrawn stop's history record: its own kind and handed-off revision. */
+  private async withdrawnStopFacts(
+    stopSequence: number,
+  ): Promise<{ stopKind: string; revision: string; manifestDigest?: string } | null> {
+    const events = this.store.readRun(this.runId);
+    const stopProjection = rebuildSchedulerProjection(events.filter((event) => event.sequence <= stopSequence));
+    const stopKind = stopProjection.runPolicy === "plan_only" ? "plan_only" : "completed";
+    const revision = await this.handedOffRevision(stopProjection);
+    if (!revision.trim()) return null;
+    const manifest = stopProjection.planning === undefined
+      ? undefined
+      : stopProjection.planning.source.manifestsById[stopProjection.planning.source.currentManifestId];
+    return { stopKind, revision, ...(manifest !== undefined ? { manifestDigest: manifest.artifactDigest } : {}) };
+  }
+
+  /** One append for every recorded handoff snapshot: current stop or withdrawn-stop history. */
+  private appendHandoffSnapshotCommitted(input: {
+    stopSequence: number;
+    stopKind: string;
+    revision: string;
+    commit: string;
+    parent: string;
+    head: string;
+    bodyDigest: string;
+    paths: string[];
+    previousSnapshotEdited: boolean;
+    specPath?: string;
+    specCopied?: boolean;
+    specCopySkipped?: string;
+    claudeLineViaLink?: string;
+  }): void {
+    this.store.append({
+      runId: this.runId,
+      type: "project_docs.handoff_snapshot_committed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `handoff-snapshot:${input.stopSequence}`,
+      payload: {
+        stopSequence: input.stopSequence,
+        stopKind: input.stopKind,
+        revision: input.revision,
+        commit: input.commit,
+        parent: input.parent,
+        head: input.head,
+        bodyDigest: input.bodyDigest,
+        paths: input.paths,
+        previousSnapshotEdited: input.previousSnapshotEdited,
+        agentsSectionCommitted: true,
+        claudeLineCommitted: true,
+        ...(input.specPath !== undefined ? { specPath: input.specPath } : {}),
+        ...(input.specCopied === true ? { specCopied: true as const } : {}),
+        ...(input.specCopySkipped !== undefined ? { specCopySkipped: input.specCopySkipped } : {}),
+        ...(input.claudeLineViaLink !== undefined ? { claudeLineViaLink: input.claudeLineViaLink } : {}),
+      },
+    });
+  }
+
   private pauseForHandoffSnapshotFailure(stopSequence: number, lastSequence: number, cause: unknown): BuildStepResult {
     this.store.append({
       runId: this.runId,
@@ -2754,6 +3182,19 @@ export class BuildRuntime {
           `Scheduler run policy is already configured as ${recovered.runPolicy}.`
         );
       }
+      if (recovered.runPolicy) {
+        // C2b: the run policy is already recorded; the recorded values
+        // govern. Re-appending would conflict on the payload shape (C2b
+        // records the run options additively), so recovery records nothing.
+        // A conflicting restamp is refused loudly instead of being ignored.
+        if (
+          this.specCopy !== specCopyOf(recovered) ||
+          this.handoffFiles !== handoffFilesOf(recovered)
+        ) {
+          throw new Error("Scheduler run options conflict with the recorded run policy.");
+        }
+        return;
+      }
     }
     this.store.append({
       runId: this.runId,
@@ -2761,7 +3202,10 @@ export class BuildRuntime {
       occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
       idempotencyKey: "run-policy-configured",
-      payload: { runPolicy: this.runPolicy },
+      // C2b (CD-5): the run options are recorded durably in the run policy
+      // (additive: logs written before C2b carry neither field and replay
+      // with the defaults). The recorded values govern the run.
+      payload: { runPolicy: this.runPolicy, specCopy: this.specCopy, handoffFiles: this.handoffFiles },
     });
   }
 

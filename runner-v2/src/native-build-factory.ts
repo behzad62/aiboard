@@ -1577,6 +1577,10 @@ export class NativeBuildFactory {
       runId: spec.runId,
       initialObjective: spec.objective,
       runPolicy: spec.runPolicy,
+      // C2b (CD-5): per-run handoff file options from the spec; recorded
+      // durably in `run.policy_configured` by the runtime.
+      specCopy: spec.specCopy ?? true,
+      handoffFiles: spec.handoffFiles ?? "commit",
       store: schedulerStore,
       workerDriver,
       architectDriver,
@@ -1691,6 +1695,13 @@ export class NativeBuildFactory {
         commit: (input) => integrationManager.commitProjectDocuments(input),
         commitHandoffSnapshot: (input) => integrationManager.commitHandoffSnapshot(input),
         readHandoffSnapshotFile: (input) => integrationManager.readHandoffSnapshotFile(input),
+        readIntegrationTipFile: (input) => integrationManager.readIntegrationTipFile(input),
+        findTrackedFileWithDigest: (input) => integrationManager.findTrackedFileWithDigest(input),
+        // C2b repair B1-R: the withdrawn-stop reconciliation lookup and the
+        // baseline revision are production-wired (both required on the
+        // port, so dropping one is a type error, never a silent skip).
+        findHandoffSnapshotCommit: (input) => integrationManager.findHandoffSnapshotCommit(input),
+        readIntegrationBaselineRevision: () => integrationManager.readIntegrationBaselineRevision(),
         relateRevision: (input) => integrationManager.relateToDocumentTip(input),
       },
     });

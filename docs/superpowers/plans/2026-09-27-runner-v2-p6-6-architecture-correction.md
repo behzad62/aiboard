@@ -121,6 +121,23 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   and 7 (reducer v2, kernel-commit method, `project_docs.handoff_snapshot_committed`, the gate with
   STATE.md, answered runs). C2b: steps 5, 6 and 8 (AGENTS.md section, `@AGENTS.md` line, spec copy,
   run options, hand-edit detection) and the full AR-R05 tree check. Same requirements, smaller reviews.
+- **CD-14 — No reducer check of the docs/planning pairing (C2b review r1 m1).** The reducer does not
+  refuse docs v2 on a legacy-planning log; T7a is the only owner of production stamping and stamps
+  planning v1 and docs v2 together (CD-1). A docs-v2 run without a plan revision uses the integration
+  revision (or the recorded baseline) as the handed-off revision, so it never loops on a snapshot
+  failure.
+- **CD-15 — Entry-file links never block a handoff (C2b review r3 NF-2).** The runner never writes
+  through a link. If AGENTS.md or CLAUDE.md is a link (a real link, or a git link entry checked out
+  as a plain file) whose target is a regular tracked file inside the repository, the runner writes
+  the marked section into that target path directly and records why. If the target is anything
+  else, the runner skips that entry file and records the reason, and the AR-R05 gate accepts the
+  recorded reason for that file (STATE.md stays required). No repository layout may leave a run
+  permanently unable to hand off.
+- **CD-16 — Two follow-up packets before T7a (C2b review r3).** C2c (docs hardening: NF-1 gitignored
+  spec directory, NF-2 per CD-15, NF-3 link facts from the commit tree only, NF-4 the `spec:` line
+  names the real copy, NF-5 and NF-7 evidence corrections). FX-1 (NF-6: a pre-existing livelock:
+  after guidance on an unchanged revision the build-risk re-assessment keyed by revision can never be
+  recorded again; it affects v1 finish runs with the independent verifier).
 
 ---
 
@@ -465,6 +482,22 @@ Runs as C2a then C2b (CD-13).
   criteria and scope in the reviewer context; token cap.
 - **Red proof:** drop the contract block from the worker context; the factory test goes red.
 - **DoD:** tests green; factory test (CD-7); stored digests valid.
+
+### C2c — Docs hardening (CD-15, CD-16)
+
+- **Outcome:** no repository layout leaves a v2 run unable to hand off, and every recorded fact
+  matches the commit. Items: C2b review r3 NF-1 to NF-5 and NF-7 (see
+  `evidence/C2b-review-r3.md`), with CD-15 for NF-2.
+- **Tests:** probes K-ignored, L2, L2-real, L3, U1, U2, K, K2, K2b turned into regression tests
+  through the production manager and the factory-built port; v1 unchanged.
+
+### FX-1 — Build-risk re-assessment after guidance (CD-16)
+
+- **Outcome:** after guidance invalidates the build-risk assessment on an unchanged revision, a new
+  assessment can be recorded and the run completes; old logs replay unchanged. Item: C2b review r3
+  NF-6 and its probe RA (`build-runtime.ts` `build-risk:${targetRevision}` key,
+  `scheduler-store.ts` guidance invalidation). Test through the production manager for a v1 finish
+  run and a v2 finish run.
 
 ### T7a-T7d — parent T7 split (AR-R17, AR-R18)
 

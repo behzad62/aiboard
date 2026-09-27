@@ -388,7 +388,10 @@ export interface ProjectDocsProjection {
   snapshots?: HandoffSnapshotRecord[];
 }
 
-/** A kernel-committed handoff snapshot (docs policy v2, C2a: STATE.md only). */
+/**
+ * A kernel-committed handoff snapshot (docs policy v2; C2a: STATE.md only,
+ * C2b: plus the v2 entry lines and the optional spec copy).
+ */
 export interface HandoffSnapshotRecord {
   stopSequence: number;
   stopKind: string;
@@ -399,6 +402,26 @@ export interface HandoffSnapshotRecord {
   bodyDigest: string;
   paths: string[];
   sequence: number;
+  /**
+   * The tip STATE.md was hand-edited before this snapshot (AR-R07): the new
+   * snapshot names it. False for the first snapshot and for clean chains.
+   */
+  previousSnapshotEdited: boolean;
+  /**
+   * Read back from the commit's own tree (never the checkout): the commit
+   * holds the marked v2 AGENTS.md section and the marked `@AGENTS.md` line.
+   * The AR-R05 gate requires both.
+   */
+  agentsSectionCommitted: boolean;
+  claudeLineCommitted: boolean;
+  /** Spec-copy outcome (CD-5): the committed copy path, or the repo path of the approved source when it was already a repository file. Absent when no copy was written. */
+  specPath?: string;
+  /** True when this snapshot committed a verbatim spec copy. Absent means none was written. */
+  specCopied?: boolean;
+  /** C2b repair m4: bounded reason the spec copy was skipped. Absent means not skipped. */
+  specCopySkipped?: string;
+  /** C2b repair m5: why the CLAUDE.md line counts as satisfied although the blob holds none. Absent means the blob holds it. */
+  claudeLineViaLink?: string;
 }
 
 export interface ProjectDocCommitProjection {
@@ -834,6 +857,13 @@ export interface SchedulerProjection {
   /** Optional for event-log compatibility with runs created before P3.1. */
   initialObjective?: string;
   runPolicy?: NativeBuildRunPolicy;
+  /**
+   * C2b run options (CD-5), recorded durably by `run.policy_configured`.
+   * Absent on every log written before C2b (and on legacy runs): the
+   * accessors below apply the defaults, so old logs replay unchanged.
+   */
+  specCopy?: boolean;
+  handoffFiles?: HandoffFilesOption;
   /**
    * Live scheduler events use running/paused/completed. Terminal historical
    * readers additionally project the authoritative RunSupervisor failed or
@@ -2877,6 +2907,7 @@ export function reduceSchedulerEvent(
       return {
         ...emptySchedulerProjection(event),
         runPolicy: requiredRunPolicy(event.payload),
+        ...parseRunPolicyOptions(event.payload),
       };
     }
     if (event.type === "project_docs.policy_configured") {
@@ -3171,6 +3202,30 @@ export function reduceSchedulerEvent(
         );
       }
       next.runPolicy = runPolicy;
+      // C2b (CD-5): the run options ride the run policy additively. A
+      // conflicting restamp is refused like a conflicting run policy; logs
+      // written before C2b carry neither field and keep the defaults.
+      const runOptions = parseRunPolicyOptions(event.payload);
+      if (
+        runOptions.specCopy !== undefined &&
+        next.specCopy !== undefined &&
+        next.specCopy !== runOptions.specCopy
+      ) {
+        throw new Error(
+          `Scheduler run specCopy is already configured as ${next.specCopy}.`
+        );
+      }
+      if (
+        runOptions.handoffFiles !== undefined &&
+        next.handoffFiles !== undefined &&
+        next.handoffFiles !== runOptions.handoffFiles
+      ) {
+        throw new Error(
+          `Scheduler run handoffFiles is already configured as ${next.handoffFiles}.`
+        );
+      }
+      if (runOptions.specCopy !== undefined) next.specCopy = runOptions.specCopy;
+      if (runOptions.handoffFiles !== undefined) next.handoffFiles = runOptions.handoffFiles;
       break;
     }
     case "request.triaged": {
@@ -5028,22 +5083,12 @@ export function reduceSchedulerEvent(
       break;
     }
     case "project.handoff_selected": {
-      rejectCompletionWhileContextRecordingUnresolved(current);
       if (event.actor.role !== "user" && event.actor.role !== "runner") {
         throw new Error("Final project handoff selection requires the user or runner.");
-      }
-      if (
-        current.acceptanceContractStatus === "acceptance_contract_upgrade_required" &&
-        current.acceptanceUpgradeRequiredEventRecorded
-      ) {
-        throw new Error(
-          "Final project handoff is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
-        );
       }
       if (current.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");
       }
-      assertBuildCompletionReady(current);
       const choice = requiredString(event.payload, "choice");
       if (choice !== "keep_integration_branch" && choice !== "apply_to_project") {
         throw new Error(`Final project handoff choice ${choice} is invalid.`);
@@ -5056,18 +5101,10 @@ export function reduceSchedulerEvent(
         event.payload,
         "integrationRevision",
       );
-      // T9 (EP39): answered runs have no integration revision to match —
-      // exempt like plan_only (the field stays required, the match is off).
-      if (
-        current.runPolicy !== "plan_only" &&
-        !isAnsweredRun(current) &&
-        !revisionMatchesIntegrationOrDocumentTip(current, selectedIntegrationRevision)
-      ) {
-        throw new Error(
-          "Final project handoff selection does not match the verified integration revision.",
-        );
-      }
-      assertHandoffSnapshotGate(current, selectedIntegrationRevision);
+      // C2b repair m6: the kernel acceptance for a selection is the one
+      // shared predicate -- the whole rule, same as the manager pre-check
+      // applies before any project mutation.
+      assertProjectHandoffSelectionAccepted(current, selectedIntegrationRevision);
       if (
         projectRevision !== undefined &&
         (typeof projectRevision !== "string" || !projectRevision.trim())
@@ -5293,6 +5330,12 @@ export function reduceSchedulerEvent(
       ) {
         throw new Error("Project document policy is already configured differently.");
       }
+      // C2b repair CD-14: the reducer does NOT enforce the docs-v2 /
+      // planning-v1 pairing -- T7a remains the only owner of production
+      // stamping and stamps both together at creation (CD-1). A docs-v2 run
+      // without a plan revision hands off the integration revision (or the
+      // recorded baseline) instead of pausing forever (N6, closed in the
+      // runtime, not here). Legacy-planning runs keep docs v1 unchanged.
       next.projectDocsPolicyVersion = event.payload.version === 2 ? 2 : 1;
       break;
     }
@@ -9069,16 +9112,26 @@ function applyProjectDocCommitted(
  * stop (`projectHandoff.requestedSequence`), never to an earlier snapshot:
  * after a withdrawal and re-request, only a snapshot for the current stop
  * satisfies it.
+ *
+ * C2b (AR-R05): the current-stop record must also carry the commit-tree
+ * proof that the commit holds the marked v2 AGENTS.md section and the
+ * marked `@AGENTS.md` line (read back from the commit by the writer, never
+ * the checkout). README is not required under v2.
  */
-function handoffSnapshotAtCurrentStop(
+export function handoffSnapshotAtCurrentStop(
   projection: SchedulerProjection,
 ): HandoffSnapshotRecord | undefined {
   const snapshots = projection.projectDocs?.snapshots ?? [];
   const latestRequest = projection.projectHandoff?.requestedSequence;
-  const current = latestRequest === undefined
-    ? [...snapshots].reverse()
-    : snapshots.filter((record) => record.stopSequence === latestRequest).reverse();
-  return current.find((record) => record.paths.includes("docs/project/STATE.md"));
+  // C2b repair N-7: without a request there is no current stop, so the
+  // fallback never selects a record -- not even a history one.
+  if (latestRequest === undefined) return undefined;
+  const current = snapshots.filter((record) => record.stopSequence === latestRequest).reverse();
+  return current.find((record) =>
+    record.paths.includes("docs/project/STATE.md") &&
+    record.agentsSectionCommitted === true &&
+    record.claudeLineCommitted === true,
+  );
 }
 
 export function handoffSnapshotCoversRevision(
@@ -9101,12 +9154,56 @@ export function assertHandoffSnapshotGate(
   revision: string | undefined,
 ): void {
   if (isAnsweredRun(projection) || projection.projectDocsPolicyVersion !== 2) return;
+  // C2b (CD-5): an `export_only` run writes no handoff file at any stop; the
+  // gate is satisfied by the recorded run option itself.
+  if (handoffFilesOf(projection) === "export_only") return;
   const covered = projection.runPolicy === "plan_only" || revision === undefined
     ? handoffSnapshotRecorded(projection)
     : handoffSnapshotCoversRevision(projection, revision);
   if (!covered) {
     throw new Error("The kernel handoff snapshot is required for the handed-off revision.");
   }
+}
+
+/**
+ * C2b (N1): the ONE kernel acceptance rule for a handoff selection. The
+ * `project.handoff_selected` reducer and the manager pre-check call this
+ * same predicate with the same revision, so a selection the manager lets
+ * through can never be refused after the project was mutated: the revision
+ * must still be the verified integration revision or the document tip
+ * (continuing the chain), and the v2 snapshot gate must hold for it.
+ */
+export function assertProjectHandoffSelectionAccepted(
+  projection: SchedulerProjection,
+  selectedIntegrationRevision: string | undefined,
+): void {
+  // C2b repair m6: the pre-check IS the whole acceptance rule, so the
+  // context-recording and acceptance-contract refusals live here -- not
+  // beside the reducer case -- and the manager refuses them before any
+  // project mutation too.
+  rejectCompletionWhileContextRecordingUnresolved(projection);
+  if (
+    projection.acceptanceContractStatus === "acceptance_contract_upgrade_required" &&
+    projection.acceptanceUpgradeRequiredEventRecorded
+  ) {
+    throw new Error(
+      "Final project handoff is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
+    );
+  }
+  assertBuildCompletionReady(projection);
+  // T9 (EP39): answered runs have no integration revision to match —
+  // exempt like plan_only (the field stays required, the match is off).
+  if (
+    projection.runPolicy !== "plan_only" &&
+    !isAnsweredRun(projection) &&
+    (typeof selectedIntegrationRevision !== "string" ||
+      !revisionMatchesIntegrationOrDocumentTip(projection, selectedIntegrationRevision))
+  ) {
+    throw new Error(
+      "Final project handoff selection does not match the verified integration revision.",
+    );
+  }
+  assertHandoffSnapshotGate(projection, selectedIntegrationRevision);
 }
 
 function applyHandoffSnapshotCommitted(
@@ -9119,10 +9216,25 @@ function applyHandoffSnapshotCommitted(
   if (projection.projectDocsPolicyVersion !== 2) {
     throw new Error("Handoff snapshots require project document policy version 2.");
   }
-  if (projection.projectHandoff?.status !== "requested") {
+  const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
+  // C2b (N1 probe F): a kernel snapshot commit that landed is always
+  // recorded -- it moves the document tip -- even when user guidance
+  // withdrew the handoff while the commit was in flight. The withdrawn
+  // stop is recognized through the handoff history; such a record never
+  // satisfies a later gate (the gate binds to the latest request), but the
+  // chain stays continuous.
+  // C2b repair N-3: a record is accepted only for the current request's
+  // stop or a withdrawn stop's requestedSequence. A sequence that is no
+  // stop at all (probe R) is refused even while a handoff is requested.
+  const requestedSequence = projection.projectHandoff?.status === "requested"
+    ? projection.projectHandoff.requestedSequence
+    : undefined;
+  const withdrawnStop = (projection.projectHandoffHistory ?? []).some(
+    (handoff) => handoff.requestedSequence === stopSequence,
+  );
+  if (stopSequence !== requestedSequence && !withdrawnStop) {
     throw new Error("Handoff snapshots require a requested project handoff.");
   }
-  const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
   const stopKind = requiredString(event.payload, "stopKind");
   if (stopKind !== "completed" && stopKind !== "plan_only") {
     throw new Error(`Handoff snapshot stop kind ${stopKind} is invalid.`);
@@ -9142,6 +9254,27 @@ function applyHandoffSnapshotCommitted(
   if (paths.length === 0 || !paths.includes("docs/project/STATE.md")) {
     throw new Error("Handoff snapshots must include docs/project/STATE.md.");
   }
+  // C2b (AR-R05): the writer proves the commit's tree holds the v2 entry
+  // lines (read back from the commit, never the checkout); the reducer
+  // requires that proof. Fail closed: no proof, no record.
+  if (
+    event.payload.agentsSectionCommitted !== true ||
+    event.payload.claudeLineCommitted !== true
+  ) {
+    throw new Error("Handoff snapshots must prove the committed tree holds the v2 AGENTS.md section and the CLAUDE.md line.");
+  }
+  const specPath = event.payload.specPath;
+  if (specPath !== undefined && (typeof specPath !== "string" || !specPath.trim())) {
+    throw new Error("Handoff snapshot specPath is invalid.");
+  }
+  const specCopySkipped = event.payload.specCopySkipped;
+  if (specCopySkipped !== undefined && (typeof specCopySkipped !== "string" || !specCopySkipped.trim())) {
+    throw new Error("Handoff snapshot specCopySkipped is invalid.");
+  }
+  const claudeLineViaLink = event.payload.claudeLineViaLink;
+  if (claudeLineViaLink !== undefined && (typeof claudeLineViaLink !== "string" || !claudeLineViaLink.trim())) {
+    throw new Error("Handoff snapshot claudeLineViaLink is invalid.");
+  }
   const snapshots = projection.projectDocs?.snapshots ?? [];
   if (snapshots.some((record) => record.stopSequence === stopSequence)) {
     throw new Error(`Handoff snapshot for stop ${stopSequence} is already recorded.`);
@@ -9156,6 +9289,13 @@ function applyHandoffSnapshotCommitted(
     bodyDigest,
     paths: [...paths],
     sequence: event.sequence,
+    previousSnapshotEdited: event.payload.previousSnapshotEdited === true,
+    agentsSectionCommitted: true,
+    claudeLineCommitted: true,
+    ...(typeof specPath === "string" ? { specPath } : {}),
+    ...(event.payload.specCopied === true ? { specCopied: true as const } : {}),
+    ...(typeof specCopySkipped === "string" ? { specCopySkipped } : {}),
+    ...(typeof claudeLineViaLink === "string" ? { claudeLineViaLink } : {}),
   };
   const canonical = projection.integrationRevision;
   const currentTip = projection.projectDocs?.documentTip;
@@ -9172,6 +9312,16 @@ function applyHandoffSnapshotCommitted(
         ? { documentTip: currentTip }
         : {}),
   };
+  // A non-current stop's record is pure history: it moves the tip above
+  // but never touches the run state. Only the current stop's snapshot
+  // clears its failure pause and returns the run to the handoff wait. In
+  // particular a withdrawn stop reconciled after a later stop was
+  // requested (C2b repair B1, probe G2) stays history while requested --
+  // an old stop's late record can never disturb the current one.
+  const isCurrentStop = requestedSequence !== undefined && stopSequence === requestedSequence;
+  if (!isCurrentStop) {
+    return;
+  }
   if (projection.pauseReason?.reason === "handoff_snapshot_failed") {
     delete projection.pauseReason;
   }
@@ -9917,4 +10067,59 @@ function requiredRunPolicy(
     throw new Error("Missing runPolicy.");
   }
   return value;
+}
+
+/** C2b run option (CD-5): commit the handoff files, or write nothing. */
+export type HandoffFilesOption = "commit" | "export_only";
+
+/**
+ * Additive C2b run options on `run.policy_configured`. Only present fields
+ * are returned, so logs written before C2b (which carry none) replay with
+ * the defaults from the accessors below.
+ */
+export function parseRunPolicyOptions(
+  payload: Record<string, unknown>
+): { specCopy?: boolean; handoffFiles?: HandoffFilesOption } {
+  const options: { specCopy?: boolean; handoffFiles?: HandoffFilesOption } = {};
+  if (payload.specCopy !== undefined) {
+    if (typeof payload.specCopy !== "boolean") {
+      throw new Error("Run policy specCopy must be a boolean.");
+    }
+    options.specCopy = payload.specCopy;
+  }
+  if (payload.handoffFiles !== undefined) {
+    if (payload.handoffFiles !== "commit" && payload.handoffFiles !== "export_only") {
+      throw new Error("Run policy handoffFiles must be commit or export_only.");
+    }
+    options.handoffFiles = payload.handoffFiles;
+  }
+  return options;
+}
+
+/** Recorded `specCopy` run option (CD-5); absent means the default true. */
+export function specCopyOf(projection: SchedulerProjection): boolean {
+  return projection.specCopy ?? true;
+}
+
+/** Recorded `handoffFiles` run option (CD-5); absent means the default commit. */
+export function handoffFilesOf(projection: SchedulerProjection): HandoffFilesOption {
+  return projection.handoffFiles ?? "commit";
+}
+
+/**
+ * C2b (N2): a kernel snapshot retry is pending -- docs v2, handoff
+ * requested, `export_only` off, and no snapshot recorded for the current
+ * stop. Resume is allowed exactly then (not by the current pause reason
+ * alone, so an owner pause stacked on a snapshot failure still retries).
+ */
+export function handoffSnapshotRetryPending(projection: SchedulerProjection): boolean {
+  if (projection.projectDocsPolicyVersion !== 2) return false;
+  if (isAnsweredRun(projection)) return false;
+  if (projection.projectHandoff?.status !== "requested") return false;
+  if (handoffFilesOf(projection) !== "commit") return false;
+  const stopSequence = projection.projectHandoff.requestedSequence;
+  if (stopSequence === undefined) return false;
+  return !(projection.projectDocs?.snapshots ?? []).some(
+    (record) => record.stopSequence === stopSequence,
+  );
 }

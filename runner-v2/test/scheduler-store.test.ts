@@ -1728,6 +1728,10 @@ test("completion and handoff are refused while a context recording note is unres
       }),
       message,
     );
+    // C2b repair m6: the structural checks (actor, requested) precede the
+    // shared acceptance rule, so a selection with no requested handoff is
+    // refused before the note is even reached. The note refusal on a
+    // requested selection is covered through the shared predicate.
     assert.throws(
       () => store.append({
         ...event("run_recording_completion", "project.handoff_selected", "selected-unresolved", {
@@ -1738,7 +1742,7 @@ test("completion and handoff are refused while a context recording note is unres
         }),
         actor: { role: "user", id: "local-user" },
       }),
-      message,
+      /Final project handoff is not awaiting user selection\./,
     );
     assert.equal(store.readRun("run_recording_completion").length, before);
     const projection = rebuildSchedulerProjection(store.readRun("run_recording_completion"));
