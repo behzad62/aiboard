@@ -2,7 +2,7 @@
 
 > **For agentic workers:** Later execution uses the repository's task-driven workflow. This source's single combined independent review, delta-validation and non-duplicative negative-proof rules take precedence over conflicting skill defaults. Checkboxes describe future work, not work performed in this planning audit.
 
-> **Amendment AR (2026-09-27):** `docs/superpowers/plans/2026-09-27-runner-v2-p6-6-architecture-correction.md` adds phases C, R1-R3, splits T7 into T7a-T7d, adds lines to T10 and T8, and amends T8's reuse scenario to exact-identity reuse (owner decision AR-4). Its packets are binding with this plan.
+> **Amendment AR (2026-09-27):** `docs/superpowers/plans/2026-09-27-runner-v2-p6-6-architecture-correction.md` adds phases C, R1-R3, splits T7 into T7a-T7d, and adds lines to T10 and T8. It amends: T8's reuse scenario and EP19's unrelated-change case to exact-identity reuse (owner decision AR-4); T7's "Documentation folder boundary" for docs-v2 runs (AR-1); and the planning-checkpoint mechanism of EP09 (derived resume index; owner "go" on phase C). Its packets are binding with this plan.
 
 **Goal:** Turn a complete approved application specification into a source-traceable implementation plan, then deliver it through Runner's existing scheduler with durable, efficient evidence gates.
 
