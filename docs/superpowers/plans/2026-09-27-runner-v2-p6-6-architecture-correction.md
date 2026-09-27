@@ -59,8 +59,10 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   early on a non-empty log and runs before any planning policy exists (review r1 B-1). So C2
   builds only the v2 reducer, gate and writer, and its tests seed `planning.policy_configured`
   and `project_docs.policy_configured {version: 2}` (CD-7 allows seeding). **T7a is the only
-  owner of production stamping:** it stamps planning v1 (at log sequence ≤ 3,
+  owner of production stamping:** it stamps planning v1 (appended while `lastSequence ≤ 3`,
   `scheduler-store.ts:3081`) and docs v2 together, and decides which production runs get them.
+  `run.initialized` accepts a leading docs stamp only for docs v1 (`scheduler-store.ts:3129-3138`);
+  C2 extends that branch to v2 for its seeds and T7a uses it.
 - **CD-2 — Scope guard is a finding, secrets are refused.** EX-4 packet 2(a) refused out-of-scope
   paths. The parent non-goal (parent `:64`, "no rigid worker file whitelist") and the owner's
   authority philosophy win: every scope item (out-of-claim path, `forbiddenSurfaces` path,
@@ -96,8 +98,9 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   OA-5/EP39 says an answered run makes zero project mutation, and its `apply_to_project`
   (`native-build-factory.ts:1823-1826`) would carry any integration-branch commit into the
   project. Resolution: OA-5 wins for runs that are not builds. C3 commits a stop snapshot only
-  when the run's triage outcome is a build (or plan-only); before triage or on an answered run it
-  records the skip reason and writes nothing. AR-1 is about continuing a build; an answered run
+  after the triage decision `build` (under either run policy, `build` or `plan_only`); before
+  triage, while a `clarify` triage is pending, or on an answered run it records the skip reason
+  and writes nothing. AR-1 is about continuing a build; an answered run
   has no build to continue.
 - **CD-10 — Shape changes after T7a (review r1 B-5, S2 §11 note 3).** Premise: no P6.6 code reaches
   `main` or a user before T8 is accepted; the branch merges only after T8. Under that premise,
@@ -105,13 +108,15 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   (T9 precedent). If the owner merges P6.6 before T8, every later new-policy shape change bumps
   the planning-policy version and adds replay fixtures.
 - **CD-11 — Mid-run document tip under v2 (review r1 M-5).** AR-1 supersedes S2 §11's "v2 runs never
-  create a mid-run document tip": stop snapshots are mid-run kernel commits. C2 and C3 extend the
-  document-tip bookkeeping (gated on `projectDocsPolicyVersion === 1` at
-  `scheduler-store.ts:4404-4409`) to v2 kernel commits.
+  create a mid-run document tip": stop snapshots are mid-run kernel commits. The tip clear
+  (`scheduler-store.ts:4404-4407`) and tip set (`:9012-9024`) are not version-gated; only
+  `latestIntegratedTaskSequence` (`:4408-4410`) is gated on `projectDocsPolicyVersion === 1`. C2
+  and C3 make the new kernel-commit event set the tip and extend the gated bookkeeping to v2.
 - **CD-12 — EP06 contract fields stay required (review r1 B-4).** S2 §5 row 7 proposed making
   unused contract fields optional. That would weaken parent EP06 (parent `:353`), and no owner
   decision authorizes it. C5 instead gives those fields consumers (the worker and reviewer
-  contexts) and makes only kernel-supplied envelope fields optional for the model.
+  contexts, including `validation` rationale for the reviewer) and makes only kernel-supplied
+  envelope fields optional for the model.
 
 ---
 
@@ -128,7 +133,7 @@ Each row has one owning packet. Acceptance evidence goes to `evidence/<packet>.m
 | AR-R05 | S2 A6, AR-1, AC-25 | v2 form of AC-25: a docs-v2 run that is not answered cannot record `project.handoff_selected` or `run.completed` until `project_docs.handoff_snapshot_committed` exists for the handed-off revision and that commit's tree holds `docs/project/STATE.md`, the marked AGENTS.md section and the marked `@AGENTS.md` line (README is not required under v2); an answered run is exempt (OA-5); an `export_only` run satisfies the gate by its recorded run option; `complete_run` no longer needs a model-written STATE.md; a failed kernel commit pauses the run with `handoff_snapshot_failed` and retries on resume | C2 | Gate test plus prove-red |
 | AR-R06 | S2 F6 | An answered v2 run writes no project file and needs none to complete | C2 | Answered-run factory test |
 | AR-R07 | S2 §12 r3, CD-5 | A hand-edited previous snapshot is detected by its header digest, recorded, and named in the new snapshot; `export_only` and spec opt-out work | C2 | Tests per option and for the edited case |
-| AR-R08 | AR-1, CD-9, CD-5 | At every stop other than handoff (any pause reason, cancel, terminal failure) of a run whose triage outcome is a build or plan-only, the runner commits a fresh snapshot on the integration branch through the C2 kernel-commit path, idempotent per stop event, never blocking or changing the stop; before triage, on an answered run, or with `export_only` it records the skip reason and writes nothing | C3 | Pause/resume factory tests with real git; answered-run tree-hash test; `export_only` test |
+| AR-R08 | AR-1, CD-9, CD-5 | At every stop other than handoff (any pause reason, cancel, terminal failure) of a run after the triage decision `build` (either run policy; CD-9), the runner commits a fresh snapshot on the integration branch through the C2 kernel-commit path, idempotent per stop event, never blocking or changing the stop; before triage, while a `clarify` triage is pending, on an answered run, with `export_only`, or for C2's own `handoff_snapshot_failed` pause it records the skip reason and writes nothing | C3 | Pause/resume factory tests with real git; answered-run tree-hash test; `export_only` test |
 | AR-R09 | AR-1 | At a stop whose reason allows model calls, the runner asks the Architect once for short notes (bounded size and time, no tools, recorded as `handoff_notes` cost); otherwise, or on failure, the snapshot says why there are no notes; at handoff the `complete_run` summary is the notes | C3 | Scripted-Architect tests: notes present, disallowed reason, failure |
 | AR-R10 | S2 §9 | Runner-authored integration commits of new-policy runs carry `AIBoard-Run`, `AIBoard-Task` and `AIBoard-Requirements` trailers | C3 | Git log assertion in a factory test |
 | AR-R11 | S2 A5, §5 rows 1-2, F9 | The v2 Architect prompt has no docs templates, layout or per-turn STATE.md body; the existing snapshot is given once at triage/planning as labelled untrusted context (at most 4 KiB); v1 prompts are unchanged | C4 | Prompt tests; token count before/after |
@@ -136,7 +141,7 @@ Each row has one owning packet. Acceptance evidence goes to `evidence/<packet>.m
 | AR-R13 | S2 A8, §5 row 3 | **Amends** the parent `PlanningCheckpoint` mechanism (EP09, parent `:356`; authorized by the owner's "go" on phase C, AR-2, which named this cut): `record_planning_checkpoint` is removed from the new-policy tool surface and prompt; the resume index is derived from the durable read index and plan/review state and still reports covered and remaining sections, completed planning contracts, outstanding work and next action; a new plan revision is the planning-turn proof after folded guidance; old logs with checkpoints replay | C4 | Tool-list, derived-index, restart and replay tests |
 | AR-R14 | S2 A1, F4, §5 row 11, CD-6 | Unproduced T2 planning event types and projections are marked reserved; a static test fails if a `src/` module starts appending them without updating the reserved list | C4 | Static guard test |
 | AR-R15 | S2 A9, §5 rows 4-5, CD-12 | The kernel stamps plan envelope fields (run, manifest id and digest, policy version, times, review and lineage ids, expected digest, and `requiredBase`, which the kernel supplies); the model may omit them and, when it gives them, they must match; the model authors one side of each link and the kernel derives the other (both sides must agree when given); EP06 fields stay required; stored revisions and digests stay valid | C5 | Planning-tool tests; stored-digest test |
-| AR-R16 | S2 F2, §5 row 7 and note, CD-12 | The worker's context holds the compact semantic contract (outcome, scope and exclusions, inputs, outputs, steps, writable surfaces and resource claims, forbidden surfaces, criteria, definition of done, cleanup); the deliverable reviewer's context holds outcome, scope, criteria, definition of done, review criteria, integration checks and negative-proof applicability; both within a recorded token cap | C5 | Factory test reading the real worker and reviewer context; prove-red |
+| AR-R16 | S2 F2, §5 row 7 and note, CD-12 | The worker's context holds the compact semantic contract (outcome, scope and exclusions, inputs, outputs, steps, writable surfaces and resource claims, forbidden surfaces, criteria, definition of done, cleanup); the deliverable reviewer's context holds outcome, scope, criteria, definition of done, review criteria, integration checks, negative-proof applicability and the validation rationale (`validation.targetedRationale` / `affectedScopeRationale`); both within a recorded token cap | C5 | Factory test reading the real worker and reviewer context; prove-red |
 | AR-R17 | S2 F1, S3 P0, CD-1 | Production run creation stamps planning policy v1 (log sequence ≤ 3) and docs v2 together and registers the approved source; one unseeded factory test runs from production run creation to `delivery.review_started`, boundary and `task.acceptance_recorded` | T7a | Unseeded factory test; stamp test |
 | AR-R18 | S2 A13, §3.2 | **Amends** parent T7 "Documentation folder boundary" (parent `:286`, authorized by AR-1): for docs-v2 runs, T7 exports and views render through the C1 renderer, the `docs/project/generated/` branch is replaced by the v2 snapshot, and an explicit export into the repo happens only on request; docs-v1 runs keep the parent behavior unchanged | T7d | Export parity test; v1 export test |
 | AR-R19 | S3 N1, L4a | Test integrity: pinned test command and suite-shrink detection at the boundary unless tied to a plan revision reason | E1 | S3 packet 1 tests |
@@ -217,7 +222,7 @@ signal.
 
 | Phase | Packets | Purpose | Entry | Exit (all packets accepted plus) | Unlocks |
 |---|---|---|---|---|---|
-| C | C1-C5 | Correct the new-policy model while no production run uses it | Owner AR-1, AR-2; this plan PLAN READY | A seeded new-policy factory run pauses, resumes and reaches handoff and writes only product files plus the kernel handoff files; an answered run writes nothing; v1 replay green | T7a; lane B |
+| C | C1-C5 | Correct the new-policy model while no production run uses it | Owner AR-1, AR-2; this plan PLAN READY (C1 may start earlier per CD-8; nothing is accepted before) | A seeded new-policy factory run pauses, resumes and reaches handoff and writes only product files plus the kernel handoff files; an answered run writes nothing; v1 replay green | T7a; lane B |
 | T7 | T7a-T7d | Parent T7, split in four (owner lesson: about four packets) | Phase C | Parent T7 acceptance plus AR-R17, AR-R18 | T10 (with lane B merged) |
 | R1 | E1-E5 | Safety guards (S3 HIGH packets plus E5) | C5 accepted | Each guard proven red then green | R2 |
 | R2 | V1-V3 | Evidence: fingerprints, exact reuse, non-JS profile | R1 | Reuse and non-JS fixtures green | R3 |
@@ -236,7 +241,10 @@ inside a lane; across lanes, conflicts resolve at the lane B merge. Lane B write
 `delivery-execution.ts`, `delivery-acceptance.ts`, `change-set.ts`, `filesystem-tools.ts`,
 `evidence-tools.ts`, `execution-host.ts`, `native-deliverable-review.ts`, `final-verification-*.ts`,
 `scheduler-store.ts` (review, author and evidence records), `build-runtime.ts`, `architect-tools.ts`
-(`review_task`), `agent-prompts.ts` (review blocks), new guard modules and their tests. At the lane
+(`review_task`), `agent-prompts.ts` (review blocks), `repair-approach-contracts.ts` (V2),
+`execution-isolation-provider.ts` and `oci-execution-isolation-provider.ts` (V1 environment scrub),
+new guard modules and their tests. A lane B brief may add a file that is not a serialized surface,
+with the reason recorded in its evidence. At the lane
 B merge the controller also re-runs T7a's unseeded factory test with the lane B guards active.
 
 ---
@@ -257,11 +265,14 @@ other packets' surfaces.
 
 ### C1 — Handoff snapshot renderer (AR-R01, AR-R02)
 
-- **Outcome:** `renderHandoffSnapshot(input)` and `handoffSnapshotInputFromProjection(...)` in a new
-  `runner-v2/src/handoff-snapshot.ts`. Pure: no I/O, no clock, no model. Wired by C2 (named
-  wiring packet, CD-7).
+- **Outcome:** `renderHandoffSnapshot(input)`, `handoffSnapshotInputFromProjection(...)` and
+  `verifyHandoffSnapshotDigest(text)` in a new `runner-v2/src/handoff-snapshot.ts`. Pure: no I/O,
+  no clock, no model. Wired by C2 (named wiring packet, CD-7). Body digest: sha256 of the body
+  below the header line, with line endings normalized to LF and trailing whitespace at the end
+  removed; the verifier normalizes the same way and matches only the exact generated header line.
 - **Content (S2 §3.4 item 3):** header (generated by AIBoard, run id, described revision, stop kind
-  `completed | plan_only | paused | cancelled | failed | answered_export`, stop reason, the event time of the
+  `completed | plan_only | paused | cancelled | failed | answered_export | in_progress` (the last for
+  on-demand exports of a running run; kinds come from the real run state), stop reason, the event time of the
   stop, body sha256); what was asked (source title, digest, spec path or copy path); requirement
   table (id, one-line outcome, status accepted / open / conditional pending / not applicable with
   its authorized reason); open work (unaccepted tasks, open blocking findings, external blockers
@@ -271,10 +282,14 @@ other packets' surfaces.
   each); notes slot (Architect notes, or "No Architect notes for this stop: <reason>"); next action
   derived from state. Plan-only adds the plan view (phases, tasks with outcome, steps, criteria,
   dependencies). A run without a ledger renders a task list instead of the requirement table.
-- **Bounds and safety:** at most 200 lines and 16 KiB; lists truncate with "N more — see AIBoard
-  run <id>"; header, open blockers and verification never truncate. Untrusted text (source titles,
-  requirement text, notes, summaries) is neutralized: `<!--` and `-->` escaped, `|` and newlines
-  escaped in tables, control characters removed, each field capped.
+- **Bounds and safety:** at most 200 lines and 16 KiB. Never truncated: the header; the exact
+  counts (open blocking findings, external blockers, exhausted repair issues, unaccepted tasks,
+  requirements by status); every external blocker with its owner action; one line per
+  final-verification category. Other lists truncate with "N more — see AIBoard run <id>", lowest
+  value first, so the cap always holds; if the never-truncated set alone exceeds the cap, lists keep
+  their exact counts and truncate too. Untrusted text is neutralized: single-line fields lose line
+  breaks and C0/C1 controls and U+2028/U+2029; notes and summaries render as a `> ` blockquote of
+  at most 30 lines and 2,000 characters; `<!--`/`-->` and table `|` are escaped; each field capped.
 - **Steps:** read S2 §3.4; inspect `SchedulerProjection` (`scheduler-store.ts`), `PlanningProjection`
   (`planning-projection.ts`), the final-verification and boundary records (`delivery-acceptance.ts`,
   `final-verification-runtime.ts`), the handoff summary (`architect-tools.ts` `complete_run`;
@@ -304,7 +319,10 @@ other packets' surfaces.
      (`integration-manager.ts:609-686`, which hardcodes the Architect author and identity at `:43`,
      `:664-674`), for example `commitHandoffSnapshot`, that writes several files in one commit
      with a runner identity, `AIBoard-Author: runner` and the `AIBoard-Generated: handoff-snapshot`
-     trailer. The Architect path stays unchanged.
+     trailer. The Architect path stays unchanged. The method writes the stop key as an
+     `AIBoard-Snapshot-Key` trailer and, like `findDocumentCommit` (`integration-manager.ts:1739`),
+     returns an existing commit for that key, so a crash between the commit and the event append
+     does not create a second commit.
   3. New additive event `project_docs.handoff_snapshot_committed` (runner actor; idempotency key
      from the stop event's sequence, no timestamp; stop kind; commit, parent and head; body
      digest; paths). Its reducer branch moves `projectDocs.documentTip` for v2 (CD-11), so
@@ -336,7 +354,8 @@ other packets' surfaces.
   `run.completed` refused before the event; commit failure pauses and resume retries; plan-only v2
   snapshot holds the plan; answered v2 run writes nothing and completes; `export_only` completes
   with no file; spec opt-out; spec already in repo; hand-edited snapshot detected and named; v1
-  fixture log replays unchanged; a seeded v1 run still needs the model-written STATE.md.
+  fixture log replays unchanged; a seeded v1 run still needs the model-written STATE.md; a crash
+  between the kernel commit and the event append resumes to one commit and one event.
 - **Red proof:** disable the v2 gate; `run.completed` without the event succeeds and the gate test
   goes red; restore.
 - **DoD:** tests green; replay-compatibility suite green; no `docs/project/evidence` or `plans`
@@ -352,8 +371,10 @@ other packets' surfaces.
      limit, external blocker, owner pause, failed final verification) or notes-denied (budget
      window exhausted, provider or credit failure, cancel, unknown reasons by default). Record the
      table in the evidence.
-  2. Skip rule (CD-9, CD-5): no snapshot before triage, on an answered run, or with
-     `handoffFiles: "export_only"`; record the skip reason durably.
+  2. Skip rule (CD-9, CD-5): no snapshot before the triage decision `build`, while a `clarify`
+     triage is pending, on an answered run, with `handoffFiles: "export_only"`, or for C2's own
+     `handoff_snapshot_failed` pause (C2 retries that commit itself); record the skip reason
+     durably.
   3. Notes: bounded investigation — find the existing one-shot model-call path outside the
      Architect loop (for example the plan critic or verifier paths) and use it for the Architect's
      runtime with a fixed short prompt ("notes for the next tool: what matters, traps, what to try
@@ -549,8 +570,8 @@ the packet evidence, then `git status` and `git log` of the lane worktree; recon
 
 ## 10. Launch cards
 
-- **Controller:** owns progress.md, assignments, merges and acceptance. Next action: planning
-  re-review r2; C1 review r1 (CD-8: C1 is not accepted before PLAN READY).
+- **Controller:** owns progress.md, assignments, merges and acceptance. Next action: C1 repair
+  cycle 1 (Muse), then C1 re-review r2; then C2.
 - **Lane A worker card:** worktree `D:\repos\ai-discussion-board\.worktrees\runner-v2-p6-6`, branch
   `codex/runner-v2-p6-6`; packet contract = section 6 of this plan; shared rules = section 6
   preamble; evidence to `evidence/<packet>.md`; do not commit.
@@ -570,5 +591,14 @@ parent header note; M-8 AR-R13 and the C4 derived-index test; M-9 AR-R23 and E5;
 write set, brief rule and merge re-run; M-11 W3 step and AR-R29; M-12 T7c/T7d; M-13 CD-5; M-14
 section 4 F3 row and section 8; M-15 CD-8.
 
-PLAN BLOCKED — targeted re-review (r2) of the r1 corrections pending; owner: controller;
-unblock action: run the fresh-context re-review of the corrections and affected coverage.
+Review r2 (`evidence/AR-plan-review-r2.md`, fresh Opus 5.5, targeted): PLAN COVERAGE VERIFIED —
+all 20 r1 findings resolved, no blocking finding, 7 minor. Dispositions: N-1 C1 Outcome owns
+`verifyHandoffSnapshotDigest` and the digest rule; N-2 C2 step 2 snapshot-key trailer and a crash
+test; N-3 CD-9, AR-R08, C3 step 2 use the triage decision `build` and name `clarify`; N-4 CD-12 and
+AR-R16 give `validation` a reviewer consumer; N-5 capability note names CD-9 and marks `export_only`
+owner-pending; N-6 lane B write set and phase C entry; N-7 CD-1 `lastSequence ≤ 3` and
+`:3129-3138`, CD-11 tip gating, C3 skips C2's own failure pause. The C1 contract also records the
+C1 repair-cycle-1 controller decisions (stop kinds incl. `in_progress`; what never truncates;
+neutralizing rules).
+
+PLAN READY — SOURCE COVERAGE VERIFIED; EXECUTION STARTED (owner "go"; C1 in repair cycle 1).

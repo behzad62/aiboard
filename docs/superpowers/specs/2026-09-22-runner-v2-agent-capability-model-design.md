@@ -45,14 +45,16 @@ Two owner decisions from the same session are applied here:
   context one to make sure it has not prior context" — and then "A, same rule everywhere".
 - **Revision 5 (2026-09-27) — D6 revised for new-policy runs (P6.6 amendment AR-1).** For runs
   stamped with the P6.6 planning policy, the runner renders `docs/project/STATE.md` from its own
-  records at every stop and commits it with the static `AGENTS.md` section and an `@AGENTS.md`
+  records at every stop (except before a build triage decision and on answered runs, P6.6 CD-9)
+  and commits it with the static `AGENTS.md` section and an `@AGENTS.md`
   line in `CLAUDE.md`; the Architect writes only short notes at a stop and no longer maintains
   `docs/project/**` on its turns. The AC-25 completion gate stays; the kernel commit satisfies it.
   AC-25 for docs-v2 runs: a run that is not answered cannot record `project.handoff_selected` or
   `run.completed` until the runner's `project_docs.handoff_snapshot_committed` exists for the
   handed-off revision and that commit's tree holds `docs/project/STATE.md`, the marked `AGENTS.md`
   section and the marked `@AGENTS.md` line; README is not required; an answered run is exempt
-  (P6.6 OA-5); a run the owner set to `export_only` satisfies it by that recorded choice.
+  (P6.6 OA-5); a run the owner set to `export_only` satisfies it by that recorded choice (P6.6
+  controller decision CD-5; owner confirmation pending, shown to the owner in T7c).
   Runs stamped docs policy v1 keep D6 revision 4 unchanged. Owner, verbatim: "I am not sure if a
   script in runner can properly write it. At the same time we dont want architect write it all
   the time, maybe only when build stopped for whatever reason?" then "go". Plan:
