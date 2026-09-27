@@ -2,6 +2,8 @@
 
 > **For agentic workers:** Later execution uses the repository's task-driven workflow. This source's single combined independent review, delta-validation and non-duplicative negative-proof rules take precedence over conflicting skill defaults. Checkboxes describe future work, not work performed in this planning audit.
 
+> **Amendment AR (2026-09-27):** `docs/superpowers/plans/2026-09-27-runner-v2-p6-6-architecture-correction.md` adds phases C, R1-R3, splits T7 into T7a-T7d, adds lines to T10 and T8, and amends T8's reuse scenario to exact-identity reuse (owner decision AR-4). Its packets are binding with this plan.
+
 **Goal:** Turn a complete approved application specification into a source-traceable implementation plan, then deliver it through Runner's existing scheduler with durable, efficient evidence gates.
 
 **Architecture:** Extend the existing Build kernel, not create a second orchestrator. Versioned source/requirement/task contracts and scheduler events are authoritative; human-readable plans, state summaries and launch cards are projections. The Architect retains semantic authority; independent reviewers inspect coverage and deliverables; the kernel enforces identities, coverage, order, authorization and evidence applicability.

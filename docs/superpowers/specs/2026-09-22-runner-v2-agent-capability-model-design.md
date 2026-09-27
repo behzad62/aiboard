@@ -43,6 +43,15 @@ Two owner decisions from the same session are applied here:
   that user had no access to many models that fit as reviewer they might use the same model for
   different tasks. we should not enfore different model in that case but instead use a clear
   context one to make sure it has not prior context" — and then "A, same rule everywhere".
+- **Revision 5 (2026-09-27) — D6 revised for new-policy runs (P6.6 amendment AR-1).** For runs
+  stamped with the P6.6 planning policy, the runner renders `docs/project/STATE.md` from its own
+  records at every stop and commits it with the static `AGENTS.md` section and an `@AGENTS.md`
+  line in `CLAUDE.md`; the Architect writes only short notes at a stop and no longer maintains
+  `docs/project/**` on its turns. The AC-25 completion gate stays; the kernel commit satisfies it.
+  Runs stamped docs policy v1 keep D6 revision 4 unchanged. Owner, verbatim: "I am not sure if a
+  script in runner can properly write it. At the same time we dont want architect write it all
+  the time, maybe only when build stopped for whatever reason?" then "go". Plan:
+  `docs/superpowers/plans/2026-09-27-runner-v2-p6-6-architecture-correction.md`.
 
 ---
 
