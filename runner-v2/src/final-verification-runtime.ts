@@ -1,4 +1,7 @@
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
+import type { TempRecordSink } from "./cleanup-ownership.js";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { ArtifactStore } from "./artifact-store.js";
 import type {
   BrowserConsoleEvent,
@@ -23,6 +26,7 @@ import type {
   EvidenceStore,
 } from "./evidence-store.js";
 import { unavailableGitRunner } from "./git-command.js";
+import { hasTestSelectionFlag, isDirectNodeTestCommand } from "./flaky-rerun.js";
 import type { GitRunner } from "./git-repository.js";
 import {
   outputFor,
@@ -173,6 +177,26 @@ export interface FinalVerificationRuntimeOptions {
   maximumTimeoutMs?: number;
   validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
   execution?: OneShotCommandExecutor;
+  /**
+   * T6b repair (B2): the ambient NODE_OPTIONS the audited executor passes
+   * to children (wired by the factory from its ambient snapshot, mirroring
+   * the T6a delivery boundary). The reporter's own flags are appended to
+   * it; this module never reads the ambient process environment itself.
+   */
+  ambientNodeOptions?: string;
+  /**
+   * T6b repair (R2-B4): the OA-14 flaky rerun of package `run test`
+   * commands. The failing-test pattern is added to the node --test
+   * NODE_OPTIONS (npm forwards the environment to the script), so the
+   * rerun report must show at least one real selected test.
+   */
+  testNamePattern?: string;
+  /**
+   * T6b repair (R2-B6, OA-17): durable creation records for the
+   * runner-owned junit report files this runtime writes into the
+   * verification workspace; the temp search later removes them.
+   */
+  tempRecorders?: Pick<TempRecordSink, "recorded">;
 }
 
 export interface FinalVerificationRunInput {
@@ -199,6 +223,15 @@ export interface FinalVerificationCommandFact extends CommandEvidenceFact {
   readinessSatisfied?: boolean;
   cleanupRequested?: boolean;
   cleanupSucceeded?: boolean;
+  /** Machine-readable test-report identities used for OA-14 rerun selection. */
+  report?: {
+    readonly failingTestIds?: readonly string[];
+    /** Real counts from the rerun report: executed and failed test
+     * totals. The OA-14 verdict requires executed >= 1 with zero failed
+     * and the named ids absent from the rerun failures. */
+    readonly executed?: number;
+    readonly failed?: number;
+  };
 }
 
 export interface FinalVerificationBrowserSnapshotFact extends BrowserSnapshotEvidenceFact {
@@ -347,6 +380,9 @@ export class FinalVerificationRuntime {
   private readonly validatePortLease?: (lease: FinalVerificationPortLease) => void | Promise<void>;
   private readonly execution?: OneShotCommandExecutor;
   private readonly git: GitRunner;
+  private readonly ambientNodeOptions?: string;
+  private readonly testNamePattern?: string;
+  private readonly tempRecorders?: Pick<TempRecordSink, "recorded">;
   private runOrdinal = 0;
 
   constructor(options: FinalVerificationRuntimeOptions) {
@@ -355,6 +391,9 @@ export class FinalVerificationRuntime {
       throw new Error("Final verification taskId is required.");
     }
     this.git = options.git ?? unavailableGitRunner;
+    this.ambientNodeOptions = options.ambientNodeOptions;
+    this.testNamePattern = options.testNamePattern;
+    this.tempRecorders = options.tempRecorders;
     this.workspaceManager = options.workspaceManager;
     this.artifacts = options.artifacts;
     this.evidenceStore = options.evidenceStore;
@@ -613,10 +652,48 @@ export class FinalVerificationRuntime {
 
     for (const [index, command] of input.commands.entries()) {
       validateCommand(command, check.category, index, this.maximumTimeoutMs);
+      // T6b repair (B2): direct node --test commands report through a
+      // runner-owned junit file named for this exact run, so a stale file
+      // from another run can never be mistaken for this run report.
+      const reportFileName = junitReportFileName(input.generationId, check.category, index, input.runOrdinal);
+      let runCommand = command;
+      let junitDestination: string | undefined;
+      let junitFiltered = false;
+      let directJunit = false;
+      if (executableCategory === "tests" && isDirectNodeTestCommand(command)) {
+        junitDestination = join(input.workspace.path, reportFileName);
+        junitFiltered = hasTestSelectionFlag(command.args);
+        directJunit = true;
+      } else if (executableCategory === "tests" && !Object.hasOwn(command.environment ?? {}, "NODE_OPTIONS")) {
+        // A caller that already sets NODE_OPTIONS (the T6a delivery
+        // boundary plans its own report) keeps its reporter and report path.
+        // T6b repair (R2-B4): the production tests command is the package
+        // `run test` script. The T6a planner models a node --test script and
+        // adds the reporter through NODE_OPTIONS (npm forwards it), so the
+        // run records real failing ids and counts from this run's report.
+        // Loaded on use: delivery-execution imports this module.
+        const { planTestReport } = await import("./delivery-execution.js");
+        const plan = planTestReport({
+          checkoutPath: input.workspace.path,
+          command,
+          reportName: reportFileName.replace(/^\.aiboard-report-/, "").replace(/\.xml$/, ""),
+          ambientNodeOptions: nodeOptionsWithTestNamePattern(this.ambientNodeOptions, this.testNamePattern),
+        });
+        if (plan.runner === "node --test" && plan.command && plan.reportPath) {
+          runCommand = plan.command;
+          junitDestination = resolve(input.workspace.path, plan.reportPath);
+          junitFiltered = plan.filtered === true;
+        }
+      }
+      if (junitDestination) {
+        try {
+          this.tempRecorders?.recorded({ path: junitDestination, kind: "file", createdAt: this.clock() });
+        } catch { /* bookkeeping never breaks verification */ }
+      }
       const startState = await repositoryState(input.workspace.path, this.git);
       const startedAt = this.clock();
       const execution = await executeCommand(
-        command,
+        runCommand,
         input.workspace.path,
         input.signal,
         this.defaultTimeoutMs,
@@ -629,8 +706,12 @@ export class FinalVerificationRuntime {
           taskId: this.taskId,
           callId: `${input.generationId}:${check.category}:${index}:${input.runOrdinal}`,
         },
+        directJunit && junitDestination ? { destination: junitDestination, ambientNodeOptions: this.ambientNodeOptions } : undefined,
       );
       const finishedAt = this.clock();
+      const junitReport = junitDestination
+        ? await readJUnitTestReport(junitDestination, input.workspace.path, junitFiltered)
+        : undefined;
       const endState = await repositoryState(input.workspace.path, this.git);
       const [stdoutArtifact, stderrArtifact] = await Promise.all([
         artifactForFinalOutput(this.artifacts, execution, "stdout", `${check.category} ${command.label} stdout`),
@@ -667,6 +748,7 @@ export class FinalVerificationRuntime {
         targetRevision: input.workspace.targetRevision,
         startState,
         endState,
+        ...(junitReport ? { report: junitReport } : {}),
       };
       base.facts.push(fact);
 
@@ -1495,8 +1577,84 @@ async function repositoryState(cwd: string, execute: GitRunner): Promise<Reposit
   return { revision, status: status.stdout };
 }
 
-async function executeCommand(
+/** T6b repair (B2): runner-owned junit report name for one exact command run. */
+function junitReportFileName(generationId: string, category: string, index: number, runOrdinal: number): string {
+  const key = `${generationId}-${category}-${index}-${runOrdinal}`.replace(/[^A-Za-z0-9_-]+/g, "_");
+  return `.aiboard-report-fv-${key}.xml`;
+}
+
+/**
+ * T6b repair (B2/N1): child environment for final-verification commands.
+ * NODE_TEST_CONTEXT is always stripped (it would make node --test exit 0
+ * with a failing file); direct node --test commands additionally report
+ * through a runner-owned junit file (T6a reporter flags, forward slashes:
+ * NODE_OPTIONS unescapes backslashes, so a Windows path would corrupt).
+ * Commands that already select a reporter keep their own options and produce no report.
+ */
+function junitEnvironment(
   command: FinalVerificationCommand,
+  junit: { destination: string; ambientNodeOptions?: string } | undefined,
+): Record<string, string | undefined> {
+  const explicitEnvironment: Record<string, string | undefined> = {
+    NODE_TEST_CONTEXT: undefined,
+    ...command.environment,
+  };
+  if (!junit) return explicitEnvironment;
+  const effectiveNodeOptions = explicitEnvironment.NODE_OPTIONS ?? junit.ambientNodeOptions ?? "";
+  if (effectiveNodeOptions.includes("--test-reporter")) return explicitEnvironment;
+  return {
+    ...explicitEnvironment,
+    NODE_OPTIONS: `${effectiveNodeOptions} --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination="${junit.destination.replace(/\\/g, "/")}"`.trim(),
+  };
+}
+
+interface JUnitTestReport {
+  readonly failingTestIds: string[];
+  readonly executed: number;
+  readonly failed: number;
+}
+
+/**
+ * T6b repair (R2-B4): the owner real-counts reading of one node junit
+ * report, through the reviewed T6a parser (nodeJunitOutcome): file-level
+ * synthetic entries, skipped tests, and suites never count as executed.
+ * Executed = real passed + failed; a filtered run with no real test yields
+ * executed 0, which the OA-14 verdict never treats as a clean rerun.
+ */
+async function readJUnitTestReport(
+  destination: string,
+  workspacePath: string,
+  filtered: boolean,
+): Promise<JUnitTestReport | undefined> {
+  let xml: string;
+  try {
+    xml = await readFile(destination, "utf8");
+  } catch {
+    return undefined;
+  }
+  // Loaded on use: delivery-execution imports this module.
+  const { nodeJunitOutcome } = await import("./delivery-execution.js");
+  const outcome = nodeJunitOutcome(xml, workspacePath, filtered);
+  if (!outcome.counts) return undefined;
+  return {
+    failingTestIds: [...(outcome.failingTestIds ?? [])],
+    executed: outcome.counts.passed + outcome.counts.failed,
+    failed: outcome.counts.failed,
+  };
+}
+
+/**
+ * T6b repair (R2-B4): NODE_OPTIONS for a narrowed package rerun. The
+ * pattern is double-quoted with backslashes and quotes escaped, because
+ * NODE_OPTIONS unescapes them.
+ */
+export function nodeOptionsWithTestNamePattern(ambient: string | undefined, pattern: string | undefined): string | undefined {
+  if (pattern === undefined) return ambient;
+  const quoted = pattern.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+  return `${ambient?.trim() ?? ""} --test-name-pattern="${quoted}"`.trim();
+}
+
+async function executeCommand(  command: FinalVerificationCommand,
   cwd: string,
   signal: AbortSignal | undefined,
   defaultTimeoutMs: number,
@@ -1509,6 +1667,7 @@ async function executeCommand(
     taskId: string;
     callId: string;
   },
+  junit?: { destination: string; ambientNodeOptions?: string },
 ): Promise<ProcessResult> {
   if (signal?.aborted) {
     return {
@@ -1543,7 +1702,13 @@ async function executeCommand(
       arguments: command.args,
       workingDirectory: cwd,
       timeoutMs,
-      ...(command.environment ? { explicitEnvironment: command.environment } : {}),
+      // T6b repair (B2/N1): the reviewed harness never leaks its own
+      // test-runner context into the child. NODE_TEST_CONTEXT would make
+      // node --test exit 0 with a failing file, so it is always stripped.
+      // Direct node --test commands additionally report through a
+      // runner-owned junit file, so the run records the real failing
+      // test ids from this run report (mirrors the T6a reporter flags).
+      ...(junitEnvironment(command, junit) ? { explicitEnvironment: junitEnvironment(command, junit) } : {}),
       context: {
         runId: identity.runId,
         sessionId: identity.sessionId,

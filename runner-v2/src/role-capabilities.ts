@@ -98,7 +98,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "repo.map",
     "research.fetch",
     "search_session_history",
-  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, "run_evidence_command"]),
+  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, "record_external_blocker", "record_repair_approach_decision", "run_evidence_command"]),
   "architect:planOnly": surface("architect", "planOnly", "read-only-class", [
     "artifact.read",
     "code.definition",
@@ -123,7 +123,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "repo.map",
     "research.fetch",
     "search_session_history",
-  ], ARCHITECT_PLAN_ONLY_BROWSER_TOOLS),
+  ], [...ARCHITECT_PLAN_ONLY_BROWSER_TOOLS, "record_external_blocker", "record_repair_approach_decision"]),
   "verifier:inspection": surface("verifier", "inspection", "none", [
     "artifact.read",
     "fs.list",

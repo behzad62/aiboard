@@ -105,6 +105,9 @@ test("historical Git query owns separate transient state and exposes no active-r
     await assert.rejects(host.withGitInspection({ runId: "closed-historical-run", permissionProfile: "full", capabilitiesConfig: config, capabilityContract: contract }, async () => { throw undefined; }),
       (reason: unknown) => reason === undefined);
     assert.deepEqual(await readdir(state), before);
+    // B1: the transient inspection root lives in the system temp dir, so a
+    // failed query must remove it too: no leaked aiboard-git-inspection-* roots.
+    assert.deepEqual((await readdir(tmpdir())).filter((entry) => entry.startsWith("aiboard-git-inspection-")), []);
     passed = true;
   } finally {
     await host.close();

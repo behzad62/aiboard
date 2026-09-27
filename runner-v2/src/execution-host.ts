@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, open, readFile, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { recordTempCreation, type TempRecordSink } from "./cleanup-ownership.js";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { ArtifactStore } from "./artifact-store.js";
@@ -96,6 +97,21 @@ export interface ExecutionHostOptions {
     runId: string;
     point: "before_isolation_recovery";
   }>) => void | Promise<void>;
+  /**
+   * T6b repair (OA-17): durable creation-record sink. The factory wires
+   * this to Runner-private scheduler state; standalone hosts omit it and
+   * the transient root is still always removed below.
+   */
+  readonly tempRecorders?: {
+    readonly recorded: (record: {
+      readonly path: string;
+      readonly ownerRunId: string;
+      readonly kind: "directory" | "file";
+      readonly createdAt: string;
+      readonly retained?: boolean;
+    }) => void;
+    readonly cleared: (path: string) => void;
+  };
 }
 
 export interface ExecutionHostRunBindingInput {
@@ -149,6 +165,8 @@ export interface ExecutionHostRunBinding {
 
 export type ExecutionHostGitInspectionInput = Omit<ExecutionHostRunBindingInput, "capabilityContract"> & {
   readonly capabilityContract?: RunnerCapabilityContract;
+  /** T6b repair (OA-17): per-query durable record sink; falls back to host options. */
+  readonly tempRecorders?: TempRecordSink;
 };
 
 export interface ExecutionHost {
@@ -275,6 +293,20 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         // historical databases and configured capability code are never reopened
         // for writes merely to display Git history.
         const root = await mkdtemp(join(tmpdir(), "aiboard-git-inspection-"));
+                // T6b repair (B1/B6): the identity rule applies only to run/session
+        // ids (validated above). The absolute project path is never run
+        // through safeSegment. Recording is validated synchronously and
+        // lives inside the operation so cleanup always runs: no crash,
+        // no leaked temp root.
+        let tempRecorded = false;
+        const tempSink = input.tempRecorders ?? options.tempRecorders;
+        try {
+          recordTempCreation({ path: root, ownerRunId: runId, ownerProjectId: runId, createdAt: new Date().toISOString(), kind: "directory" });
+          tempSink?.recorded({ path: root, ownerRunId: runId, kind: "directory", createdAt: new Date().toISOString() });
+          tempRecorded = tempSink !== undefined;
+        } catch {
+          tempRecorded = false;
+        }
         const queryProcesses = new ManagedProcessService({ stateDirectory: join(root, "managed"),
           platform: platform === "windows" ? "win32" : process.platform === "win32" ? "linux" : process.platform });
         const windowsJobHost = createWindowsJobProcessHost({ stateDirectory: join(root, "managed-job-host"),
@@ -307,8 +339,17 @@ export function createExecutionHost(options: ExecutionHostOptions): ExecutionHos
         } catch (error) { failed = true; primary = error; }
         try { await cleanup(); }
         catch (error) { throw new AggregateError(failed ? [primary, error] : [error], `Historical Git query cleanup is unverified; retain ${root}.`); }
-        if (failed) throw primary;
+        if (failed) {
+          await rm(root, { recursive: true, force: true });
+          if (tempRecorded) {
+            try { (input.tempRecorders ?? options.tempRecorders)?.cleared(root); } catch { /* bookkeeping never breaks the query */ }
+          }
+          throw primary;
+        }
         await rm(root, { recursive: true });
+        if (tempRecorded) {
+          try { (input.tempRecorders ?? options.tempRecorders)?.cleared(root); } catch { /* bookkeeping never breaks the query */ }
+        }
         return result!;
       })();
       inspectionOperations.add(operation);

@@ -24,6 +24,7 @@ import {
 } from "node:path";
 import { builtinModules } from "node:module";
 import * as ts from "typescript";
+import { recordTempCreation, type TempRecordSink } from "./cleanup-ownership.js";
 
 import {
   RUNNER_EXTENSION_MANIFEST_FILE,
@@ -822,6 +823,7 @@ function isExecutableExtensionModule(path: string): boolean {
 export async function materializeRunnerExtensionExecutionCopy(
   closure: RunnerExtensionClosure,
   stateDirectory: string,
+  tempRecorders?: TempRecordSink,
 ): Promise<RunnerExtensionExecutionCopy> {
   const stateRoot = await requiredRealStateDirectory(stateDirectory);
   const executions = join(stateRoot, "extension-executions");
@@ -831,6 +833,14 @@ export async function materializeRunnerExtensionExecutionCopy(
     executionRoot,
     `.${closure.contract.closureDigest?.slice(0, 16) ?? "extension"}-`,
   ));
+  // T6b repair (OA-17): execution copies are live, verified artifacts with
+  // their own sealed lifecycle (see removeExecutionCopy). Recorded as
+  // retained when the caller supplies a run-scoped sink, so cleanup never
+  // deletes a live copy; the synchronous validation never throws here.
+  recordTempCreation({ path: directory, ownerRunId: "runner-extension", ownerProjectId: "runner-state", createdAt: new Date().toISOString(), kind: "directory", retained: true });
+  try {
+    tempRecorders?.recorded({ path: directory, ownerRunId: "runner-extension", ownerProjectId: "runner-state", kind: "directory", createdAt: new Date().toISOString(), retained: true });
+  } catch { /* bookkeeping never breaks materialization */ }
   let retained = false;
   try {
     await writeCapturedExtension(directory, closure.files);
@@ -933,6 +943,7 @@ async function removeExecutionCopy(
 async function persistRunnerCapabilitySnapshot(
   captured: CapturedRunnerCapabilities,
   stateDirectory: string,
+  tempRecorders?: TempRecordSink,
 ): Promise<void> {
   if (captured.extensions.length === 0) return;
   const stateRoot = await requiredRealStateDirectory(stateDirectory);
@@ -945,6 +956,15 @@ async function persistRunnerCapabilitySnapshot(
     return;
   }
   const staging = await mkdtemp(join(snapshots, ".staging-"));
+  // T6b repair (OA-17): staging is renamed to its target on success and
+  // removed in the finally below; the validated record lets a run-scoped
+  // sink track the leftover window. Validation never throws here.
+  recordTempCreation({ path: staging, ownerRunId: "runner-extension", ownerProjectId: "runner-state", createdAt: new Date().toISOString(), kind: "directory" });
+  let stagingRecorded = false;
+  try {
+    tempRecorders?.recorded({ path: staging, ownerRunId: "runner-extension", ownerProjectId: "runner-state", kind: "directory", createdAt: new Date().toISOString() });
+    stagingRecorded = tempRecorders !== undefined;
+  } catch { stagingRecorded = false; }
   let renamed = false;
   try {
     for (const [index, extension] of captured.extensions.entries()) {
@@ -965,6 +985,9 @@ async function persistRunnerCapabilitySnapshot(
     }
   } finally {
     if (!renamed) await rm(staging, { recursive: true, force: true });
+    if (stagingRecorded) {
+      try { tempRecorders?.cleared(staging); } catch { /* bookkeeping only */ }
+    }
   }
 }
 

@@ -7,6 +7,7 @@ import {
 import type { ProjectInstructionSource } from "./project-context.js";
 import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { SchedulerProjection } from "./scheduler-store.js";
+import { effectiveRepairPlanLimit, readyPlanTaskCount, repairPlanLimitScales } from "./scheduler-store.js";
 import type { SkillDocument } from "./skill-catalog.js";
 import type { BuildTask } from "./task-contracts.js";
 import type {
@@ -33,6 +34,27 @@ export const RUNNER_KERNEL_INVARIANTS = [
   "The kernel enforces mechanics and permissions only; it does not reinterpret intent.",
   "Inspect current repository state before editing and preserve unrelated user changes.",
 ].join("\n");
+
+/**
+ * T6b (OA-15/EP49): the top five defect classes for the project, injected
+ * into worker and reviewer briefs. The 300-character cap is a conservative
+ * stand-in for the 300-token budget (well under it for short class labels);
+ * the inclusion and its cost are recorded in each pass's context manifest
+ * (EP40) through the regular pack sections below.
+ */
+export const TOP_DEFECT_CLASSES_TOKEN_LIMIT = 300;
+
+export function defectClassBrief(classes: readonly string[]): string {
+  if (classes.length === 0) return "";
+  const selected = classes.slice(0, 5);
+  const text = `Project defect classes to watch (top five, <=300 tokens):\n${selected.map((label) => `- ${label}`).join("\n")}`;
+  if (text.length <= TOP_DEFECT_CLASSES_TOKEN_LIMIT) return text;
+  const cut = text.slice(0, TOP_DEFECT_CLASSES_TOKEN_LIMIT);
+  const newline = cut.lastIndexOf("\n");
+  if (newline > 0) return cut.slice(0, newline);
+  const space = cut.lastIndexOf(" ");
+  return space > 0 ? cut.slice(0, space) : cut;
+}
 
 export const ARCHITECT_PROJECT_DOCS_INSTRUCTIONS = [
   "The project-docs section shows this run's committed documents, which your fs tools cannot see (they read the user's tree, not the integration branch). Base every rewrite on the committed text, since write_project_doc replaces the whole file.",
@@ -62,6 +84,12 @@ export const NEW_POLICY_PLANNING_INSTRUCTIONS = [
   "After drafting or revising, call request_coverage_review; an independent reviewer derives obligations from the source first, then judges the plan.",
   "The plan becomes ready only with no blocking missing/weakened verdict, no unread source section, and every blocking prior finding resolved; resolve blocking findings by revising, then request again.",
   "No worker starts until the plan is ready, and plan-only runs never start workers. Command execution is refused while the run is in planning state.",
+].join("\n");
+
+export const REPAIR_APPROACH_DECISION_INSTRUCTIONS = [
+  "Before dispatching repairs, call record_repair_approach_decision against the current issue.",
+  "Record one hypothesis and immutable evidence references; a repeated failed approach needs evidence NEW to its diagnostic set.",
+  "A proven external blocker is recorded with record_external_blocker (exact acceptance condition, evidence, attempted resolutions, required owner action); it consumes no further attempts.",
 ].join("\n");
 
 /** Shown only on a context_recording_decision_required turn, beside the reason JSON. */
@@ -130,6 +158,8 @@ export interface BuildWorkerContextInput {
   evidence: PromptEvidence[];
   recentHistory: string[];
   pendingToolResults?: string[];
+  /** T6b (OA-15): top defect-class labels for the project (at most five used). */
+  defectClasses?: readonly string[];
 }
 
 export function buildWorkerContext(input: BuildWorkerContextInput): ContextPack {
@@ -193,6 +223,9 @@ export function workerContextSections(input: BuildWorkerContextInput): ContextSe
   }
   for (const [index, history] of input.recentHistory.entries()) {
     sections.push(optional(`history:${index + 1}`, "history", 100, history));
+  }
+  if (input.defectClasses?.length) {
+    sections.push(optional("defect-classes", "defects", 650, defectClassBrief(input.defectClasses)));
   }
   return sections;
 }
@@ -543,6 +576,14 @@ export function architectContextSections(
         2
       )
     ),
+    // T6b repair (B4): open repair issues ride every new-policy Architect
+    // turn, so the decision tool gets exact issue ids and the prior
+    // failed approaches with their diagnostic evidence ids.
+    ...(input.projection.planningPolicyVersion === 1 &&
+      input.projection.repairIssues &&
+      Object.keys(input.projection.repairIssues).length > 0
+      ? [required("repair-issues", "repair", renderRepairIssues(input.projection))]
+      : []),
   ];
   if (input.reviewSubmission) {
     sections.push(
@@ -594,6 +635,49 @@ export function architectContextSections(
     sections.push(optional(`history:${index + 1}`, "history", 100, history));
   }
   return sections;
+}
+
+/**
+ * Owner decision 2026-09-26 ("Scale with tasks"): the effective run-level
+ * repair-plan limit and its usage ride the Architect status with the open
+ * issues, so the Architect plans against the scaled cap, not the stored base.
+ */
+export function renderRunRepairBudget(projection: SchedulerProjection): string {
+  const cycles = projection.repairCycles;
+  if (!cycles) return "Run repair-plan budget: no repair policy configured (uncapped).";
+  const effective = effectiveRepairPlanLimit(projection) ?? cycles.limit;
+  if (repairPlanLimitScales(projection)) {
+    return `Run repair-plan budget: used ${cycles.used}/${effective} repair plans (scales as 3 + ${readyPlanTaskCount(projection)} ready-plan tasks; stored base ${cycles.limit}).`;
+  }
+  return `Run repair-plan budget: used ${cycles.used}/${effective} repair plans.`;
+}
+
+/** Repair budget status for the planning-status JSON (effective run cap). */
+function repairBudgetStatus(projection: SchedulerProjection): unknown {
+  const cycles = projection.repairCycles;
+  if (!cycles) return null;
+  return {
+    used: cycles.used,
+    limit: effectiveRepairPlanLimit(projection) ?? cycles.limit,
+    scalesWithReadyPlan: repairPlanLimitScales(projection),
+    readyPlanTasks: readyPlanTaskCount(projection),
+  };
+}
+
+/** T6b repair (B4): open issues with budgets and prior approaches. */
+function renderRepairIssues(projection: SchedulerProjection): string {
+  const lines = [renderRunRepairBudget(projection), "Open repair issues. Record approach decisions with record_repair_approach_decision against the exact issueId; repeats need evidence NEW to the failed approach" + String.fromCharCode(39) + "s diagnostic set."];
+  for (const issue of Object.values(projection.repairIssues ?? {})) {
+    lines.push("issueId: " + issue.issueId);
+    lines.push("rootCause: " + issue.rootCause);
+    lines.push("budget: used " + issue.used + "/" + issue.limit);
+    if (issue.externalBlocker) lines.push("externalBlocker: " + issue.externalBlocker.acceptanceCondition + " Required owner action: " + issue.externalBlocker.requiredOwnerAction);
+    for (const approach of issue.approaches) {
+      lines.push("approach " + approach.approachId + " repeat=" + approach.repeat + " failed=" + approach.failed + " dispatched=" + (approach.dispatched === true) + " hypothesis=" + approach.hypothesis + " diagnosticSet=[" + approach.diagnosticSet.join(", ") + "] evidence=[" + approach.evidenceIds.join(", ") + "] failureEvidence=[" + (approach.failureEvidenceIds ?? []).join(", ") + "]");
+    }
+    lines.push("---");
+  }
+  return lines.join("\n");
 }
 
 function required(id: string, kind: string, content: string): ContextSection {
@@ -779,6 +863,7 @@ export function renderPlanningStatus(projection: SchedulerProjection): string {
     failedDeliveryBoundaries: deliveryBoundaries,
     unacceptedPhases: unacceptedPhaseStatus(projection),
     readiness: planning.readiness,
+    repairBudget: repairBudgetStatus(projection),
     manifestId: manifest.manifestId,
     currentRevisionId: planning.plan?.currentRevisionId ?? null,
     currentDigest: planning.plan?.currentDigest ?? null,

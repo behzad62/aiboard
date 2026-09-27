@@ -17,6 +17,7 @@ import {
   type AgentProviderRetryEvent,
 } from "./agent-loop.js";
 import {
+  REPAIR_APPROACH_DECISION_INSTRUCTIONS,
   buildArchitectContext,
   architectContextSections,
   type ArchitectReviewSubmission,
@@ -243,6 +244,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           "When final verification planning is requested, inspect the canonical repository state and use plan_final_verification with an explicit build, tests, runtime_smoke, and browser plan.",
           "When final verification review is requested, inspect the exact current submission and persisted category evidence, then use review_final_verification with one semantic rationale per category plus an explicit low/high Architect risk declaration and rationale. Require repair when the evidence does not support approval, and declare high risk whenever semantic concerns exceed the kernel-observed paths and effects.",
           "When final verification repairs are requested, use plan_verification_repairs to create narrowly scoped ordinary tasks whose provenance and acceptance criteria cover every failed category exactly once.",
+          REPAIR_APPROACH_DECISION_INSTRUCTIONS,
           "When plan critique resolution is requested, read every blocking finding, inspect the baseline repository where a finding cites files, then call resolve_plan_critique exactly once: reconcile the plan for findings you accept (cancel, revise, or add tasks in one planReconciliation) and reject the rest with evidence-based rationale.",
         ].join("\n"),
       },

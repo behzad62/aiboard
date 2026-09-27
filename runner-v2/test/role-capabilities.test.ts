@@ -122,6 +122,8 @@ const ARCHITECT_INSPECTION_FULL = [
   "propose_project_memory",
   "read_skill",
   "recall_project_memory",
+  "record_external_blocker",
+  "record_repair_approach_decision",
   "repo.manifest",
   "repo.map",
   "research.fetch",
@@ -180,6 +182,8 @@ const ARCHITECT_PLAN_ONLY_FULL = [
   "list_skills",
   "read_skill",
   "recall_project_memory",
+  "record_external_blocker",
+  "record_repair_approach_decision",
   "repo.manifest",
   "repo.map",
   "research.fetch",
@@ -536,12 +540,12 @@ test("constructed brokers match the derived surfaces and an unlisted probe fails
     const withBrowser = createArchitectInspectionBroker({ ...base, browserBackend: browserStub() });
     assert.deepEqual(
       names(withBrowser),
-      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command"),
+      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command" && name !== "record_external_blocker" && name !== "record_repair_approach_decision"),
     );
     assert.equal(names(withBrowser).includes("run_evidence_command"), false);
     assert.deepEqual(
       names(new PlanOnlyInspectionRuntime(withBrowser)),
-      [...ARCHITECT_PLAN_ONLY_FULL],
+      [...ARCHITECT_PLAN_ONLY_FULL].filter((name) => name !== "record_external_blocker" && name !== "record_repair_approach_decision"),
     );
     assert.deepEqual(
       names(new PlanOnlyInspectionRuntime(inspection)),

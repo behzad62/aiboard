@@ -38,6 +38,7 @@ import {
 import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
 import { createHash } from "node:crypto";
 import { PROJECT_DOC_MAX_BYTES, validateProjectDocPath } from "./project-docs.js";
+import { isDiagnosticRepairCycle } from "./repair-budget-contracts.js";
 
 import {
   isFinalVerificationTask,
@@ -209,6 +210,18 @@ export type SchedulerEventType =
   | "verifier.verdict_submitted"
   | "verifier.repairs_planned"
   | "repair.policy_configured"
+  | "repair.issue_recorded"
+  | "repair.approach_decided"
+  | "repair.cycle_recorded"
+  | "repair.approach_failed"
+  | "repair.external_blocker_recorded"
+  | "repair.flaky_isolated"
+  | "repair.issue_budget_extended"
+  | "repair.issue_paused"
+  | "repair.external_blocker_cleared"
+  | "temp.creation_recorded"
+  | "temp.record_cleared"
+  | "cleanup.checked"
   | "repair.cycle_limit_reached"
   | "repair.cycle_limit_extended"
   | "plan_critique.policy_configured"
@@ -629,12 +642,79 @@ export interface RepairCyclesProjection {
   limit: number;
   used: number;
   extensions: number;
+  /**
+   * Owner decision 2026-09-26 ("Scale with tasks"): true when the run cap
+   * came from an explicit `repairPlanLimit` option / project policy and must
+   * not scale with the ready plan. Absent on rows written before the flag
+   * existed; the effective-limit helper infers explicitness there (a stored
+   * limit other than the flat default had to be chosen explicitly).
+   */
+  explicitLimit?: boolean;
   pause?: {
     source: "final_verification" | "verifier";
     targetRevision: string;
     used: number;
     limit: number;
   };
+}
+
+export interface RepairIssueProjection {
+  issueId: string;
+  rootCause: string;
+  limit: number;
+  used: number;
+  hypotheses: string[];
+  outcomes: string[];
+  approaches: Array<{
+    approachId: string;
+    repeat: boolean;
+    failed: boolean;
+    /** T6b repair (R3-B2): true once this decision authorized a dispatch. */
+    dispatched: boolean;
+    hypothesis: string;
+    diagnosticSet: string[];
+    evidenceIds: string[];
+    failureEvidenceIds: string[];
+  }>;
+  externalBlocker?: {
+    acceptanceCondition: string;
+    evidence: string[];
+    attemptedResolutions: string[];
+    requiredOwnerAction: string;
+  };
+}
+
+/**
+ * T6b (OA-14): durable outcome of the single failing-test rerun for one
+ * final-verification check. Keyed `${generationId}:${category}`; the rerun
+ * executes at most once per key and the original failing check still blocks
+ * acceptance until it passes on its own run.
+ */
+export interface RepairFlakyProjection {
+  category: string;
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+  failingTestIds: string[];
+  rerunGreen: boolean;
+  rerunEvidenceIds: string[];
+  finding: string;
+}
+
+/**
+ * T6b repair (OA-17): Runner-private durable creation record for one
+ * directory or file the runner created outside the workspace. Stored as
+ * scheduler events in the Runner-private SQLite store under the runner
+ * state directory — never in a shared or worker-writable file — so an
+ * executed workload cannot forge ownership (probe F).
+ */
+export interface TempRecordProjection {
+  path: string;
+  ownerRunId: string;
+  ownerProjectId: string;
+  createdAt: string;
+  kind: "directory" | "file";
+  retained: boolean;
 }
 
 /**
@@ -757,6 +837,7 @@ export interface SchedulerProjection {
   pauseReason?: {
     reason: string;
     taskId?: string;
+    detail?: string;
   };
   planRevision: number;
   tasks: Record<string, BuildTask>;
@@ -798,6 +879,9 @@ export interface SchedulerProjection {
   buildRisk?: BuildRiskProjection;
   verifierSelection?: VerifierSelectionProjection;
   repairCycles?: RepairCyclesProjection;
+  repairIssues?: Record<string, RepairIssueProjection>;
+  repairFlaky?: Record<string, RepairFlakyProjection>;
+  tempRecords?: Record<string, TempRecordProjection>;
   verifier?: VerifierProjection;
   planRiskDeclaration?: {
     risk: PlanRiskLevel;
@@ -858,9 +942,53 @@ export interface SchedulerStore {
   close(): void;
 }
 
+/**
+ * Owner decision 2026-09-26 ("Scale with tasks"): tasks in the current ready
+ * plan revision. Zero when the run has no ready plan (legacy runs never do).
+ */
+export function readyPlanTaskCount(projection: SchedulerProjection): number {
+  const plan = projection.planning?.plan;
+  if (projection.planningPolicyVersion !== 1 || !plan) return 0;
+  return plan.revisionsById[plan.currentRevisionId]?.tasks.length ?? 0;
+}
+
+/**
+ * Owner decision 2026-09-26 ("Scale with tasks"): true when the run-level
+ * repair-plan limit scales with the ready plan (new-policy runs without an
+ * explicit cap). An explicit `repairPlanLimit` wins; legacy runs never scale.
+ */
+export function repairPlanLimitScales(projection: SchedulerProjection): boolean {
+  const cycles = projection.repairCycles;
+  if (!cycles || projection.planningPolicyVersion !== 1) return false;
+  // Scale only when the runtime recorded the default as non-explicit. Policy
+  // rows without the flag were written before the scaled limit existed; they
+  // keep their stored flat limit so old logs replay unchanged and an owner
+  // extension never shrinks the effective limit (review T6b r5 B-1/B-2).
+  return cycles.explicitLimit === false;
+}
+
+/**
+ * Owner decision 2026-09-26 ("Scale with tasks"): the effective run-level
+ * repair-plan limit, derived from durable state at every read so replay is
+ * deterministic. New-policy runs without an explicit cap run with
+ * 3 + (tasks in the current ready plan) instead of the flat 3: a later plan
+ * revision that adds tasks grows the limit, and the stored base already
+ * covers extensions and everything consumed, so the value never drops below
+ * `used`. Undefined while the run has no repair policy (in-flight pre-P6.5
+ * runs stay uncapped).
+ */
+export function effectiveRepairPlanLimit(projection: SchedulerProjection): number | undefined {
+  const cycles = projection.repairCycles;
+  if (!cycles) return undefined;
+  if (!repairPlanLimitScales(projection)) return cycles.limit;
+  return Math.max(cycles.used, cycles.limit + readyPlanTaskCount(projection));
+}
+
 export function repairCyclesExhausted(projection: SchedulerProjection): boolean {
   const cycles = projection.repairCycles;
-  return cycles !== undefined && cycles.used >= cycles.limit;
+  if (cycles === undefined) return false;
+  const effective = effectiveRepairPlanLimit(projection);
+  return effective !== undefined && cycles.used >= effective;
 }
 
 export function planCritiquePending(projection: SchedulerProjection): boolean {
@@ -1443,9 +1571,10 @@ export function newPolicyStaleTasksRequireArchitect(projection: SchedulerProject
 export function consumeRepairCycle(projection: SchedulerProjection): void {
   const cycles = projection.repairCycles;
   if (!cycles) return;
-  if (cycles.used >= cycles.limit) {
+  const effective = effectiveRepairPlanLimit(projection) ?? cycles.limit;
+  if (cycles.used >= effective) {
     throw new Error(
-      `Repair plan limit reached: ${cycles.used} of ${cycles.limit} repair plans used; the user must extend the repair-cycle budget.`,
+      `Repair plan limit reached: ${cycles.used} of ${effective} repair plans used; the user must extend the repair-cycle budget.`,
     );
   }
   projection.repairCycles = { ...cycles, used: cycles.used + 1 };
@@ -2828,6 +2957,15 @@ export function reduceSchedulerEvent(
     ...(current.repairCycles
       ? { repairCycles: cloneRepairCyclesProjection(current.repairCycles) }
       : {}),
+    ...(current.repairIssues
+      ? { repairIssues: cloneRepairIssuesProjection(current.repairIssues) }
+      : {}),
+    ...(current.repairFlaky
+      ? { repairFlaky: Object.fromEntries(Object.entries(current.repairFlaky).map(([key, record]) => [key, { ...record, failingTestIds: [...record.failingTestIds], rerunEvidenceIds: [...record.rerunEvidenceIds] }])) }
+      : {}),
+    ...(current.tempRecords
+      ? { tempRecords: Object.fromEntries(Object.entries(current.tempRecords).map(([key, record]) => [key, { ...record }])) }
+      : {}),
     ...(current.contextRecording
       ? { contextRecording: cloneContextRecording(current.contextRecording) }
       : {}),
@@ -3708,10 +3846,283 @@ export function reduceSchedulerEvent(
       if (!Number.isSafeInteger(limit) || (limit as number) < 0) {
         throw new Error("repairPlanLimit must be a non-negative integer.");
       }
-      if (current.repairCycles && current.repairCycles.limit !== limit) {
+      const explicit = event.payload.explicit;
+      if (explicit !== undefined && typeof explicit !== "boolean") {
+        throw new Error("repairPlanLimit explicit flag must be a boolean.");
+      }
+      const explicitLimit = explicit === true ? true : explicit === false ? false : undefined;
+      if (current.repairCycles &&
+        (current.repairCycles.limit !== limit ||
+          (current.repairCycles.explicitLimit ?? false) !== (explicitLimit ?? false))) {
         throw new Error("Repair policy is already configured differently.");
       }
-      next.repairCycles = current.repairCycles ?? { limit: limit as number, used: 0, extensions: 0 };
+      next.repairCycles = current.repairCycles ?? {
+        limit: limit as number,
+        used: 0,
+        extensions: 0,
+        ...(explicitLimit !== undefined ? { explicitLimit } : {}),
+      };
+      break;
+    }
+    case "repair.issue_recorded": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record a repair issue.");
+      const issueId = requiredString(event.payload, "issueId");
+      const rootCause = requiredString(event.payload, "rootCause");
+      const limit = requiredPositiveInteger(event.payload, "limit");
+      const issues = { ...(next.repairIssues ?? {}) };
+      const existing = issues[issueId];
+      if (existing && (existing.rootCause !== rootCause || existing.limit !== limit)) {
+        throw new Error("Repair issue identity or allowance conflicts with its durable record.");
+      }
+      issues[issueId] ??= { issueId, rootCause, limit, used: 0, hypotheses: [], outcomes: [], approaches: [] };
+      next.repairIssues = issues;
+      break;
+    }
+    case "repair.approach_decided": {
+      if (event.actor.role !== "architect") throw new Error("Only the Architect may decide a repair approach.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Repair approach requires its durable issue.");
+      const approachId = requiredString(event.payload, "approachId");
+      const repeat = event.payload.repeat === true;
+      const hypothesis = requiredString(event.payload, "hypothesis");
+      const diagnosticSet = stringArray(event.payload, "diagnosticSet");
+      const evidenceIds = stringArray(event.payload, "evidenceIds");
+      const prior = issue.approaches.find((entry) => entry.approachId === approachId);
+      const known = new Set(issue.approaches.flatMap((entry) => entry.diagnosticSet));
+      const decided = new Set(issue.approaches.flatMap((entry) => entry.evidenceIds));
+      const failedEvidence = new Set(issue.approaches.flatMap((entry) => entry.failureEvidenceIds ?? []));
+      const excluded = new Set([...known, ...decided, ...failedEvidence]);
+      const superseded = issue.approaches.at(-1);
+      if (superseded && !superseded.failed) superseded.failed = true;
+      if (!repeat && prior?.failed) {
+        throw new Error("A failed repair approach cannot be relabelled or resubmitted without an explicit repeat and new evidence.");
+      }
+      if (prior?.failed || repeat) {
+        if (evidenceIds.some((id) => failedEvidence.has(id))) {
+          throw new Error("A repeated repair approach must not cite the failure's own evidence.");
+        }
+        if (!evidenceIds.some((id) => !excluded.has(id))) {
+          throw new Error("A repeated failed repair approach requires evidence NEW to its diagnostic set.");
+        }
+      }
+      if (prior && !sameValue(prior.diagnosticSet, diagnosticSet) && !prior.failed) {
+        throw new Error("A prior repair approach's diagnostic set is immutable.");
+      }
+      if (prior && repeat && sameValue(prior.evidenceIds, evidenceIds)) {
+        throw new Error("Replaying reused evidence cannot authorize a repeated failed approach.");
+      }
+      // T6b repair (R2-B3): with prior approaches a new decision needs NON-EMPTY evidence outside every prior excluded set.
+      if (issue.approaches.length > 0 && !evidenceIds.some((id) => !excluded.has(id))) {
+        throw new Error("A renamed repair approach with identical evidence cannot pass as a new approach; empty evidence never passes.");
+      }
+      // T6b repair (R2-B3): a new id with a failed approach's hypothesis and diagnostic set is a relabel.
+      if (issue.approaches.length > 0 && issue.approaches.some((entry) =>
+        entry.failed &&
+        entry.hypothesis === hypothesis &&
+        entry.diagnosticSet.length === diagnosticSet.length &&
+        entry.diagnosticSet.every((id) => diagnosticSet.includes(id)))) {
+        throw new Error("A new repair approach id with a failed approach's hypothesis and diagnostic set is a relabel, not a new approach.");
+      }
+      issue.approaches.push({ approachId, repeat, failed: false, dispatched: false, hypothesis, diagnosticSet, evidenceIds, failureEvidenceIds: [] });
+      break;
+    }
+    case "repair.cycle_recorded": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record a charged repair cycle.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Repair cycle requires its durable issue.");
+      const hypothesis = requiredString(event.payload, "hypothesis");
+      const outcome = requiredString(event.payload, "outcome");
+      const evidenceIds = stringArray(event.payload, "evidenceIds");
+      if (evidenceIds.length === 0) throw new Error("A repair cycle requires evidence.");
+      if (issue.externalBlocker) throw new Error("A proven external blocker does not consume futile attempts.");
+      // T6b repair (B5): an approach-bound cycle dispatched repair tasks,
+      // so it is always substantive no matter the hypothesis label.
+      // The diagnostic exemption covers approach-free investigations only.
+      if (event.payload.approachId === undefined && isDiagnosticRepairCycle(hypothesis, outcome)) {
+        issue.hypotheses.push(hypothesis);
+        issue.outcomes.push(outcome);
+        break;
+      }
+      if (outcome === "resolved" && event.payload.approachId !== undefined) {
+        const resolvedId = requiredString(event.payload, "approachId");
+        const resolved = issue.approaches.at(-1);
+        if (!resolved || resolved.approachId !== resolvedId) throw new Error("Repair cycle must follow its recorded approach decision.");
+        resolved.failed = false;
+        issue.hypotheses.push(hypothesis);
+        issue.outcomes.push(outcome);
+        break;
+      }
+      if (issue.used >= issue.limit) throw new Error("Issue repair budget is exhausted.");
+      issue.used += 1;
+      issue.hypotheses.push(hypothesis);
+      issue.outcomes.push(outcome);
+      if (event.payload.approachId === undefined) break;
+      const approachId = requiredString(event.payload, "approachId");
+      const approach = issue.approaches.at(-1);
+      if (!approach || approach.approachId !== approachId) throw new Error("Repair cycle must follow its recorded approach decision.");
+      // T6b repair (R3-B2): a decision authorizes exactly one dispatch;
+      // the consumption is marked here in the kernel, durably.
+      if (outcome === "dispatched") approach.dispatched = true;
+      approach.failed = outcome !== "resolved" && outcome !== "dispatched";
+      if (approach.failed) {
+        const knownFailure = new Set(approach.failureEvidenceIds ?? []);
+        for (const id of evidenceIds) {
+          if (!knownFailure.has(id)) {
+            approach.failureEvidenceIds.push(id);
+            knownFailure.add(id);
+          }
+        }
+      }
+      break;
+    }
+    case "repair.approach_failed": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record a failed repair approach.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Failed repair approach requires its durable issue.");
+      const approachId = requiredString(event.payload, "approachId");
+      const approach = issue.approaches.at(-1);
+      if (!approach || approach.approachId !== approachId) throw new Error("Failed repair approach must follow its recorded approach decision.");
+      // T6b repair (R3-B2): a dispatched repair whose next validation
+      // failed is durably failed here. No cycle is charged (an
+      // observation is not an attempt) and no failure evidence is
+      // absorbed, so the next decision still cites fresh evidence; a
+      // repeat of the same approach still needs evidence NEW to its sets.
+      if (approach.failed) break;
+      if (!approach.dispatched) throw new Error("Only a dispatched repair approach fails on its next validation.");
+      approach.failed = true;
+      break;
+    }
+    case "repair.flaky_isolated": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record flaky isolation.");
+      const category = requiredString(event.payload, "category");
+      const generationId = requiredString(event.payload, "generationId");
+      const taskId = requiredString(event.payload, "taskId");
+      const targetRevision = requiredString(event.payload, "targetRevision");
+      const failingTestIds = stringArray(event.payload, "failingTestIds");
+      if (failingTestIds.length === 0 && !(event.payload.rerunGreen === false && typeof event.payload.finding === "string" && (event.payload.finding as string).startsWith("not_performed"))) throw new Error("Flaky isolation requires the first run's failing test ids, or a not_performed finding when no test ids exist to narrow.");
+      if (typeof event.payload.rerunGreen !== "boolean") throw new Error("Flaky isolation requires the rerun result.");
+      const rerunEvidenceIds = stringArray(event.payload, "rerunEvidenceIds");
+      const finding = requiredString(event.payload, "finding");
+      const key = `${generationId}:${category}`;
+      const record = { category, generationId, taskId, targetRevision, failingTestIds: [...failingTestIds], rerunGreen: event.payload.rerunGreen as boolean, rerunEvidenceIds: [...rerunEvidenceIds], finding };
+      const existing = next.repairFlaky?.[key];
+      if (existing) {
+        if (!sameValue(existing, record)) throw new Error(`Flaky isolation for ${key} conflicts with its durable record.`);
+        break;
+      }
+      next.repairFlaky = { ...(next.repairFlaky ?? {}), [key]: record };
+      break;
+    }
+    case "repair.external_blocker_recorded": {
+      if (event.actor.role !== "architect") throw new Error("Only the Architect may record an external blocker.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("External blocker requires its durable issue.");
+      const acceptanceCondition = requiredString(event.payload, "acceptanceCondition");
+      const evidence = stringArray(event.payload, "evidence");
+      const attemptedResolutions = stringArray(event.payload, "attemptedResolutions");
+      const requiredOwnerAction = requiredString(event.payload, "requiredOwnerAction");
+      if (evidence.length === 0 || attemptedResolutions.length === 0) {
+        throw new Error("A blocker record requires evidence and attempted resolutions.");
+      }
+      if (issue.externalBlocker) throw new Error("This repair issue already has an external blocker.");
+      issue.externalBlocker = { acceptanceCondition, evidence, attemptedResolutions, requiredOwnerAction };
+      break;
+    }
+    case "repair.issue_budget_extended": {
+      if (event.actor.role !== "user") throw new Error("Issue-budget extension requires the owner.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Issue-budget extension requires its durable issue.");
+      const additional = event.payload.additionalCycles;
+      if (!Number.isSafeInteger(additional) || (additional as number) < 1 || (additional as number) > MAX_REPAIR_CYCLE_EXTENSION) {
+        throw new Error(`additionalCycles must be an integer between 1 and ${MAX_REPAIR_CYCLE_EXTENSION}.`);
+      }
+      issue.limit += additional as number;
+      if (current.pauseReason?.reason === `repair_issue_paused:${issueId}`) {
+        next.status = "running";
+        delete next.pauseReason;
+      }
+      break;
+    }
+    case "repair.issue_paused": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may pause on a repair issue.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Repair-issue pause requires its durable issue.");
+      const cause = requiredString(event.payload, "cause");
+      if (cause !== "budget_exhausted" && cause !== "external_blocker" && cause !== "approach_failed") {
+        throw new Error("Repair-issue pause cause is invalid.");
+      }
+      const detail = requiredString(event.payload, "detail");
+      next.status = "paused";
+      next.pauseReason = { reason: `repair_issue_paused:${issueId}`, detail: `repair:${cause}:${detail}` };
+      break;
+    }
+    case "repair.external_blocker_cleared": {
+      if (event.actor.role !== "user") throw new Error("External-blocker clearance requires the owner.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("External-blocker clearance requires its durable issue.");
+      if (!issue.externalBlocker) throw new Error("This repair issue has no external blocker to clear.");
+      delete issue.externalBlocker;
+      if (current.pauseReason?.reason === `repair_issue_paused:${issueId}`) {
+        next.status = "running";
+        delete next.pauseReason;
+      }
+      break;
+    }
+    case "temp.creation_recorded": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record temp creation.");
+      const path = requiredString(event.payload, "path");
+      const ownerRunId = requiredString(event.payload, "ownerRunId");
+      const ownerProjectId = requiredString(event.payload, "ownerProjectId");
+      const createdAt = requiredString(event.payload, "createdAt");
+      const kind: "directory" | "file" | undefined = event.payload.kind === "directory" ? "directory" : event.payload.kind === "file" ? "file" : undefined;
+      if (!kind) throw new Error("Temp creation kind is invalid.");
+      const retained = event.payload.retained === true;
+      const key = createHash("sha256").update(path).digest("hex").slice(0, 24);
+      const records = { ...(next.tempRecords ?? {}) };
+      const existing = records[key];
+      const record = { path, ownerRunId, ownerProjectId, createdAt, kind, retained: (existing?.retained ?? false) || retained };
+      if (existing && (existing.path !== path || existing.ownerRunId !== ownerRunId || existing.ownerProjectId !== ownerProjectId || existing.kind !== kind)) {
+        throw new Error("Temp creation record conflicts with its durable record.");
+      }
+      records[key] = existing ?? record;
+      if (existing && retained && !existing.retained) records[key] = record;
+      next.tempRecords = records;
+      break;
+    }
+    case "temp.record_cleared": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may clear temp records.");
+      const path = requiredString(event.payload, "path");
+      const key = createHash("sha256").update(path).digest("hex").slice(0, 24);
+      if (next.tempRecords?.[key]) {
+        const records = { ...next.tempRecords };
+        delete records[key];
+        next.tempRecords = records;
+      }
+      break;
+    }
+    case "cleanup.checked": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record cleanup searches.");
+      const trigger = requiredString(event.payload, "trigger");
+      if (trigger !== "task_attempt" && trigger !== "verification") {
+        throw new Error("Cleanup search trigger is invalid.");
+      }
+      if (!Array.isArray(event.payload.findings)) {
+        throw new Error("Cleanup search requires findings.");
+      }
+      for (const finding of event.payload.findings as Record<string, unknown>[]) {
+        const ownership = finding.ownership;
+        const action = finding.action;
+        if (ownership !== "proven" && ownership !== "unproven") throw new Error("Cleanup ownership must be proven or unproven.");
+        if (ownership === "unproven" && action !== "retained") throw new Error("Unproven cleanup ownership must retain the resource.");
+        if (action !== "cleaned" && action !== "retained") throw new Error("Cleanup action is invalid.");
+      }
       break;
     }
     case "repair.cycle_limit_reached": {
@@ -3726,7 +4137,8 @@ export function reduceSchedulerEvent(
       }
       const used = requiredNumber(event.payload, "used");
       const limit = requiredNumber(event.payload, "limit");
-      if (used !== cycles.used || limit !== cycles.limit || used < limit) {
+      const effective = effectiveRepairPlanLimit(current) ?? cycles.limit;
+      if (used !== cycles.used || limit !== effective || used < effective) {
         throw new Error("Repair-cycle limit event does not match the kernel repair-cycle count.");
       }
       next.repairCycles = {
@@ -3734,7 +4146,12 @@ export function reduceSchedulerEvent(
         pause: { source, targetRevision: requiredString(event.payload, "targetRevision"), used, limit },
       };
       next.status = "paused";
-      next.pauseReason = { reason: "repair_cycle_limit" };
+      next.pauseReason = {
+        reason: "repair_cycle_limit",
+        ...(current.planningPolicyVersion === 1
+          ? { detail: `Run-level repair-plan budget exhausted: used ${used} of ${effective} repair plans${repairPlanLimitScales(current) ? ` (scales as 3 + ${readyPlanTaskCount(current)} ready-plan tasks)` : " (explicit cap)"}; the user must extend the repair-cycle budget.` }
+          : {}),
+      };
       break;
     }
     case "repair.cycle_limit_extended": {
@@ -3755,6 +4172,7 @@ export function reduceSchedulerEvent(
         limit: cycles.limit + (additional as number),
         used: cycles.used,
         extensions: cycles.extensions + 1,
+        ...(cycles.explicitLimit !== undefined ? { explicitLimit: cycles.explicitLimit } : {}),
       };
       next.status = "running";
       delete next.pauseReason;
@@ -6043,6 +6461,8 @@ function deliveryReviewRequested(current: SchedulerProjection, state: DeliverySt
   ) {
     throw new Error("Deliverable review risk input requires the real changed files and line counts.");
   }
+  // T6b repair (EP50): the recorded OA-16 track-record snapshot replays
+  // here so the deterministic recompute matches the request-time tier.
   const risk = assessDeliveryRisk({
     authorModelId,
     changedFiles,
@@ -6050,6 +6470,7 @@ function deliveryReviewRequested(current: SchedulerProjection, state: DeliverySt
     linesRemoved,
     attempts,
     acceptedFailuresUsed: riskInput.acceptedFailuresUsed,
+    ...(riskInput.trackRecord !== undefined ? { trackRecord: readTrackRecordSnapshot(riskInput.trackRecord) } : {}),
   });
   if (risk.tier !== tier || risk.digest !== requiredString(event.payload, "riskDigest")) {
     throw new Error("Deliverable review tier must equal the deterministic T5 risk tier of the recorded change.");
@@ -6567,7 +6988,7 @@ function deliveryBoundaryFailureResolved(
  * T6a: repairs for a failed boundary are ordinary worker tasks bound to the
  * failed task's parent contract, created like verifier repairs (ready plan,
  * one repair cycle, validated graph). T6b adds the repair-approach decision
- * and budget at the beforeRepairDecisionDispatch seam.
+ * and budget at the repair-approach decision tool and issue budget gate.
  */
 function createDeliveryRepairTasks(
   projection: SchedulerProjection,
@@ -8789,8 +9210,32 @@ function cloneRepairCyclesProjection(
     limit: cycles.limit,
     used: cycles.used,
     extensions: cycles.extensions,
+    ...(cycles.explicitLimit !== undefined ? { explicitLimit: cycles.explicitLimit } : {}),
     ...(cycles.pause ? { pause: { ...cycles.pause } } : {}),
   };
+}
+
+function cloneRepairIssuesProjection(issues: Record<string, RepairIssueProjection>): Record<string, RepairIssueProjection> {
+  return Object.fromEntries(Object.entries(issues).map(([issueId, issue]) => [issueId, {
+    ...issue,
+    hypotheses: [...issue.hypotheses],
+    outcomes: [...issue.outcomes],
+    approaches: issue.approaches.map((approach) => ({
+      ...approach,
+      diagnosticSet: [...approach.diagnosticSet],
+      evidenceIds: [...approach.evidenceIds],
+      failureEvidenceIds: [...(approach.failureEvidenceIds ?? [])],
+    })),
+    ...(issue.externalBlocker
+      ? {
+          externalBlocker: {
+            ...issue.externalBlocker,
+            evidence: [...issue.externalBlocker.evidence],
+            attemptedResolutions: [...issue.externalBlocker.attemptedResolutions],
+          },
+        }
+      : {}),
+  }]));
 }
 
 function cloneUserGuidanceItem(guidance: UserGuidanceItem): UserGuidanceItem {
@@ -9131,6 +9576,21 @@ function requiredNumber(payload: Record<string, unknown>, key: string): number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** T6b repair (EP50): the recorded OA-16 track-record snapshot, validated for deterministic recompute. */
+function readTrackRecordSnapshot(value: unknown): { records: Record<string, { tasksReviewed: number; defectsFound: number }>; snapshotId: string } {
+  if (!isRecord(value) || !isRecord(value.records) || typeof value.snapshotId !== "string") {
+    throw new Error("Deliverable review track record requires model records and a snapshot id.");
+  }
+  const records: Record<string, { tasksReviewed: number; defectsFound: number }> = {};
+  for (const [modelId, entry] of Object.entries(value.records)) {
+    if (!isRecord(entry) || !Number.isSafeInteger(entry.tasksReviewed) || !Number.isSafeInteger(entry.defectsFound)) {
+      throw new Error("Deliverable review track record requires integer task and defect counts.");
+    }
+    records[modelId] = { tasksReviewed: entry.tasksReviewed as number, defectsFound: entry.defectsFound as number };
+  }
+  return { records, snapshotId: value.snapshotId };
 }
 
 // ---------------------------------------------------------------------------

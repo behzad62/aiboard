@@ -455,6 +455,7 @@ export function nodeJunitTestCases(xml: string, checkoutPath: string): Array<{ n
 export function nodeJunitOutcome(xml: string, checkoutPath: string, filtered: boolean): {
   status: "passed" | "failed" | "unknown";
   counts?: { selected: number; passed: number; failed: number; skipped: number };
+  failingTestIds?: string[];
   reason?: string;
 } {
   const summary = nodeJunitSummary(xml);
@@ -467,6 +468,7 @@ export function nodeJunitOutcome(xml: string, checkoutPath: string, filtered: bo
   const cases = nodeJunitTestCases(xml, checkoutPath);
   const synthetic = cases.filter((entry) => entry.fileLevel && !entry.failed);
   const realCases = cases.filter((entry) => !entry.fileLevel && !entry.skipped);
+  const failingTestIds = realCases.filter((entry) => entry.failed).map((entry) => entry.name).sort();
   const failed = summary.fail + summary.cancelled;
   const executed = Math.max(0, summary.tests - synthetic.length);
   const passed = Math.max(0, summary.pass - synthetic.length);
@@ -475,6 +477,7 @@ export function nodeJunitOutcome(xml: string, checkoutPath: string, filtered: bo
   return {
     status,
     counts: { selected: executed, passed, failed, skipped: summary.skipped + summary.todo },
+    failingTestIds,
     ...(status === "unknown"
       ? {
           reason: `node --test ran ${executed} real tests and ${passed} passed (${synthetic.length} file-level entries for files without tests and suites without tests do not count${filtered ? "; the script filters tests by name or .only" : ""}); at least one executed test is required.`,
@@ -545,6 +548,7 @@ async function readRunReport(
       path: plan.reportPath,
       artifactHash: artifact.hash,
       counts: outcome.counts,
+      ...(outcome.failingTestIds?.length ? { failingTestIds: [...outcome.failingTestIds] } : {}),
       ...(outcome.reason ? { reason: outcome.reason } : {}),
     };
   }

@@ -35,6 +35,7 @@ import {
   nextAnswerReviewId,
   readyPlanIdentity,
   rebuildSchedulerProjection,
+  effectiveRepairPlanLimit,
   repairCyclesExhausted,
 } from "./scheduler-store.js";
 import type { PlanningSourceReader } from "./planning-tools.js";
@@ -49,8 +50,10 @@ import {
 import {
   DELIVERY_ACCEPTANCE_RUNNER_ID,
   beforeFailingCheckRepairCharge,
-  beforeRepairDecisionDispatch,
+  failingCheckRepairChargeDecision,
+  type DeliveryReviewRecord,
   currentSubmissionReview,
+  reviewOutcomeByAuthor,
   deliveryBoundaryAction,
   deliveryBoundaryId,
   evaluatePhaseAcceptance,
@@ -60,6 +63,7 @@ import {
   type DeliveryBoundaryCheck,
 } from "./delivery-acceptance.js";
 import type { NativeDeliverableReviewResult } from "./native-deliverable-review.js";
+import { DEFAULT_ISSUE_REPAIR_CYCLE_LIMIT, deliveryBoundaryRootCause, failingTestIdsByCategory, repairIssueIdentity, repairMemberIssues, withFailingIds } from "./repair-budget-contracts.js";
 import {
   SchedulerAnswerReviewAuthority,
   type AnswerReviewAuthority,
@@ -175,6 +179,46 @@ export interface FinalVerificationCleanupDriver {
       logs?: readonly string[];
     };
   }): Promise<{ diagnosticsPath?: string }>;
+}
+
+/**
+ * T6b (OA-14): re-runs only the failing tests of one check, once, on the
+ * same revision and environment through the audited executor. The factory
+ * wires the production implementation (filtered node --test rerun through
+ * FinalVerificationRuntime); tests may substitute a double at this seam.
+ */
+export interface FlakyRerunInput {
+  runId: string;
+  category: string;
+  failingTestIds: readonly string[];
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+  plan: FinalVerificationPlan;
+  executionProfile: FinalVerificationExecutionProfile;
+  attempt: number;
+  signal?: AbortSignal;
+}
+
+export type FlakyRerunResult =
+  | { status: "rerun"; green: boolean; evidenceIds: readonly string[]; note: string }
+  | { status: "unsupported"; note: string };
+
+export interface FlakyIsolationDriver {
+  rerunFailingTests(input: FlakyRerunInput): Promise<FlakyRerunResult>;
+}
+
+/** T6b (OA-16): records the per-model outcome of every reviewed accepted task. */
+export interface ReviewOutcomeRecorder {
+  projectId: string;
+  record(input: {
+    readonly runId: string;
+    readonly modelId: string;
+    readonly taskId: string;
+    readonly accepted: boolean;
+    readonly defectFound: boolean;
+    readonly recordedAt: string;
+  }): void;
 }
 
 export interface IndependentVerifierRequest {
@@ -297,6 +341,21 @@ export interface BuildRuntimeOptions {
   independentVerifier?: IndependentVerifierDriver;
   planCritic?: PlanCriticDriver;
   repairPlanLimit?: number;
+  /**
+   * T6b: stable project identity for issue-level repair budgets. Falls back
+   * to the run id when absent (issues stay per-run).
+   */
+  projectId?: string;
+  /**
+   * T6b: explicit project policy override for the issue-level repair budget.
+   * Defaults to DEFAULT_ISSUE_REPAIR_CYCLE_LIMIT, independent from the
+   * run-level DEFAULT_REPAIR_PLAN_LIMIT (G-5).
+   */
+  issueRepairLimit?: number;
+  repairApproachAvailable?: boolean;
+  flakyIsolation?: FlakyIsolationDriver;
+  cleanupAfterAttempt?: (context: { readonly taskAttempt: "task_attempt" | "verification"; readonly sessionIds?: readonly string[] }) => Promise<import("./cleanup-ownership.js").CleanupSearchFinding>;
+  reviewOutcomeRecorder?: ReviewOutcomeRecorder;
   /** Test probe applied to lifecycle tools immediately before the allow-list assert. */
   architectLifecycleProbe?: (
     tools: readonly NativeTool<unknown>[],
@@ -397,6 +456,18 @@ export class BuildRuntime {
   private readonly independentVerifier?: IndependentVerifierDriver;
   private readonly planCritic?: PlanCriticDriver;
   private readonly repairPlanLimit: number;
+  /**
+   * Owner decision 2026-09-26 ("Scale with tasks"): true when the operator
+   * set an explicit run-level repair-plan cap, which wins over the scaled
+   * 3 + ready-plan-tasks default. Recorded durably on repair.policy_configured.
+   */
+  private readonly explicitRepairPlanLimit: boolean;
+  private readonly projectId?: string;
+  private readonly issueRepairLimit: number;
+  private readonly repairApproachAvailable: boolean;
+  private readonly flakyIsolation: BuildRuntimeOptions["flakyIsolation"];
+  private readonly cleanupAfterAttempt: BuildRuntimeOptions["cleanupAfterAttempt"];
+  private readonly reviewOutcomeRecorder: BuildRuntimeOptions["reviewOutcomeRecorder"];
   private readonly architectLifecycleProbe?: BuildRuntimeOptions["architectLifecycleProbe"];
   private readonly planningSourceReader?: PlanningSourceReader;
   private readonly coverageReview?: CoverageReviewDriver;
@@ -438,6 +509,13 @@ export class BuildRuntime {
     this.independentVerifier = options.independentVerifier;
     this.planCritic = options.planCritic;
     this.repairPlanLimit = options.repairPlanLimit ?? DEFAULT_REPAIR_PLAN_LIMIT;
+    this.explicitRepairPlanLimit = options.repairPlanLimit !== undefined;
+    this.projectId = options.projectId;
+    this.issueRepairLimit = options.issueRepairLimit ?? DEFAULT_ISSUE_REPAIR_CYCLE_LIMIT;
+    this.repairApproachAvailable = options.repairApproachAvailable ?? true;
+    this.flakyIsolation = options.flakyIsolation;
+    this.cleanupAfterAttempt = options.cleanupAfterAttempt;
+    this.reviewOutcomeRecorder = options.reviewOutcomeRecorder;
     this.architectLifecycleProbe = options.architectLifecycleProbe;
     this.planningSourceReader = options.planningSourceReader;
     this.coverageReview = options.coverageReview;
@@ -1100,6 +1178,10 @@ export class BuildRuntime {
         }, projection);
         return this.afterArchitect("rejected_task_resolution_required");
       }
+      // T6b repair (R2-B5): a blocking review that dispatches a fix round
+      // charges the review issue budget before the retry is planned.
+      const reviewFixPause = await this.chargeReviewFixRound(rejected);
+      if (reviewFixPause) return reviewFixPause;
       this.store.append({
         runId: this.runId,
         type: "task.transitioned",
@@ -1170,6 +1252,9 @@ export class BuildRuntime {
     const sequenceBeforeWorkers = projection.lastSequence;
     await this.scheduler.tick();
     await this.scheduler.awaitIdle();
+    if (this.projection().lastSequence > sequenceBeforeWorkers) {
+      await this.recordCleanupSearch("task_attempt", this.workerSessionIdsSince(sequenceBeforeWorkers));
+    }
     const afterWorkers = this.projection();
     if (afterWorkers.status === "paused") {
       return {
@@ -1238,6 +1323,8 @@ export class BuildRuntime {
           generation.targetRevision,
         );
         if (pausedForRepair) return pausedForRepair;
+        const reviewDispatch = await this.prepareRepairDispatch(decision.failedCategories, { taskId: generation.taskId, evidenceIds: [...new Set(decision.categoryReviews.flatMap((review) => review.verdict === "repair_required" ? review.evidenceIds : []))], failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
+        if (reviewDispatch.paused) return reviewDispatch.paused;
         await this.runArchitect({
           type: "final_verification_repair_plan_required",
           finalVerificationTaskId: generation.taskId,
@@ -1248,12 +1335,17 @@ export class BuildRuntime {
             submissionId: generation.submission.submissionId,
             reviewId: generation.review.reviewId,
           },
-          failedCategories: [...beforeRepairDecisionDispatch(decision.failedCategories)],
+          failedCategories: reviewDispatch.categories,
           evidenceIds: [...new Set(decision.categoryReviews.flatMap(
             (review) => review.verdict === "repair_required" ? review.evidenceIds : [],
           ))],
         }, this.projection());
         const repaired = this.projection().finalVerification?.current;
+        // T6b repair (B3): a pause recorded during the turn returns paused,
+        // never throws.
+        if (this.projection().status === "paused") {
+          return { status: "paused", action: this.projection().pauseReason?.reason ?? "repair_issue_paused" };
+        }
         if (
           repaired?.generationId !== generation.generationId ||
           !repaired.repairTaskIds?.length
@@ -1316,6 +1408,9 @@ export class BuildRuntime {
           idempotencyKey: `${generation.generationId}:failure:${failure.failureId}`,
           payload: failure,
         });
+        // T6b repair (R3-B2): a dispatched repair whose validation just
+        // failed again has its consumed approach durably failed here.
+        this.markDispatchedApproachesFailed(failure, generation.completedChecks);
         return { status: "progressed", action: "final_verification_failure_reported" };
       }
       if (generation.cleanup?.status !== "succeeded") {
@@ -1328,6 +1423,8 @@ export class BuildRuntime {
         generation.targetRevision,
       );
       if (pausedForRepair) return pausedForRepair;
+      const mechanicalDispatch = await this.prepareRepairDispatch(generation.failure.failedCategories, { taskId: generation.taskId, evidenceIds: [...generation.failure.evidenceIds], failingIdsByCategory: failingTestIdsByCategory(generation.completedChecks ?? []) });
+      if (mechanicalDispatch.paused) return mechanicalDispatch.paused;
       await this.runArchitect({
         type: "final_verification_repair_plan_required",
         finalVerificationTaskId: generation.taskId,
@@ -1339,10 +1436,15 @@ export class BuildRuntime {
           issueIds: [...generation.failure.issueIds],
           factIds: [...generation.failure.factIds],
         },
-        failedCategories: [...generation.failure.failedCategories],
+        failedCategories: mechanicalDispatch.categories,
         evidenceIds: [...generation.failure.evidenceIds],
       }, this.projection());
       const repaired = this.projection().finalVerification?.current;
+      // T6b repair (B3): a pause recorded during the turn returns paused,
+      // never throws.
+      if (this.projection().status === "paused") {
+        return { status: "paused", action: this.projection().pauseReason?.reason ?? "repair_issue_paused" };
+      }
       if (repaired?.generationId !== generation.generationId || !repaired.repairTaskIds?.length) {
         throw new Error(
           "Architect returned from final_verification_repair_plan_required without a typed action.",
@@ -1419,7 +1521,15 @@ export class BuildRuntime {
       const status = this.projection().status === "paused" ? "paused" : "progressed";
       return {
         status,
-        action: beforeFailingCheckRepairCharge(result.check).green
+        action: (await this.applyFailingCheckRepairCharge(result.check, {
+          generationId: generation.generationId,
+          taskId: generation.taskId,
+          targetRevision: generation.targetRevision,
+          plan: generation.plan,
+          executionProfile: generation.executionProfile,
+          attempt: 1,
+          signal,
+        })).green
           ? "final_verification_check_completed"
           : "final_verification_check_non_green",
       };
@@ -1543,6 +1653,18 @@ export class BuildRuntime {
           rationale: criterion.rationale,
           evidenceIds: [...criterion.evidenceIds],
         }));
+      // T6b repair (R4-B1): this unsatisfied verdict is the next validation
+      // of any dispatched verifier repair — durably fail consumed
+      // approaches here so the next dispatch needs a new decision.
+      this.markDispatchedApproachesFailedForMembers(
+        this.repairMembers(unsatisfiedCriteria.map((criterion) => `verifier:${criterion.taskId}:${criterion.criterionId}`)),
+        currentReview.reviewId,
+      );
+      const verifierDispatch = await this.prepareRepairDispatch(
+        unsatisfiedCriteria.map((criterion) => `verifier:${criterion.taskId}:${criterion.criterionId}`),
+        { taskId: finalVerification.taskId, evidenceIds: unsatisfiedCriteria.flatMap((criterion) => criterion.evidenceIds) },
+      );
+      if (verifierDispatch.paused) return verifierDispatch.paused;
       await this.runArchitect({
         type: "verifier_repair_plan_required",
         reviewId: currentReview.reviewId,
@@ -1550,6 +1672,11 @@ export class BuildRuntime {
         unsatisfiedCriteria,
       }, projection);
       const repaired = this.projection().verifier?.current;
+      // T6b repair (B3): a pause recorded during the turn returns paused,
+      // never throws.
+      if (this.projection().status === "paused") {
+        return { status: "paused", action: this.projection().pauseReason?.reason ?? "repair_issue_paused" };
+      }
       if (
         repaired?.reviewId !== currentReview.reviewId ||
         !repaired.repairTaskIds?.length
@@ -1574,6 +1701,9 @@ export class BuildRuntime {
         : {}),
       signal: this.activeLifecycleSignal(),
     });
+    // T6b repair (R2-B6): the OA-17 cleanup search also runs after this
+    // checkout-backed step (no-op for legacy runs).
+    await this.recordCleanupSearch("verification");
     const afterVerification = this.projection();
     if (
       afterVerification.integrationRevision !== targetRevision ||
@@ -2042,6 +2172,10 @@ export class BuildRuntime {
         reason.type === "final_verification_repair_plan_required",
       verifierRepairPlanAvailable:
         reason.type === "verifier_repair_plan_required",
+      // T6b repair: the approach/blocker tools are non-terminal, so every
+      // non-answer turn carries them; dispatch still needs a live decision.
+      repairApproachAvailable: this.repairApproachAvailable,
+      repairProjectId: this.projectId ?? this.runId,
       deliveryBoundaryResolutionAvailable:
         reason.type === "delivery_boundary_failed",
       planCritiqueResolutionAvailable:
@@ -2224,8 +2358,12 @@ export class BuildRuntime {
         ...(providerRetryDeadlineMs !== undefined ? { providerRetryDeadlineMs } : {}),
       });
     } catch (error) {
+      await this.recordCleanupSearch("verification");
       return this.pauseForDeliveryGate(task.id, "delivery_review_failed", error instanceof Error ? error.message : String(error));
     }
+    // T6b repair (R2-B6): the OA-17 cleanup search also runs after this
+    // checkout-backed step (no-op for legacy runs).
+    await this.recordCleanupSearch("verification");
     if (result.status === "reviewed") {
       return { status: "progressed", action: "deliverable_review_recorded" };
     }
@@ -2280,6 +2418,7 @@ export class BuildRuntime {
       if (action.type === "wait") continue;
       if (action.type === "accept") {
         const review = projection.delivery!.reviews[task.id]!;
+        this.recordReviewOutcome(task.id, review);
         this.store.append({
           runId: this.runId,
           type: "task.acceptance_recorded",
@@ -2291,13 +2430,35 @@ export class BuildRuntime {
         return { status: "progressed", action: "task_acceptance_recorded" };
       }
       if (action.type === "architect") {
+        // T6b repair (R2-B2): open the member delivery-boundary issues
+        // before the Architect turn, so resolve_delivery_boundary_failure
+        // works through the tools. Exhaustion pauses instead.
+        // T6b repair (R3-B1): the member key is per task and per failing
+        // check (plus failing test ids when known) via the shared helper,
+        // so unrelated tasks never share one budget.
+        const failedBoundaryChecks = (action.boundary.checks ?? []).filter((check) => check.outcome !== "passed");
+        const boundaryRootCauses = failedBoundaryChecks.length > 0
+          ? failedBoundaryChecks.map((check) => deliveryBoundaryRootCause({ taskId: task.id, checkId: check.checkId, failingIds: check.report?.failingTestIds }))
+          : [deliveryBoundaryRootCause({ taskId: task.id, checkId: action.boundary.boundaryId })];
+        // T6b repair (R4-B1): this failed boundary is the next validation
+        // of any dispatched boundary repair — durably fail consumed
+        // approaches here so the next dispatch needs a new decision.
+        this.markDispatchedApproachesFailedForMembers(
+          this.repairMembers(boundaryRootCauses),
+          `boundary:${action.boundary.boundaryId}`,
+        );
+        const boundaryDispatch = await this.prepareRepairDispatch(
+          boundaryRootCauses,
+          { taskId: task.id, evidenceIds: failedBoundaryChecks.flatMap((check) => check.evidenceIds ?? []) },
+        );
+        if (boundaryDispatch.paused) return boundaryDispatch.paused;
         await this.runArchitect({
           type: "delivery_boundary_failed",
           taskId: task.id,
           boundaryId: action.boundary.boundaryId,
           integrationRevision,
           resolutionGeneration: action.resolutionGeneration,
-        }, projection);
+        }, this.projection());
         return this.afterArchitect("delivery_boundary_failed");
       }
       if (!this.deliveryBoundary) {
@@ -2326,6 +2487,7 @@ export class BuildRuntime {
           signal: this.activeLifecycleSignal(),
         });
       } catch (error) {
+        await this.recordCleanupSearch("verification");
         return this.pauseForDeliveryGate(task.id, "delivery_boundary_unavailable", error instanceof Error ? error.message : String(error));
       }
       this.store.append({
@@ -2347,6 +2509,9 @@ export class BuildRuntime {
           passed: outcome.checks.every((check) => check.outcome === "passed"),
         },
       });
+      // T6b repair (R2-B6): the OA-17 cleanup search also runs after this
+      // checkout-backed step (no-op for legacy runs).
+      await this.recordCleanupSearch("verification");
       return { status: "progressed", action: "delivery_boundary_checked" };
     }
     return undefined;
@@ -2490,7 +2655,7 @@ export class BuildRuntime {
       occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
       idempotencyKey: "repair-policy",
-      payload: { repairPlanLimit: this.repairPlanLimit },
+      payload: { repairPlanLimit: this.repairPlanLimit, explicit: this.explicitRepairPlanLimit },
     });
   }
 
@@ -2939,9 +3104,447 @@ export class BuildRuntime {
       occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
       idempotencyKey: `repair-cycle-limit:${targetRevision}:${cycles.used}:${cycles.extensions}`,
-      payload: { source, targetRevision, used: cycles.used, limit: cycles.limit },
+      payload: { source, targetRevision, used: cycles.used, limit: effectiveRepairPlanLimit(projection) ?? cycles.limit },
     });
     return { status: "paused", action: "repair_cycle_limit_reached" };
+  }
+
+  /** T6b repair (B5/R2-B5): one member issue per category, shared by dispatch and charge; failing ids enrich the identity. */
+  private repairMembers(categories: readonly string[], failingIdsByCategory?: ReadonlyMap<string, readonly string[]>): { issueId: string; rootCause: string }[] {
+    return repairMemberIssues(this.projectId ?? this.runId, categories.map((category) => failingIdsByCategory ? withFailingIds(category, failingIdsByCategory) : category));
+
+  }
+
+  /**
+   * T6b repair (B3): an exhausted issue, a recorded external blocker, or
+   * an exhausted task/run cap pauses the run with a durable owner-visible
+   * reason instead of throwing, so step() never rejects on a repair
+   * refusal and the run never loops. The owner resumes with
+   * repair.issue_budget_extended (authorized amendment) or
+   * repair.external_blocker_cleared; the resumed run gives the Architect
+   * a turn to record a new approach, re-scope, or declare a blocker.
+   * T6b repair (R2-B1): the pause idempotency key carries the durable
+   * generation (used/limit plus sequence), so a pause after an owner
+   * extension is a new occurrence and a generic resume re-pauses durably.
+   */
+  private pauseOnRepairIssue(issueId: string, cause: "budget_exhausted" | "external_blocker" | "approach_failed", detail: string): BuildStepResult {
+    const reason = `repair_issue_paused:${issueId}`;
+    const projection = this.projection();
+    if (projection.status === "paused" && projection.pauseReason?.reason === reason) {
+      return { status: "paused", action: reason };
+    }
+    const issue = projection.repairIssues?.[issueId];
+    const generation = issue ? `${issue.used}/${issue.limit}` : "unknown";
+    this.store.append({
+      runId: this.runId,
+      type: "repair.issue_paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `repair-issue-paused:${issueId}:${cause}:${generation}:${projection.lastSequence}`,
+      payload: { issueId, cause, detail },
+    });
+    const after = this.projection();
+    if (after.status !== "paused") throw new Error(`Repair-issue pause for ${issueId} did not pause the run.`);
+    return { status: "paused", action: "repair_issue_paused" };
+  }
+
+  private async ensureRepairIssue(issueId: string, rootCause: string): Promise<void> {
+    if (this.projection().repairIssues?.[issueId]) return;
+    this.store.append({
+      runId: this.runId,
+      type: "repair.issue_recorded",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: DELIVERY_ACCEPTANCE_RUNNER_ID },
+      idempotencyKey: `repair-issue:${issueId}`,
+      payload: { issueId, rootCause, limit: this.issueRepairLimit },
+    });
+  }
+
+  /**
+   * T6b repair (B3/B4/B5): the gate before every repair dispatch. Opens
+   * one durable issue per member root cause (never a joined category set;
+   * dispatch and charge share the key) and checks every member allowance.
+   * The first failure opens the issue; no cycle is charged here. An
+   * exhausted issue, a recorded external blocker, or an exhausted
+   * task/run cap pauses with a durable owner-visible reason instead of
+   * throwing. The kernel never synthesizes an approach decision: the
+   * Architect records one through its non-terminal tool on the repair
+   * turn, and the repair planning tools require it before dispatching.
+   * Legacy runs bypass the gate unchanged.
+   */
+  private async prepareRepairDispatch(
+    categories: readonly string[],
+    scope: { taskId: string; evidenceIds: readonly string[]; failingIdsByCategory?: ReadonlyMap<string, readonly string[]> },
+  ): Promise<{ categories: string[]; paused?: BuildStepResult }> {
+    if (this.projection().planningPolicyVersion !== 1) return { categories: [...categories] };
+    // The durable issue identity namespaces bare final-verification
+    // categories exactly like the failing-check charge path, so dispatch
+    // reads the issue the checks charged. Already-namespaced verifier
+    // categories pass through unchanged. The returned categories stay in
+    // the caller's namespace: the Architect-facing failedCategories keep
+    // the bare contract the repair tools validate.
+    const members = this.repairMembers(categories, scope.failingIdsByCategory);
+    for (const member of members) {
+      await this.ensureRepairIssue(member.issueId, member.rootCause);
+    }
+    const projection = this.projection();
+    const task = projection.tasks[scope.taskId];
+    const maxTaskAttemptsRemaining = Math.max(0, (task?.attemptLimit ?? this.maxTaskAttempts) - (task?.attempt ?? 0));
+    const maxRepairPlanRemaining = Math.max(0, (effectiveRepairPlanLimit(projection) ?? this.repairPlanLimit) - (projection.repairCycles?.used ?? 0));
+    for (const member of members) {
+      const issue = this.projection().repairIssues?.[member.issueId];
+      if (!issue) throw new Error("Repair dispatch requires its durable issue.");
+      if (issue.externalBlocker) {
+        return {
+          categories: [...categories],
+          paused: this.pauseOnRepairIssue(member.issueId, "external_blocker",
+            `External blocker on ${member.rootCause}: ${issue.externalBlocker.acceptanceCondition} Required owner action: ${issue.externalBlocker.requiredOwnerAction}`),
+        };
+      }
+      if (issue.used >= issue.limit) {
+        return {
+          categories: [...categories],
+          paused: this.pauseOnRepairIssue(member.issueId, "budget_exhausted",
+            `Issue ${member.rootCause} used ${issue.used}/${issue.limit} repair cycles. The owner may extend the budget with additionalCycles via repair.issue_budget_extended.`),
+        };
+      }
+      if (maxTaskAttemptsRemaining <= 0) {
+        return {
+          categories: [...categories],
+          paused: this.pauseOnRepairIssue(member.issueId, "budget_exhausted",
+            `Task ${scope.taskId} has no attempts remaining for ${member.rootCause}; re-scope the plan before dispatching another repair.`),
+        };
+      }
+      if (maxRepairPlanRemaining <= 0) {
+        return {
+          categories: [...categories],
+          paused: this.pauseOnRepairIssue(member.issueId, "budget_exhausted",
+            `Run-level repair-plan budget is exhausted for ${member.rootCause}: used ${projection.repairCycles?.used ?? 0} of ${effectiveRepairPlanLimit(projection) ?? this.repairPlanLimit} repair plans; the owner may raise the run repair-plan limit before dispatching another repair.`),
+        };
+      }
+    }
+    return { categories: [...categories] };
+  }
+
+  /**
+   * T6b (OA-14): the gate before a failing check charges a repair cycle.
+   * Green checks charge nothing. A proven external blocker consumes no
+   * futile charge. Otherwise the single failing-test rerun decides: a
+   * pass-on-rerun records `flaky`, charges nothing, and still blocks
+   * acceptance until the check passes on its own run; any other outcome
+   * charges exactly one issue-level cycle against the check's category
+   * issue, linked to the standing recorded approach when one exists.
+   * Legacy runs bypass the gate unchanged.
+   */
+  /**
+   * T6b repair (R3-B2): when a dispatched repair's next validation fails,
+   * its consumed approach is durably failed (no charge: an observation is
+   * not an attempt). The next dispatch then needs a new recorded decision;
+   * a repeat of the same approach still needs evidence NEW to its sets.
+   * Legacy runs bypass (their flows record no approaches).
+   */
+  private markDispatchedApproachesFailed(
+    failure: ReturnType<typeof deriveFinalVerificationFailure>,
+    completedChecks: Parameters<typeof failingTestIdsByCategory>[0] | undefined,
+  ): void {
+    if (this.projection().planningPolicyVersion !== 1) return;
+    const members = this.repairMembers(failure.failedCategories, failingTestIdsByCategory(completedChecks ?? []));
+    this.markDispatchedApproachesFailedForMembers(members, failure.failureId);
+  }
+
+  /**
+   * T6b repair (R4-B1): when a dispatched repair's next validation fails —
+   * a failed boundary, an unsatisfied verifier verdict, or a failed final
+   * verification — its consumed approach is durably failed (no charge: an
+   * observation is not an attempt). The next dispatch then needs a new
+   * recorded decision. Members with no dispatched live approach are
+   * skipped; repeats stay idempotent on the failure key.
+   */
+  private markDispatchedApproachesFailedForMembers(
+    members: readonly { issueId: string; rootCause: string }[],
+    failureKey: string,
+  ): void {
+    if (this.projection().planningPolicyVersion !== 1) return;
+    for (const member of members) {
+      const issue = this.projection().repairIssues?.[member.issueId];
+      const latest = issue?.approaches.at(-1);
+      if (!issue || !latest || latest.failed || !latest.dispatched) continue;
+      this.store.append({
+        runId: this.runId,
+        type: "repair.approach_failed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `repair-approach-failed:${member.issueId}:${failureKey}`,
+        payload: { issueId: member.issueId, approachId: latest.approachId },
+      });
+    }
+  }
+
+  private async chargeReviewFixRound(rejected: BuildTask): Promise<BuildStepResult | undefined> {
+    if (this.projection().planningPolicyVersion !== 1) return undefined;
+    const members = new Map<string, { evidenceIds: string[]; rationale: string }>();
+    const review = this.projection().reviews[rejected.id];
+    for (const verdict of review?.criterionVerdicts ?? []) {
+      if (verdict.verdict !== "unsatisfied") continue;
+      const key = `delivery-review:${rejected.id}:${verdict.criterionId}`;
+      const entry = members.get(key) ?? { evidenceIds: [], rationale: "" };
+      entry.evidenceIds.push(...verdict.evidenceIds);
+      if (!entry.rationale) entry.rationale = verdict.rationale;
+      members.set(key, entry);
+    }
+    const deliveryReview = this.projection().delivery?.reviews[rejected.id];
+    for (const finding of openBlockingFindings(deliveryReview)) {
+      const key = `delivery-review:${rejected.id}:${finding.category}`;
+      const entry = members.get(key) ?? { evidenceIds: [], rationale: "" };
+      if (!entry.rationale) entry.rationale = finding.claim;
+      members.set(key, entry);
+    }
+    if (members.size === 0) return undefined;
+    const links = (rejected.criterionEvidenceLinks ?? []).map((link) => link.evidenceId);
+    for (const rootCause of members.keys()) {
+      const issueId = repairIssueIdentity({ projectId: this.projectId ?? this.runId, rootCause });
+      await this.ensureRepairIssue(issueId, rootCause);
+    }
+    for (const [rootCause, member] of members) {
+      const issueId = repairIssueIdentity({ projectId: this.projectId ?? this.runId, rootCause });
+      const issue = this.projection().repairIssues?.[issueId];
+      if (!issue) throw new Error("Review fix round requires its durable issue.");
+      if (issue.used >= issue.limit) {
+        return this.pauseOnRepairIssue(issueId, "budget_exhausted",
+          `Issue ${rootCause} used ${issue.used}/${issue.limit} repair cycles. The owner may extend the budget with additionalCycles via repair.issue_budget_extended.`);
+      }
+      const evidenceIds = [...new Set([...member.evidenceIds, ...links])];
+      // T6b repair (R3 N-1): a review fix round with no evidence still
+      // charges — against the durable delivery review record — never
+      // silently uncharged. Without any review record either, the run
+      // pauses instead of charging blind.
+      const chargeEvidence = evidenceIds.length > 0 ? evidenceIds : deliveryReview?.reviewId ? [deliveryReview.reviewId] : [];
+      if (chargeEvidence.length === 0) {
+        return this.pauseOnRepairIssue(issueId, "approach_failed",
+          `Review fix round for ${rootCause} cites no evidence and has no durable review record; the owner may re-scope before another fix round.`);
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "repair.cycle_recorded",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `repair-cycle:delivery-review:${rejected.id}:${rejected.attempt}:${issueId}`,
+        payload: {
+          issueId,
+          hypothesis: `rework ${rootCause}: ${member.rationale}`.slice(0, 1000),
+          outcome: "rework_dispatched",
+          evidenceIds: chargeEvidence,
+        },
+      });
+    }
+    return undefined;
+  }
+
+  private async applyFailingCheckRepairCharge(
+    check: FinalVerificationCheckResult,
+    rerun: {
+      generationId: string;
+      taskId: string;
+      targetRevision: string;
+      plan: FinalVerificationPlan;
+      executionProfile: FinalVerificationExecutionProfile;
+      attempt: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<{ green: boolean }> {
+    if (this.projection().planningPolicyVersion !== 1) return { green: check.green };
+    // T6b repair (B6): both searches run after every verification, green or red.
+    if (check.green) {
+      await this.recordCleanupSearch("verification");
+      return { green: true };
+    }
+    const failingTestIds = [...new Set(check.facts.flatMap((fact) => fact.kind === "command" ? fact.report?.failingTestIds ?? [] : []))];
+    const [member] = this.repairMembers([`final-verification:${check.category}`], new Map([[check.category, failingTestIds]]));
+    if (!member) throw new Error("Failing check requires a repair issue.");
+    const { issueId, rootCause } = member;
+    await this.ensureRepairIssue(issueId, rootCause);
+    const issue = this.projection().repairIssues?.[issueId];
+    if (!issue) throw new Error("Failing check requires its durable repair issue.");
+    if (issue.externalBlocker) {
+      await this.recordCleanupSearch("verification");
+      return { green: false };
+    }
+    const flakyKey = `${rerun.generationId}:${check.category}`;
+    let flaky = this.projection().repairFlaky?.[flakyKey];
+    // T6b repair (B2): the rerun runs once per failing check through the
+    // audited path with the real failing test ids. When no rerun can be
+    // performed (no driver, or an unsupported command shape), record
+    // not_performed with the reason; the cycle is charged on dispatch.
+    // T6b repair (N7): the rerun selector needs the first run failing
+    // test ids AND the failing check durable evidence.
+    if (!flaky && failingTestIds.length > 0) {
+      if (this.flakyIsolation && check.evidenceIds.length > 0) {
+      const outcome = await this.flakyIsolation.rerunFailingTests({
+        runId: this.runId,
+        category: check.category,
+        failingTestIds,
+        generationId: rerun.generationId,
+        taskId: rerun.taskId,
+        targetRevision: rerun.targetRevision,
+        plan: rerun.plan,
+        executionProfile: rerun.executionProfile,
+        attempt: rerun.attempt,
+        ...(rerun.signal ? { signal: rerun.signal } : {}),
+      });
+      if (outcome.status === "rerun") {
+        this.store.append({
+          runId: this.runId,
+          type: "repair.flaky_isolated",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `repair-flaky:${rerun.generationId}:${check.category}`,
+          payload: {
+            category: check.category,
+            generationId: rerun.generationId,
+            taskId: rerun.taskId,
+            targetRevision: rerun.targetRevision,
+            failingTestIds: [...failingTestIds],
+            rerunGreen: outcome.green,
+            rerunEvidenceIds: [...outcome.evidenceIds],
+            finding: outcome.green
+              ? `flaky: ${check.category} failed [${failingTestIds.join(", ")}] then passed on a rerun of only those tests; still requires a clean run.`
+              : `consistent failure: ${check.category} failed [${failingTestIds.join(", ")}] and failed again on rerun.`,
+          },
+        });
+        flaky = this.projection().repairFlaky?.[flakyKey];
+      } else {
+        this.store.append({
+          runId: this.runId,
+          type: "repair.flaky_isolated",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `repair-flaky:${rerun.generationId}:${check.category}`,
+          payload: {
+            category: check.category,
+            generationId: rerun.generationId,
+            taskId: rerun.taskId,
+            targetRevision: rerun.targetRevision,
+            failingTestIds: [...failingTestIds],
+            rerunGreen: false,
+            rerunEvidenceIds: [],
+            finding: `not_performed: ${outcome.note}`,
+          },
+        });
+        flaky = this.projection().repairFlaky?.[flakyKey];
+      }
+      } else {
+        this.store.append({
+          runId: this.runId,
+          type: "repair.flaky_isolated",
+          occurredAt: this.clock(),
+          actor: { role: "runner", id: "build-runtime" },
+          idempotencyKey: `repair-flaky:${rerun.generationId}:${check.category}`,
+          payload: {
+            category: check.category,
+            generationId: rerun.generationId,
+            taskId: rerun.taskId,
+            targetRevision: rerun.targetRevision,
+            failingTestIds: [...failingTestIds],
+            rerunGreen: false,
+            rerunEvidenceIds: [],
+            finding: `not_performed: ${this.flakyIsolation ? "the failing check has no durable evidence to select the rerun" : "no flaky-isolation driver is configured for this run"}.`,
+          },
+        });
+        flaky = this.projection().repairFlaky?.[flakyKey];
+      }
+    }
+    // T6b repair (B2): a failing tests check with no failing test ids
+    // (an npm-managed command or a missing report) cannot be narrowed, so
+    // the pump records not_performed with the reason instead of silently
+    // skipping the rerun decision.
+    if (!flaky && check.category === "tests" && failingTestIds.length === 0) {
+      this.store.append({
+        runId: this.runId,
+        type: "repair.flaky_isolated",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `repair-flaky:${rerun.generationId}:${check.category}`,
+        payload: {
+          category: check.category,
+          generationId: rerun.generationId,
+          taskId: rerun.taskId,
+          targetRevision: rerun.targetRevision,
+          failingTestIds: [],
+          rerunGreen: false,
+          rerunEvidenceIds: [],
+          finding: `not_performed: the failing tests check produced no failing test ids to narrow (npm-managed command or missing report)${this.flakyIsolation ? "" : "; no flaky-isolation driver is configured for this run"}.`,
+        },
+      });
+      flaky = this.projection().repairFlaky?.[flakyKey];
+    }
+    const isolation = { outcome: (flaky?.rerunGreen === true ? "flaky" : "consistent_failure") as "flaky" | "consistent_failure", failingTestIds };
+    beforeFailingCheckRepairCharge(check, { flakyIsolation: isolation });
+    await this.recordCleanupSearch("verification");
+    // T6b repair (B5): a failing check opens the issue (above) but never
+    // charges it here. The cycle is charged when a correction is dispatched
+    // through a repair planning tool; a flaky pass-on-rerun still blocks
+    // acceptance until the check passes on its own run.
+    void failingCheckRepairChargeDecision({ flakyIsolation: isolation });
+    return { green: false };
+  }
+
+  /**
+   * T6b repair (N-6): sessions of the worker attempts that moved since the
+   * given sequence, so attempt cleanup stops only those processes. A task
+   * touched by the window contributes every session assigned to it: an
+   * older attempt of the same task is done, so its leftovers are fair
+   * game, while concurrent untouched attempts stay out of scope.
+   */
+  private workerSessionIdsSince(sequence: number): string[] {
+    const tasks = new Set<string>();
+    const sessions = new Set<string>();
+    for (const event of this.store.readRun(this.runId, sequence)) {
+      const payload = event.payload as { readonly taskId?: unknown; readonly sessionId?: unknown };
+      if (event.type === "worker.runtime_assigned" && typeof payload.sessionId === "string") {
+        sessions.add(payload.sessionId);
+      }
+      if (typeof payload.taskId === "string") tasks.add(payload.taskId);
+    }
+    for (const assignment of Object.values(this.projection().runtime.workerAssignments)) {
+      if (tasks.has(assignment.taskId)) sessions.add(assignment.sessionId);
+    }
+    return [...sessions];
+  }
+
+
+  private async recordCleanupSearch(trigger: "task_attempt" | "verification", sessionIds?: readonly string[]): Promise<void> {
+    // T6b (OA-17) binds new-policy runs; legacy runs keep P6.5 behavior.
+    if (this.projection().planningPolicyVersion !== 1) return;
+    const sequence = this.projection().lastSequence;
+    const findings = await this.cleanupAfterAttempt?.({ taskAttempt: trigger, ...(sessionIds ? { sessionIds: [...sessionIds] } : {}) }) ?? { processes: [], tempPaths: [] };
+    this.store.append({
+      runId: this.runId,
+      type: "cleanup.checked",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `cleanup:${trigger}:${sequence}`,
+      payload: { trigger, findings: [...findings.processes.map((process) => ({ ...process, kind: "process" })), ...findings.tempPaths.map((path) => ({ ...path, kind: "temp_path" }))] },
+    });
+  }
+
+  /**
+   * T6b (OA-16/B7): the per-model outcome for every reviewed accepted
+   * task. Runs before the acceptance event so an unrecorded outcome cannot
+   * be accepted. A no-op without a wired recorder. Every review round of
+   * the task counts, per author identity of its reviewed revision: a task
+   * whose first review found a defect keeps that defect on its original
+   * author even when a different model wrote the accepted fix. The store
+   * keeps defect_found sticky per (run, model, task), so earlier rounds are
+   * never erased by the accepting round.
+   */
+  private recordReviewOutcome(taskId: string, review: DeliveryReviewRecord): void {
+    const recorder = this.reviewOutcomeRecorder;
+    if (!recorder) return;
+    const history = this.projection().delivery?.reviewHistory[taskId] ?? [];
+    const recordedAt = this.clock();
+    for (const outcome of reviewOutcomeByAuthor([...history, review])) {
+      recorder.record({ runId: this.runId, modelId: outcome.modelId, taskId, accepted: true, defectFound: outcome.defectFound, recordedAt });
+    }
   }
 }
 
@@ -3051,7 +3654,9 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "read_planning_source_section",
   "reconcile_plan",
   "record_answer",
+  "record_external_blocker",
   "record_planning_checkpoint",
+  "record_repair_approach_decision",
   "record_triage",
   "request_coverage_review",
   "request_integration",
@@ -3132,6 +3737,7 @@ const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store"
   {
     runPolicy: "finish",
     finalVerificationRepairPlanAvailable: true,
+    repairApproachAvailable: true,
     architectAction: {
       reason: {
         type: "final_verification_repair_plan_required",
@@ -3148,6 +3754,7 @@ const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store"
   {
     runPolicy: "finish",
     verifierRepairPlanAvailable: true,
+    repairApproachAvailable: true,
     architectAction: {
       reason: {
         type: "verifier_repair_plan_required",
@@ -3162,6 +3769,7 @@ const ARCHITECT_LIFECYCLE_UNIVERSE: readonly Omit<ArchitectToolsOptions, "store"
     // T6a: the failed integrated-boundary turn.
     runPolicy: "finish",
     deliveryBoundaryResolutionAvailable: true,
+    repairApproachAvailable: true,
     architectAction: {
       reason: { type: "delivery_boundary_failed", taskId: "task", boundaryId: "boundary", integrationRevision: "rev", resolutionGeneration: 1 },
       sequence: 0,

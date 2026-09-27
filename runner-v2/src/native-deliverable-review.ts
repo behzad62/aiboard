@@ -10,7 +10,9 @@ import type {
   ToolResult,
 } from "./agent-contracts.js";
 import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
-import { RUNNER_KERNEL_INVARIANTS } from "./agent-prompts.js";
+import { RUNNER_KERNEL_INVARIANTS, defectClassBrief } from "./agent-prompts.js";
+import type { ReviewDefectRecorder } from "./defect-history.js";
+import { modelTrackRecordSnapshot } from "./defect-history.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { BudgetLedger, ModelCostBasisSnapshot } from "./budget-ledger.js";
 import { BudgetedAgentModel, type ModelCostEstimator } from "./budgeted-model.js";
@@ -31,6 +33,7 @@ import {
   deliveryReviewId,
   diffLineCounts,
   latestCompletedReview,
+  normalizeDefectClassLabel,
   taskAcceptedFailuresUsed,
   type DeliveryAffectedTestsRecord,
   type DeliveryClaim,
@@ -160,6 +163,10 @@ export interface NativeDeliverableReviewRuntimeOptions {
   outputTokenReserve?: number;
   contextManifests?: ContextManifestStore;
   recordContextPackText?: boolean;
+  defectClasses?: readonly string[];
+  /** T6b repair (N-5): fresh top defect-class labels per review; wins over defectClasses. */
+  defectClassesFor?: () => readonly string[];
+  defectRecorder?: ReviewDefectRecorder;
   contextLimits?: ContextLimits;
   maxTurns?: number;
   providerRetryRuntime?: RunnerProviderRetryRuntime;
@@ -273,6 +280,12 @@ export class NativeDeliverableReviewRuntime {
       architectRuntimeId,
       architectModelIdentity: canonicalModelIdentity(architect.modelId),
     });
+    // T6b repair (EP50): the OA-16 track-record snapshot feeds the T5
+    // change-risk author tier; without outcomes the recorded default tier
+    // applies exactly as before.
+    const trackRecord = this.options.defectRecorder?.modelOutcomes
+      ? modelTrackRecordSnapshot(this.options.defectRecorder.modelOutcomes(this.options.defectRecorder.projectId, request.runId))
+      : undefined;
     const riskInput = {
       authorModelId: authorIdentity,
       changedFiles: [...inputs.changedPaths],
@@ -283,6 +296,7 @@ export class NativeDeliverableReviewRuntime {
         ...(projection.reviewHistory?.[task.id] ?? []),
         ...(projection.reviews[task.id] ? [projection.reviews[task.id]!] : []),
       ]),
+      ...(trackRecord ? { trackRecord } : {}),
     };
     const risk = assessDeliveryRisk(riskInput);
     const authors = Object.keys(this.projection(request.runId).delivery?.authorModelIdentities ?? {});
@@ -315,7 +329,7 @@ export class NativeDeliverableReviewRuntime {
     });
     const tier = risk.tier;
     const depth = deliveryReviewDepthForTier(tier);
-    const context: PassContext = { request, reviewId, inputs, candidate, model, independence, tier };
+    const context: PassContext = { request, reviewId, inputs, candidate, model, independence, tier, defectClasses: this.resolveDefectClasses() };
     let workspace: { path: string } | undefined;
     try {
       if (depth.obligationsFirst) {
@@ -505,6 +519,19 @@ export class NativeDeliverableReviewRuntime {
         `Runner-executed high-tier checks (audited; recorded with your findings):\n${JSON.stringify(context.depthRecords, null, 2)}`,
       ));
     }
+    // T6b (OA-15/EP49): the project's top defect classes ride the regular
+    // pack (never the obligations pass, which derives from the criteria
+    // alone), so the inclusion and its cost are recorded in the pass's
+    // context manifest (EP40) like every other section.
+    if (context.defectClasses?.length) {
+      sections.push({
+        id: "defect-classes",
+        kind: "defects",
+        required: false,
+        priority: 650,
+        content: defectClassBrief(context.defectClasses),
+      });
+    }
     if (pass === "findings") return sections;
     sections.push(section(
       "own-findings",
@@ -610,7 +637,13 @@ export class NativeDeliverableReviewRuntime {
       runtimeId: context.candidate.runtimeId,
       sessionId,
       clock: this.clock,
+      ...(this.options.defectRecorder ? { defects: { ...this.options.defectRecorder } } : {}),
     };
+  }
+
+  private resolveDefectClasses(): readonly string[] | undefined {
+    const classes = this.options.defectClassesFor?.() ?? this.options.defectClasses;
+    return classes?.length ? [...classes] : undefined;
   }
 
   private append(runId: string, type: string, key: string, payload: Record<string, unknown>): void {
@@ -651,6 +684,7 @@ interface PassContext {
   model: AgentModel;
   independence: ReviewerIndependence;
   tier: DeliveryReviewTier;
+  defectClasses?: readonly string[];
   depthRecords?: { affectedTests: DeliveryAffectedTestsRecord; probe: DeliveryProbeRecord };
 }
 
@@ -735,6 +769,7 @@ export interface DeliveryLifecycleToolOptions {
   runtimeId: string;
   sessionId: string;
   clock: () => string;
+  defects?: ReviewDefectRecorder;
 }
 
 function assertDeliveryReviewerContext(context: ToolExecutionContext, options: DeliveryLifecycleToolOptions): void {
@@ -835,6 +870,7 @@ export function createRecordDeliverableFindingsTool(
       name: "record_deliverable_findings",
       description:
         "Record your own findings on the submitted change exactly once, before the worker's report is shown. " +
+        "Each finding carries a short defect class (for example \"guard never exercised\"); the runner remembers the project's top classes. " +
         "The runner attaches your inspection count and any runner-executed checks.",
       inputSchema: {
         type: "object",
@@ -851,8 +887,9 @@ export function createRecordDeliverableFindingsTool(
                 location: { type: "string", minLength: 1 },
                 requirementId: { type: "string", minLength: 1 },
                 evidenceRefs: { type: "array", items: { type: "string", minLength: 1 } },
+                defectClass: { type: "string", minLength: 1 },
               },
-              required: ["id", "category", "severity", "claim", "evidenceRefs"],
+              required: ["id", "category", "severity", "claim", "evidenceRefs", "defectClass"],
               additionalProperties: false,
             },
           },
@@ -866,18 +903,48 @@ export function createRecordDeliverableFindingsTool(
     },
     validate: (input) => {
       const value = objectInput(input);
-      return value && Array.isArray(value.findings)
-        ? { ok: true, value: { findings: value.findings } }
-        : { ok: false, issues: ["findings must be an array"] };
+      if (!value || !Array.isArray(value.findings)) {
+        return { ok: false, issues: ["findings must be an array"] };
+      }
+      for (const finding of value.findings) {
+        const candidate = (typeof finding === "object" && finding !== null ? finding : {}) as Record<string, unknown>;
+        if (typeof candidate.id !== "string" || !candidate.id.trim()) {
+          return { ok: false, issues: ["every finding requires an id"] };
+        }
+        try {
+          normalizeDefectClassLabel(candidate.defectClass, candidate.id);
+        } catch {
+          return { ok: false, issues: [`finding ${candidate.id} requires a short defect class`] };
+        }
+      }
+      return { ok: true, value: { findings: value.findings } };
     },
-    execute: async (input, context) => appendAsReviewer(
-      options,
-      context,
-      "delivery.findings_recorded",
-      "findings",
-      { findings: input.findings, depth: options.depth() },
-      { type: "verifier_expectations_recorded", reviewId: options.reviewId },
-    ),
+    execute: async (input, context) => {
+      // T6b repair (N2): defect classes are recorded only after the
+      // kernel accepts the findings below.
+      const accepted = await appendAsReviewer(
+        options,
+        context,
+        "delivery.findings_recorded",
+        "findings",
+        { findings: input.findings, depth: options.depth() },
+        { type: "verifier_expectations_recorded", reviewId: options.reviewId },
+      );
+      if (!accepted.isError && options.defects) {
+        for (const finding of input.findings) {
+          const candidate = finding as Record<string, unknown>;
+          options.defects.store.recordDefectFinding({
+            projectId: options.defects.projectId,
+            label: normalizeDefectClassLabel(candidate.defectClass, String(candidate.id)),
+            taskId: options.taskId,
+            reviewId: options.reviewId,
+            findingId: String(candidate.id),
+            recordedAt: options.clock(),
+          });
+        }
+      }
+      return accepted;
+    },
   };
 }
 

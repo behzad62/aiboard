@@ -24,6 +24,37 @@ export interface SeedDeliveryReviewOptions {
 
 export const SEED_DIFF_HASH = "d".repeat(64);
 
+/** Seed depth that satisfies the kernel's tier gate (high tier needs the affected-test run and the probe). */
+function seedDepthForTier(tier: string): Record<string, unknown> {
+  if (tier !== "high") return { inspectionToolCalls: 1 };
+  return {
+    inspectionToolCalls: 1,
+    affectedTests: {
+      executedScope: "full_test_script",
+      selectionRung: "seed",
+      changedFiles: ["src/feature.ts"],
+      selectedTests: ["test/feature.test.ts"],
+      fullSuiteCount: 1,
+      command: "seed",
+      args: [],
+      evidenceIds: [],
+      exitCode: null,
+      outcome: "unknown",
+      report: { status: "unknown", runner: "seed" },
+    },
+    probe: {
+      rung: "seed",
+      mutantsGenerated: 0,
+      mutantsExecuted: 0,
+      mutantsCaught: 0,
+      survivors: [],
+      partial: true,
+      evidenceIds: [],
+      notes: ["seeded high-tier depth"],
+    },
+  };
+}
+
 export function seedCompletedDeliveryReview(
   store: SchedulerStore,
   runId: string,
@@ -80,7 +111,7 @@ export function seedCompletedDeliveryReview(
   }
   append("delivery.criteria_and_diff_delivered", `${reviewId}:diff`, runner, { taskId, reviewId, diffArtifactHash: SEED_DIFF_HASH });
   append("delivery.findings_recorded", `${reviewId}:findings`, reviewer, {
-    taskId, reviewId, sessionId: `${reviewId}:findings`, findings: options.findings ?? [], depth: { inspectionToolCalls: 1 },
+    taskId, reviewId, sessionId: `${reviewId}:findings`, findings: options.findings ?? [], depth: seedDepthForTier(risk.tier),
   });
   const claims = [
     ...criteriaIds.map((id) => ({ id: `claim:${id}`, text: `Criterion ${id} is satisfied.`, evidenceIds: [] })),

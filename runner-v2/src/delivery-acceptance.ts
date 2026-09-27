@@ -1,4 +1,4 @@
-import { assessChangeRisk, type ChangeRiskInput, type ChangeRiskLevel } from "./change-risk.js";
+import { assessChangeRisk, type ChangeRiskInput, type ChangeRiskLevel, type ModelTrackRecordSnapshot } from "./change-risk.js";
 import {
   PLANNING_FINDING_CATEGORIES,
   phaseValidationCheckId,
@@ -84,6 +84,8 @@ export interface DeliveryTestReport {
   /** ArtifactStore sha256 of the report bytes that were read. */
   artifactHash?: string;
   counts?: { selected: number; passed: number; failed: number; skipped: number };
+  /** Test identities failed according to this run's machine-readable report. */
+  failingTestIds?: string[];
   reason?: string;
   /**
    * The test runner rejected the report flags (for example a Node version
@@ -331,6 +333,8 @@ export interface DeliveryRiskInput {
   linesRemoved: number;
   attempts: number;
   acceptedFailuresUsed: boolean;
+  /** T6b repair (EP50): OA-16 track-record snapshot for the author tier. */
+  trackRecord?: ModelTrackRecordSnapshot;
 }
 
 export function assessDeliveryRisk(input: DeliveryRiskInput): DeliveryRiskRecord {
@@ -341,6 +345,7 @@ export function assessDeliveryRisk(input: DeliveryRiskInput): DeliveryRiskRecord
     linesRemoved: input.linesRemoved,
     attempts: input.attempts,
     acceptedFailuresUsed: input.acceptedFailuresUsed,
+    ...(input.trackRecord ? { trackRecordSnapshot: input.trackRecord } : {}),
   };
   const assessment = assessChangeRisk(riskInput);
   return {
@@ -360,6 +365,27 @@ export function taskAcceptedFailuresUsed(
 ): boolean {
   return reviews.some((review) =>
     (review.criterionVerdicts ?? []).some((verdict) => (verdict.acceptedFailures ?? []).length > 0));
+}
+
+/**
+ * T6b (OA-16/B7): per-author defect outcomes across every review round of
+ * one task. A task whose first review found a defect keeps that defect on
+ * its original author even when a different model wrote the accepted fix;
+ * the store keeps defect_found sticky per (model, task), so earlier rounds
+ * are never erased by the accepting round.
+ */
+export function reviewOutcomeByAuthor(
+  reviews: readonly Pick<DeliveryReviewRecord, "reviewId" | "authorModelIdentity" | "findings">[],
+): { modelId: string; defectFound: boolean }[] {
+  const seen = new Set<string>();
+  const defectByAuthor = new Map<string, boolean>();
+  for (const entry of reviews) {
+    if (seen.has(entry.reviewId)) continue;
+    seen.add(entry.reviewId);
+    const found = (entry.findings?.length ?? 0) > 0;
+    defectByAuthor.set(entry.authorModelIdentity, (defectByAuthor.get(entry.authorModelIdentity) ?? false) || found);
+  }
+  return [...defectByAuthor].map(([modelId, defectFound]) => ({ modelId, defectFound }));
 }
 
 /** Counts added and removed lines of a unified diff, skipping file headers. */
@@ -404,6 +430,7 @@ export function validateDeliveryFindings(value: unknown): PlanningFinding[] {
     if (seen.has(id)) throw new Error(`Duplicate deliverable finding ${id}.`);
     seen.add(id);
     const category = text(candidate.category, "Deliverable finding category");
+    validateOptionalDefectClass(candidate.defectClass, id);
     if (!(PLANNING_FINDING_CATEGORIES as readonly string[]).includes(category)) {
       throw new Error(`Deliverable finding ${id} category ${category} is invalid.`);
     }
@@ -701,14 +728,60 @@ export function assertContractTaskRevisionAllowed(input: {
 }
 
 /**
- * T6b seams. T6a only marks where T6b adds the repair-approach decision and
- * budget check (before a repair decision is dispatched) and flaky isolation
- * (before a failing check charges a repair). Both are identity functions now.
+ * T6b seams. T6a only marks where T6b adds flaky isolation
+ * (before a failing check charges a repair). It is an identity function now.
  */
-export const T6B_REPAIR_DECISION_HOOK = "repair_dispatch_requires_repair_approach_decision_and_budget_check" as const;
 export const T6B_FLAKY_ISOLATION_HOOK = "failing_check_requires_flaky_isolation_before_repair_charge" as const;
-export function beforeRepairDecisionDispatch<T>(value: T): T { void T6B_REPAIR_DECISION_HOOK; return value; }
-export function beforeFailingCheckRepairCharge<T>(value: T): T { void T6B_FLAKY_ISOLATION_HOOK; return value; }
+
+export interface FailingCheckRepairChargeInput {
+  readonly flakyIsolation: { readonly outcome: "flaky" | "consistent_failure"; readonly failingTestIds: readonly string[] };
+}
+
+/**
+ * T6b (OA-14): the charge decision for a failing check after flaky
+ * isolation ran. `flaky` charges nothing — the check still blocks
+ * acceptance until it passes on its own run. `consistent_failure`
+ * charges exactly one issue-level cycle.
+ */
+export function failingCheckRepairChargeDecision(input: FailingCheckRepairChargeInput): "charge" | "no_charge_flaky" {
+  if (input.flakyIsolation.outcome === "flaky") {
+    if (input.flakyIsolation.failingTestIds.length === 0) throw new Error("A flaky finding must retain its failing test ids.");
+    return "no_charge_flaky";
+  }
+  return "charge";
+}
+
+export function beforeFailingCheckRepairCharge<T>(value: T, input: FailingCheckRepairChargeInput): T {
+  failingCheckRepairChargeDecision(input);
+  void T6B_FLAKY_ISOLATION_HOOK;
+  return value;
+}
+
+/**
+ * T6b (OA-15): defect classes ride alongside findings until
+ * `PlanningFinding` can carry one (planning-contracts.ts is frozen for
+ * T6b — reported in evidence/T6b.md). Present classes are validated;
+ * absent classes are kept for replay compatibility with older reviews.
+ */
+export function validateOptionalDefectClass(value: unknown, findingId: string): void {
+  if (value === undefined) return;
+  normalizeDefectClassLabel(value, findingId);
+}
+
+export function normalizeDefectClassLabel(value: unknown, findingId: string): string {
+  const label = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  if (!label) throw new Error(`Deliverable finding ${findingId} defect class is invalid.`);
+  return label;
+}
+
+/** Defect classes in finding order; `undefined` where the review recorded none. */
+export function deliveryFindingDefectClasses(value: unknown): Array<string | undefined> {
+  if (!Array.isArray(value)) throw new Error("Deliverable findings must be an array.");
+  return value.map((candidate) => {
+    if (!isRecord(candidate) || candidate.defectClass === undefined) return undefined;
+    return normalizeDefectClassLabel(candidate.defectClass, typeof candidate.id === "string" ? candidate.id : "?");
+  });
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

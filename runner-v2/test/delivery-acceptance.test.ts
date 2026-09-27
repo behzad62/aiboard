@@ -233,6 +233,7 @@ interface HarnessOptions {
   /** Simulates an interrupted boundary run on the first call for this task. */
   boundaryThrowsOnceFor?: string;
   loadInputsError?: string;
+  defectClassesFor?: () => readonly string[];
   depth?: DeliveryDepthRunner;
   architectRuntimeId?: string;
 }
@@ -324,6 +325,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
       },
     },
     clock,
+    ...(options.defectClassesFor ? { defectClassesFor: options.defectClassesFor } : {}),
   });
   const boundaryCount = new Map<string, number>();
   const boundaryAttempts: string[] = [];
@@ -428,6 +430,21 @@ test("B1: the reviewer sees the real diff, the worker's own report and claims, a
     assert.deepEqual(review.claims!.map((claim) => claim.id), ["claim:c1", "claim:summary"]);
     assert.ok(review.claims![0]!.evidenceIds.length > 0, "criterion claims cite the worker's real evidence ids");
     assert.equal(review.risk!.tier, "medium", "the tier is the T5 tier of the real change (source without test)");
+  } finally {
+    harness.close();
+  }
+});
+
+test("reviewer requests resolve defect classes per review from the provider", async () => {
+  const live: string[] = [];
+  const harness = createHarness({ defectClassesFor: () => live });
+  try {
+    // Provided after the harness (and its review runtime) exists:
+    // a construction-time snapshot would miss it.
+    live.push("missing coverage");
+    await harness.until(accepted("T1"));
+    const texts = harness.reviewer.requests.map((entry) => entry.text).join("\n");
+    assert.match(texts, /missing coverage/);
   } finally {
     harness.close();
   }
@@ -695,7 +712,7 @@ test("B7: a blocking finding goes through reject and the fix re-review checks ea
   const harness = createHarness({
     reviewer: new ScriptedReviewer({
       inspect: true,
-      findings: (context) => (/attempt 1/.test(context) ? [{ id: "f-1", category: "missing_coverage", severity: "blocking", claim: "c is not tested.", evidenceRefs: ["src/feature.ts:3"] }] : []),
+      findings: (context) => (/attempt 1/.test(context) ? [{ id: "f-1", category: "missing_coverage", severity: "blocking", claim: "c is not tested.", evidenceRefs: ["src/feature.ts:3"], defectClass: "missing coverage" }] : []),
       priorChecks: (context) => (/Prior review/.test(context) ? [{ findingId: "f-1", resolution: "resolved", rationale: "Attempt 2 adds the test." }] : undefined),
     }),
     architect: { reject: (_taskId, attempt) => attempt === 1 },
@@ -1022,6 +1039,27 @@ test("N-R8 (fast guard): a filtered run needs at least one real test case, even 
   assert.equal(filtered.status, "unknown", "a filtered run with no real test case is not a pass");
   assert.match(filtered.reason!, /filters tests by name/);
   assert.equal(nodeJunitOutcome(xml, checkout, false).status, "passed", "without a filter the node summary is trusted");
+});
+
+test("B7: reviewOutcomeByAuthor keeps the first review's defect on its original author", async () => {
+  const { reviewOutcomeByAuthor } = await import("../src/delivery-acceptance.js");
+  const finding = { id: "f-1", category: "missing_coverage", severity: "blocking" as const, claim: "c is not tested.", evidenceRefs: ["src/feature.ts:3"] };
+  const outcomes = reviewOutcomeByAuthor([
+    { reviewId: "r1", authorModelIdentity: "model-original", findings: [finding] },
+    { reviewId: "r2", authorModelIdentity: "model-fixer", findings: [] },
+  ]);
+  assert.deepEqual(outcomes, [
+    { modelId: "model-original", defectFound: true },
+    { modelId: "model-fixer", defectFound: false },
+  ]);
+  // A repeated entry never double-counts, and a clean history stays clean.
+  assert.deepEqual(
+    reviewOutcomeByAuthor([
+      { reviewId: "r1", authorModelIdentity: "m", findings: [] },
+      { reviewId: "r1", authorModelIdentity: "m", findings: [] },
+    ]),
+    [{ modelId: "m", defectFound: false }],
+  );
 });
 
 test("real counts: acceptedFailuresUsed on a fix re-review reflects an accepted evidence failure", async () => {
