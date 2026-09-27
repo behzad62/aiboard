@@ -117,6 +117,10 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   decision authorizes it. C5 instead gives those fields consumers (the worker and reviewer
   contexts, including `validation` rationale for the reviewer) and makes only kernel-supplied
   envelope fields optional for the model.
+- **CD-13 — C2 runs as two packets (2026-09-27, after C1 needed seven reviews).** C2a: steps 1-4
+  and 7 (reducer v2, kernel-commit method, `project_docs.handoff_snapshot_committed`, the gate with
+  STATE.md, answered runs). C2b: steps 5, 6 and 8 (AGENTS.md section, `@AGENTS.md` line, spec copy,
+  run options, hand-edit detection) and the full AR-R05 tree check. Same requirements, smaller reviews.
 
 ---
 
@@ -308,6 +312,8 @@ other packets' surfaces.
   imports only pure modules).
 
 ### C2 — Docs policy v2: the kernel writes the handoff files (AR-R03 to AR-R07)
+
+Runs as C2a then C2b (CD-13).
 
 - **Outcome:** v2 per S2 §3.4 items 1-4, AR-1 and the v2 form of AC-25 (AR-R05) for runs seeded
   with planning v1 and docs v2; v1 untouched. Production stamping is T7a's (CD-1).

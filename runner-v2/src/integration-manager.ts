@@ -26,6 +26,7 @@ import {
   type DocumentTipRelation,
   type ProjectDocCommitRequest,
   type ProjectDocCommitResult,
+  type ProjectDocWrite,
 } from "./project-docs.js";
 import {
   classifyOwnedWorktreeAssociations,
@@ -76,6 +77,14 @@ interface OwnedProjectApplyJournal extends ProjectApplyJournalBase {
 }
 
 type ProjectApplyJournal = LegacyProjectApplyJournal | OwnedProjectApplyJournal;
+
+/** Kernel handoff snapshot commit (docs policy v2, C2a: STATE.md only). */
+export interface HandoffSnapshotCommitRequest {
+  writes: readonly ProjectDocWrite[];
+  summary: string;
+  runId: string;
+  snapshotKey: string;
+}
 
 export interface IntegrationManagerOptions {
   repositoryRoot: string;
@@ -598,6 +607,122 @@ export class IntegrationManager {
         integrationRevision: this.currentRevision,
         changedPaths: [...changeSet.changedPaths],
       };
+    });
+  }
+
+  /**
+   * Commit a kernel-rendered handoff snapshot on the integration branch.
+   * Docs policy v2 (C2a: STATE.md only): one commit with a runner identity,
+   * `AIBoard-Author: runner` and `AIBoard-Generated: handoff-snapshot`
+   * trailers plus the `AIBoard-Snapshot-Key` trailer. A key already present
+   * in a commit body is returned unchanged, so a crash between the commit
+   * and the event append never creates a second commit. No model call.
+   */
+  async commitHandoffSnapshot(
+    input: HandoffSnapshotCommitRequest,
+  ): Promise<ProjectDocCommitResult> {
+    return await this.serialized(async () => {
+      if (input.runId !== this.runId) {
+        throw new Error("Project document commit belongs to another run.");
+      }
+      if (!input.summary.trim() || input.summary.includes("\n") || input.summary.includes("\0")) {
+        throw new Error("Project document summary is invalid.");
+      }
+      if (!input.snapshotKey.trim() || /[\r\n\0]/.test(input.snapshotKey)) {
+        throw new Error("Handoff snapshot key is invalid.");
+      }
+      if (input.writes.length === 0) {
+        throw new Error("Project document commit requires at least one write.");
+      }
+      await this.ensureIntegrationWorkspace();
+      const existing = await this.findSnapshotCommit(input.snapshotKey, input.runId);
+      if (existing) {
+        return await this.documentCommitResult(existing);
+      }
+      const writes = input.writes.map((write) => {
+        const checked = validateProjectDocPath(write.path);
+        if (!checked.ok) {
+          throw new Error(`Project document path is refused: ${checked.reason}.`);
+        }
+        return { path: checked.path, content: write.content };
+      });
+      for (const write of writes) {
+        await this.refuseProjectDocLink(write.path);
+      }
+      for (const write of writes) {
+        const absolute = this.containedProjectDocPath(write.path);
+        await mkdir(dirname(absolute), { recursive: true });
+        await writeFile(absolute, write.content);
+      }
+      const paths = writes.map((write) => write.path);
+      await this.git(this.path, ["add", "--", ...paths]);
+      try {
+        await this.execute({
+          cwd: this.path,
+          args: [
+            "commit",
+            "--allow-empty",
+            "-m",
+            input.summary,
+            "--trailer",
+            `AIBoard-Run: ${input.runId}`,
+            "--trailer",
+            "AIBoard-Author: runner",
+            "--trailer",
+            "AIBoard-Generated: handoff-snapshot",
+            "--trailer",
+            `AIBoard-Snapshot-Key: ${input.snapshotKey}`,
+            "--",
+            ...paths,
+          ],
+          env: RUNNER_IDENTITY,
+        });
+      } catch (error) {
+        await this.git(this.path, ["reset", "--hard", "HEAD"], true);
+        await this.git(this.path, ["clean", "-fd", "--", ...paths], true);
+        throw error;
+      }
+      const commit = await this.head();
+      this.currentRevision = commit;
+      return await this.documentCommitResult(commit);
+    });
+  }
+
+  /**
+   * Read back a committed handoff snapshot file with the commit's real
+   * paths (C2a repair B4). The runtime records the digest of the bytes
+   * the commit actually holds -- never a fresh render -- so the event
+   * describes the committed tree even when a retry reuses an earlier
+   * commit. Runs through the audited git path like every other read.
+   */
+  async readHandoffSnapshotFile(input: {
+    commit: string;
+    path: string;
+  }): Promise<{ content: string | null; paths: string[] }> {
+    return await this.serialized(async () => {
+      const checked = validateProjectDocPath(input.path);
+      if (!checked.ok) {
+        throw new Error(`Project document path is refused: ${checked.reason}.`);
+      }
+      if (!input.commit.trim()) {
+        throw new Error("Handoff snapshot commit is required.");
+      }
+      const stored = await this.git(
+        this.path,
+        ["show", `${input.commit}:${checked.path}`],
+        true,
+      );
+      const names = await this.git(this.path, [
+        "show",
+        "--name-only",
+        "--format=",
+        input.commit,
+      ]);
+      const paths = names.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      return { content: stored.exitCode === 0 ? stored.stdout : null, paths };
     });
   }
 
@@ -1740,6 +1865,29 @@ export class IntegrationManager {
     const needle = `AIBoard-Doc-Request: ${requestId}`;
     for (const commit of await this.commitBodies()) {
       if (commit.body.split(/\r?\n/).some((line) => line.trim() === needle)) {
+        return commit.revision;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * C2a repair (M3): reuse only a runner-authored snapshot commit. The
+   * key line alone is not enough (worker messages survive cherry-picks
+   * with `-x`): the candidate must carry every runner trailer. The
+   * caller additionally verifies the committed tree (B4) before
+   * recording anything about it.
+   */
+  private async findSnapshotCommit(snapshotKey: string, runId: string): Promise<string | null> {
+    const trailers = new Set([
+      `AIBoard-Run: ${runId}`,
+      "AIBoard-Author: runner",
+      "AIBoard-Generated: handoff-snapshot",
+      `AIBoard-Snapshot-Key: ${snapshotKey}`,
+    ]);
+    for (const commit of await this.commitBodies()) {
+      const lines = new Set(commit.body.split(/\r?\n/).map((line) => line.trim()));
+      if ([...trailers].every((trailer) => lines.has(trailer))) {
         return commit.revision;
       }
     }

@@ -251,6 +251,15 @@ function stubProjectDocsPort() {
       entryPoint: { readme: true, agentsMarkedSection: true, claudePointer: true },
     }),
     relateRevision: async () => "equal_to_tip" as const,
+    readHandoffSnapshotFile: async () => {
+      throw new Error("request-triage stubs never reach the handoff snapshot read");
+    },
+    commitHandoffSnapshot: async (input: { writes: { path: string; content: string }[]; summary: string; runId: string; snapshotKey: string }) => ({
+      commit: createHash("sha256").update(`snapshot:${input.snapshotKey}`).digest("hex").slice(0, 40),
+      parent: createHash("sha256").update(`parent:${input.snapshotKey}`).digest("hex").slice(0, 40),
+      head: createHash("sha256").update(`head:${input.snapshotKey}`).digest("hex").slice(0, 40),
+      entryPoint: { readme: false, agentsMarkedSection: false, claudePointer: false },
+    }),
   };
 }
 

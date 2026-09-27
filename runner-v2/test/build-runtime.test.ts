@@ -89,6 +89,29 @@ function planOnlyDocumentPort(): ProjectDocsPort {
       };
     },
     relateRevision: async () => "strict_descendant",
+    readHandoffSnapshotFile: async (input) => ({
+      content: tree.get(input.path) ?? null,
+      paths: [...tree.keys()],
+    }),
+    commitHandoffSnapshot: async (input) => {
+      const parent = head;
+      for (const write of input.writes) {
+        tree.set(write.path, write.content);
+      }
+      commitCount += 1;
+      const commit = `snapshot-${commitCount}`;
+      head = commit;
+      return {
+        commit,
+        parent,
+        head,
+        entryPoint: {
+          readme: tree.has("docs/project/README.md"),
+          agentsMarkedSection: agentsMarkedSectionSatisfies(tree.get("AGENTS.md") ?? ""),
+          claudePointer: claudePointerSatisfies(tree.get("CLAUDE.md") ?? ""),
+        },
+      };
+    },
   };
 }
 
@@ -1954,6 +1977,12 @@ test("recovery abandons a recorded multiline project-doc summary and continues",
           };
         },
         relateRevision: async () => "strict_descendant" as const,
+        commitHandoffSnapshot: async () => {
+          throw new Error("unexpected handoff snapshot commit");
+        },
+        readHandoffSnapshotFile: async () => {
+          throw new Error("unexpected handoff snapshot read");
+        },
       },
     };
     const runtime = new BuildRuntime(options);

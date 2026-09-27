@@ -2,7 +2,7 @@ import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports }
 import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
 import type { LspTransportFactory } from "./lsp-transport.js";
 import type { McpDiscoveryResult } from "./runner-internal-execution-context.js";
-import { requireGitRunner } from "./git-command.js";
+import { requireGitRunner, unavailableGitRunner } from "./git-command.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { createHash, randomBytes } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
@@ -1689,6 +1689,8 @@ export class NativeBuildFactory {
       artifacts: this.artifacts,
       projectDocs: {
         commit: (input) => integrationManager.commitProjectDocuments(input),
+        commitHandoffSnapshot: (input) => integrationManager.commitHandoffSnapshot(input),
+        readHandoffSnapshotFile: (input) => integrationManager.readHandoffSnapshotFile(input),
         relateRevision: (input) => integrationManager.relateToDocumentTip(input),
       },
     });
@@ -3742,7 +3744,11 @@ export async function searchRunnerOwnedTempLeftovers(input: {
  * (a user folder, credentials) is retained, never deleted.
  */
 export function nativeBuildCleanupRoots(stateDirectory: string, runId: string): string[] {
+  // This helper only reads `.path` (pure path math, never git): the owner
+  // is explicitly the unavailable runner, so a stray execution fails
+  // closed instead of running ownerless.
   const at = (workspaceSuffix?: string, kind?: "independent-verifier") => new VerificationWorkspaceManager({
+    execute: unavailableGitRunner,
     repositoryRoot: stateDirectory,
     stateDirectory,
     runId,

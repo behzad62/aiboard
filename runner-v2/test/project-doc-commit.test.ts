@@ -438,6 +438,8 @@ test("restart recovery commits a pending document request once", async () => {
       projectDocs: {
         commit: (input) => fixture.integration.commitProjectDocuments(input),
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
+        commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
+        readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
       },
     });
     assert.equal(runtime.events()[0]?.type, "project_docs.policy_configured");
@@ -494,6 +496,8 @@ test("restart recovery commits a pending document request once", async () => {
       projectDocs: {
         commit: (input) => fixture.integration.commitProjectDocuments(input),
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
+        commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
+        readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
       },
     });
     await recovered.step();
@@ -575,6 +579,8 @@ test("same-turn project document commit is durable before complete_run returns",
       projectDocs: {
         commit: (input) => fixture.integration.commitProjectDocuments(input),
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
+        commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
+        readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
       },
     });
     assert.equal((await runtime.step()).action, "plan_required");
@@ -634,6 +640,12 @@ test("plan_only completion without documents names STATE.md", async () => {
           throw new Error("complete_run must not commit when the tool refuses");
         },
         relateRevision: async () => "strict_descendant",
+        commitHandoffSnapshot: async () => {
+          throw new Error("complete_run must not commit when the tool refuses");
+        },
+        readHandoffSnapshotFile: async () => {
+          throw new Error("complete_run must not commit when the tool refuses");
+        },
       },
     });
     await runtime.step();
@@ -828,6 +840,8 @@ test("identical STATE.md content in a second request commits after integration a
       projectDocs: {
         commit: (input) => fixture.integration.commitProjectDocuments(input),
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
+        commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
+        readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
       },
     });
     for (let index = 0; index < 24; index += 1) {
@@ -1047,6 +1061,8 @@ test("handoff after STATE.md keeps final verification current", async () => {
       projectDocs: {
         commit: (input) => fixture.integration.commitProjectDocuments(input),
         relateRevision: (input) => fixture.integration.relateToDocumentTip(input),
+        commitHandoffSnapshot: (input) => fixture.integration.commitHandoffSnapshot(input),
+        readHandoffSnapshotFile: (input) => fixture.integration.readHandoffSnapshotFile(input),
       },
     });
     for (let index = 0; index < 24; index += 1) {

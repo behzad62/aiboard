@@ -219,6 +219,13 @@ export interface HandoffSnapshotInput {
 export interface HandoffSnapshotFacts {
   /** Event time of the stop (no stop timestamp exists in the projection). */
   readonly stopAt?: string;
+  /**
+   * The exact revision the snapshot event records (C2a: the handed-off
+   * revision, which for a plan-only run is the plan revision, not the
+   * absent integration revision). The committed header and the event
+   * then describe the same revision.
+   */
+  readonly revision?: string;
   /** Exact build command used (from the execution profile / run evidence). */
   readonly buildCommand?: string;
   /** Exact test command used (from the execution profile / run evidence). */
@@ -967,7 +974,9 @@ function recordedAnswer(projection: SchedulerProjection): boolean {
  * really exist on the projection; anything missing renders "not recorded".
  *
  * Field provenance:
- * - runId: SchedulerProjection.runId; revision: integrationRevision.
+ * - runId: SchedulerProjection.runId; revision: the facts revision when
+ *   supplied (the handed-off revision the event records), else
+ *   integrationRevision.
  * - stop kind from the real run state, never a default: projectHandoff
  *   `requested` first (completed, or plan_only for a plan-only run); failed
  *   status (failed + failureReason, whatever the triage or run policy);
@@ -1270,7 +1279,7 @@ export function handoffSnapshotInputFromProjection(
     : stopKind === "failed" || stopKind === "cancelled" ? undefined : recordedPause;
   return {
     runId: projection.runId,
-    revision: projection.integrationRevision ?? NOT_RECORDED,
+    revision: facts.revision ?? projection.integrationRevision ?? NOT_RECORDED,
     stopKind,
     stopReason,
     stopAt: facts.stopAt ?? NOT_RECORDED,

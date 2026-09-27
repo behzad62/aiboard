@@ -21,7 +21,7 @@ import type {
   FinalVerificationGenerationProjection,
   SchedulerProjection,
 } from "./scheduler-store.js";
-import { assertBuildCompletionReady } from "./scheduler-store.js";
+import { assertBuildCompletionReady, assertHandoffSnapshotGate } from "./scheduler-store.js";
 import type {
   IntegrationFileSnapshot,
   ProjectHandoffResult,
@@ -568,6 +568,10 @@ export class NativeBuildManager implements BuildControlPlane {
         throw new Error("Final project handoff is not awaiting user selection.");
       }
       assertBuildCompletionReady(projection);
+      // C2a repair (B1): check the kernel snapshot gate BEFORE the handle
+      // can mutate the project -- a missing snapshot refuses here, so a
+      // failed snapshot commit never leaves a mutated project behind.
+      assertHandoffSnapshotGate(projection, projection.integrationRevision);
       const result = await handle.projectHandoff(choice);
       const selected = handle.runtime.selectProjectHandoff(
         choice,

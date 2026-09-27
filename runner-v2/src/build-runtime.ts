@@ -72,6 +72,12 @@ import {
 import { computePlanReadiness, coverageReviewHoldsReadiness } from "./planning-contracts.js";
 import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./planning-projection.js";
 import type { BuildTask } from "./task-contracts.js";
+import {
+  handoffSnapshotInputFromProjection,
+  renderHandoffSnapshot,
+  verifyHandoffSnapshotDigest,
+} from "./handoff-snapshot.js";
+import type { HandoffSnapshotCommitRequest } from "./integration-manager.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import type {
   DocumentTipRelation,
@@ -392,8 +398,22 @@ export interface BuildRuntimeOptions {
   coverageSuspendedRetryLimit?: number;
 }
 
+const HANDOFF_SNAPSHOT_FAILURE_DETAIL_MAX_LENGTH = 300;
+
+/**
+ * C2a repair (M4): bounded, redacted failure cause for the pause detail --
+ * the error message only (never a stack), single-lined and truncated.
+ */
+function snapshotFailureDetail(cause: unknown): string {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const singleLine = message.replace(/\s+/g, " ").trim();
+  return singleLine.slice(0, HANDOFF_SNAPSHOT_FAILURE_DETAIL_MAX_LENGTH) || "handoff snapshot failed";
+}
+
 export interface ProjectDocsPort {
   commit(input: ProjectDocCommitRequest): Promise<ProjectDocCommitResult>;
+  commitHandoffSnapshot(input: HandoffSnapshotCommitRequest): Promise<ProjectDocCommitResult>;
+  readHandoffSnapshotFile(input: { commit: string; path: string }): Promise<{ content: string | null; paths: string[] }>;
   relateRevision(input: { revision: string; tip: string }): Promise<DocumentTipRelation>;
 }
 
@@ -671,7 +691,9 @@ export class BuildRuntime {
     if (this.lifecycleController.signal.aborted) {
       this.lifecycleController = new AbortController();
     }
-    if (projection.projectHandoff?.status === "requested") {
+    // C2a: a failed kernel snapshot pauses the handoff instead of blocking it;
+    // the owner's resume retries the commit.
+    if (projection.projectHandoff?.status === "requested" && projection.pauseReason?.reason !== "handoff_snapshot_failed") {
       throw new Error(
         "This Build is awaiting the user's final project handoff selection."
       );
@@ -931,6 +953,8 @@ export class BuildRuntime {
 
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
+    const handoffSnapshot = await this.maybeCommitHandoffSnapshot(projection);
+    if (handoffSnapshot) return handoffSnapshot;
     if (projection.status === "failed") {
       return { status: "failed", action: "context_recording_aborted" };
     }
@@ -1944,6 +1968,137 @@ export class BuildRuntime {
     this.appendProjectDocCommitted(requestId, input.path, result);
   }
 
+  /**
+   * C2a: after `project.handoff_requested` on a docs-v2 run that is not
+   * answered, the kernel renders the C1 snapshot and commits
+   * docs/project/STATE.md through the handoff port, then records
+   * `project_docs.handoff_snapshot_committed`. No model call. A failed
+   * attempt pauses with `handoff_snapshot_failed` and retries on resume; a
+   * commit already found by its snapshot key is reused, never duplicated.
+   *
+   * C2a repair: the snapshot renders from the projection rebuilt from
+   * the events up to and including the stop event (B4/M5), so a later
+   * pause never enters STATE.md; the event and the file describe the
+   * same revision (M2); the recorded digest is read back from the
+   * commit's own tree (B4); the failure pause key is per attempt (B3)
+   * with the bounded cause in its detail (M4). Called from
+   * `afterArchitect` (the same step that records the stop) and from the
+   * top of `dispatchStep` (resume retries and crash recovery).
+   */
+  private async maybeCommitHandoffSnapshot(
+    projection: SchedulerProjection,
+  ): Promise<BuildStepResult | undefined> {
+    if (projection.projectDocsPolicyVersion !== 2) return undefined;
+    if (isAnsweredRun(projection)) return undefined;
+    if (projection.projectHandoff?.status !== "requested") return undefined;
+    const events = this.store.readRun(this.runId);
+    const stop = [...events].reverse().find((event) => event.type === "project.handoff_requested");
+    if (!stop) return undefined;
+    const stopSequence = stop.sequence;
+    if ((projection.projectDocs?.snapshots ?? []).some((record) => record.stopSequence === stopSequence)) {
+      return undefined;
+    }
+    const lastSequence = events[events.length - 1]!.sequence;
+    const stopProjection = rebuildSchedulerProjection(events.filter((event) => event.sequence <= stopSequence));
+    const stopKind = stopProjection.runPolicy === "plan_only" ? "plan_only" : "completed";
+    const revision = stopProjection.integrationRevision
+      ?? stopProjection.planning?.plan?.currentRevisionId
+      ?? "";
+    if (!revision.trim()) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "no handed-off revision recorded at the stop");
+    }
+    const snapshotKey = `handoff-snapshot:${stopSequence}`;
+    let body: string;
+    try {
+      body = renderHandoffSnapshot(handoffSnapshotInputFromProjection(stopProjection, { stopAt: stop.occurredAt, revision }));
+    } catch (error) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, error);
+    }
+    if (!verifyHandoffSnapshotDigest(body)) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "the rendered snapshot failed its digest check");
+    }
+    if (!this.projectDocs) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "the project document port is unavailable");
+    }
+    const port = this.projectDocs;
+    let result: ProjectDocCommitResult;
+    try {
+      result = await port.commitHandoffSnapshot({
+        writes: [{ path: "docs/project/STATE.md", content: body }],
+        summary: `AIBoard handoff snapshot (${stopKind}) for run ${this.runId}`,
+        runId: this.runId,
+        snapshotKey,
+      });
+    } catch (error) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, error);
+    }
+    // B4: the event describes the committed tree, never the fresh render:
+    // read the file back from the commit (fresh or reused) and record
+    // that digest with the commit's real paths.
+    let stored: { content: string | null; paths: string[] };
+    try {
+      stored = await port.readHandoffSnapshotFile({ commit: result.commit, path: "docs/project/STATE.md" });
+    } catch (error) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, error);
+    }
+    if (stored.content === null || !verifyHandoffSnapshotDigest(stored.content)) {
+      return this.pauseForHandoffSnapshotFailure(
+        stopSequence,
+        lastSequence,
+        stored.content === null
+          ? `commit ${result.commit} holds no docs/project/STATE.md`
+          : `commit ${result.commit} holds a STATE.md that failed its digest check`,
+      );
+    }
+    const committedDigest = /body_sha256: ([a-f0-9]{64})/.exec(stored.content.split("\n")[0] ?? "")?.[1] ?? "";
+    if (!committedDigest) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "the committed snapshot carries no digest");
+    }
+    if (!stored.paths.includes("docs/project/STATE.md")) {
+      return this.pauseForHandoffSnapshotFailure(
+        stopSequence,
+        lastSequence,
+        `commit ${result.commit} lists no docs/project/STATE.md path`,
+      );
+    }
+    this.store.append({
+      runId: this.runId,
+      type: "project_docs.handoff_snapshot_committed",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: snapshotKey,
+      payload: {
+        stopSequence,
+        stopKind,
+        revision,
+        commit: result.commit,
+        parent: result.parent,
+        head: result.head,
+        bodyDigest: committedDigest,
+        paths: stored.paths,
+      },
+    });
+    return { status: "paused", action: "handoff_snapshot_committed" };
+  }
+
+  /**
+   * C2a repair (B3/M4): the failure pause key is per attempt (the log
+   * sequence, like `answer-paused:`), so a second failure pauses again
+   * and the next resume retries. The bounded, message-only cause travels
+   * in the pause detail.
+   */
+  private pauseForHandoffSnapshotFailure(stopSequence: number, lastSequence: number, cause: unknown): BuildStepResult {
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `handoff-snapshot-failed:${stopSequence}:${lastSequence}`,
+      payload: { reason: "handoff_snapshot_failed", detail: snapshotFailureDetail(cause) },
+    });
+    return { status: "paused", action: "handoff_snapshot_failed" };
+  }
+
   private async recoverPendingProjectDocs(): Promise<void> {
     if (!this.projectDocs || !this.artifacts) return;
     const events = this.store.readRun(this.runId);
@@ -2572,12 +2727,17 @@ export class BuildRuntime {
     return { status: "paused", action: reason.startsWith("delivery_") ? reason : `delivery_${reason}` };
   }
 
-  private afterArchitect(action: string): BuildStepResult {
+  private async afterArchitect(action: string): Promise<BuildStepResult> {
     const events = this.store.readRun(this.runId);
     if (events.length === 0) {
       throw new Error(`Architect returned from ${action} without a typed action.`);
     }
     const projection = rebuildSchedulerProjection(events);
+    // C2a repair (B1): commit the kernel snapshot in the same step that
+    // recorded `project.handoff_requested`, before returning `paused` --
+    // the production flow never takes another step from the handoff stop.
+    const handoffSnapshot = await this.maybeCommitHandoffSnapshot(projection);
+    if (handoffSnapshot) return handoffSnapshot;
     return projection.status === "completed"
       ? { status: "completed", action }
       : projection.status === "paused"

@@ -236,6 +236,7 @@ export type SchedulerEventType =
   | "project_doc.committed"
   | "project_doc.abandoned"
   | "project_docs.policy_configured"
+  | "project_docs.handoff_snapshot_committed"
   | "delivery.review_started"
   | "delivery.review_requested"
   | "delivery.obligations_recorded"
@@ -383,6 +384,21 @@ export interface ProjectDocsProjection {
   /** Document-only commits ahead of the canonical integration revision. */
   documentTip?: string;
   abandoned?: ProjectDocAbandonmentProjection[];
+  /** Kernel handoff snapshots (docs policy v2) in append order. */
+  snapshots?: HandoffSnapshotRecord[];
+}
+
+/** A kernel-committed handoff snapshot (docs policy v2, C2a: STATE.md only). */
+export interface HandoffSnapshotRecord {
+  stopSequence: number;
+  stopKind: string;
+  revision: string;
+  commit: string;
+  parent: string;
+  head: string;
+  bodyDigest: string;
+  paths: string[];
+  sequence: number;
 }
 
 export interface ProjectDocCommitProjection {
@@ -400,6 +416,8 @@ export interface ProjectDocCommitProjection {
 export interface ProjectHandoffProjection {
   status: "requested" | "selected";
   summary: string;
+  /** Log sequence of the `project.handoff_requested` event (C2a repair: binds the v2 gate to the latest stop). Absent only on hand-built projections; the reducer always records it. */
+  requestedSequence?: number;
   options: ProjectHandoffChoice[];
   choice?: ProjectHandoffChoice;
   integrationRevision?: string;
@@ -1635,6 +1653,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     event.type === "final_verification.cleanup_succeeded" ||
     event.type === "final_verification.cleanup_failed" ||
     (event.type === "project_doc.committed" && event.actor.role === "runner") ||
+    (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     (event.type === "plan.created" && current.planRevision === 0) ||
     (event.type === "task.transitioned" &&
@@ -1665,6 +1684,7 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
     (event.type === "project_doc.committed" && event.actor.role === "runner") ||
+    (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     event.type === "planning.assignment_released";
   if (!allowed) {
@@ -2218,6 +2238,7 @@ function revisionMatchesIntegrationOrDocumentTip(
 }
 
 function projectDocumentationReadiness(projection: SchedulerProjection): string[] {
+  // Docs v2 (C2a): the kernel snapshot replaces the model-written docs gate.
   if (projection.projectDocsPolicyVersion !== 1) return [];
   const issues: string[] = [];
   const stateCommit = latestProjectStateCommit(projection);
@@ -2862,12 +2883,12 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may configure project document policy.");
       }
-      if (event.payload.version !== 1) {
+      if (event.payload.version !== 1 && event.payload.version !== 2) {
         throw new Error("Project document policy version is invalid.");
       }
       return {
         ...emptySchedulerProjection(event),
-        projectDocsPolicyVersion: 1,
+        projectDocsPolicyVersion: event.payload.version === 2 ? 2 : 1,
       };
     }
     if (event.type !== "plan.created") {
@@ -3128,7 +3149,7 @@ export function reduceSchedulerEvent(
       }
       // The new-run document stamp is sequence 1. run.initialized follows it once.
       if (
-        current.projectDocsPolicyVersion === 1 &&
+        (current.projectDocsPolicyVersion === 1 || current.projectDocsPolicyVersion === 2) &&
         current.lastSequence === 1 &&
         current.planRevision === 0 &&
         current.runPolicy === undefined
@@ -4405,7 +4426,7 @@ export function reduceSchedulerEvent(
               const { documentTip: _tip, ...remaining } = next.projectDocs;
               next.projectDocs = remaining;
             }
-            if (next.projectDocsPolicyVersion === 1) {
+            if (next.projectDocsPolicyVersion === 1 || next.projectDocsPolicyVersion === 2) {
               next.latestIntegratedTaskSequence = event.sequence;
             }
           }
@@ -4933,6 +4954,9 @@ export function reduceSchedulerEvent(
           ...(typeof event.payload.taskId === "string"
             ? { taskId: event.payload.taskId }
             : {}),
+          ...(typeof event.payload.detail === "string" && event.payload.detail
+            ? { detail: event.payload.detail }
+            : {}),
         };
       } else {
         delete next.pauseReason;
@@ -4964,6 +4988,7 @@ export function reduceSchedulerEvent(
         );
       }
       assertBuildCompletionReady(current);
+      assertHandoffSnapshotGate(current, current.integrationRevision);
       next.status = "completed";
       if (current.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
         next.acceptanceContractStatus = "legacy_completed";
@@ -4995,6 +5020,7 @@ export function reduceSchedulerEvent(
       next.projectHandoff = {
         status: "requested",
         summary: requiredString(event.payload, "summary"),
+        requestedSequence: event.sequence,
         options: ["keep_integration_branch", "apply_to_project"],
       };
       next.status = "paused";
@@ -5041,6 +5067,7 @@ export function reduceSchedulerEvent(
           "Final project handoff selection does not match the verified integration revision.",
         );
       }
+      assertHandoffSnapshotGate(current, selectedIntegrationRevision);
       if (
         projectRevision !== undefined &&
         (typeof projectRevision !== "string" || !projectRevision.trim())
@@ -5231,6 +5258,10 @@ export function reduceSchedulerEvent(
       applyProjectDocCommitted(next, event);
       break;
     }
+    case "project_docs.handoff_snapshot_committed": {
+      applyHandoffSnapshotCommitted(next, event);
+      break;
+    }
     case "project_doc.abandoned": {
       applyProjectDocAbandoned(next, event);
       break;
@@ -5253,16 +5284,16 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may configure project document policy.");
       }
-      if (event.payload.version !== 1) {
+      if (event.payload.version !== 1 && event.payload.version !== 2) {
         throw new Error("Project document policy version is invalid.");
       }
       if (
         next.projectDocsPolicyVersion !== undefined &&
-        next.projectDocsPolicyVersion !== 1
+        next.projectDocsPolicyVersion !== event.payload.version
       ) {
         throw new Error("Project document policy is already configured differently.");
       }
-      next.projectDocsPolicyVersion = 1;
+      next.projectDocsPolicyVersion = event.payload.version === 2 ? 2 : 1;
       break;
     }
   }
@@ -9028,6 +9059,130 @@ function applyProjectDocCommitted(
   };
 }
 
+/**
+ * C2a: the v2 handoff gate. A docs-v2 run that is not answered cannot record
+ * `project.handoff_selected` or `run.completed` until the kernel committed
+ * docs/project/STATE.md for the handed-off revision. The writer guarantees
+ * the tree holds STATE.md; the reducer checks the recorded paths.
+ *
+ * C2a repair (M1): the gate binds to the latest `project.handoff_requested`
+ * stop (`projectHandoff.requestedSequence`), never to an earlier snapshot:
+ * after a withdrawal and re-request, only a snapshot for the current stop
+ * satisfies it.
+ */
+function handoffSnapshotAtCurrentStop(
+  projection: SchedulerProjection,
+): HandoffSnapshotRecord | undefined {
+  const snapshots = projection.projectDocs?.snapshots ?? [];
+  const latestRequest = projection.projectHandoff?.requestedSequence;
+  const current = latestRequest === undefined
+    ? [...snapshots].reverse()
+    : snapshots.filter((record) => record.stopSequence === latestRequest).reverse();
+  return current.find((record) => record.paths.includes("docs/project/STATE.md"));
+}
+
+export function handoffSnapshotCoversRevision(
+  projection: SchedulerProjection,
+  revision: string,
+): boolean {
+  const record = handoffSnapshotAtCurrentStop(projection);
+  if (!record) return false;
+  // Production selects the post-snapshot head (CD-11): it matches the
+  // snapshot commit/head, while the described revision matches revision.
+  return record.revision === revision || record.commit === revision || record.head === revision;
+}
+
+export function handoffSnapshotRecorded(projection: SchedulerProjection): boolean {
+  return handoffSnapshotAtCurrentStop(projection) !== undefined;
+}
+
+export function assertHandoffSnapshotGate(
+  projection: SchedulerProjection,
+  revision: string | undefined,
+): void {
+  if (isAnsweredRun(projection) || projection.projectDocsPolicyVersion !== 2) return;
+  const covered = projection.runPolicy === "plan_only" || revision === undefined
+    ? handoffSnapshotRecorded(projection)
+    : handoffSnapshotCoversRevision(projection, revision);
+  if (!covered) {
+    throw new Error("The kernel handoff snapshot is required for the handed-off revision.");
+  }
+}
+
+function applyHandoffSnapshotCommitted(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may commit a handoff snapshot.");
+  }
+  if (projection.projectDocsPolicyVersion !== 2) {
+    throw new Error("Handoff snapshots require project document policy version 2.");
+  }
+  if (projection.projectHandoff?.status !== "requested") {
+    throw new Error("Handoff snapshots require a requested project handoff.");
+  }
+  const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
+  const stopKind = requiredString(event.payload, "stopKind");
+  if (stopKind !== "completed" && stopKind !== "plan_only") {
+    throw new Error(`Handoff snapshot stop kind ${stopKind} is invalid.`);
+  }
+  const revision = requiredString(event.payload, "revision");
+  const commit = requiredString(event.payload, "commit");
+  const parent = requiredString(event.payload, "parent");
+  const head = requiredString(event.payload, "head");
+  if (!revision.trim() || !commit.trim() || !parent.trim() || !head.trim()) {
+    throw new Error("Handoff snapshot revision and commit references are required.");
+  }
+  const bodyDigest = requiredString(event.payload, "bodyDigest");
+  if (!/^[a-f0-9]{64}$/.test(bodyDigest)) {
+    throw new Error("Handoff snapshot body digest is invalid.");
+  }
+  const paths = stringArray(event.payload, "paths");
+  if (paths.length === 0 || !paths.includes("docs/project/STATE.md")) {
+    throw new Error("Handoff snapshots must include docs/project/STATE.md.");
+  }
+  const snapshots = projection.projectDocs?.snapshots ?? [];
+  if (snapshots.some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Handoff snapshot for stop ${stopSequence} is already recorded.`);
+  }
+  const record: HandoffSnapshotRecord = {
+    stopSequence,
+    stopKind,
+    revision,
+    commit,
+    parent,
+    head,
+    bodyDigest,
+    paths: [...paths],
+    sequence: event.sequence,
+  };
+  const canonical = projection.integrationRevision;
+  const currentTip = projection.projectDocs?.documentTip;
+  const continuesDocuments =
+    (typeof canonical === "string" && parent === canonical) ||
+    (typeof currentTip === "string" && parent === currentTip);
+  projection.projectDocs = {
+    pending: projection.projectDocs?.pending ?? [],
+    ...carriedProjectDocs(projection.projectDocs),
+    snapshots: [...snapshots, record],
+    ...(continuesDocuments
+      ? { documentTip: commit }
+      : currentTip
+        ? { documentTip: currentTip }
+        : {}),
+  };
+  if (projection.pauseReason?.reason === "handoff_snapshot_failed") {
+    delete projection.pauseReason;
+  }
+  // C2a repair (B2): a resume retried the snapshot while `running`; the
+  // committed snapshot returns the run to the handoff wait, never
+  // `running`, so no Architect call follows until the owner selects.
+  if (projection.status === "running") {
+    projection.status = "paused";
+  }
+}
+
 function applyProjectDocAbandoned(
   projection: SchedulerProjection,
   event: SchedulerEvent,
@@ -9081,7 +9236,7 @@ function cloneProjectDocs(docs: ProjectDocsProjection): ProjectDocsProjection {
 
 function carriedProjectDocs(
   docs: ProjectDocsProjection | undefined,
-): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned"> {
+): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned" | "snapshots"> {
   if (!docs) return {};
   return {
     ...(docs.committed
@@ -9090,6 +9245,9 @@ function carriedProjectDocs(
     ...(docs.documentTip ? { documentTip: docs.documentTip } : {}),
     ...(docs.abandoned
       ? { abandoned: docs.abandoned.map((item) => ({ ...item })) }
+      : {}),
+    ...(docs.snapshots
+      ? { snapshots: docs.snapshots.map((record) => ({ ...record, paths: [...record.paths] })) }
       : {}),
   };
 }
