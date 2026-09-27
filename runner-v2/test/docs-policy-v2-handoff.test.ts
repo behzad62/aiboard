@@ -6,7 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
-import { BuildRuntime, sanitizeSpecSourceId, type ProjectDocsPort } from "../src/build-runtime.js";
+import { BuildRuntime, sanitizeSpecSourceId, type IndependentVerifierDriver, type ProjectDocsPort } from "../src/build-runtime.js";
 import { validateBuildSpec } from "../src/build-spec.js";
 import {
   handoffSnapshotInputFromProjection,
@@ -51,7 +51,7 @@ import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
-import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
+import { deriveNativeVerifierRiskInput, snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import {
   IntegrationManager,
   NativeBuildFactory,
@@ -191,8 +191,10 @@ function seedEvent(
  * assessment before completion is ready. The assessment is computed by the
  * kernel (`assessBuildRisk`), never hand-written. It lands after the
  * factory's policy and the green approved FV generation it qualifies
- * (targeting the unchanged baseline revision), mirroring what the
- * production manager records before completion.
+ * (targeting the unchanged baseline revision), with the same content the
+ * runtime records under its own idempotency key. FX-1: only the stop-1
+ * generation is seeded; the post-guidance re-assessment goes through the
+ * real runtime re-assessment (see stepUntilRiskReassessed).
  */
 function lowRiskSeed(runId: string, baselineRevision: string, key = "risk:baseline-low"): NewSchedulerEvent[] {
   const input: BuildRiskAssessmentInput = {
@@ -547,6 +549,7 @@ function buildRuntimeForHandoff(options: {
   artifacts?: ArtifactStore;
   specCopy?: boolean;
   handoffFiles?: "commit" | "export_only";
+  independentVerifier?: IndependentVerifierDriver;
 }): BuildRuntime {
   return new BuildRuntime({
     runId: options.runId,
@@ -555,6 +558,7 @@ function buildRuntimeForHandoff(options: {
     workerDriver: { run: async () => ({ type: "failed" as const, reason: "unused" }) },
     architectDriver: options.architect.driver,
     integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
+    ...(options.independentVerifier ? { independentVerifier: options.independentVerifier } : {}),
     maxConcurrency: 1,
     workspaceFor: async () => "C:/unused",
     clock: options.clock,
@@ -2538,6 +2542,53 @@ function fvRerunSeed(runId: string, integrationRevision: string): NewSchedulerEv
   return events;
 }
 
+/**
+ * FX-1: production-shaped independent verifier for the factory-port finish
+ * tests. Risk comes from the real kernel derivation
+ * (deriveNativeVerifierRiskInput); low risk never reaches verify. The
+ * factory already configured the risk_based policy with these candidates,
+ * so the driver matches it exactly.
+ */
+function productionRiskVerifier(
+  runId: string,
+  store: () => SqliteSchedulerStore,
+  counter: { calls: number },
+): IndependentVerifierDriver {
+  return {
+    candidateRuntimeIds: ["rev:reviewer"],
+    alwaysRequireIndependentVerifier: false,
+    assessRisk: async ({ projection }) => {
+      counter.calls += 1;
+      return deriveNativeVerifierRiskInput({
+        projection,
+        sessions: [],
+        schedulerEvents: store().readRun(runId),
+        toolEvents: [],
+        stricterQualification: false,
+      });
+    },
+    verify: async () => {
+      throw new Error("A low-risk run must never reach independent verification.");
+    },
+  };
+}
+
+/**
+ * FX-1: step until the runtime records the post-guidance re-assessment (or
+ * the bound runs out). The assessment precedes any completion turn, so the
+ * bounded walk never reaches a second Architect turn.
+ */
+async function stepUntilRiskReassessed(
+  manager: NativeBuildManager,
+  runId: string,
+  maxSteps = 10,
+): Promise<void> {
+  for (let index = 0; index < maxSteps; index += 1) {
+    if (manager.events(runId).filter((event) => event.type === "build.risk_assessed").length >= 2) return;
+    await manager.step(runId);
+  }
+}
+
 test("C2b repair B1 probe G2: a withdrawn stop's landed commit is reconciled, the chain continues", async () => {
   const RUN = "run-c2b-g2";
   const repo = await openGitRepo("g2", RUN);
@@ -3307,6 +3358,9 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
   // after the commit (or a crash before the append).
   failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
   const architect = silentArchitect("The build is complete and verified.");
+  // FX-1: the harness runtime re-assesses through the real kernel
+  // derivation after the FV re-run (no seeded re-assessment).
+  const verifierCalls = { calls: 0 };
   let store: SqliteSchedulerStore | undefined;
   let manager: NativeBuildManager | undefined;
   const order: string[] = [];
@@ -3322,6 +3376,7 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
         const runtime = buildRuntimeForHandoff({
           runId: RUN, store, projectDocs: fixture.port,
           architect, clock: advancingClock(), runPolicy: "finish", evidenceStore: fixture.evidence,
+          independentVerifier: productionRiskVerifier(RUN, () => store!, verifierCalls),
         });
         return managedHandle(runtime, async () => {
           order.push(`projectHandoff:${manager!.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length}`);
@@ -3393,12 +3448,20 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
     const withdrawn = manager.projection(RUN);
     assert.equal(withdrawn.projectHandoff, undefined, "guidance withdrew the handoff");
     assert.equal((withdrawn.projectHandoffHistory ?? []).length, 1);
-    // Final verification re-runs green on the unchanged canonical revision,
-    // and the Architect re-requests (stop 2).
+    // Final verification re-runs green on the unchanged canonical revision.
     for (const input of fvRerunSeed(RUN, fixture.baselineRevision)) store.append(input);
-    // Guidance invalidated the stop-1 assessment; production re-assesses
-    // after the green FV re-run, before the Architect re-requests.
-    for (const input of lowRiskSeed(RUN, fixture.baselineRevision, "risk:rerun-low")) store.append(input);
+    // FX-1: guidance invalidated the stop-1 assessment; the runtime
+    // re-assesses through the real derivation before the Architect
+    // re-requests (stop 2).
+    await stepUntilRiskReassessed(manager, RUN);
+    const risks = manager.events(RUN).filter((event) => event.type === "build.risk_assessed");
+    assert.equal(risks.length, 2, "production re-assesses after the invalidation");
+    assert.equal(
+      risks[1]!.idempotencyKey,
+      `build-risk:${fixture.baselineRevision}:generation-c2a-finish-rerun`,
+      "the re-assessment is keyed by the re-run generation",
+    );
+    assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
     store.append(e("project.handoff_requested", "handoff-2", "architect", "architect", { summary: COMPLETION_SUMMARY }));
     manager.activate(RUN);
     await manager.awaitIdle(RUN);
@@ -3440,6 +3503,9 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
   const fixture = await openFactoryPort("g3", RUN, preSeed, "finish");
   failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
   const architect = silentArchitect("The build is complete and verified.");
+  // FX-1: the harness runtime re-assesses through the real kernel
+  // derivation after the FV re-run (no seeded re-assessment).
+  const verifierCalls = { calls: 0 };
   let store: SqliteSchedulerStore | undefined;
   let manager: NativeBuildManager | undefined;
   const order: string[] = [];
@@ -3455,6 +3521,7 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
         const runtime = buildRuntimeForHandoff({
           runId: RUN, store, projectDocs: fixture.port,
           architect, clock: advancingClock(), runPolicy: "finish", evidenceStore: fixture.evidence,
+          independentVerifier: productionRiskVerifier(RUN, () => store!, verifierCalls),
         });
         return managedHandle(runtime, async () => {
           order.push(`projectHandoff:${manager!.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length}`);
@@ -3520,9 +3587,18 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
     }));
     assert.equal(manager.projection(RUN).projectHandoff, undefined, "guidance withdrew the handoff");
     for (const input of fvRerunSeed(RUN, fixture.baselineRevision)) store.append(input);
-    // Guidance invalidated the stop-1 assessment; production re-assesses
-    // after the green FV re-run, before the Architect re-requests.
-    for (const input of lowRiskSeed(RUN, fixture.baselineRevision, "risk:rerun-low")) store.append(input);
+    // FX-1: guidance invalidated the stop-1 assessment; the runtime
+    // re-assesses through the real derivation before the Architect
+    // re-requests.
+    await stepUntilRiskReassessed(manager, RUN);
+    const risks = manager.events(RUN).filter((event) => event.type === "build.risk_assessed");
+    assert.equal(risks.length, 2, "production re-assesses after the invalidation");
+    assert.equal(
+      risks[1]!.idempotencyKey,
+      `build-risk:${fixture.baselineRevision}:generation-c2a-finish-rerun`,
+      "the re-assessment is keyed by the re-run generation",
+    );
+    assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
     store.append(e("project.handoff_requested", "handoff-2", "architect", "architect", { summary: COMPLETION_SUMMARY }));
     // The transient: the withdrawn-stop lookup throws once at stop 2.
     failNextSnapshotLookupOnce(fixture.integration, "Injected transient snapshot lookup failure.");

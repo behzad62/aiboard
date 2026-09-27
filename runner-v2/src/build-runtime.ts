@@ -1716,12 +1716,21 @@ export class BuildRuntime {
       ) {
         return { status: "progressed", action: "build_risk_assessment_invalidated" };
       }
+      // FX-1: key the assessment by the final-verification generation it
+      // qualifies, not just the revision. Guidance invalidates the current
+      // assessment without moving the revision, and the green re-run lands a
+      // new generation; a revision-only key dedupes the re-assessment into
+      // the old event and the run spins on assessRisk forever. The
+      // generation id is durable log state (history only grows), so replays
+      // of the same step still dedupe and restarts record nothing new.
+      // Pre-FX-1 logs carry `build-risk:${targetRevision}`; the reducer
+      // never inspects the key, so they replay unchanged.
       this.store.append({
         runId: this.runId,
         type: "build.risk_assessed",
         occurredAt: this.clock(),
         actor: { role: "runner", id: "build-runtime" },
-        idempotencyKey: `build-risk:${targetRevision}`,
+        idempotencyKey: `build-risk:${targetRevision}:${finalVerification.generationId}`,
         payload: {
           targetRevision,
           input,
