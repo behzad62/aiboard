@@ -843,12 +843,25 @@ export class BuildRuntime {
     runtimeId: string,
     idempotencyKey: string
   ): SchedulerProjection {
+    // FX-2 repair 1 (M2): scope the stored key to the requirement this
+    // answer belongs to. The client reuses one key per runtime
+    // (`architect-handoff:<run>:<runtime>`), so without scoping an answer to
+    // a second handoff offer dedupes into the first selection and the run
+    // stays paused. The first requirement keeps the bare caller key so
+    // pre-fix logs and in-flight runs behave as before; a replay of the same
+    // answer sees the same requirement count and still dedupes. Selections
+    // never record requirements, so the count is stable across the answer
+    // itself. The reducer never inspects the key.
+    const handoffRequirements = this.recordedArchitectHandoffRequirements();
+    const storedArchitectKey = handoffRequirements <= 1
+      ? idempotencyKey
+      : `${idempotencyKey}:req-${handoffRequirements}`;
     this.store.append({
       runId: this.runId,
       type: "architect.handoff_selected",
       occurredAt: this.clock(),
       actor: { role: "user", id: "local-user" },
-      idempotencyKey,
+      idempotencyKey: storedArchitectKey,
       payload: { runtimeId },
     });
     return this.projection();
@@ -858,15 +871,48 @@ export class BuildRuntime {
     runtimeId: string,
     idempotencyKey: string,
   ): SchedulerProjection {
+    // FX-2 repair 1 (B1): scope the stored key to the requirement this
+    // answer belongs to. The client reuses one key per runtime
+    // (`verifier-handoff:<run>:<runtime>`), so without scoping an answer to
+    // a re-required selection dedupes into the first selection: the API
+    // reports success with the projection unchanged, the selection stays
+    // `required`, and a run with one verifier candidate stays stuck. The
+    // first requirement keeps the bare caller key so pre-fix logs and
+    // in-flight runs behave as before; a replay of the same answer sees the
+    // same requirement count and still dedupes. Selections never record
+    // requirements, so the count is stable across the answer itself. The
+    // reducer never inspects the key.
+    const verifierRequirements = this.recordedVerifierRequirements();
+    const storedVerifierKey = verifierRequirements <= 1
+      ? idempotencyKey
+      : `${idempotencyKey}:req-${verifierRequirements}`;
     this.store.append({
       runId: this.runId,
       type: "verifier.selection_selected",
       occurredAt: this.clock(),
       actor: { role: "user", id: "local-user" },
-      idempotencyKey,
+      idempotencyKey: storedVerifierKey,
       payload: { runtimeId },
     });
     return this.projection();
+  }
+
+  /**
+   * FX-2 repair 1 (B1/M2): the occurrence an owner answer belongs to -- the
+   * number of recorded requirements. Durable log state, so a replay of the
+   * same answer computes the same count and still dedupes, a new requirement
+   * increments it, and a restart records nothing new.
+   */
+  private recordedVerifierRequirements(): number {
+    return this.store.readRun(this.runId).filter(
+      (event) => event.type === "verifier.selection_required",
+    ).length;
+  }
+
+  private recordedArchitectHandoffRequirements(): number {
+    return this.store.readRun(this.runId).filter(
+      (event) => event.type === "architect.handoff_required",
+    ).length;
   }
 
   extendRepairCycles(additionalRepairPlans: number, idempotencyKey: string): SchedulerProjection {
@@ -1854,12 +1900,24 @@ export class BuildRuntime {
     const reason = result.status === "unavailable"
       ? result.reason
       : result.reason || "verifier_suspended";
+    // FX-2 (N1): key a new selection requirement by the owner selection it
+    // follows. After the owner selects, the same reason at the same revision
+    // must record a NEW requirement: the old revision+reason key dedupes the
+    // append, step() returns paused while the projection stays running with
+    // selection "selected", and the run sits with no prompt. The recorded
+    // selection count is durable log state that is stable on replay: 0 keeps
+    // the old key shape so old logs replay unchanged. The reducer never
+    // inspects the key.
+    const verifierSelections = this.recordedVerifierSelections();
+    const verifierSelectionKey = verifierSelections === 0
+      ? `verifier-selection:${targetRevision}:${reason}`
+      : `verifier-selection:${targetRevision}:${reason}:sel-${verifierSelections}`;
     this.store.append({
       runId: this.runId,
       type: "verifier.selection_required",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
-      idempotencyKey: `verifier-selection:${targetRevision}:${reason}`,
+      idempotencyKey: verifierSelectionKey,
       payload: {
         reason,
         requiredCapabilities: ["code"],
@@ -1867,6 +1925,18 @@ export class BuildRuntime {
       },
     });
     return { status: "paused", action: "verifier_selection_required" };
+  }
+
+  /**
+   * FX-2 (N1): the occurrence a verifier-selection requirement follows --
+   * the number of recorded owner selections. Durable log state, so a replay
+   * of the same step computes the same count and still dedupes, and a
+   * restart records nothing new.
+   */
+  private recordedVerifierSelections(): number {
+    return this.store.readRun(this.runId).filter(
+      (event) => event.type === "verifier.selection_selected",
+    ).length;
   }
 
   private async advanceFinalVerificationCleanup(
@@ -3691,10 +3761,17 @@ export class BuildRuntime {
       return { status: "progressed", action: "plan_critic_provider_failed" };
     }
     if (!driver.stricterQualification && result.status === "suspended") return skip("critic_failed");
+    // FX-2 (N1): same occurrence key as the final-verification selection
+    // path -- a re-requirement after an owner selection must record anew.
+    const critiqueSelections = this.recordedVerifierSelections();
+    const critiqueSelectionBase = `verifier-selection:plan-critique:${projection.planRevision}:${result.status === "unavailable" ? result.reason : result.reason}`;
+    const critiqueSelectionKey = critiqueSelections === 0
+      ? critiqueSelectionBase
+      : `${critiqueSelectionBase}:sel-${critiqueSelections}`;
     this.store.append({
       runId: this.runId, type: "verifier.selection_required", occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
-      idempotencyKey: `verifier-selection:plan-critique:${projection.planRevision}:${result.status === "unavailable" ? result.reason : result.reason}`,
+      idempotencyKey: critiqueSelectionKey,
       payload: {
         reason: "plan_critique_no_independent_runtime",
         requiredCapabilities: ["code"],

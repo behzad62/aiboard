@@ -289,7 +289,7 @@ function safeSegment(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "run";
 }
 
-/** Scripted Architect: exactly one completion turn; a second turn is a test failure. */
+/** Scripted Architect: exactly two completion turns (stop 1 and the post-guidance re-request); a third turn is a test failure. */
 function completionArchitect(
   projection: () => import("../src/scheduler-store.js").SchedulerProjection,
   summary = COMPLETION_SUMMARY,
@@ -304,8 +304,8 @@ function completionArchitect(
         if (projection().projectHandoff) {
           throw new Error(`Unexpected Architect turn after handoff: ${projection().projectHandoff?.status}.`);
         }
-        if (calls > 1) {
-          throw new Error(`Unexpected second Architect turn (call ${calls}).`);
+        if (calls > 2) {
+          throw new Error(`Unexpected third Architect turn (call ${calls}).`);
         }
         sequence += 1;
         const result = await request.tools.invoke({
@@ -522,9 +522,10 @@ function buildHarnessRuntime(options: {
 
 /**
  * Step the manager until a second risk assessment lands (or the bound
- * runs out). The assessment must precede any completion turn, so the
- * bounded walk can never reach a second Architect turn: on the fixed code
- * it records exactly one new event; on the broken key it records none.
+ * runs out). The assessment precedes any completion turn, so the bounded
+ * walk records the re-assessment before the Architect re-requests: on the
+ * fixed code it records exactly one new event; on the broken key it
+ * records none.
  */
 async function stepUntilReassessed(
   manager: NativeBuildManager,
@@ -562,6 +563,7 @@ test("FX-1 v1 finish: guidance on the handoff invalidates risk, the green re-run
   const verifierCalls = { calls: 0 };
   let store: SqliteSchedulerStore | undefined;
   let manager: NativeBuildManager | undefined;
+  const architect = completionArchitect(() => manager!.projection(RUN));
   try {
     manager = new NativeBuildManager({
       specs: new SqliteBuildSpecStore(join(repo.root, "builds.sqlite")),
@@ -575,7 +577,7 @@ test("FX-1 v1 finish: guidance on the handoff invalidates risk, the green re-run
           runId: RUN,
           store,
           projectDocs: gitDocsPort(repo.integration),
-          architect: completionArchitect(() => manager!.projection(RUN)),
+          architect,
           verifier: productionShapedVerifier(RUN, () => store!, verifierCalls),
           clock: advancingClock(),
           evidenceStore: evidence,
@@ -623,7 +625,7 @@ test("FX-1 v1 finish: guidance on the handoff invalidates risk, the green re-run
       planVersion: 1,
     }).filter((event) => event.type.startsWith("final_verification."))) store.append(input);
     // The re-assessment lands as a NEW event even though the revision is
-    // unchanged; the walk never reaches a second Architect turn.
+    // unchanged; the walk records it before the Architect re-requests.
     await stepUntilReassessed(manager, store, RUN);
     const risks = riskEvents(store, RUN);
     assert.equal(risks.length, 2, "the re-assessment is recorded instead of deduped");
@@ -633,10 +635,15 @@ test("FX-1 v1 finish: guidance on the handoff invalidates risk, the green re-run
     );
     assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
     assert.equal(manager.projection(RUN).buildRisk?.current?.state, "current");
-    // The Architect re-requests (stop 2) and the run completes.
-    store.append(seedEvent(RUN, "project.handoff_requested", "handoff-2", "architect", "architect", { summary: COMPLETION_SUMMARY }));
+    // FX-2: the Architect's real second complete_run records stop 2 as a NEW
+    // request (no seeded re-request).
     const final = await manager.runUntilBlocked(RUN);
     assert.notEqual(final.action, "step_allowance_yielded", "no livelock after the re-assessment");
+    const requests = store.readRun(RUN).filter((event) => event.type === "project.handoff_requested");
+    assert.equal(requests.length, 2, "the second complete_run records a new request");
+    assert.equal(requests[0]!.idempotencyKey, "project-handoff-requested");
+    assert.equal(requests[1]!.idempotencyKey, "project-handoff-requested:1");
+    assert.equal(architect.calls(), 2, "completion goes through a real second complete_run");
     assert.equal(manager.projection(RUN).status, "completed");
     assert.equal(manager.projection(RUN).projectHandoff?.choice, "apply_to_project");
     assert.equal(riskEvents(store, RUN).length, 2, "completion records no third assessment");
@@ -870,11 +877,14 @@ test("FX-1 docs-v2 finish: guidance on the handoff invalidates risk, the green r
       `build-risk:${fixture.baselineRevision}:generation-fx1-docs-rerun`,
     );
     assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
-    // The Architect re-requests (stop 2): the withdrawn stop reconciles as
-    // history, the chain continues, and the handoff completes.
-    store.append(seedEvent(RUN, "project.handoff_requested", "handoff-2", "architect", "architect", { summary: COMPLETION_SUMMARY }));
+    // FX-2: the Architect's real second complete_run re-requests (stop 2):
+    // the withdrawn stop reconciles as history, the chain continues, and
+    // the handoff completes (no seeded re-request).
     const final = await manager.runUntilBlocked(RUN);
     assert.notEqual(final.action, "step_allowance_yielded", "no livelock after the re-assessment");
+    const docsv2Requests = manager.events(RUN).filter((event) => event.type === "project.handoff_requested");
+    assert.equal(docsv2Requests.length, 2, "the second complete_run records a new request");
+    assert.equal(docsv2Requests[1]!.idempotencyKey, "project-handoff-requested:1");
     const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
     assert.equal(snapshots.length, 2);
     const first = snapshots[0]!.payload as Record<string, unknown>;
@@ -975,11 +985,15 @@ test("FX-1 restart after the re-assessment replays without a duplicate assessmen
       "current",
       "the re-assessment is current after replay",
     );
-    // The restarted run steps without re-assessing and completes.
-    store.append(seedEvent(RUN, "project.handoff_requested", "handoff-2", "architect", "architect", { summary: COMPLETION_SUMMARY }));
+    // The restarted run steps without re-assessing; the Architect's real
+    // second complete_run records stop 2 (no seeded re-request) and the run
+    // completes.
     manager.activate(RUN);
     await manager.awaitIdle(RUN);
     assert.equal(manager.projection(RUN).status, "completed");
+    const restartRequests = store.readRun(RUN).filter((event) => event.type === "project.handoff_requested");
+    assert.equal(restartRequests.length, 2, "the second complete_run records a new request");
+    assert.equal(restartRequests[1]!.idempotencyKey, "project-handoff-requested:1");
     assert.equal(riskEvents(store, RUN).length, 2, "no duplicate assessment after restart");
     assert.equal(verifierCalls.calls, callsBeforeRestart, "the restarted run never re-assesses current risk");
   } finally {

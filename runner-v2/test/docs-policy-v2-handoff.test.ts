@@ -3462,24 +3462,28 @@ test("C2b repair B1-R/G2-prod: the G2 flow through the production manager with t
       "the re-assessment is keyed by the re-run generation",
     );
     assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
-    store.append(e("project.handoff_requested", "handoff-2", "architect", "architect", { summary: COMPLETION_SUMMARY }));
+    // FX-2: the Architect's real second complete_run records stop 2 (no
+    // seeded re-request); the run then reconciles and completes.
     manager.activate(RUN);
     await manager.awaitIdle(RUN);
     // The withdrawn stop's landed commit was recorded as history before the
     // next stop committed: two snapshot events, one chain.
+    const restop = manager.events(RUN).filter((event) => event.type === "project.handoff_requested");
+    assert.equal(restop.length, 2, "the second complete_run records a new request");
+    assert.equal(restop[0]!.idempotencyKey, "project-handoff-requested");
+    assert.equal(restop[1]!.idempotencyKey, "project-handoff-requested:1");
+    assert.equal(architect.calls(), 2, "stop 1 plus the real re-request; the kernel snapshot itself makes no model call");
     const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
     assert.equal(snapshots.length, 2);
     const first = snapshots[0]!.payload as Record<string, unknown>;
     const second = snapshots[1]!.payload as Record<string, unknown>;
     assert.equal(first.stopSequence, stop1, "the withdrawn stop is recorded first, as history");
-    const restop = manager.events(RUN).filter((event) => event.type === "project.handoff_requested");
     assert.equal(second.stopSequence, restop[restop.length - 1]!.sequence, "the second record belongs to the re-request");
     assert.equal(second.parent, first.commit, "the new snapshot continues the withdrawn commit");
     assert.equal(manager.projection(RUN).projectDocs?.documentTip, second.commit);
     const projection = manager.projection(RUN);
     assert.equal(projection.status, "completed", "the handoff succeeds after reconciliation");
     assert.equal(projection.projectHandoff?.choice, "apply_to_project");
-    assert.equal(architect.calls(), 1, "the kernel snapshot makes no model call");
     assert.deepEqual(order, ["projectHandoff:2", "applied"], "the project changes only after the kernel accepts");
     const stateShow = await runGit({ cwd: fixture.integration.path, args: ["show", `${String(second.commit)}:docs/project/STATE.md`] });
     const applied = await runGit({ cwd: fixture.project, args: ["show", "HEAD:docs/project/STATE.md"] });
@@ -3599,7 +3603,8 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
       "the re-assessment is keyed by the re-run generation",
     );
     assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
-    store.append(e("project.handoff_requested", "handoff-2", "architect", "architect", { summary: COMPLETION_SUMMARY }));
+    // FX-2: the Architect's real second complete_run records stop 2 (no
+    // seeded re-request).
     // The transient: the withdrawn-stop lookup throws once at stop 2.
     failNextSnapshotLookupOnce(fixture.integration, "Injected transient snapshot lookup failure.");
     manager.activate(RUN);
@@ -3627,7 +3632,10 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
     const projection = manager.projection(RUN);
     assert.equal(projection.status, "completed", "the handoff completes after resume");
     assert.equal(projection.projectHandoff?.choice, "apply_to_project");
-    assert.equal(architect.calls(), 1, "the kernel snapshot makes no model call");
+    const g3requests = manager.events(RUN).filter((event) => event.type === "project.handoff_requested");
+    assert.equal(g3requests.length, 2, "the second complete_run records a new request");
+    assert.equal(g3requests[1]!.idempotencyKey, "project-handoff-requested:1");
+    assert.equal(architect.calls(), 2, "stop 1 plus the real re-request; the kernel snapshot itself makes no model call");
     assert.deepEqual(order, ["projectHandoff:2", "applied"], "the project changes only after the kernel accepts");
   } finally {
     await manager?.close();

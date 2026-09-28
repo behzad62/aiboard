@@ -2391,12 +2391,22 @@ function completeRunTool(
           readiness.issues,
         );
       }
+      // FX-2 (CR-1): key each handoff request by the withdrawals it follows.
+      // Guidance withdraws a requested handoff into projectHandoffHistory
+      // (history only grows), so its length is durable log state that is
+      // stable on replay: 0 keeps the old key shape so old logs replay
+      // unchanged, N keys the request after N withdrawals. The reducer never
+      // inspects the key.
+      const handoffRequests = projection.projectHandoffHistory?.length ?? 0;
+      const handoffRequestKey = handoffRequests === 0
+        ? "project-handoff-requested"
+        : `project-handoff-requested:${handoffRequests}`;
       return appendEvent(store, {
         runId: context.runId,
         type: "project.handoff_requested",
         occurredAt: clock(),
         actor: { role: "architect", id: context.actor.id },
-        idempotencyKey: "project-handoff-requested",
+        idempotencyKey: handoffRequestKey,
         payload: { summary: input.summary },
       }, { type: "architect_action", action: "run_completed" });
     },

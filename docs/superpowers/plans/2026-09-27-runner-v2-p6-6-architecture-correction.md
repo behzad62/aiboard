@@ -499,6 +499,14 @@ Runs as C2a then C2b (CD-13).
   `scheduler-store.ts` guidance invalidation). Test through the production manager for a v1 finish
   run and a v2 finish run.
 
+### FX-2 — Repeatable handoff request and verifier re-selection (CD-16 follow-up)
+
+- **Outcome:** a run whose handoff was withdrawn by guidance can request it again and complete, and
+  a verifier that becomes unavailable again after an owner selection prompts the owner again. Items:
+  FX-1 review r1 CR-1 (HIGH, `complete_run`'s fixed key `project-handoff-requested`) and N1
+  (`verifier-selection:<revision>:<reason>`), both pre-existing. Old logs replay unchanged.
+- **Tests:** through the production manager for v1 and docs-v2 finish runs; review probes D and F.
+
 ### T7a-T7d — parent T7 split (AR-R17, AR-R18)
 
 The parent T7 contract (plan §5 T7) stays binding. Its items split as follows; each packet gets
@@ -512,6 +520,8 @@ a full brief at its start from the parent text plus these lines.
 - **T7b APIs and client:** authenticated, idempotent source, plan-readiness and explicit-start
   controls; stale reconnect cannot start an old plan; unauthorized user or worker cannot mutate
   acceptance; on-demand export API through C1.
+  Also FX-2 review r2 F1: verifier and Architect selection answers name the requirement they
+  answer, and the kernel refuses an answer to a stale requirement.
 - **T7c UI:** planning-ready vs delivery-complete, requirements and blockers, answered-run view and
   answer-review opt-in, per-pass purpose and token cost, review independence and ladder rungs,
   docs v2 run options and their defaults (CD-5, CD-2 shown to the owner), the hand-edited-snapshot
