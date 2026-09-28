@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import {
   QUORIDOR_SIZE,
   QUORIDOR_WALL_GRID,
   formatQuoridorSquare,
   getLegalActions,
+  wallCoversIntersection,
 } from "@/lib/games/quoridor/engine";
 import type {
   QuoridorGameState,
@@ -15,14 +16,10 @@ import type {
   QuoridorWallOrientation,
 } from "@/lib/games/quoridor/types";
 
-export type QuoridorActionMode = "move" | "wall";
-
 interface QuoridorBoardProps {
   state: QuoridorGameState;
   interactive: boolean;
-  actionMode: QuoridorActionMode;
   wallOrientation: QuoridorWallOrientation;
-  onActionModeChange: (mode: QuoridorActionMode) => void;
   onWallOrientationChange: (orientation: QuoridorWallOrientation) => void;
   onMove: (row: number, col: number) => void;
   onPlaceWall: (row: number, col: number, orientation: QuoridorWallOrientation) => void;
@@ -57,9 +54,7 @@ function wallCoversHorizontal(
 export function QuoridorBoard({
   state,
   interactive,
-  actionMode,
   wallOrientation,
-  onActionModeChange,
   onWallOrientationChange,
   onMove,
   onPlaceWall,
@@ -81,6 +76,14 @@ export function QuoridorBoard({
     }
     return set;
   }, [legalActions]);
+  const [hoveredWall, setHoveredWall] = useState<QuoridorWall | null>(null);
+  const previewWall =
+    hoveredWall &&
+    legalWalls.has(
+      `${hoveredWall.row},${hoveredWall.col},${hoveredWall.orientation}`
+    )
+      ? hoveredWall
+      : null;
 
   const tracks = Array.from({ length: QUORIDOR_SIZE * 2 - 1 }, (_, index) =>
     index % 2 === 0 ? "minmax(28px, 1fr)" : "14px"
@@ -89,38 +92,23 @@ export function QuoridorBoard({
   return (
     <div className="w-full max-w-[640px]" data-testid="quoridor-board">
       <div className="mb-3 flex flex-wrap items-center justify-center gap-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+          Wall direction
+        </span>
         <ModeButton
-          label="Move pawn"
-          testId="quoridor-mode-move"
-          selected={actionMode === "move"}
-          onClick={() => onActionModeChange("move")}
+          label="Horizontal"
+          testId="quoridor-orientation-H"
+          selected={wallOrientation === "H"}
+          onClick={() => onWallOrientationChange("H")}
           disabled={!interactive}
         />
         <ModeButton
-          label="Place wall"
-          testId="quoridor-mode-wall"
-          selected={actionMode === "wall"}
-          onClick={() => onActionModeChange("wall")}
+          label="Vertical"
+          testId="quoridor-orientation-V"
+          selected={wallOrientation === "V"}
+          onClick={() => onWallOrientationChange("V")}
           disabled={!interactive}
         />
-        {actionMode === "wall" && (
-          <>
-            <ModeButton
-              label="Horizontal"
-              testId="quoridor-orientation-H"
-              selected={wallOrientation === "H"}
-              onClick={() => onWallOrientationChange("H")}
-              disabled={!interactive}
-            />
-            <ModeButton
-              label="Vertical"
-              testId="quoridor-orientation-V"
-              selected={wallOrientation === "V"}
-              onClick={() => onWallOrientationChange("V")}
-              disabled={!interactive}
-            />
-          </>
-        )}
       </div>
 
       <div
@@ -152,9 +140,7 @@ export function QuoridorBoard({
                 const col = squareCol;
                 const occupant = occupantAt(state, row, col);
                 const canMove =
-                  interactive &&
-                  actionMode === "move" &&
-                  legalMoves.has(`${row},${col}`);
+                  interactive && legalMoves.has(`${row},${col}`);
 
                 return (
                   <button
@@ -186,6 +172,10 @@ export function QuoridorBoard({
                 const row = gridRow / 2;
                 const colBetween = (gridCol - 1) / 2;
                 const filled = wallCoversVertical(state.walls, row, colBetween);
+                const preview =
+                  !filled &&
+                  previewWall !== null &&
+                  wallCoversVertical([previewWall], row, colBetween);
                 return (
                   <div
                     key={`${gridRow}-${gridCol}`}
@@ -193,9 +183,12 @@ export function QuoridorBoard({
                       "m-[1px] rounded-sm",
                       filled
                         ? "bg-amber-950 dark:bg-amber-200"
-                        : "bg-amber-300/70 dark:bg-amber-800/80"
+                        : preview
+                          ? "bg-sky-400/60 dark:bg-sky-500/50"
+                          : "bg-amber-300/70 dark:bg-amber-800/80"
                     )}
                     aria-hidden="true"
+                    data-testid={`quoridor-vgap-${row}-${colBetween}`}
                   />
                 );
               }
@@ -208,6 +201,10 @@ export function QuoridorBoard({
                   rowBetween,
                   col
                 );
+                const preview =
+                  !filled &&
+                  previewWall !== null &&
+                  wallCoversHorizontal([previewWall], rowBetween, col);
                 return (
                   <div
                     key={`${gridRow}-${gridCol}`}
@@ -215,9 +212,12 @@ export function QuoridorBoard({
                       "m-[1px] rounded-sm",
                       filled
                         ? "bg-amber-950 dark:bg-amber-200"
-                        : "bg-amber-300/70 dark:bg-amber-800/80"
+                        : preview
+                          ? "bg-sky-400/60 dark:bg-sky-500/50"
+                          : "bg-amber-300/70 dark:bg-amber-800/80"
                     )}
                     aria-hidden="true"
+                    data-testid={`quoridor-hgap-${rowBetween}-${col}`}
                   />
                 );
               }
@@ -227,27 +227,61 @@ export function QuoridorBoard({
                 const wallCol = (gridCol - 1) / 2;
                 const canPlace =
                   interactive &&
-                  actionMode === "wall" &&
                   wallRow < QUORIDOR_WALL_GRID &&
                   wallCol < QUORIDOR_WALL_GRID &&
                   legalWalls.has(
                     `${wallRow},${wallCol},${wallOrientation}`
                   );
+                const filled = wallCoversIntersection(
+                  state.walls,
+                  wallRow,
+                  wallCol
+                );
+                const preview =
+                  !filled &&
+                  previewWall !== null &&
+                  previewWall.row === wallRow &&
+                  previewWall.col === wallCol;
 
                 return (
                   <button
                     key={`${gridRow}-${gridCol}`}
                     type="button"
                     className={cn(
-                      "m-[1px] rounded-sm bg-amber-400/80 dark:bg-amber-700",
+                      filled
+                        ? "bg-amber-950 dark:bg-amber-200"
+                        : preview
+                          ? "bg-sky-400/70 dark:bg-sky-500/60"
+                          : "bg-amber-400/80 dark:bg-amber-700",
                       canPlace &&
                         "cursor-pointer ring-2 ring-sky-400 ring-offset-1 ring-offset-amber-200",
                       !canPlace && "cursor-default"
                     )}
                     disabled={!canPlace}
+                    onMouseEnter={() => {
+                      if (canPlace) {
+                        setHoveredWall({
+                          row: wallRow,
+                          col: wallCol,
+                          orientation: wallOrientation,
+                        });
+                      }
+                    }}
+                    onMouseLeave={() => setHoveredWall(null)}
+                    onFocus={() => {
+                      if (canPlace) {
+                        setHoveredWall({
+                          row: wallRow,
+                          col: wallCol,
+                          orientation: wallOrientation,
+                        });
+                      }
+                    }}
+                    onBlur={() => setHoveredWall(null)}
                     onClick={() => {
                       if (canPlace) {
                         onPlaceWall(wallRow, wallCol, wallOrientation);
+                        setHoveredWall(null);
                       }
                     }}
                     aria-label={`Wall intersection ${formatQuoridorSquare({
