@@ -17,6 +17,8 @@ import type {
   SchedulerStore,
 } from "./scheduler-store.js";
 import {
+  describeSnapshotCommitFacts,
+  handoffLinkRawTargetsClaudeDotMd,
   V2_AGENTS_SECTION_BODY,
   V2_CLAUDE_POINTER_LINE,
 } from "./project-docs.js";
@@ -456,6 +458,81 @@ export function sanitizeSpecSourceId(sourceId: string, digest?: string): string 
   return safe;
 }
 
+/**
+ * Per-entry-file handoff status from the COMMIT tree facts alone (C2c
+ * NF-2/CD-15, NF-3). Each file is satisfied directly, through a link whose
+ * target blob holds the section (redirected at stage time, recorded on the
+ * redirect), or -- for CLAUDE.md only -- through the legacy link to
+ * AGENTS.md. A link to anything else satisfies the file through the
+ * recorded skip reason, but only when the commit tree corroborates the
+ * link (its raw target); otherwise the layout is refused (null), so a
+ * commit tree without the lines is never accepted on a live checkout's
+ * word alone (U1, U2). A redirect reason counts only with its ViaLink
+ * proof: a redirect the tree disproves is a failure, not a skip.
+ */
+export function handoffEntryFileStatus(
+  entryPoint: ProjectDocCommitResult["entryPoint"],
+  reasons: {
+    agentsRedirect?: string;
+    agentsRedirectTarget?: string;
+    agentsSkip?: string;
+    claudeRedirect?: string;
+    claudeSkip?: string;
+  },
+): {
+  agentsSectionCommitted: boolean;
+  agentsSectionViaLink?: string;
+  claudeLineCommitted: boolean;
+  claudeLineViaLink?: string;
+} | null {
+  let agentsSectionCommitted = entryPoint.agentsMarkedSectionV2;
+  let agentsSectionViaLink = reasons.agentsRedirect;
+  if (entryPoint.agentsSectionV2ViaLink === true) {
+    agentsSectionCommitted = true;
+  } else {
+    agentsSectionViaLink = undefined;
+  }
+  if (!agentsSectionCommitted) {
+    if (reasons.agentsSkip === undefined || entryPoint.agentsLinkTarget === undefined) return null;
+    agentsSectionViaLink = reasons.agentsSkip;
+  }
+  let claudeLineCommitted = entryPoint.claudePointerV2;
+  let claudeLineViaLink = reasons.claudeRedirect;
+  if (entryPoint.claudePointerV2ViaAgentsLink === true) {
+    claudeLineCommitted = true;
+    claudeLineViaLink = "CLAUDE.md is a symbolic link to AGENTS.md";
+  } else if (entryPoint.claudePointerV2ViaLink === true) {
+    claudeLineCommitted = true;
+  } else {
+    claudeLineViaLink = undefined;
+  }
+  if (!claudeLineCommitted) {
+    // C2c repair M-6: when AGENTS.md resolves to CLAUDE.md the merged
+    // section carries no @AGENTS.md self-import (recorded as the CLAUDE.md
+    // skip reason); the AGENTS.md section in CLAUDE.md satisfies both
+    // entry lines when the commit tree proves the redirect into CLAUDE.md.
+    if (
+      reasons.claudeSkip !== undefined &&
+      reasons.agentsRedirectTarget === "CLAUDE.md" &&
+      entryPoint.agentsLinkTarget !== undefined &&
+      handoffLinkRawTargetsClaudeDotMd(entryPoint.agentsLinkTarget) &&
+      entryPoint.agentsSectionV2ViaLink === true
+    ) {
+      claudeLineCommitted = true;
+      claudeLineViaLink = reasons.claudeSkip;
+    } else {
+      if (reasons.claudeSkip === undefined || entryPoint.claudeLinkTarget === undefined) return null;
+      claudeLineViaLink = reasons.claudeSkip;
+    }
+  }
+  return {
+    agentsSectionCommitted,
+    ...(agentsSectionViaLink !== undefined ? { agentsSectionViaLink } : {}),
+    claudeLineCommitted,
+    ...(claudeLineViaLink !== undefined ? { claudeLineViaLink } : {}),
+  };
+}
+
 export interface ProjectDocsPort {
   commit(input: ProjectDocCommitRequest): Promise<ProjectDocCommitResult>;
   commitHandoffSnapshot(input: HandoffSnapshotCommitRequest): Promise<ProjectDocCommitResult>;
@@ -485,6 +562,16 @@ export interface ProjectDocsPort {
    * reason: production always wires it.
    */
   readIntegrationBaselineRevision(): Promise<{ revision: string }>;
+  /**
+   * C2c (NF-1 residual, required): whether a spec-copy path can be staged
+   * right now. The check writes nothing and answers with a dry-run
+   * `git add`, which stages nothing; a link at any component of the path,
+   * or other bytes already at the path, reports unstageable. Required so a
+   * missing wiring is a type error, never a silently wrong `spec:` line:
+   * the runtime asks before rendering STATE.md and renders "not recorded"
+   * when the copy will be skipped.
+   */
+  canStageSpecPath(input: { path: string; content: string }): Promise<{ stageable: boolean; unstageableReason?: "path_occupied" | "write_failed" }>;
 }
 
 export interface BuildStepResult {
@@ -2262,8 +2349,48 @@ export class BuildRuntime {
             if (stem === undefined) {
               specCopySkipped = "unusable_source_id";
             } else {
-              specPath = `docs/project/specs/${stem}.md`;
-              specWrite = { path: specPath, content: specBytes.toString("utf8") };
+              // C2c (NF-4): the final spec path is decided BEFORE rendering
+              // STATE.md, from the integration tip blobs -- never assumed.
+              // The `spec:` line then names the real copy; a skip renders
+              // "not recorded" (facts omit specPath) and the event omits it.
+              const wantedText = specBytes.toString("utf8");
+              const resolved = await this.resolveHandoffSpecCopyPath(
+                `docs/project/specs/${stem}.md`,
+                wantedText,
+              );
+              if ("skipped" in resolved) {
+                specCopySkipped = resolved.skipped;
+              } else if (resolved.written) {
+                // C2c (NF-1 residual): the copy needs a worktree write and a
+                // stage, so ask the port first. An unstageable path (a
+                // gitignored specs directory) skips the copy here -- the
+                // facts omit specPath and STATE.md renders "not recorded".
+                // An unreadable answer defers to the stage-time truth (the
+                // separate spec `git add` still drops it with write_failed).
+                // C2c repair cycle 2 (m-2): a check error never fails open.
+                // The copy is optional, so the path counts as not stageable:
+                // STATE.md renders "not recorded" and the reason is recorded.
+                // (m-4) an occupant reads back as path_occupied, every other
+                // refusal as write_failed.
+                let stageable = true;
+                let unstageableReason: "path_occupied" | "write_failed" | undefined;
+                try {
+                  const answer = await port.canStageSpecPath({ path: resolved.path, content: wantedText });
+                  stageable = answer.stageable;
+                  unstageableReason = answer.unstageableReason;
+                } catch {
+                  stageable = false;
+                  unstageableReason = undefined;
+                }
+                if (!stageable) {
+                  specCopySkipped = unstageableReason === "path_occupied" ? "path_occupied" : "write_failed";
+                } else {
+                  specPath = resolved.path;
+                  specWrite = { path: resolved.path, content: wantedText };
+                }
+              } else {
+                specPath = resolved.path;
+              }
             }
           }
         }
@@ -2309,25 +2436,49 @@ export class BuildRuntime {
     } catch (error) {
       return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, error);
     }
-    if (stored.content === null || !verifyHandoffSnapshotDigest(stored.content)) {
-      return this.pauseForHandoffSnapshotFailure(
-        stopSequence,
-        lastSequence,
-        stored.content === null
-          ? `commit ${result.commit} holds no docs/project/STATE.md`
-          : `commit ${result.commit} holds a STATE.md that failed its digest check`,
-      );
-    }
-    const committedDigest = /body_sha256: ([a-f0-9]{64})/.exec(stored.content.split("\n")[0] ?? "")?.[1] ?? "";
-    if (!committedDigest) {
-      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "the committed snapshot carries no digest");
-    }
-    if (!stored.paths.includes("docs/project/STATE.md")) {
-      return this.pauseForHandoffSnapshotFailure(
-        stopSequence,
-        lastSequence,
-        `commit ${result.commit} lists no docs/project/STATE.md path`,
-      );
+    // C2c repair cycle 2 (NB-1, NB-2, m-1, m-3, m-4): every recorded fact
+    // about this commit -- fresh or reused -- comes from the ONE commit-tree
+    // describer. The fresh path, the reuse path and the withdrawn-stop path
+    // below share it, so no reuse layout needs its own patch. Stage-time
+    // facts only confirm the tree, never replace it: a reused commit
+    // carries none, and an uncorroborated stage-time reason (an out-of-band
+    // junction the tree never held) records nothing, pausing fail-closed.
+    // The AR-R05 gate accepts the recorded reason the way it accepts
+    // export_only.
+    const described = describeSnapshotCommitFacts({
+      entryPoint: result.entryPoint,
+      storedPaths: stored.paths,
+      ...(result.dirLinks?.[0] !== undefined ? { commitStateLink: result.dirLinks[0] } : {}),
+      ...(result.skipped !== undefined ? { stageSkipped: result.skipped } : {}),
+      ...(result.redirected !== undefined ? { stageRedirected: result.redirected } : {}),
+    });
+    const stateChanged = described.stateChanged;
+    const stateSkippedReason = described.stateSkippedReason;
+    // A commit with no fresh STATE.md but a recorded link reason takes the
+    // CD-17 path below (no digest to record); without a reason it still
+    // fails closed exactly as before.
+    let committedDigest = "";
+    if (stateChanged || stateSkippedReason === undefined) {
+      if (stored.content === null || !verifyHandoffSnapshotDigest(stored.content)) {
+        return this.pauseForHandoffSnapshotFailure(
+          stopSequence,
+          lastSequence,
+          stored.content === null
+            ? `commit ${result.commit} holds no docs/project/STATE.md`
+            : `commit ${result.commit} holds a STATE.md that failed its digest check`,
+        );
+      }
+      committedDigest = /body_sha256: ([a-f0-9]{64})/.exec(stored.content.split("\n")[0] ?? "")?.[1] ?? "";
+      if (!committedDigest) {
+        return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, "the committed snapshot carries no digest");
+      }
+      if (!stateChanged) {
+        return this.pauseForHandoffSnapshotFailure(
+          stopSequence,
+          lastSequence,
+          `commit ${result.commit} lists no docs/project/STATE.md path`,
+        );
+      }
     }
     // C2b (AR-R05): the full gate needs the v2 entry lines in the commit's
     // own tree. The entry-point facts above were read back from the commit
@@ -2335,19 +2486,35 @@ export class BuildRuntime {
     // missing STATE.md -- recorded, never silently accepted.
     // C2b repair m5: a CLAUDE.md that links to AGENTS.md satisfies the line
     // through the link (recorded below); any other missing line still fails.
-    const claudeLineViaLink = result.entryPoint.claudePointerV2ViaAgentsLink === true
-      ? "CLAUDE.md is a symbolic link to AGENTS.md"
-      : undefined;
-    if (
-      !result.entryPoint.agentsMarkedSectionV2 ||
-      (!result.entryPoint.claudePointerV2 && claudeLineViaLink === undefined)
-    ) {
+    // C2c (NF-2/CD-15, NF-3): each entry file is satisfied by the COMMIT
+    // tree alone -- directly, through a link whose target blob holds the
+    // section (the runner wrote it into the target path, recorded on the
+    // redirect), or through the legacy CLAUDE.md-to-AGENTS.md link. A link
+    // to anything else skips that entry file with a recorded reason, and
+    // the gate accepts the reason when the commit tree corroborates the
+    // link. Anything without commit-tree proof pauses fail-closed (U1, U2).
+    // The entry facts come from the same describer above: on a reused
+    // commit the M-6 omission and every skip are re-described from the
+    // commit tree (BL-2/NB-1), so a retry that reuses a skip-layout commit
+    // records it instead of pausing again on every resume. A reason is
+    // accepted only with commit-tree corroboration
+    // (handoffEntryFileStatus), so this cannot accept a commit the tree
+    // does not prove.
+    const entryStatus = handoffEntryFileStatus(result.entryPoint, {
+      ...(described.agentsRedirect !== undefined ? { agentsRedirect: described.agentsRedirect } : {}),
+      ...(described.agentsRedirectTarget !== undefined ? { agentsRedirectTarget: described.agentsRedirectTarget } : {}),
+      ...(described.agentsSkip !== undefined ? { agentsSkip: described.agentsSkip } : {}),
+      ...(described.claudeRedirect !== undefined ? { claudeRedirect: described.claudeRedirect } : {}),
+      ...(described.claudeSkip !== undefined ? { claudeSkip: described.claudeSkip } : {}),
+    });
+    if (entryStatus === null) {
       return this.pauseForHandoffSnapshotFailure(
         stopSequence,
         lastSequence,
         `commit ${result.commit} lacks the v2 AGENTS.md section or the CLAUDE.md line`,
       );
     }
+    const { agentsSectionCommitted, agentsSectionViaLink, claudeLineCommitted, claudeLineViaLink } = entryStatus;
     // C2b repair m2/m4: the event describes the committed tree. On a reused
     // commit the pre-commit reads are stale (the tip is the commit itself),
     // so previousSnapshotEdited comes from the notice line in the committed
@@ -2367,7 +2534,12 @@ export class BuildRuntime {
     const stagedSpecSkipped = stagedSpecSkip === undefined
       ? undefined
       : stagedSpecSkip.reason.includes("(path_occupied)") ? "path_occupied" : "write_failed";
-    const eventSpecPath = commitClaim.specPath ?? specPath;
+    // C2c (NF-4): the event omits specPath when no copy was written (its
+    // field doc). A copy was attempted exactly when specWrite was set; when
+    // the committed tree proves nothing, the copy never landed -- the
+    // separate spec `git add` dropped it (NF-1) -- so the path stays out
+    // while the skip reason is still recorded below.
+    const eventSpecPath = commitClaim.specPath ?? (specWrite !== undefined ? undefined : specPath);
     const eventSpecCopySkipped = commitClaim.specCopied
       ? undefined
       : (commitClaim.specCopySkipped ?? stagedSpecSkipped ?? specCopySkipped);
@@ -2380,11 +2552,19 @@ export class BuildRuntime {
       head: result.head,
       bodyDigest: committedDigest,
       paths: stored.paths,
-      previousSnapshotEdited: stored.content.includes(PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE),
+      // C2c repair CD-17: with no fresh STATE.md there is no committed
+      // notice line to read; the skip reason below carries the facts.
+      previousSnapshotEdited: stateChanged && stored.content !== null
+        ? stored.content.includes(PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE)
+        : false,
       ...(eventSpecPath !== undefined ? { specPath: eventSpecPath } : {}),
       ...(commitClaim.specCopied ? { specCopied: true as const } : {}),
       ...(eventSpecCopySkipped !== undefined ? { specCopySkipped: eventSpecCopySkipped } : {}),
+      ...(agentsSectionViaLink !== undefined ? { agentsSectionViaLink } : {}),
       ...(claudeLineViaLink !== undefined ? { claudeLineViaLink } : {}),
+      ...(agentsSectionCommitted ? {} : { agentsSectionCommitted: false as const }),
+      ...(claudeLineCommitted ? {} : { claudeLineCommitted: false as const }),
+      ...(stateSkippedReason !== undefined ? { stateSkippedReason } : {}),
     });
     return { status: "paused", action: "handoff_snapshot_committed" };
   }
@@ -2403,6 +2583,47 @@ export class BuildRuntime {
       if (error instanceof ArtifactNotFoundError) return null;
       throw error;
     }
+  }
+
+  /**
+   * C2c (NF-4): the final spec-copy path, decided from the integration tip
+   * blobs before STATE.md renders. Absent target: the copy lands there.
+   * Target holding the wanted bytes: the tree already holds it, so no write
+   * is needed and the line still names it. Target holding other bytes: the
+   * copy moves to the digest-suffixed sibling (the same name the kernel
+   * staging uses), unless that is taken too -- then the copy is skipped as
+   * path_occupied. An unreadable tip skips the copy with a reason instead
+   * of failing the snapshot (the copy is conditional, the snapshot is not).
+   */
+  private async resolveHandoffSpecCopyPath(
+    target: string,
+    wantedText: string,
+  ): Promise<{ path: string; written: boolean } | { skipped: string }> {
+    const port = this.projectDocs;
+    if (!port) return { skipped: "spec_tip_unreadable" };
+    let tip: { content: string | null };
+    try {
+      tip = await port.readIntegrationTipFile({ path: target });
+    } catch {
+      return { skipped: "spec_tip_unreadable" };
+    }
+    if (tip.content === null || tip.content === wantedText) {
+      return { path: target, written: tip.content === null };
+    }
+    const sibling = target.replace(
+      /\.md$/,
+      `-${createHash("sha256").update(wantedText, "utf8").digest("hex").slice(0, 16)}.md`,
+    );
+    let siblingTip: { content: string | null };
+    try {
+      siblingTip = await port.readIntegrationTipFile({ path: sibling });
+    } catch {
+      return { skipped: "spec_tip_unreadable" };
+    }
+    if (siblingTip.content === null || siblingTip.content === wantedText) {
+      return { path: sibling, written: siblingTip.content === null };
+    }
+    return { skipped: "path_occupied" };
   }
 
   /**
@@ -2496,17 +2717,42 @@ export class BuildRuntime {
       } catch (error) {
         throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: read-back threw (${snapshotFailureDetail(error)}).`);
       }
-      if (stored.content === null || !verifyHandoffSnapshotDigest(stored.content)) {
-        throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: commit ${found.commit} holds no verifiable STATE.md.`);
+      // C2c repair cycle 2: a withdrawn commit is described by the same ONE
+      // describer as the current stop -- a withdrawn commit with no fresh
+      // STATE.md is history with a recorded link reason instead of a
+      // failure, so the current stop never wedges on it. History only: the
+      // gate still binds to the latest request, so this never satisfies a
+      // later gate.
+      const withdrawnDescribed = describeSnapshotCommitFacts({
+        entryPoint: found.entryPoint,
+        storedPaths: stored.paths,
+        ...(found.dirLinks?.[0] !== undefined ? { commitStateLink: found.dirLinks[0] } : {}),
+      });
+      const withdrawnStateChanged = withdrawnDescribed.stateChanged;
+      const withdrawnStateSkipped = withdrawnDescribed.stateSkippedReason;
+      let withdrawnDigest = "";
+      if (withdrawnStateChanged || withdrawnStateSkipped === undefined) {
+        if (stored.content === null || !verifyHandoffSnapshotDigest(stored.content)) {
+          throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: commit ${found.commit} holds no verifiable STATE.md.`);
+        }
+        withdrawnDigest = /body_sha256: ([a-f0-9]{64})/.exec(stored.content.split("\n")[0] ?? "")?.[1] ?? "";
+        if (!withdrawnDigest || !withdrawnStateChanged) {
+          throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: commit ${found.commit} cannot be recorded.`);
+        }
       }
-      const committedDigest = /body_sha256: ([a-f0-9]{64})/.exec(stored.content.split("\n")[0] ?? "")?.[1] ?? "";
-      if (!committedDigest || !stored.paths.includes("docs/project/STATE.md")) {
-        throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: commit ${found.commit} cannot be recorded.`);
-      }
-      if (
-        !found.entryPoint.agentsMarkedSectionV2 ||
-        (!found.entryPoint.claudePointerV2 && found.entryPoint.claudePointerV2ViaAgentsLink !== true)
-      ) {
+      // The lookup path carries no staging decisions, so every entry fact
+      // comes from the same describer (link-to-elsewhere skips and the M-6
+      // omission re-described from the commit tree). History only: the gate
+      // still binds to the latest request, so this never satisfies a later
+      // gate.
+      const withdrawnStatus = handoffEntryFileStatus(found.entryPoint, {
+        ...(withdrawnDescribed.agentsRedirect !== undefined ? { agentsRedirect: withdrawnDescribed.agentsRedirect } : {}),
+        ...(withdrawnDescribed.agentsRedirectTarget !== undefined ? { agentsRedirectTarget: withdrawnDescribed.agentsRedirectTarget } : {}),
+        ...(withdrawnDescribed.agentsSkip !== undefined ? { agentsSkip: withdrawnDescribed.agentsSkip } : {}),
+        ...(withdrawnDescribed.claudeRedirect !== undefined ? { claudeRedirect: withdrawnDescribed.claudeRedirect } : {}),
+        ...(withdrawnDescribed.claudeSkip !== undefined ? { claudeSkip: withdrawnDescribed.claudeSkip } : {}),
+      });
+      if (withdrawnStatus === null) {
         throw new Error(`withdrawn-stop reconciliation failed for stop ${stopSequence}: commit ${found.commit} lacks the v2 entry lines.`);
       }
       const facts = await this.withdrawnStopFacts(stopSequence);
@@ -2521,15 +2767,19 @@ export class BuildRuntime {
         commit: found.commit,
         parent: found.parent,
         head: found.head,
-        bodyDigest: committedDigest,
+        bodyDigest: withdrawnDigest,
         paths: stored.paths,
-        previousSnapshotEdited: stored.content.includes(PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE),
+        previousSnapshotEdited: withdrawnStateChanged && stored.content !== null
+          ? stored.content.includes(PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE)
+          : false,
         ...(claim.specPath !== undefined ? { specPath: claim.specPath } : {}),
         ...(claim.specCopied ? { specCopied: true as const } : {}),
         ...(claim.specCopied || claim.specCopySkipped === undefined ? {} : { specCopySkipped: claim.specCopySkipped }),
-        ...(found.entryPoint.claudePointerV2ViaAgentsLink === true
-          ? { claudeLineViaLink: "CLAUDE.md is a symbolic link to AGENTS.md" }
-          : {}),
+        ...(withdrawnStatus.agentsSectionViaLink !== undefined ? { agentsSectionViaLink: withdrawnStatus.agentsSectionViaLink } : {}),
+        ...(withdrawnStatus.claudeLineViaLink !== undefined ? { claudeLineViaLink: withdrawnStatus.claudeLineViaLink } : {}),
+        ...(withdrawnStatus.agentsSectionCommitted ? {} : { agentsSectionCommitted: false as const }),
+        ...(withdrawnStatus.claudeLineCommitted ? {} : { claudeLineCommitted: false as const }),
+        ...(withdrawnStateSkipped !== undefined ? { stateSkippedReason: withdrawnStateSkipped } : {}),
       });
       recorded.add(stopSequence);
       appended = true;
@@ -2560,13 +2810,23 @@ export class BuildRuntime {
     commit: string;
     parent: string;
     head: string;
+    /**
+     * The committed STATE.md body digest (C2c repair CD-17: "" when
+     * stateSkippedReason carries the skip instead -- no STATE.md was
+     * committed, so there is no digest to record).
+     */
     bodyDigest: string;
     paths: string[];
     previousSnapshotEdited: boolean;
     specPath?: string;
     specCopied?: boolean;
     specCopySkipped?: string;
+    agentsSectionCommitted?: boolean;
+    agentsSectionViaLink?: string;
+    claudeLineCommitted?: boolean;
     claudeLineViaLink?: string;
+    /** C2c repair CD-17: why no STATE.md was committed (a linked directory above it). Absent means STATE.md committed. */
+    stateSkippedReason?: string;
   }): void {
     this.store.append({
       runId: this.runId,
@@ -2584,12 +2844,14 @@ export class BuildRuntime {
         bodyDigest: input.bodyDigest,
         paths: input.paths,
         previousSnapshotEdited: input.previousSnapshotEdited,
-        agentsSectionCommitted: true,
-        claudeLineCommitted: true,
+        agentsSectionCommitted: input.agentsSectionCommitted ?? true,
+        claudeLineCommitted: input.claudeLineCommitted ?? true,
         ...(input.specPath !== undefined ? { specPath: input.specPath } : {}),
         ...(input.specCopied === true ? { specCopied: true as const } : {}),
         ...(input.specCopySkipped !== undefined ? { specCopySkipped: input.specCopySkipped } : {}),
+        ...(input.agentsSectionViaLink !== undefined ? { agentsSectionViaLink: input.agentsSectionViaLink } : {}),
         ...(input.claudeLineViaLink !== undefined ? { claudeLineViaLink: input.claudeLineViaLink } : {}),
+        ...(input.stateSkippedReason !== undefined ? { stateSkippedReason: input.stateSkippedReason } : {}),
       },
     });
   }

@@ -399,6 +399,7 @@ function gitDocsPort(integration: IntegrationManager): ProjectDocsPort {
     findTrackedFileWithDigest: async (input) => integration.findTrackedFileWithDigest(input),
     findHandoffSnapshotCommit: async (input) => integration.findHandoffSnapshotCommit(input),
     readIntegrationBaselineRevision: async () => integration.readIntegrationBaselineRevision(),
+    canStageSpecPath: async (input) => integration.canStageSpecPath(input),
     relateRevision: async () => "strict_descendant" as const,
   };
 }

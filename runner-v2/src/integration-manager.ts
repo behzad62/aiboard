@@ -10,7 +10,7 @@ import {
   rmdir,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
 import {
@@ -24,6 +24,8 @@ import {
   agentsMarkedSectionSatisfiesV2,
   claudePointerSatisfies,
   claudePointerSatisfiesV2,
+  HANDOFF_STATE_LINK_COMPONENTS,
+  resolveHandoffLinkTarget,
   spliceMarkedArchitectSectionBytes,
   validateProjectDocPath,
   type DocumentTipRelation,
@@ -676,7 +678,7 @@ export class IntegrationManager {
       // C2b (M7): entry files go through the marked-section splice, never a
       // whole-file overwrite -- the same staging the Architect path uses, so
       // bytes outside the markers survive every kernel commit.
-      const { staged: paths, skipped } = await this.stageProjectDocWrites(
+      const { staged: paths, skipped, redirected } = await this.stageProjectDocWrites(
         input.writes.filter((write) => !isHandoffSpecCopyPath(write.path)),
         { skipClaudeAgentsLink: true },
       );
@@ -691,9 +693,70 @@ export class IntegrationManager {
       paths.push(...specStaging.staged);
       skipped.push(...specStaging.skipped);
       if (paths.length === 0) {
-        throw new Error(`Project document commit wrote nothing: ${skipped.map((entry) => entry.reason).join(" ") || "every write was skipped."}`);
+        // C2c repair cycle 4 (NB-9): every write skipped with a recorded
+        // reason (a docs link together with both entry files linked
+        // elsewhere) still hands off. The reducer accepts the `paths: []`
+        // shape with those reasons (round 3, NB-4), so record an empty
+        // snapshot commit instead of wedging the run. Nothing else may be
+        // staged into it: the index must be clean (fail closed with the
+        // original throw otherwise), and the commit carries every runner
+        // trailer so key reuse still finds it. The v1 Architect path below
+        // keeps the throw.
+        const indexStatus = await this.git(this.path, ["diff", "--cached", "--quiet"], true);
+        if (indexStatus.exitCode !== 0) {
+          throw new Error(`Project document commit wrote nothing: ${skipped.map((entry) => entry.reason).join(" ") || "every write was skipped."}`);
+        }
+        try {
+          await this.execute({
+            cwd: this.path,
+            args: [
+              "commit",
+              "--allow-empty",
+              "-m",
+              input.summary,
+              "--trailer",
+              `AIBoard-Run: ${input.runId}`,
+              "--trailer",
+              "AIBoard-Author: runner",
+              "--trailer",
+              "AIBoard-Generated: handoff-snapshot",
+              "--trailer",
+              `AIBoard-Snapshot-Key: ${input.snapshotKey}`,
+            ],
+            env: RUNNER_IDENTITY,
+          });
+        } catch (error) {
+          await this.git(this.path, ["reset", "--hard", "HEAD"], true);
+          throw error;
+        }
+        const commit = await this.head();
+        this.currentRevision = commit;
+        const committed = await this.documentCommitResult(commit);
+        if (skipped.length > 0) committed.skipped = skipped;
+        if (redirected.length > 0) committed.redirected = redirected;
+        return committed;
       }
-      await this.git(this.path, ["add", "--", ...paths]);
+      // C2c (NF-1): the spec copy stages in its own `git add`. A gitignored
+      // (or otherwise unstageable) specs path then drops only the copy --
+      // recorded below -- while STATE.md and the entry lines still commit.
+      // A single batch add would fail every path together and wedge the run.
+      const entryPaths = paths.filter((path) => !isHandoffSpecCopyPath(path));
+      const specPaths = paths.filter((path) => isHandoffSpecCopyPath(path));
+      await this.git(this.path, ["add", "--", ...entryPaths]);
+      const droppedSpec: Array<{ path: string; reason: string }> = [];
+      if (specPaths.length > 0) {
+        const specAdd = await this.git(this.path, ["add", "--", ...specPaths], true);
+        if (specAdd.exitCode !== 0) {
+          const detail = `${specAdd.stdout} ${specAdd.stderr}`.replace(/\s+/g, " ").trim().slice(0, 160) || "unknown error";
+          for (const path of specPaths) {
+            droppedSpec.push({
+              path,
+              reason: `spec copy skipped (write_failed): git add failed for ${path} (${detail}).`,
+            });
+          }
+        }
+      }
+      const commitPaths = droppedSpec.length > 0 ? entryPaths : paths;
       try {
         await this.execute({
           cwd: this.path,
@@ -711,7 +774,7 @@ export class IntegrationManager {
             "--trailer",
             `AIBoard-Snapshot-Key: ${input.snapshotKey}`,
             "--",
-            ...paths,
+            ...commitPaths,
           ],
           env: RUNNER_IDENTITY,
         });
@@ -723,9 +786,11 @@ export class IntegrationManager {
       const commit = await this.head();
       this.currentRevision = commit;
       const committed = await this.documentCommitResult(commit);
-      // A skipped spec copy (N-1/N-2) is recorded on the result so the skip
-      // is never silent; the runtime maps it to specCopySkipped.
-      if (skipped.length > 0) committed.skipped = skipped;
+      // A skipped spec copy (N-1/N-2, C2c NF-1) is recorded on the result so
+      // the skip is never silent; the runtime maps it to specCopySkipped.
+      const allSkipped = [...skipped, ...droppedSpec];
+      if (allSkipped.length > 0) committed.skipped = allSkipped;
+      if (redirected.length > 0) committed.redirected = redirected;
       return committed;
     });
   }
@@ -734,9 +799,14 @@ export class IntegrationManager {
    * Stage the kernel's spec-copy writes without ever failing the snapshot
    * (C2b repair N-1/N-2). Each write is validated, link-refused, and
    * written like the shared staging, but a failure is reported instead of
-   * thrown. A user's own file holding different bytes is never overwritten:
-   * the copy moves to a digest-suffixed sibling, or is skipped as
-   * path_occupied when even that is taken.
+   * thrown. A user's own file holding different bytes is never overwritten.
+   * C2c repair M-4: the runtime resolves the final path (target or digest
+   * sibling) from the tip blobs before STATE.md renders, and each write
+   * arrives carrying that resolved path -- the stager stages exactly it, or
+   * skips it as path_occupied when it holds different bytes. It never
+   * diverts to a sibling of its own, so the committed copy always matches
+   * the `spec:` line (or the copy is skipped and the line says
+   * "not recorded").
    */
   private async stageHandoffSpecCopies(
     writes: readonly ProjectDocWrite[],
@@ -784,26 +854,7 @@ export class IntegrationManager {
       return { staged: path };
     }
     if (existing !== null) {
-      const sibling = path.replace(/\.md$/, `-${createHash("sha256").update(wanted).digest("hex").slice(0, 16)}.md`);
-      const siblingAbsolute = this.containedProjectDocPath(sibling);
-      let siblingExisting: Buffer | null = null;
-      try {
-        siblingExisting = await readFile(siblingAbsolute);
-      } catch (error) {
-        if (!isNodeError(error) || error.code !== "ENOENT") {
-          return { skipped: `spec copy skipped (write_failed): cannot read ${sibling} (${briefErrorDetail(error)}).` };
-        }
-      }
-      if (siblingExisting !== null && !siblingExisting.equals(wanted)) {
-        return { skipped: `spec copy skipped (path_occupied): ${path} holds different bytes and so does ${sibling}.` };
-      }
-      try {
-        await mkdir(dirname(siblingAbsolute), { recursive: true });
-        await writeFile(siblingAbsolute, wanted);
-      } catch (error) {
-        return { skipped: `spec copy skipped (write_failed): cannot stage ${sibling} (${briefErrorDetail(error)}).` };
-      }
-      return { staged: sibling };
+      return { skipped: `spec copy skipped (path_occupied): ${path} holds different bytes.` };
     }
     try {
       await mkdir(dirname(absolute), { recursive: true });
@@ -937,8 +988,13 @@ export class IntegrationManager {
   private async stageProjectDocWrites(
     writes: readonly ProjectDocWrite[],
     options: { skipClaudeAgentsLink?: boolean } = {},
-  ): Promise<{ staged: string[]; skipped: Array<{ path: string; reason: string }> }> {
+  ): Promise<{
+    staged: string[];
+    skipped: Array<{ path: string; reason: string }>;
+    redirected: Array<{ path: string; target: string; reason: string }>;
+  }> {
     const skipped: Array<{ path: string; reason: string }> = [];
+    const redirected: Array<{ path: string; target: string; reason: string }> = [];
     const staged = writes.map((write) => {
       const checked = validateProjectDocPath(write.path);
       if (!checked.ok) {
@@ -950,6 +1006,10 @@ export class IntegrationManager {
     // to AGENTS.md. The v1 Architect path keeps the HEAD refusal below
     // (refuseProjectDocLink throws exactly as before).
     const skipClaudeAgentsLink = options.skipClaudeAgentsLink === true;
+    // C2c (NF-2/CD-15): the kernel snapshot path never writes through a
+    // link. Each entry write lands on a physical path: its own path, or the
+    // link target when the entry file is a link to a regular tracked file.
+    const planned: Array<{ writePath: string; physicalPath: string; content: string }> = [];
     for (const write of staged) {
       if (skipClaudeAgentsLink && write.path === "CLAUDE.md" && (await this.claudeLinksAgents())) {
         skipped.push({
@@ -958,33 +1018,113 @@ export class IntegrationManager {
         });
         continue;
       }
+      // C2c repair CD-17: a linked directory above a handoff file never
+      // blocks the handoff on the kernel path -- the file is skipped with a
+      // recorded reason (the AR-R05 gate accepts it the way it accepts
+      // export_only) and nothing is written under the link. Entry files
+      // live at the repository root and keep their CD-15 handling below.
+      // The v1 Architect path (skipClaudeAgentsLink false) keeps refusing
+      // through refuseProjectDocLink, which now checks docs too.
+      if (skipClaudeAgentsLink && write.path !== "AGENTS.md" && write.path !== "CLAUDE.md") {
+        const linked = await this.firstLinkComponent(write.path);
+        if (linked !== null) {
+          skipped.push({
+            path: write.path,
+            reason: `${write.path} is not written: ${linked} is a symbolic link or junction; the handoff proceeds without it.`,
+          });
+          continue;
+        }
+      }
+      if (skipClaudeAgentsLink && (write.path === "AGENTS.md" || write.path === "CLAUDE.md")) {
+        const link = await this.entryLinkRawTarget(write.path);
+        if (link.isLink) {
+          const target = link.raw === undefined ? null : resolveEntryLinkTarget(link.raw);
+          const display = (link.raw ?? "").replace(/\s+/g, " ").trim().slice(0, 120) || "an unreadable target";
+          if (target !== null && await this.isEntryLinkRedirectTarget(target)) {
+            planned.push({ writePath: write.path, physicalPath: target, content: write.content });
+            redirected.push({
+              path: write.path,
+              target,
+              reason: `${write.path} is a symbolic link to ${target}; the section is written into ${target}.`,
+            });
+          } else {
+            // C2c repair cycle 2 (m-4): name the real cause. A target that
+            // resolves but sits under a linked directory (a junction above
+            // it) is refused for the junction, not for its own tracking.
+            const ancestor = target !== null ? await this.ancestorLinkComponent(target) : null;
+            const detail = entryLinkSkipDetail(link.raw ?? "", target, ancestor);
+            skipped.push({
+              path: write.path,
+              reason: `${write.path} is a symbolic link to ${display}; the entry is skipped (${detail}).`,
+            });
+          }
+          continue;
+        }
+      }
       await this.refuseProjectDocLink(write.path);
+      planned.push({ writePath: write.path, physicalPath: write.path, content: write.content });
+    }
+    // Two entry writes can land on one physical file (AGENTS.md linking to
+    // CLAUDE.md): the marked section holds a single body, so the AGENTS.md
+    // body wins alone.
+    // C2c repair M-6: the @AGENTS.md pointer is never merged into a file
+    // AGENTS.md resolves to -- it would import the file into itself. The
+    // omission is recorded below; the runtime accepts it when the commit
+    // tree proves the redirect, so both entry lines still count.
+    const agentsRedirectTargets = new Set(
+      planned
+        .filter((op) => op.writePath === "AGENTS.md" && op.physicalPath !== "AGENTS.md")
+        .map((op) => op.physicalPath),
+    );
+    const merged = new Map<string, { entry: boolean; bodies: string[] }>();
+    let claudePointerOmittedFor: string | null = null;
+    for (const op of planned) {
+      if (op.writePath === "CLAUDE.md" && agentsRedirectTargets.has(op.physicalPath)) {
+        claudePointerOmittedFor = op.physicalPath;
+        continue;
+      }
+      const slot = merged.get(op.physicalPath) ?? { entry: false, bodies: [] };
+      slot.entry = slot.entry || op.writePath === "AGENTS.md" || op.writePath === "CLAUDE.md";
+      slot.bodies.push(op.content);
+      merged.set(op.physicalPath, slot);
+    }
+    if (claudePointerOmittedFor !== null) {
+      skipped.push({
+        path: "CLAUDE.md",
+        reason: `CLAUDE.md pointer omitted: AGENTS.md resolves to ${claudePointerOmittedFor}, so @AGENTS.md here would import the file into itself; the AGENTS.md section satisfies both entry lines.`,
+      });
+      for (let index = redirected.length - 1; index >= 0; index -= 1) {
+        if (redirected[index]?.path === "CLAUDE.md" && redirected[index]?.target === claudePointerOmittedFor) {
+          redirected.splice(index, 1);
+        }
+      }
     }
     const stagedPaths: string[] = [];
-    for (const write of staged) {
-      if (skipped.some((entry) => entry.path === write.path)) continue;
-      const absolute = this.containedProjectDocPath(write.path);
-      if (write.path === "AGENTS.md" || write.path === "CLAUDE.md") {
+    for (const [physicalPath, slot] of merged) {
+      const absolute = this.containedProjectDocPath(physicalPath);
+      if (slot.entry) {
         // C2b repair m3: splice on bytes, never through a string decode. The
         // markers and section bodies are ASCII, so bytes outside the markers
         // survive untouched even when the file is not valid UTF-8, and the
         // inserted section takes the file's own line ending. This is strictly
         // safer for the v1 Architect path too (same preservation; UTF-8 files
-        // behave exactly as before), so both paths share it.
+        // behave exactly as before), so both paths share it. A redirected
+        // write splices into the TARGET path (never through the link), so
+        // the target's own bytes outside the markers survive too.
         let existing: Buffer | null = null;
         try {
           existing = await readFile(absolute);
         } catch (error) {
           if (!isNodeError(error) || error.code !== "ENOENT") throw error;
         }
-        await writeFile(absolute, spliceMarkedArchitectSectionBytes(existing, write.content));
+        await writeFile(absolute, spliceMarkedArchitectSectionBytes(existing, slot.bodies.join("\n")));
       } else {
         await mkdir(dirname(absolute), { recursive: true });
-        await writeFile(absolute, write.content);
+        await writeFile(absolute, slot.bodies.join("\n"));
       }
-      stagedPaths.push(write.path);
+      stagedPaths.push(physicalPath);
     }
-    return { staged: stagedPaths, skipped };
+    return { staged: stagedPaths, skipped, redirected };
   }
 
   /**
@@ -2189,17 +2329,159 @@ export class IntegrationManager {
     // pointer through the link. The blob itself holds no marked line, so
     // that fact stays false and this separate flag carries the reason; the
     // runtime records it and the gate accepts it. Never write through it.
-    // C2b repair B3/N-6: the link fact comes from the COMMIT tree (mode
-    // 120000 with an AGENTS.md target), never the worktree checkout, so a
-    // link-mode entry checked out as a plain file still counts. A real
-    // worktree symlink (C2b repair m5) never reaches any commit tree -- the
-    // kernel skips the write without staging it -- so the live worktree
-    // determination covers that case too. Either source refuses the write
-    // above; either source satisfies the pointer here.
-    if ((await this.commitClaudeLinksAgents(commit)) || (await this.claudeLinksAgents())) {
-      entryPoint.claudePointerV2ViaAgentsLink = true;
+    // C2c (NF-2/CD-15, NF-3): every link fact below comes from the COMMIT
+    // tree alone (mode 120000 plus the target blob in the same commit). The
+    // live worktree/index fallback is gone: a commit tree without the entry
+    // lines is refused even when the live checkout holds a link (probes U1,
+    // U2). A link whose regular-file target blob holds the marked section
+    // (AGENTS.md) or line (CLAUDE.md) satisfies that file through the link,
+    // because the runner wrote the section into the target path directly. A
+    // link to anything else carries only its target, so the runtime can
+    // accept the recorded skip reason for that file instead.
+    const agentsLink = await this.commitEntryLinkTarget(commit, "AGENTS.md");
+    if (agentsLink !== undefined) {
+      entryPoint.agentsLinkTarget = agentsLink;
+      if (await this.commitEntryTargetHoldsSection(commit, agentsLink, "agents")) {
+        entryPoint.agentsSectionV2ViaLink = true;
+      }
     }
-    return { commit, parent, head, entryPoint };
+    const claudeLink = await this.commitEntryLinkTarget(commit, "CLAUDE.md");
+    if (claudeLink !== undefined) {
+      entryPoint.claudeLinkTarget = claudeLink;
+      if (linkTargetPointsAtAgentsDotMd(claudeLink)) {
+        entryPoint.claudePointerV2ViaAgentsLink = true;
+      } else if (await this.commitEntryTargetHoldsSection(commit, claudeLink, "claude")) {
+        entryPoint.claudePointerV2ViaLink = true;
+      }
+    }
+    // C2c repair cycle 2 (NB-2, m-1): commit-tree link facts for STATE.md,
+    // read from the commit alone like every other link fact above. The
+    // walk covers the ancestors plus STATE.md itself (a linked STATE.md
+    // skips the same way), case-folded where the checkout is
+    // case-insensitive (a committed `Docs` link), and never specs (m-1: it
+    // is not an ancestor of STATE.md). The runtime derives every
+    // skipped-STATE.md reason from these through the shared describer; the
+    // AR-R05 gate accepts the recorded reason the way it accepts
+    // export_only.
+    const dirLinks = await this.commitStateLinkComponents(commit);
+    return { commit, parent, head, entryPoint, ...(dirLinks.length > 0 ? { dirLinks } : {}) };
+  }
+
+  /**
+   * The STATE.md ancestor-or-self components the COMMIT tree holds as links
+   * (C2c repair cycle 2, NB-2/m-1). Each level lists only its parent tree,
+   * so the queries stay bounded no matter how large the docs tree is, and
+   * names compare case-folded where the checkout is case-insensitive.
+   * Returns expected spellings (HANDOFF_STATE_LINK_COMPONENTS) in
+   * first-link order; the walk stops at the first link.
+   */
+  private async commitStateLinkComponents(commit: string): Promise<string[]> {
+    const insensitive = await this.checkoutIgnoresCase();
+    const parts = ["docs", "project", "STATE.md"];
+    const actual: string[] = [];
+    for (let level = 0; level < parts.length; level += 1) {
+      const treeRef = actual.length === 0 ? commit : `${commit}:${actual.join("/")}`;
+      const want = parts[level] ?? "";
+      // C2c round 3 (NB-5): query the single entry, never the whole parent
+      // listing (40,000 files directly under docs/ exceed the 4 MiB git
+      // output cap). The expected spelling first; on a case-insensitive
+      // checkout the other spellings come from the COMMIT tree itself (C2c
+      // repair cycle 4, NB-7): every upper/lower-case variant of the fixed
+      // name as exact pathspecs in one `ls-tree` call per level (16 for
+      // `docs`, 128 for `project`, 128 for `STATE.md`; the output holds
+      // only the matching entries). The live worktree is never consulted --
+      // a withdrawn stop describes an older commit, and the worktree may no
+      // longer hold that spelling.
+      let entry = await this.commitTreeEntry(treeRef, want);
+      if (entry === undefined && insensitive) {
+        entry = await this.commitTreeEntryFolded(treeRef, want);
+      }
+      if (entry === undefined) return [];
+      const { mode, name } = entry;
+      if (mode === "120000") {
+        return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
+      }
+      if (level < parts.length - 1) {
+        // A non-tree where a directory is expected (a tracked file at docs
+        // or docs/project): no link fact, and nothing below can be one.
+        if (mode !== "040000") return [];
+        actual.push(name);
+      }
+    }
+    return [];
+  }
+
+  /** One exact entry of a commit tree (mode and name), or undefined. */
+  private async commitTreeEntry(treeRef: string, name: string): Promise<{ mode: string; name: string } | undefined> {
+    if (!name || name.includes("/")) return undefined;
+    const listing = await this.git(this.path, ["ls-tree", treeRef, "--", name], true);
+    if (listing.exitCode !== 0) return undefined;
+    for (const record of listing.stdout.split("\n")) {
+      const line = record.trim();
+      const tab = line.lastIndexOf("\t");
+      if (tab < 0) continue;
+      if (line.slice(tab + 1) !== name) continue;
+      const mode = line.slice(0, tab).split(" ")[0];
+      if (mode) return { mode, name };
+    }
+    return undefined;
+  }
+
+  /**
+   * One entry of a commit tree matching `want` ignoring case (C2c repair
+   * cycle 4, NB-7): every upper/lower-case variant of the fixed name as an
+   * exact pathspec in a single `ls-tree` call. The output holds only the
+   * matching entries, so the call stays bounded (16 variants for `docs`,
+   * 128 for `project`, 128 for `STATE.md`) no matter how large the parent
+   * tree is. The spellings come from the commit being described, never from
+   * the live worktree.
+   */
+  private async commitTreeEntryFolded(treeRef: string, want: string): Promise<{ mode: string; name: string } | undefined> {
+    if (!want || want.includes("/")) return undefined;
+    const variants = caseVariants(want);
+    if (variants.length === 0) return undefined;
+    const wanted = new Set(variants);
+    const listing = await this.git(this.path, ["ls-tree", treeRef, "--", ...variants], true);
+    if (listing.exitCode !== 0) return undefined;
+    for (const record of listing.stdout.split("\n")) {
+      const line = record.trim();
+      const tab = line.lastIndexOf("\t");
+      if (tab < 0) continue;
+      const name = line.slice(tab + 1);
+      if (!wanted.has(name)) continue;
+      const mode = line.slice(0, tab).split(" ")[0];
+      if (mode) return { mode, name };
+    }
+    return undefined;
+  }
+
+  /**
+   * True when the integration checkout is case-insensitive (C2c repair
+   * cycle 2, NB-2): a committed `Docs` link must back the same STATE.md
+   * skip as `docs` there. A pure filesystem probe (lstat a
+   * case-toggled sibling of the worktree): no git command, no writes.
+   */
+  private checkoutCaseInsensitive: boolean | undefined;
+
+  private async checkoutIgnoresCase(): Promise<boolean> {
+    if (this.checkoutCaseInsensitive === undefined) {
+      const fallback = process.platform === "win32" || process.platform === "darwin";
+      const leaf = basename(this.path);
+      const toggled = leaf.replace(/[A-Za-z]/, (letter) =>
+        letter === letter.toUpperCase() ? letter.toLowerCase() : letter.toUpperCase(),
+      );
+      if (toggled === leaf) {
+        this.checkoutCaseInsensitive = fallback;
+      } else {
+        try {
+          await lstat(resolve(this.path, "..", toggled));
+          this.checkoutCaseInsensitive = true;
+        } catch (error) {
+          this.checkoutCaseInsensitive = isNodeError(error) && error.code === "ENOENT" ? false : fallback;
+        }
+      }
+    }
+    return this.checkoutCaseInsensitive;
   }
 
   private async projectDocEntryPointFacts(revision: string): Promise<ProjectDocCommitResult["entryPoint"]> {
@@ -2279,24 +2561,121 @@ export class IntegrationManager {
    */
   private async indexClaudeLinksAgents(): Promise<boolean> {
     const modes = await this.indexEntryModes(["CLAUDE.md"]);
-    if (modes.get("CLAUDE.md") !== "120000") return false;
-    const target = await this.indexBlobText("CLAUDE.md");
+    // C2c repair cycle 4 (NB-8): the link-ness of CLAUDE.md itself folds
+    // case; the blob is read by the index's own spelling.
+    const found = IntegrationManager.findIndexEntry(modes, "CLAUDE.md", true);
+    if (found?.mode !== "120000") return false;
+    const target = await this.indexBlobText(found.path);
     return target !== null && linkTargetPointsAtAgentsDotMd(target);
   }
 
   /**
-   * True when the COMMIT tree holds CLAUDE.md as a link (mode 120000)
-   * whose target resolves to AGENTS.md (C2b repair B3/N-6). The gate reads
-   * this fact from the commit, never the checkout.
+   * The raw link target when the COMMIT tree holds the entry path as a link
+   * (mode 120000), otherwise undefined (C2c NF-2/NF-3). The gate reads this
+   * fact from the commit, never the checkout.
    */
-  private async commitClaudeLinksAgents(commit: string): Promise<boolean> {
-    const tree = await this.git(this.path, ["ls-tree", commit, "--", "CLAUDE.md"], true);
-    if (tree.exitCode !== 0) return false;
+  private async commitEntryLinkTarget(commit: string, entryPath: string): Promise<string | undefined> {
+    const tree = await this.git(this.path, ["ls-tree", commit, "--", entryPath], true);
+    if (tree.exitCode !== 0) return undefined;
     const line = tree.stdout.split("\n").map((entry) => entry.trim()).find(Boolean) ?? "";
     const match = /^120000 blob ([a-f0-9]{40,64})\t(\S.*)$/.exec(line);
-    if (!match) return false;
+    if (!match) return undefined;
     const target = await this.blobText(match[1] ?? "");
-    return target !== null && linkTargetPointsAtAgentsDotMd(target);
+    return target ?? undefined;
+  }
+
+  /**
+   * True when the COMMIT tree holds the link target as a regular (non-link)
+   * blob whose bytes carry the marked v2 section (agents) or line (claude).
+   * A single hop only: a target that is itself a link never counts, so a
+   * chained layout skips the entry file with a recorded reason instead.
+   */
+  private async commitEntryTargetHoldsSection(
+    commit: string,
+    rawTarget: string,
+    kind: "agents" | "claude",
+  ): Promise<boolean> {
+    const target = resolveEntryLinkTarget(rawTarget);
+    if (target === null) return false;
+    const tree = await this.git(this.path, ["ls-tree", commit, "--", target], true);
+    if (tree.exitCode !== 0) return false;
+    const line = tree.stdout.split("\n").map((entry) => entry.trim()).find(Boolean) ?? "";
+    const match = /^(100[0-9]{3}) blob ([a-f0-9]{40,64})\t(\S.*)$/.exec(line);
+    if (!match || match[3] !== target) return false;
+    const content = await this.blobText(match[2] ?? "");
+    if (content === null) return false;
+    return kind === "agents" ? agentsMarkedSectionSatisfiesV2(content) : claudePointerSatisfiesV2(content);
+  }
+
+  /**
+   * Stage-time link sighting for one entry file (C2c NF-2): a real worktree
+   * symlink (readlink text), else a git link entry (mode 120000, checked out
+   * as a plain file under core.symlinks=false) from the index blob. The
+   * write decision refuses from either source; the gate later verifies from
+   * the commit tree alone.
+   */
+  private async entryLinkRawTarget(entryPath: string): Promise<{ isLink: boolean; raw?: string }> {
+    // C2c repair M-2: when the index holds mode 120000 the link target
+    // comes from the index blob (the commit-tree truth), never readlink --
+    // git for Windows stores real-link targets with backslashes, and the
+    // worktree sighting may disagree with the committed target.
+    const modes = await this.indexEntryModes([entryPath]);
+    // C2c repair cycle 4 (NB-8): the link-ness of the entry file itself
+    // folds case; the target blob is read by the index's own spelling.
+    const found = IntegrationManager.findIndexEntry(modes, entryPath, true);
+    if (found?.mode === "120000") {
+      const target = await this.indexBlobText(found.path);
+      if (target !== null) return { isLink: true, raw: target };
+      return { isLink: true };
+    }
+    const absolute = this.containedProjectDocPath(entryPath);
+    let stats;
+    try {
+      stats = await lstat(absolute);
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+      return { isLink: false };
+    }
+    if (stats.isSymbolicLink()) {
+      try {
+        return { isLink: true, raw: await readlink(absolute) };
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+      }
+      return { isLink: true };
+    }
+    return { isLink: false };
+  }
+
+  /**
+   * True when an entry-file link target may receive the marked section
+   * directly (C2c NF-2/CD-15): it resolves inside the worktree, is a
+   * tracked regular (non-link) file, exists on disk as a regular file (not
+   * through another link), and is not a kernel-owned or spec-copy path a
+   * redirect must never land on.
+   */
+  private async isEntryLinkRedirectTarget(target: string): Promise<boolean> {
+    if (isHandoffSpecCopyPath(target) || target === "docs/project/STATE.md") return false;
+    // C2c repair M-1: the directories on the way to the target must be
+    // link-free too -- a directory link or junction above the target
+    // refuses the redirect, so the write can never land outside through it.
+    const slash = target.lastIndexOf("/");
+    if (slash > 0 && (await this.firstLinkComponent(target.slice(0, slash))) !== null) return false;
+    // C2c repair cycle 4 (NB-8): a redirect target resolves ONLY by the
+    // exact spelling the index holds -- never folded. A link to `notes.md`
+    // when the index holds `NOTES.md` is refused here, and the entry file
+    // is skipped with a reason instead of wedging on a pathspec commit.
+    const modes = await this.indexEntryModes([target]);
+    const found = IntegrationManager.findIndexEntry(modes, target, false);
+    if (found?.mode === undefined || found?.mode === "120000") return false;
+    let stats;
+    try {
+      stats = await lstat(this.containedProjectDocPath(target));
+    } catch (error) {
+      if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+      return false;
+    }
+    return stats !== undefined && stats.isFile() && !stats.isSymbolicLink();
   }
 
   /** Blob bytes for an index entry path, or null when it is not staged. */
@@ -2325,17 +2704,64 @@ export class IntegrationManager {
   private async indexEntryModes(paths: readonly string[]): Promise<Map<string, string>> {
     const modes = new Map<string, string>();
     if (paths.length === 0) return modes;
-    const listing = await this.git(this.path, ["ls-files", "-s", "-z", "--", ...paths], true);
-    if (listing.exitCode !== 0) return modes;
-    for (const record of listing.stdout.split("\0")) {
-      if (!record) continue;
-      const tab = record.lastIndexOf("\t");
-      if (tab < 0) continue;
-      const entryPath = record.slice(tab + 1);
-      const mode = record.slice(0, tab).split(" ")[0] ?? "";
-      if (entryPath && mode) modes.set(entryPath, mode);
+    // C2c repair cycle 2 (NB-3): query only each component entry itself,
+    // one git call per path. `ls-files -- <dir>` lists the whole subtree,
+    // so 40,000 tracked files under docs/generated/ exceed the 4 MiB git
+    // output cap and fail every snapshot (plus the v1 document commit),
+    // while `<path> ':(exclude)<path>/*'` returns exactly the entry: a link
+    // entry is listed, a directory yields nothing. The calls stay separate
+    // because one combined call lets an ancestor exclude swallow a nested
+    // exact hit (`:(exclude)docs/*` matches docs/project/STATE.md itself).
+    // C2c round 3 (NB-6): on a case-insensitive checkout a committed `Docs`
+    // link must count for `docs`, so both pathspecs fold case there.
+    // C2c repair cycle 4 (NB-8): every entry is keyed by the index's own
+    // (real) spelling, never by the requested spelling. Callers that detect
+    // a link fold case through findIndexEntry below; a redirect TARGET
+    // resolves only by its exact spelling, so a link to `notes.md` when the
+    // index holds `NOTES.md` is refused instead of redirected.
+    const insensitive = await this.checkoutIgnoresCase();
+    for (const path of paths) {
+      const pathspec = insensitive
+        ? [`:(icase)${path}`, `:(exclude,icase)${path}/*`]
+        : [path, `:(exclude)${path}/*`];
+      const listing = await this.git(this.path, ["ls-files", "-s", "-z", "--", ...pathspec], true);
+      if (listing.exitCode !== 0) continue;
+      for (const record of listing.stdout.split("\0")) {
+        if (!record) continue;
+        const tab = record.lastIndexOf("\t");
+        if (tab < 0) continue;
+        const entryPath = record.slice(tab + 1);
+        const mode = record.slice(0, tab).split(" ")[0] ?? "";
+        if (!entryPath || !mode) continue;
+        if (entryPath === path || (insensitive && entryPath.toLowerCase() === path.toLowerCase())) {
+          modes.set(entryPath, mode);
+        }
+      }
     }
     return modes;
+  }
+
+  /**
+   * The index entry for a requested path (C2c repair cycle 4, NB-8): the
+   * exact-spelling hit, or -- only when `foldCase` is set for LINK
+   * DETECTION (the CD-17 directory check, the link-ness of AGENTS.md and
+   * CLAUDE.md themselves) -- a case-insensitive hit carrying the index's
+   * own spelling. Redirect targets never fold: they resolve only by the
+   * exact spelling the index holds.
+   */
+  private static findIndexEntry(
+    modes: Map<string, string>,
+    path: string,
+    foldCase: boolean,
+  ): { path: string; mode: string } | undefined {
+    const exact = modes.get(path);
+    if (exact !== undefined) return { path, mode: exact };
+    if (!foldCase) return undefined;
+    const want = path.toLowerCase();
+    for (const [entryPath, mode] of modes) {
+      if (entryPath.toLowerCase() === want) return { path: entryPath, mode };
+    }
+    return undefined;
   }
 
   /**
@@ -2368,39 +2794,122 @@ export class IntegrationManager {
     return { revision: this.baselineRevision };
   }
 
-  private async refuseProjectDocLink(relativePath: string): Promise<void> {
-    const parts = relativePath.split("/");
-    const targets: string[] = [];
-    if (relativePath === "AGENTS.md" || relativePath === "CLAUDE.md") {
-      targets.push(relativePath);
-    } else {
-      let accumulated = "";
-      for (const part of parts) {
-        accumulated = accumulated ? `${accumulated}/${part}` : part;
-        if (accumulated === "docs/project" || accumulated.startsWith("docs/project/")) {
-          targets.push(accumulated);
-        }
+  /**
+   * Whether a spec-copy path can be staged right now (C2c NF-1 residual).
+   * The check writes nothing: a dry-run `git add` predicts the stage-time
+   * add exactly (a tracked path stays stageable even under an ignore rule,
+   * while a gitignored path refuses) and stages nothing into the index.
+   * C2c repair BL-1: there is deliberately no worktree preview -- writing
+   * the copy's bytes before any link check would send them outside the
+   * repository through a committed directory link, so every component of
+   * the spec path (from the repository root down) is refused first when it
+   * is a link. C2c repair M-4: a resolved path already holding other bytes
+   * can never land where the snapshot names it (the stager honors the
+   * resolved path), so it reports unstageable here and STATE.md renders
+   * "not recorded". The runtime asks before rendering STATE.md so the
+   * `spec:` line says "not recorded" when the copy will be skipped.
+   * `git check-ignore` would answer this directly but sits outside the
+   * Runner Git policy; the dry-run add is the policy-held equivalent
+   * (non-interactive `add` modes are permitted).
+   */
+  async canStageSpecPath(input: {
+    path: string;
+    content: string;
+  }): Promise<{ stageable: boolean; unstageableReason?: "path_occupied" | "write_failed" }> {
+    return await this.serialized(async () => {
+      const checked = validateProjectDocPath(input.path);
+      if (!checked.ok) return { stageable: false };
+      await this.ensureIntegrationWorkspace();
+      if (await this.specPathHasLinkComponent(checked.path)) return { stageable: false };
+      const absolute = this.containedProjectDocPath(checked.path);
+      let existing: Buffer | null = null;
+      try {
+        existing = await readFile(absolute);
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== "ENOENT") return { stageable: false };
       }
+      if (existing !== null && !existing.equals(Buffer.from(input.content, "utf8"))) {
+        // C2c repair cycle 2 (m-4): an occupant is path_occupied, not a
+        // generic write failure -- the runtime records the real cause.
+        return { stageable: false, unstageableReason: "path_occupied" };
+      }
+      const dry = await this.git(this.path, ["add", "--dry-run", "--ignore-missing", "--", checked.path], true);
+      return { stageable: dry.exitCode === 0 };
+    });
+  }
+
+  /**
+   * True when any component of a spec-copy path -- every component from
+   * the repository root down to the file itself -- is a link (C2c repair
+   * BL-1). Delegates to firstLinkComponent below.
+   */
+  private async specPathHasLinkComponent(relativePath: string): Promise<boolean> {
+    return (await this.firstLinkComponent(relativePath)) !== null;
+  }
+
+  /**
+   * The first path component -- every component from the repository root
+   * down to the file itself -- that is a link, or null (C2c repair CD-17,
+   * M-1). Link-ness comes from the worktree AND the git index, so a
+   * link-mode entry (mode 120000) checked out as a plain file under
+   * core.symlinks=false still counts. A directory the worktree reports as
+   * a plain directory is additionally probed with readlink, which resolves
+   * Windows junctions (lstat reports those as directories). A path through
+   * a link can never stage inside the repository, so callers refuse before
+   * any byte is written anywhere.
+   */
+  private async firstLinkComponent(relativePath: string): Promise<string | null> {
+    const parts = relativePath.split("/");
+    const components: string[] = [];
+    let accumulated = "";
+    for (const part of parts) {
+      accumulated = accumulated ? `${accumulated}/${part}` : part;
+      components.push(accumulated);
     }
-    // C2b repair B3: link-ness comes from the worktree AND the git index,
-    // so a link-mode entry (mode 120000) checked out as a plain file under
-    // core.symlinks=false is still refused. The refusal message is
-    // unchanged from HEAD.
-    const modes = await this.indexEntryModes(targets);
-    for (const target of targets) {
-      const absolute = this.containedProjectDocPath(target);
+    const modes = await this.indexEntryModes(components);
+    for (const component of components) {
+      // C2c repair cycle 4 (NB-8): the CD-17 directory check folds case
+      // (a committed `Docs` link counts for `docs`).
+      if (IntegrationManager.findIndexEntry(modes, component, true)?.mode === "120000") return component;
+      const absolute = this.containedProjectDocPath(component);
       let stats;
       try {
         stats = await lstat(absolute);
       } catch (error) {
         if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-        stats = undefined;
+        continue;
       }
-      if (stats?.isSymbolicLink() || modes.get(target) === "120000") {
-        throw new Error(
-          `Project document path ${relativePath} is refused because ${target} is a symbolic link or junction.`,
-        );
-      }
+      if (stats.isSymbolicLink()) return component;
+      if (stats.isDirectory() && await isJunction(absolute)) return component;
+    }
+    return null;
+  }
+
+  /**
+   * The first linked directory above a redirect target, if any (C2c repair
+   * cycle 2, m-4): the stager names this junction in the skip reason instead
+   * of blaming the target's own tracking.
+   */
+  private async ancestorLinkComponent(target: string): Promise<string | null> {
+    const slash = target.lastIndexOf("/");
+    if (slash <= 0) return null;
+    return await this.firstLinkComponent(target.slice(0, slash));
+  }
+
+  private async refuseProjectDocLink(relativePath: string): Promise<void> {
+    // C2c repair CD-17: every path component from the repository root is
+    // checked (docs, docs/project, ...), so a docs link can never send a
+    // write outside the repository. The v1 Architect path keeps refusing
+    // (this throw); the kernel path skips with a recorded reason instead.
+    // C2b repair B3: link-ness comes from the worktree AND the git index,
+    // so a link-mode entry (mode 120000) checked out as a plain file under
+    // core.symlinks=false is still refused. The refusal message is
+    // unchanged from HEAD.
+    const linked = await this.firstLinkComponent(relativePath);
+    if (linked !== null) {
+      throw new Error(
+        `Project document path ${relativePath} is refused because ${linked} is a symbolic link or junction.`,
+      );
     }
   }
 
@@ -2512,6 +3021,109 @@ function isHandoffSpecCopyPath(path: string): boolean {
  * B3): "AGENTS.md" (also "./AGENTS.md" or other dot-only spellings), never
  * an escape (".."), an absolute path, or a backslash layout.
  */
+/**
+ * Resolve a raw entry-file link target to a repository-relative path, or
+ * null when it escapes or is unusable (C2c NF-2/CD-15): dot-only spellings
+ * ("./AGENTS.md") resolve to the sibling; an absolute path, a drive-letter
+ * path, or any ".." escape is outside the repository and never written.
+ * C2c repair M-2: backslashes normalize to slashes first (git for Windows
+ * stores real-link targets like "docs\notes.md"); the checks below still
+ * refuse absolute paths, drive letters, and every ".." escape.
+ */
+function resolveEntryLinkTarget(target: string): string | null {
+  // C2c repair cycle 2: one shared spelling with the commit describer.
+  return resolveHandoffLinkTarget(target);
+}
+
+/**
+ * Every upper/lower-case variant of a fixed name (C2c repair cycle 4,
+ * NB-7): each ASCII letter doubles the set, non-letters stay fixed
+ * (`docs` gives 16, `project` and `STATE.md` give 128 each). The exact
+ * spelling is always included.
+ */
+function caseVariants(want: string): string[] {
+  let variants = [""];
+  for (const char of want) {
+    const lower = char.toLowerCase();
+    const upper = char.toUpperCase();
+    if (lower !== upper) {
+      variants = variants.flatMap((prefix) => [`${prefix}${lower}`, `${prefix}${upper}`]);
+    } else {
+      variants = variants.map((prefix) => `${prefix}${char}`);
+    }
+  }
+  return variants;
+}
+
+/**
+ * True when a raw link target lexically resolves inside the repository
+ * when ".." is allowed to cancel a previous segment without escaping the
+ * root (C2c repair M-5): "sub/../CLAUDE.md" lands inside, while absolute
+ * paths, drive letters, and root-escaping ".." do not. Used only to NAME
+ * the skip reason -- ".." targets are still never followed.
+ */
+function linkTargetResolvesInsideAllowingDotDot(target: string): boolean {
+  const normalized = target.trim().replace(/\\/g, "/");
+  if (!normalized || normalized.includes("\0")) return false;
+  if (normalized.startsWith("/")) return false;
+  if (/^[A-Za-z]:/.test(normalized)) return false;
+  let depth = 0;
+  for (const segment of normalized.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") {
+      depth -= 1;
+      if (depth < 0) return false;
+    } else {
+      depth += 1;
+    }
+  }
+  return true;
+}
+
+/**
+ * The recorded detail for a skipped entry-file link (C2c repair M-5): the
+ * real reason, not a blanket "outside". A kernel-owned target
+ * (docs/project/STATE.md, spec copies) is named as kernel-owned; a ".."
+ * target that resolves inside is named as a refused ".." (it is still
+ * never followed); anything else unusable is outside; a resolved target
+ * that is no regular tracked file keeps that reason.
+ */
+function entryLinkSkipDetail(raw: string, target: string | null, ancestorLink: string | null = null): string {
+  const display = raw.replace(/\s+/g, " ").trim().slice(0, 120) || "an unreadable target";
+  if (target !== null) {
+    if (target === "docs/project/STATE.md" || isHandoffSpecCopyPath(target)) {
+      return `target ${target} is kernel-owned (the runner writes it; entry sections never redirect into it)`;
+    }
+    if (ancestorLink !== null) {
+      return `target ${target} is not reachable: ${ancestorLink} is a symbolic link or junction`;
+    }
+    return `target ${target} is not a regular tracked file`;
+  }
+  if (linkTargetResolvesInsideAllowingDotDot(raw)) {
+    return `target ${display} uses ".." and is never followed (it resolves inside the repository)`;
+  }
+  return `target ${display} is outside the repository`;
+}
+
+/**
+ * True when an absolute worktree path is a Windows junction (C2c repair
+ * M-1/CD-17): lstat reports junctions as plain directories, but readlink
+ * resolves them. A readlink failure means a plain directory (or file);
+ * other errors propagate. No child_process: pure fs probing.
+ */
+async function isJunction(absolute: string): Promise<boolean> {
+  try {
+    await readlink(absolute);
+    return true;
+  } catch (error) {
+    if (!isNodeError(error)) throw error;
+    if (error.code === "EINVAL" || error.code === "ENOENT" || error.code === "ENOSYS" || error.code === "ENOTSUP" || error.code === "UNKNOWN") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 function linkTargetPointsAtAgentsDotMd(target: string): boolean {
   const trimmed = target.trim();
   if (!trimmed || trimmed.includes("\0") || trimmed.includes("\\")) return false;

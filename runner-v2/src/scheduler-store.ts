@@ -399,8 +399,19 @@ export interface HandoffSnapshotRecord {
   commit: string;
   parent: string;
   head: string;
+  /**
+   * The committed STATE.md body digest (C2c repair CD-17: "" when
+   * stateSkippedReason carries the skip instead -- no STATE.md was
+   * committed, so there is no digest to record).
+   */
   bodyDigest: string;
   paths: string[];
+  /**
+   * C2c repair CD-17: why no STATE.md was committed (a linked directory
+   * above it). The AR-R05 gate accepts the recorded reason the way it
+   * accepts export_only. Absent means STATE.md committed.
+   */
+  stateSkippedReason?: string;
   sequence: number;
   /**
    * The tip STATE.md was hand-edited before this snapshot (AR-R07): the new
@@ -422,6 +433,14 @@ export interface HandoffSnapshotRecord {
   specCopySkipped?: string;
   /** C2b repair m5: why the CLAUDE.md line counts as satisfied although the blob holds none. Absent means the blob holds it. */
   claudeLineViaLink?: string;
+  /**
+   * C2c (NF-2/CD-15): why the AGENTS.md section counts as satisfied although
+   * the blob holds none -- the runner wrote it into the link target path
+   * directly (redirect), or skipped the link to a missing or outside target
+   * with a recorded reason. Absent means the blob holds it. The AR-R05 gate
+   * accepts the recorded reason for that file; STATE.md stays required.
+   */
+  agentsSectionViaLink?: string;
 }
 
 export interface ProjectDocCommitProjection {
@@ -9127,10 +9146,14 @@ export function handoffSnapshotAtCurrentStop(
   // fallback never selects a record -- not even a history one.
   if (latestRequest === undefined) return undefined;
   const current = snapshots.filter((record) => record.stopSequence === latestRequest).reverse();
+  // C2c (NF-2/CD-15): each entry file counts as satisfied by its committed
+  // flag or by its recorded link reason; STATE.md stays required.
+  // C2c repair CD-17: a recorded STATE.md link reason satisfies STATE.md
+  // the way export_only satisfies the whole gate.
   return current.find((record) =>
-    record.paths.includes("docs/project/STATE.md") &&
-    record.agentsSectionCommitted === true &&
-    record.claudeLineCommitted === true,
+    (record.paths.includes("docs/project/STATE.md") || typeof record.stateSkippedReason === "string") &&
+    (record.agentsSectionCommitted === true || typeof record.agentsSectionViaLink === "string") &&
+    (record.claudeLineCommitted === true || typeof record.claudeLineViaLink === "string"),
   );
 }
 
@@ -9246,20 +9269,48 @@ function applyHandoffSnapshotCommitted(
   if (!revision.trim() || !commit.trim() || !parent.trim() || !head.trim()) {
     throw new Error("Handoff snapshot revision and commit references are required.");
   }
-  const bodyDigest = requiredString(event.payload, "bodyDigest");
-  if (!/^[a-f0-9]{64}$/.test(bodyDigest)) {
-    throw new Error("Handoff snapshot body digest is invalid.");
+  // C2c repair CD-17: a linked directory above STATE.md skips the file
+  // with a recorded reason; the gate accepts it the way it accepts
+  // export_only. With the reason present the paths may omit STATE.md and
+  // there is no body digest to record ("").
+  const stateSkipped = event.payload.stateSkippedReason;
+  if (stateSkipped !== undefined && (typeof stateSkipped !== "string" || !stateSkipped.trim())) {
+    throw new Error("Handoff snapshot stateSkippedReason is invalid.");
+  }
+  let bodyDigest: string;
+  if (typeof stateSkipped === "string") {
+    const rawDigest = event.payload.bodyDigest;
+    if (rawDigest !== undefined && rawDigest !== "" && (typeof rawDigest !== "string" || !/^[a-f0-9]{64}$/.test(rawDigest))) {
+      throw new Error("Handoff snapshot body digest is invalid.");
+    }
+    bodyDigest = typeof rawDigest === "string" ? rawDigest : "";
+  } else {
+    bodyDigest = requiredString(event.payload, "bodyDigest");
+    if (!/^[a-f0-9]{64}$/.test(bodyDigest)) {
+      throw new Error("Handoff snapshot body digest is invalid.");
+    }
   }
   const paths = stringArray(event.payload, "paths");
-  if (paths.length === 0 || !paths.includes("docs/project/STATE.md")) {
+  // C2c round 3 (NB-4): with STATE.md skipped for a recorded reason and the
+  // entry files already holding their sections, the kernel commit is empty
+  // and records no paths; that is valid. Without a skip reason STATE.md must
+  // be among the committed paths.
+  if (typeof stateSkipped !== "string" && !paths.includes("docs/project/STATE.md")) {
     throw new Error("Handoff snapshots must include docs/project/STATE.md.");
   }
   // C2b (AR-R05): the writer proves the commit's tree holds the v2 entry
   // lines (read back from the commit, never the checkout); the reducer
   // requires that proof. Fail closed: no proof, no record.
+  // C2c (NF-2/CD-15): each entry file proves itself by its committed flag
+  // or by its recorded link reason (a redirect into the target path, or a
+  // skip of a missing or outside link target). STATE.md stays required.
+  const agentsViaLink = event.payload.agentsSectionViaLink;
+  if (agentsViaLink !== undefined && (typeof agentsViaLink !== "string" || !agentsViaLink.trim())) {
+    throw new Error("Handoff snapshot agentsSectionViaLink is invalid.");
+  }
   if (
-    event.payload.agentsSectionCommitted !== true ||
-    event.payload.claudeLineCommitted !== true
+    (event.payload.agentsSectionCommitted !== true && agentsViaLink === undefined) ||
+    (event.payload.claudeLineCommitted !== true && event.payload.claudeLineViaLink === undefined)
   ) {
     throw new Error("Handoff snapshots must prove the committed tree holds the v2 AGENTS.md section and the CLAUDE.md line.");
   }
@@ -9289,13 +9340,15 @@ function applyHandoffSnapshotCommitted(
     bodyDigest,
     paths: [...paths],
     sequence: event.sequence,
+    ...(typeof stateSkipped === "string" ? { stateSkippedReason: stateSkipped } : {}),
     previousSnapshotEdited: event.payload.previousSnapshotEdited === true,
-    agentsSectionCommitted: true,
-    claudeLineCommitted: true,
+    agentsSectionCommitted: event.payload.agentsSectionCommitted !== false,
+    claudeLineCommitted: event.payload.claudeLineCommitted !== false,
     ...(typeof specPath === "string" ? { specPath } : {}),
     ...(event.payload.specCopied === true ? { specCopied: true as const } : {}),
     ...(typeof specCopySkipped === "string" ? { specCopySkipped } : {}),
     ...(typeof claudeLineViaLink === "string" ? { claudeLineViaLink } : {}),
+    ...(typeof agentsViaLink === "string" ? { agentsSectionViaLink: agentsViaLink } : {}),
   };
   const canonical = projection.integrationRevision;
   const currentTip = projection.projectDocs?.documentTip;

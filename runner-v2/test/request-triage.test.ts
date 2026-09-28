@@ -266,6 +266,9 @@ function stubProjectDocsPort() {
     readIntegrationBaselineRevision: async () => {
       throw new Error("request-triage stubs never reach the baseline revision read");
     },
+    canStageSpecPath: async () => {
+      throw new Error("request-triage stubs never reach the spec stageability check");
+    },
     commitHandoffSnapshot: async (input: { writes: { path: string; content: string }[]; summary: string; runId: string; snapshotKey: string }) => ({
       commit: createHash("sha256").update(`snapshot:${input.snapshotKey}`).digest("hex").slice(0, 40),
       parent: createHash("sha256").update(`parent:${input.snapshotKey}`).digest("hex").slice(0, 40),

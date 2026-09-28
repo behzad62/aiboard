@@ -133,11 +133,31 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   else, the runner skips that entry file and records the reason, and the AR-R05 gate accepts the
   recorded reason for that file (STATE.md stays required). No repository layout may leave a run
   permanently unable to hand off.
+- **CD-17 — A linked docs folder never blocks or leaks (C2c review r1 A3n, A4).** Before any handoff
+  write, every path component from the repository root is checked (`docs`, `docs/project`,
+  `docs/project/specs`, and the handoff file itself, for example `docs/project/STATE.md`). If one is a link, the runner writes no handoff file under it, records the
+  reason, and the AR-R05 gate accepts that recorded reason the way it accepts `export_only`; the
+  handoff proceeds. The same per-component check protects the v1 Architect document path, where
+  a `docs` link used to send STATE.md outside the repository.
+- **CD-18 — Faster delivery-suite validation (owner, 2026-09-28).** The 27-minute serial
+  `native-delivery-factory.test.ts` is split into four files (4 wiring tests and three report-matrix
+  files, shared scenario in `test/support/delivery-factory-scenario.ts`), run with
+  `--test-concurrency=4`. Workers skip them unless the packet changes `native-build-factory.ts`,
+  `delivery-execution.ts`, `final-verification-*.ts`, `execution-host.ts` or the report readers;
+  the controller runs all four at the same time as the independent review, before the commit.
 - **CD-16 — Two follow-up packets before T7a (C2b review r3).** C2c (docs hardening: NF-1 gitignored
   spec directory, NF-2 per CD-15, NF-3 link facts from the commit tree only, NF-4 the `spec:` line
   names the real copy, NF-5 and NF-7 evidence corrections). FX-1 (NF-6: a pre-existing livelock:
   after guidance on an unchanged revision the build-risk re-assessment keyed by revision can never be
   recorded again; it affects v1 finish runs with the independent verifier).
+- **CD-19 — Close the remaining docs layouts before T7a (C2c review r5; owner 2026-09-28 "keep
+  fixing each case").** C2c review r5 accepted C2c and left layouts that are pre-existing or
+  reachable only in colliding repositories, but CD-15 says no layout may leave a run permanently
+  unable to hand off, and the reviews marked them "must close before T7a stamps docs v2". Two
+  packets close them after TX-2 (so their tests use the slim handoff harness): **C2d** (one root
+  cause: case-variant spellings; commit the index's own spelling) and **C2e** (non-link layouts,
+  the project-apply output cap, and the remaining minors). Out of scope and kept fail-closed: an
+  out-of-band junction created after the commit (J-docs permanence; the owner fixes the checkout).
 
 ---
 
@@ -251,7 +271,7 @@ signal.
 | T10 | parent T10 + AR-R30 | Prompt hygiene | T7 and R3 merged | Parent T10 acceptance | T8 |
 | T8 | parent T8 + AR-R31 | Final gate | T10 | Parent T8 acceptance | P6.6 complete |
 
-Dependency graph (acyclic): C1→C2→C3→C4→C5→T7a→T7b→T7c→T7d; C5→E1→E2→E3→E4→E5→V1→V2→V3→W1→W2→W3;
+Dependency graph (acyclic): C1→C2→C3→C4→C5→T7a (C2 ran as C2a→C2b→C2c→FX-1/FX-2/TX-1 per CD-13 and CD-16; then C2c→TX-2→C2d→C2e→C3 per CD-19)→T7b→T7c→T7d; C5→E1→E2→E3→E4→E5→V1→V2→V3→W1→W2→W3;
 {T7d, W3}→T10→T8. C4 and C5 follow C3 because they share `agent-prompts.ts`, `build-runtime.ts`
 and planning tools. Lane B packets touch `scheduler-store.ts` and `build-runtime.ts` like T7a;
 the controller merges lane B into lane A before T10 and runs the affected suites at the merge.
@@ -506,6 +526,58 @@ Runs as C2a then C2b (CD-13).
   FX-1 review r1 CR-1 (HIGH, `complete_run`'s fixed key `project-handoff-requested`) and N1
   (`verifier-selection:<revision>:<reason>`), both pre-existing. Old logs replay unchanged.
 - **Tests:** through the production manager for v1 and docs-v2 finish runs; review probes D and F.
+
+### TX-1 — Fast report-matrix tests (CD-18, owner option 1)
+
+- **Outcome:** the 13 report-matrix tests drive the post-integration boundary directly through the
+  factory's own boundary construction (real audited execution host, real test runs and reports),
+  with a parity test against the full factory scenario; the 4 end-to-end wiring tests stay
+  unchanged. Target: the native-delivery group in about 5 minutes with `--test-concurrency=4`
+  (was about 1,600 s serial and 1,005 s parallel). Test-only; no `runner-v2/src` change except a
+  byte-exact prove-red.
+
+### TX-2 — Slim the handoff suite (CD-18, owner 2026-09-28)
+
+- **Outcome:** `docs-policy-v2-handoff.test.ts` (75 tests, most driving a whole build through
+  NativeBuildManager) moves onto a handoff harness (real git, real SQLite, the factory-built docs
+  port, the runtime's real snapshot step) with about 5-7 full-manager tests kept and a parity test,
+  split into about 6 files for parallel runs. One-time change: afterwards, new behavior tests use
+  the narrowest real harness by default with at most 1-2 full-pump tests per packet. Test-only.
+  Also (C2c review r5 T-1): W-CI-rm and W-CI-mv move from the hand-built `gitDocsPort` onto the
+  factory-built port; the slow G1 and G1-flat tests go into their own file.
+
+### C2d — Case-variant docs spellings (CD-19, CD-15)
+
+- **Outcome:** on a case-insensitive checkout, a docs layout whose spelling differs only in case
+  never leaves a v2 or v1 run unable to hand off, and nothing is written through a spelling the
+  index does not hold. Items (C2c reviews r4 and r5): the escalation "case-variant real paths" — a
+  regular `Docs/` directory (probe DOCS-dir), `docs/Project/` (D-walk-projdir), a lowercase
+  `agents.md` or `claude.md` (F-LC-agents, D-rd-lcagents: today the section is written into the
+  link target and then the run pauses on every attempt, m-10); m-9 (`commitTreeEntryFolded` must
+  prefer a `120000` entry among folded matches, F-collide); r5 minor 4 (refuse a redirect whose
+  target collides case-insensitively with another index entry, D-rd-collide). One root cause:
+  the write and the commit must use the index's own spelling, or skip with a recorded reason.
+- **Writable:** `integration-manager.ts`, `project-docs.ts` if needed, the handoff test files.
+- **Tests:** each named probe as a regression test through the handoff harness with the
+  factory-built port (core.ignorecase true; links with core.symlinks true and false); one
+  full-manager test; v1 matrix unchanged; prove-red per root cause.
+
+### C2e — Non-link docs layouts, apply cap and minors (CD-19, CD-15)
+
+- **Outcome:** the remaining r3-r5 layouts hand off or pause with a precise reason the owner can
+  act on. Items: the F-matrix (a tracked file at `docs` gives `ENOTDIR`, a file at `docs/project`
+  `EEXIST`, a directory at `docs/project/STATE.md` `EISDIR`, each stuck on every attempt) → skip
+  STATE.md with a tree-derived reason the AR-R05 gate accepts, as CD-17 does for links; the
+  4 MiB output cap in `applyToProject` for large trees (G1, G1-control, G1-flat selection
+  refused) → bounded output; m-7 (a snapshot append the reducer refuses is a pump error at
+  `build-runtime.ts:2546`; route it through `pauseForHandoffSnapshotFailure`); m-11 (the
+  empty-commit refusal names the unclean index); m-4 (reuse wording matches the fresh wording);
+  m-8 (a second-stop regression test for W-A4 or W-S1).
+- **Writable:** `integration-manager.ts`, `build-runtime.ts`, `scheduler-store.ts` (gate only),
+  `native-build-factory.ts` only if the apply call needs it (`applyToProject` is in `integration-manager.ts:1221`), the handoff and project-doc test files.
+- **Tests:** F-matrix (3 layouts), G1 selection, m-7 fault injection, W-A4 second stop, through
+  the handoff harness with the factory-built port; one full-manager test; v1 matrix unchanged;
+  prove-red per item.
 
 ### T7a-T7d — parent T7 split (AR-R17, AR-R18)
 

@@ -444,6 +444,7 @@ test("restart recovery commits a pending document request once", async () => {
         findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
         findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
         readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
+        canStageSpecPath: (input) => fixture.integration.canStageSpecPath(input),
       },
     });
     assert.equal(runtime.events()[0]?.type, "project_docs.policy_configured");
@@ -506,6 +507,7 @@ test("restart recovery commits a pending document request once", async () => {
         findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
         findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
         readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
+        canStageSpecPath: (input) => fixture.integration.canStageSpecPath(input),
       },
     });
     await recovered.step();
@@ -593,6 +595,7 @@ test("same-turn project document commit is durable before complete_run returns",
         findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
         findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
         readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
+        canStageSpecPath: (input) => fixture.integration.canStageSpecPath(input),
       },
     });
     assert.equal((await runtime.step()).action, "plan_required");
@@ -668,6 +671,9 @@ test("plan_only completion without documents names STATE.md", async () => {
           throw new Error("complete_run must not commit when the tool refuses");
         },
         readIntegrationBaselineRevision: async () => {
+          throw new Error("complete_run must not commit when the tool refuses");
+        },
+        canStageSpecPath: async () => {
           throw new Error("complete_run must not commit when the tool refuses");
         },
       },
@@ -870,6 +876,7 @@ test("identical STATE.md content in a second request commits after integration a
         findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
         findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
         readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
+        canStageSpecPath: (input) => fixture.integration.canStageSpecPath(input),
       },
     });
     for (let index = 0; index < 24; index += 1) {
@@ -1095,6 +1102,7 @@ test("handoff after STATE.md keeps final verification current", async () => {
         findTrackedFileWithDigest: (input) => fixture.integration.findTrackedFileWithDigest(input),
         findHandoffSnapshotCommit: (input) => fixture.integration.findHandoffSnapshotCommit(input),
         readIntegrationBaselineRevision: () => fixture.integration.readIntegrationBaselineRevision(),
+        canStageSpecPath: (input) => fixture.integration.canStageSpecPath(input),
       },
     });
     for (let index = 0; index < 24; index += 1) {
@@ -1389,6 +1397,81 @@ test("v1 Architect documents keep the HEAD refusal for a CLAUDE.md link to AGENT
     assert.equal(after, before, "the refused batch commits nothing");
   } finally {
     rmSync(join(fixture.integration.path, "CLAUDE.md"), { force: true });
+    fixture.close();
+  }
+});
+
+test("v1 Architect documents refuse a link-mode CLAUDE.md checked out as a plain file (C2c NF-5)", async () => {
+  const fixture = await openGitFixture("v1linkmode");
+  try {
+    const worktree = fixture.integration.path;
+    // A git link entry (mode 120000) checked out as a plain file under
+    // core.symlinks=false: lstat sees a file, the index sees a link. The
+    // v1 Architect path refuses it -- strictly safer than the old
+    // lstat-only write-through -- with the unchanged refusal message.
+    writeFileSync(join(worktree, "AGENTS.md"), "pre-existing agents\n");
+    await gitText(worktree, ["add", "--", "AGENTS.md"]);
+    await gitText(worktree, ["commit", "-m", "seed agents file"]);
+    writeFileSync(join(worktree, "link-target.txt"), "AGENTS.md");
+    const blob = await gitText(worktree, ["hash-object", "-w", "link-target.txt"]);
+    assert.match(blob, /^[a-f0-9]{40}$/);
+    rmSync(join(worktree, "link-target.txt"), { force: true });
+    await gitText(worktree, ["update-index", "--add", "--cacheinfo", `120000,${blob},CLAUDE.md`]);
+    await gitText(worktree, ["commit", "-m", "link CLAUDE.md to AGENTS.md"]);
+    await gitText(worktree, ["config", "core.symlinks", "false"]);
+    rmSync(join(worktree, "CLAUDE.md"), { force: true });
+    await gitText(worktree, ["checkout", "--", "CLAUDE.md"]);
+    assert.equal(readFileSync(join(worktree, "CLAUDE.md"), "utf8"), "AGENTS.md");
+    assert.match(await gitText(worktree, ["ls-files", "-s", "--", "CLAUDE.md"]), /^120000 /);
+    const before = await gitText(worktree, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: entryPointWrites(),
+        summary: "Record documents",
+        runId: fixture.runId,
+        requestId: "project-doc:1:docs/project/STATE.md",
+      }),
+      /Project document path CLAUDE\.md is refused because CLAUDE\.md is a symbolic link or junction\./,
+    );
+    const after = await gitText(worktree, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    assert.equal(after, before, "the refused batch commits nothing");
+    assert.equal(readFileSync(join(worktree, "CLAUDE.md"), "utf8"), "AGENTS.md", "the link checkout is never written through");
+  } finally {
+    fixture.close();
+  }
+});
+
+test("v1 Architect documents refuse a committed docs link instead of writing outside (C2c repair CD-17/A4)", async () => {
+  const fixture = await openGitFixture("v1docslink");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-v1-docslink-"));
+  try {
+    const worktree = fixture.integration.path;
+    // A committed directory link at docs (mode 120000) to an absolute
+    // directory outside the repository, checked out as a real link.
+    writeFileSync(join(worktree, "link-target.txt"), outside);
+    const blob = await gitText(worktree, ["hash-object", "-w", "link-target.txt"]);
+    assert.match(blob, /^[a-f0-9]{40}$/);
+    rmSync(join(worktree, "link-target.txt"), { force: true });
+    await gitText(worktree, ["update-index", "--add", "--cacheinfo", `120000,${blob},docs`]);
+    await gitText(worktree, ["commit", "-m", "link docs outside"]);
+    await gitText(worktree, ["config", "core.symlinks", "true"]);
+    await gitText(worktree, ["checkout", "--", "docs"]);
+    const before = await gitText(worktree, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: entryPointWrites(),
+        summary: "Record documents",
+        runId: fixture.runId,
+        requestId: "project-doc:1:docs/project/STATE.md",
+      }),
+      /Project document path docs\/project\/README\.md is refused because docs is a symbolic link or junction\./,
+      "a docs link refuses the v1 batch before any write instead of sending STATE.md outside",
+    );
+    const after = await gitText(worktree, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    assert.equal(after, before, "the refused batch commits nothing");
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
     fixture.close();
   }
 });

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
 
 import type { AgentModel, AgentModelRequest, ModelTurn } from "../src/agent-contracts.js";
@@ -43,8 +43,13 @@ import { buildSourceManifest } from "../src/source-manifest.js";
 import {
   AGENTS_SECTION_END,
   AGENTS_SECTION_START,
+  CLAUDE_POINTER_LINE,
+  DEFAULT_AGENTS_SECTION_BODY,
+  DEFAULT_README_TEMPLATE,
+  DEFAULT_STATE_TEMPLATE,
   V2_AGENTS_SECTION_BODY,
   V2_CLAUDE_POINTER_LINE,
+  spliceMarkedArchitectSectionBytes,
 } from "../src/project-docs.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
@@ -515,6 +520,7 @@ function gitDocsPort(integration: IntegrationManager, hooks: DocsPortHooks = {})
     findTrackedFileWithDigest: async (input) => integration.findTrackedFileWithDigest(input),
     findHandoffSnapshotCommit: async (input) => integration.findHandoffSnapshotCommit(input),
     readIntegrationBaselineRevision: async () => integration.readIntegrationBaselineRevision(),
+    canStageSpecPath: async (input) => integration.canStageSpecPath(input),
     relateRevision: async () => "strict_descendant" as const,
   };
 }
@@ -1496,6 +1502,9 @@ test("C2a M1: the gate binds to the latest handoff request, not an earlier snaps
       readIntegrationBaselineRevision: async () => {
         throw new Error("the stale-stop test never touches the docs port");
       },
+      canStageSpecPath: async () => {
+        throw new Error("the stale-stop test never touches the docs port");
+      },
       relateRevision: async () => "strict_descendant" as const,
     };
     const runtime = buildRuntimeForHandoff({
@@ -1783,6 +1792,11 @@ test("C2a: the snapshot gate only fires for non-answered docs-v2 runs", () => {
   const noState = withStop10Request(v2());
   noState.projectDocs = { pending: [], snapshots: [{ ...snapshotRecord, paths: ["docs/project/AGENTS.md"] }] };
   assert.throws(() => assertHandoffSnapshotGate(noState, "rev-1"), /kernel handoff snapshot/);
+  // C2c repair CD-17: a recorded STATE.md link reason satisfies STATE.md
+  // the way export_only satisfies the whole gate.
+  const linkedState = withStop10Request(v2());
+  linkedState.projectDocs = { pending: [], snapshots: [{ ...snapshotRecord, paths: ["AGENTS.md", "CLAUDE.md"], bodyDigest: "", stateSkippedReason: "docs/project/STATE.md is not written: docs/project is a symbolic link or junction; the handoff proceeds without it." }] };
+  assertHandoffSnapshotGate(linkedState, "rev-1");
   // C2b (AR-R05): the gate refuses when the committed tree lacks the v2
   // AGENTS.md section or the marked CLAUDE.md line.
   const noAgents = withStop10Request(v2());
@@ -2832,46 +2846,59 @@ test("C2b repair m4: a spec-copy search failure skips the copy, never the commit
   }
 });
 
-test("C2b repair m5: a CLAUDE.md link to AGENTS.md satisfies the line without writing through it", async () => {
+test("C2b repair m5: a committed CLAUDE.md link to AGENTS.md satisfies the line without writing through it", async () => {
   const RUN = "run-c2b-claudelink";
-  const repo = await openGitRepo("claudelink", RUN);
-  const schedulerPath = join(repo.root, "scheduler.sqlite");
-  const seeder = new SqliteSchedulerStore(schedulerPath);
-  for (const input of v2PlanOnlySeed(RUN)) seeder.append(input);
-  seeder.close();
-  // A common layout: CLAUDE.md is a link to AGENTS.md.
-  symlinkSync("AGENTS.md", join(repo.integration.path, "CLAUDE.md"), "file");
-  const architect = silentArchitect();
-  let store: SqliteSchedulerStore | undefined;
-  let manager: NativeBuildManager | undefined;
+  const fixture = await openFactoryPort("claudelink", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
   try {
-    manager = new NativeBuildManager({
-      specs: new SqliteBuildSpecStore(join(repo.root, "builds.sqlite")),
-      createRuntime: async () => {
-        store = new SqliteSchedulerStore(schedulerPath);
-        const runtime = buildRuntimeForHandoff({
-          runId: RUN, store, projectDocs: gitDocsPort(repo.integration),
-          architect, clock: advancingClock(), runPolicy: "plan_only",
-        });
-        return managedHandle(runtime, async () => ({ integrationRevision: "unused", integrationBranch: "unused", appliedToProject: false }), RUN);
-      },
-    });
-    await manager.create(managerSpec(RUN, "plan_only"));
-    manager.activate(RUN);
-    await manager.awaitIdle(RUN);
-    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
-    assert.equal(snapshots.length, 1, "the link layout completes instead of failing every snapshot");
-    const payload = snapshots[0]!.payload as Record<string, unknown>;
-    assert.equal(payload.claudeLineCommitted, true);
-    assert.equal(payload.claudeLineViaLink, "CLAUDE.md is a symbolic link to AGENTS.md");
-    assert.ok(lstatSync(join(repo.integration.path, "CLAUDE.md")).isSymbolicLink(), "never written through the link");
-    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2b-claudelink");
-    assert.equal(selected.status, "completed");
+    const worktree = fixture.integration.path;
+    // A common layout: CLAUDE.md is a link to AGENTS.md. C2c NF-3: the link
+    // is COMMITTED (the realistic layout) -- the gate reads the fact from
+    // the commit tree alone, never the live checkout.
+    writeFileSync(join(worktree, "AGENTS.md"), "pre-existing agents\n");
+    symlinkSync("AGENTS.md", join(worktree, "CLAUDE.md"), "file");
+    await runGit({ cwd: worktree, args: ["add", "--", "AGENTS.md", "CLAUDE.md"] });
+    const staged = await runGit({ cwd: worktree, args: ["ls-files", "-s", "--", "CLAUDE.md"] });
+    assert.match(staged.stdout.trim(), /^120000 /);
+    await runGit({ cwd: worktree, args: ["commit", "-m", "link CLAUDE.md to AGENTS.md"] });
+    const architect = silentArchitect();
+    let store: SqliteSchedulerStore | undefined;
+    let manager: NativeBuildManager | undefined;
+    try {
+      manager = new NativeBuildManager({
+        specs: new SqliteBuildSpecStore(join(fixture.root, "builds.sqlite")),
+        createRuntime: async () => {
+          store = new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(RUN), "scheduler.sqlite"), {
+            evidenceStore: fixture.evidence,
+            validateExecutionProfile: acceptFinalVerificationProfile,
+            validateCleanupReceipt: () => undefined,
+          });
+          const runtime = buildRuntimeForHandoff({
+            runId: RUN, store, projectDocs: fixture.port,
+            architect, clock: advancingClock(), runPolicy: "plan_only",
+          });
+          return managedHandle(runtime, async () => ({ integrationRevision: "unused", integrationBranch: "unused", appliedToProject: false }), RUN);
+        },
+      });
+      await manager.create(managerSpec(RUN, "plan_only"));
+      manager.activate(RUN);
+      await manager.awaitIdle(RUN);
+      const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+      assert.equal(snapshots.length, 1, "the link layout completes instead of failing every snapshot");
+      const payload = snapshots[0]!.payload as Record<string, unknown>;
+      assert.equal(payload.claudeLineCommitted, true);
+      assert.equal(payload.claudeLineViaLink, "CLAUDE.md is a symbolic link to AGENTS.md");
+      assert.ok(lstatSync(join(worktree, "CLAUDE.md")).isSymbolicLink(), "never written through the link");
+      // The commit keeps the link: the gate read the fact from the commit tree.
+      const mode = await runGit({ cwd: worktree, args: ["ls-tree", String(payload.commit), "--", "CLAUDE.md"] });
+      assert.match(mode.stdout.trim(), /^120000 blob/);
+      const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2b-claudelink");
+      assert.equal(selected.status, "completed");
+    } finally {
+      await manager?.close();
+      store?.close();
+    }
   } finally {
-    await manager?.close();
-    store?.close();
-    rmSync(join(repo.integration.path, "CLAUDE.md"), { force: true });
-    await repo.close();
+    await fixture.close();
   }
 });
 
@@ -3122,6 +3149,9 @@ test("C2b: run options are recorded in run.policy_configured with durable defaul
     readIntegrationBaselineRevision: async () => {
       throw new Error("the recording test never touches the docs port");
     },
+    canStageSpecPath: async () => {
+      throw new Error("the recording test never touches the docs port");
+    },
     relateRevision: async () => "strict_descendant" as const,
   };
   const RUN = "run-c2b-options";
@@ -3328,13 +3358,15 @@ test("C2b repair B1-R/P1: the factory-built docs port wires both reconciliation 
   const fixture = await openFactoryPort("p1", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
   try {
     // Probe P1: the runtime that NativeBuildFactory.create builds must
-    // carry both methods on its docs port -- not just the six cycle-0 keys.
-    for (const key of ["commit", "commitHandoffSnapshot", "findHandoffSnapshotCommit", "readHandoffSnapshotFile", "readIntegrationBaselineRevision", "readIntegrationTipFile", "findTrackedFileWithDigest", "relateRevision"]) {
+    // carry every required method on its docs port -- not just the six
+    // cycle-0 keys. C2c adds the pre-render spec stageability check.
+    for (const key of ["commit", "commitHandoffSnapshot", "findHandoffSnapshotCommit", "readHandoffSnapshotFile", "readIntegrationBaselineRevision", "readIntegrationTipFile", "findTrackedFileWithDigest", "relateRevision", "canStageSpecPath"]) {
       assert.equal(typeof (fixture.port as unknown as Record<string, unknown>)[key], "function", `the factory port wires ${key}`);
     }
     const baseline = await fixture.port.readIntegrationBaselineRevision();
     assert.equal(baseline.revision, fixture.baselineRevision);
     assert.equal(await fixture.port.findHandoffSnapshotCommit({ snapshotKey: "handoff-snapshot:1" }), null);
+    assert.equal((await fixture.port.canStageSpecPath({ path: "docs/project/specs/source_value.md", content: "preview\n" })).stageable, true);
   } finally {
     await fixture.close();
   }
@@ -3813,7 +3845,169 @@ test("C2b repair N-2/probe K2: a user's own spec-path file is never overwritten"
     assert.ok(files.stdout.split("\n").map((line) => line.trim()).includes(expected), "the copy lands under the digest-suffixed name");
     const blob = await runGit({ cwd: fixture.integration.path, args: ["show", `${commit}:${expected}`] });
     assert.equal(blob.stdout, SOURCE_TEXT);
+    const state = await runGit({ cwd: fixture.integration.path, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(state.stdout.includes(`spec: ${expected}`), "the snapshot names the real copy, not the occupied target");
     const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2b-specown");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c NF-1/probe K-ignored: a gitignored specs directory never fails the snapshot", async () => {
+  const RUN = "run-c2c-specignored";
+  const fixture = await openFactoryPort("specignored", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  // The specs directory is gitignored, so the spec `git add` refuses it.
+  writeFileSync(join(fixture.integration.path, ".gitignore"), "docs/project/specs/\n");
+  await runGit({ cwd: fixture.integration.path, args: ["add", "--", ".gitignore"] });
+  await runGit({ cwd: fixture.integration.path, args: ["commit", "-m", "ignore the specs directory"] });
+  const architect = silentArchitect();
+  let store: SqliteSchedulerStore | undefined;
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(fixture.root, "builds.sqlite")),
+      createRuntime: async () => {
+        store = new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(RUN), "scheduler.sqlite"), {
+          evidenceStore: fixture.evidence,
+          validateExecutionProfile: acceptFinalVerificationProfile,
+          validateCleanupReceipt: () => undefined,
+        });
+        const runtime = buildRuntimeForHandoff({
+          runId: RUN, store, projectDocs: fixture.port,
+          architect, clock: advancingClock(), runPolicy: "plan_only", artifacts,
+        });
+        return managedHandle(runtime, async () => ({ integrationRevision: "unused", integrationBranch: "unused", appliedToProject: false }), RUN);
+      },
+    });
+    await manager.create(managerSpec(RUN, "plan_only"));
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the ignored copy never fails the snapshot commit");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.specCopySkipped, "write_failed");
+    assert.ok(!("specCopied" in payload), "no copy is claimed");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: fixture.integration.path, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    // C2c NF-1 residual: the port's pre-render stageability check omits the
+    // spec path from the facts, so the line says "not recorded".
+    const state = await runGit({ cwd: fixture.integration.path, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(state.stdout.includes("spec: not recorded"), "the snapshot names no spec path the commit does not hold");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-specignored");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c NF-4/probe K2b: an occupied target and sibling skip the copy as path_occupied", async () => {
+  const RUN = "run-c2c-specboth";
+  const fixture = await openFactoryPort("specboth", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  // Both the copy path and its digest sibling hold other bytes.
+  const digest = createHash("sha256").update(SOURCE_TEXT, "utf8").digest("hex").slice(0, 16);
+  const sibling = `source_value-${digest}.md`;
+  mkdirSync(join(fixture.integration.path, "docs", "project", "specs"), { recursive: true });
+  writeFileSync(join(fixture.integration.path, "docs", "project", "specs", "source_value.md"), "user's own notes\n");
+  writeFileSync(join(fixture.integration.path, "docs", "project", "specs", sibling), "other notes\n");
+  await runGit({ cwd: fixture.integration.path, args: ["add", "--", "docs/project/specs/source_value.md", `docs/project/specs/${sibling}`] });
+  await runGit({ cwd: fixture.integration.path, args: ["commit", "-m", "both spec paths occupied"] });
+  const architect = silentArchitect();
+  let store: SqliteSchedulerStore | undefined;
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(fixture.root, "builds.sqlite")),
+      createRuntime: async () => {
+        store = new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(RUN), "scheduler.sqlite"), {
+          evidenceStore: fixture.evidence,
+          validateExecutionProfile: acceptFinalVerificationProfile,
+          validateCleanupReceipt: () => undefined,
+        });
+        const runtime = buildRuntimeForHandoff({
+          runId: RUN, store, projectDocs: fixture.port,
+          architect, clock: advancingClock(), runPolicy: "plan_only", artifacts,
+        });
+        return managedHandle(runtime, async () => ({ integrationRevision: "unused", integrationBranch: "unused", appliedToProject: false }), RUN);
+      },
+    });
+    await manager.create(managerSpec(RUN, "plan_only"));
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1);
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.specCopySkipped, "path_occupied");
+    assert.ok(!("specCopied" in payload), "no copy is claimed");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    const commit = String(payload.commit);
+    const state = await runGit({ cwd: fixture.integration.path, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(state.stdout.includes("spec: not recorded"), "the snapshot records no spec path");
+    const files = await runGit({ cwd: fixture.integration.path, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-specboth");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c NF-4: an unreadable spec tip skips the copy instead of failing the snapshot", async () => {
+  const RUN = "run-c2c-spectip";
+  const fixture = await openFactoryPort("spectip", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  // The STATE.md tip read works (hand-edit detection runs), but every spec
+  // tip read throws: the copy is skipped with a reason, never a failure.
+  const origReadTip = fixture.integration.readIntegrationTipFile.bind(fixture.integration);
+  fixture.integration.readIntegrationTipFile = async (input: { path: string }) => {
+    if (input.path.startsWith("docs/project/specs/")) throw new Error("Injected spec tip read failure.");
+    return origReadTip(input);
+  };
+  const architect = silentArchitect();
+  let store: SqliteSchedulerStore | undefined;
+  let manager: NativeBuildManager | undefined;
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(fixture.root, "builds.sqlite")),
+      createRuntime: async () => {
+        store = new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(RUN), "scheduler.sqlite"), {
+          evidenceStore: fixture.evidence,
+          validateExecutionProfile: acceptFinalVerificationProfile,
+          validateCleanupReceipt: () => undefined,
+        });
+        const runtime = buildRuntimeForHandoff({
+          runId: RUN, store, projectDocs: fixture.port,
+          architect, clock: advancingClock(), runPolicy: "plan_only", artifacts,
+        });
+        return managedHandle(runtime, async () => ({ integrationRevision: "unused", integrationBranch: "unused", appliedToProject: false }), RUN);
+      },
+    });
+    await manager.create(managerSpec(RUN, "plan_only"));
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the unreadable tip never fails the snapshot commit");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.specCopySkipped, "spec_tip_unreadable");
+    assert.ok(!("specCopied" in payload), "no copy is claimed");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    const commit = String(payload.commit);
+    const state = await runGit({ cwd: fixture.integration.path, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(state.stdout.includes("spec: not recorded"), "the snapshot records no spec path");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-spectip");
     assert.equal(selected.status, "completed");
   } finally {
     await manager?.close();
@@ -3891,6 +4085,812 @@ test("C2b repair B1-R/N6-factory: a docs-v2 run without a plan revision hands of
   }
 });
 
+/**
+ * C2c (NF-2/CD-15, NF-3): entry-file link layouts, all through the
+ * production manager with the docs port NativeBuildFactory builds.
+ */
+async function commitEntryLinkMode(worktree: string, linkPath: string, targetText: string): Promise<void> {
+  // Store an entry file as a link entry (mode 120000) without touching a
+  // real symlink: hash the target text, then index it as a link.
+  writeFileSync(join(worktree, "link-target.txt"), targetText);
+  const hashed = await runGit({ cwd: worktree, args: ["hash-object", "-w", "link-target.txt"] });
+  const blob = hashed.stdout.trim();
+  assert.match(blob, /^[a-f0-9]{40}$/);
+  rmSync(join(worktree, "link-target.txt"), { force: true });
+  await runGit({ cwd: worktree, args: ["update-index", "--add", "--cacheinfo", `120000,${blob},${linkPath}`] });
+  await runGit({ cwd: worktree, args: ["commit", "-m", `link ${linkPath}`] });
+}
+
+async function checkoutEntryLinkAsPlainFile(worktree: string, linkPath: string, targetText: string): Promise<void> {
+  // The Windows default: links check out as plain files holding the target.
+  await runGit({ cwd: worktree, args: ["config", "core.symlinks", "false"] });
+  rmSync(join(worktree, linkPath), { force: true });
+  await runGit({ cwd: worktree, args: ["checkout", "--", linkPath] });
+  assert.equal(lstatSync(join(worktree, linkPath)).isSymbolicLink(), false);
+  assert.equal(readFileSync(join(worktree, linkPath), "utf8"), targetText);
+  const staged = await runGit({ cwd: worktree, args: ["ls-files", "-s", "--", linkPath] });
+  assert.match(staged.stdout.trim(), /^120000 /);
+}
+
+async function driveFactoryHandoffSnapshot(
+  fixture: Awaited<ReturnType<typeof openFactoryPort>>,
+  runId: string,
+  held: { store?: SqliteSchedulerStore },
+): Promise<NativeBuildManager> {
+  const architect = silentArchitect();
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(fixture.root, "builds.sqlite")),
+    createRuntime: async () => {
+      held.store = new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(runId), "scheduler.sqlite"), {
+        evidenceStore: fixture.evidence,
+        validateExecutionProfile: acceptFinalVerificationProfile,
+        validateCleanupReceipt: () => undefined,
+      });
+      const runtime = buildRuntimeForHandoff({
+        runId, store: held.store, projectDocs: fixture.port,
+        architect, clock: advancingClock(), runPolicy: "plan_only",
+      });
+      return managedHandle(runtime, async () => ({ integrationRevision: "unused", integrationBranch: "unused", appliedToProject: false }), runId);
+    },
+  });
+  await manager.create(managerSpec(runId, "plan_only"));
+  manager.activate(runId);
+  await manager.awaitIdle(runId);
+  return manager;
+}
+
+test("C2c NF-2/probe L2: a link-mode AGENTS.md to CLAUDE.md writes the section into the target", async () => {
+  const RUN = "run-c2c-agentslink";
+  const fixture = await openFactoryPort("agentslink", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, "CLAUDE.md"), "pre-existing claude rules\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "CLAUDE.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed claude file"] });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "CLAUDE.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "CLAUDE.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the link layout completes instead of failing every snapshot");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.agentsSectionViaLink, "AGENTS.md is a symbolic link to CLAUDE.md; the section is written into CLAUDE.md.");
+    assert.equal(payload.claudeLineCommitted, true, "the CLAUDE.md line counts as committed through the AGENTS.md redirect");
+    assert.match(String(payload.claudeLineViaLink), /CLAUDE\.md pointer omitted: AGENTS\.md resolves to CLAUDE\.md/, "the self-import omission is recorded");
+    // Never written through the link: the worktree entry file still holds
+    // the target text, and the target holds the AGENTS.md section -- with
+    // no @AGENTS.md self-import (M-6: it would import the file into itself).
+    assert.equal(readFileSync(join(worktree, "AGENTS.md"), "utf8"), "CLAUDE.md");
+    const target = readFileSync(join(worktree, "CLAUDE.md"), "utf8");
+    assert.ok(target.includes(V2_AGENTS_SECTION_BODY), "the target holds the AGENTS.md section");
+    assert.ok(!target.split("\n").some((line) => line.trim() === V2_CLAUDE_POINTER_LINE), "the merged section carries no self-import");
+    assert.ok(target.includes("pre-existing claude rules"), "the target's own bytes survive");
+    const commit = String(payload.commit);
+    const mode = await runGit({ cwd: worktree, args: ["ls-tree", commit, "--", "AGENTS.md"] });
+    assert.match(mode.stdout.trim(), /^120000 blob/);
+    const linkTarget = await runGit({ cwd: worktree, args: ["show", `${commit}:AGENTS.md`] });
+    assert.equal(linkTarget.stdout, "CLAUDE.md");
+    const committedTarget = await runGit({ cwd: worktree, args: ["show", `${commit}:CLAUDE.md`] });
+    assert.ok(committedTarget.stdout.includes(V2_AGENTS_SECTION_BODY));
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-agentslink");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c NF-2/probe L2-real: a real AGENTS.md link to CLAUDE.md writes the section into the target", async () => {
+  const RUN = "run-c2c-agentslink-real";
+  const fixture = await openFactoryPort("agentslinkreal", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, "CLAUDE.md"), "pre-existing claude rules\n");
+    symlinkSync("CLAUDE.md", join(worktree, "AGENTS.md"), "file");
+    await runGit({ cwd: worktree, args: ["add", "--", "AGENTS.md", "CLAUDE.md"] });
+    const staged = await runGit({ cwd: worktree, args: ["ls-files", "-s", "--", "AGENTS.md"] });
+    assert.match(staged.stdout.trim(), /^120000 /);
+    await runGit({ cwd: worktree, args: ["commit", "-m", "link AGENTS.md to CLAUDE.md"] });
+    assert.ok(lstatSync(join(worktree, "AGENTS.md")).isSymbolicLink());
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the real-link layout completes instead of failing every snapshot");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.agentsSectionViaLink, "AGENTS.md is a symbolic link to CLAUDE.md; the section is written into CLAUDE.md.");
+    assert.ok(lstatSync(join(worktree, "AGENTS.md")).isSymbolicLink(), "never written through the link");
+    assert.equal(readlinkSync(join(worktree, "AGENTS.md")).replace(/\\/g, "/"), "CLAUDE.md");
+    assert.match(String(payload.claudeLineViaLink), /CLAUDE\.md pointer omitted: AGENTS\.md resolves to CLAUDE\.md/, "the self-import omission is recorded");
+    const committedTarget = await runGit({ cwd: worktree, args: ["show", `${String(payload.commit)}:CLAUDE.md`] });
+    assert.ok(committedTarget.stdout.includes(V2_AGENTS_SECTION_BODY), "the section is in the target, not through the link");
+    assert.ok(!committedTarget.stdout.split("\n").some((line) => line.trim() === V2_CLAUDE_POINTER_LINE), "the merged section carries no self-import");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-agentslink-real");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c NF-2/probe L3: a CLAUDE.md link to another regular file writes the line into that target", async () => {
+  const RUN = "run-c2c-claudetarget";
+  const fixture = await openFactoryPort("claudetarget", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, "NOTES.md"), "# team notes\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "NOTES.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed notes file"] });
+    await commitEntryLinkMode(worktree, "CLAUDE.md", "NOTES.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "CLAUDE.md", "NOTES.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the link layout completes instead of failing every snapshot");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.claudeLineCommitted, true);
+    assert.equal(payload.claudeLineViaLink, "CLAUDE.md is a symbolic link to NOTES.md; the section is written into NOTES.md.");
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.ok(!("agentsSectionViaLink" in payload), "the regular AGENTS.md write needs no link reason");
+    assert.equal(readFileSync(join(worktree, "CLAUDE.md"), "utf8"), "NOTES.md", "never written through the link");
+    const target = readFileSync(join(worktree, "NOTES.md"), "utf8");
+    assert.ok(target.split("\n").some((line) => line.trim() === V2_CLAUDE_POINTER_LINE), "the target holds the line");
+    assert.ok(target.includes("# team notes"), "the target's own bytes survive");
+    const commit = String(payload.commit);
+    const mode = await runGit({ cwd: worktree, args: ["ls-tree", commit, "--", "CLAUDE.md"] });
+    assert.match(mode.stdout.trim(), /^120000 blob/);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "NOTES.md", "docs/project/STATE.md"]);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-claudetarget");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c NF-2: an AGENTS.md link to a missing target is skipped with a reason, and the handoff completes", async () => {
+  const RUN = "run-c2c-agentsmissing";
+  const fixture = await openFactoryPort("agentsmissing", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "AGENTS.md", "MISSING.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "MISSING.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "no layout leaves the run unable to hand off");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to MISSING\.md.*not a regular tracked file/);
+    assert.equal(payload.claudeLineCommitted, true);
+    assert.equal(readFileSync(join(worktree, "AGENTS.md"), "utf8"), "MISSING.md", "the link is never touched");
+    const commit = String(payload.commit);
+    const mode = await runGit({ cwd: worktree, args: ["ls-tree", commit, "--", "AGENTS.md"] });
+    assert.match(mode.stdout.trim(), /^120000 blob/);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-agentsmissing");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c NF-2: an AGENTS.md link to an outside target is skipped with a reason, and the handoff completes", async () => {
+  const RUN = "run-c2c-agentsoutside";
+  const fixture = await openFactoryPort("agentsoutside", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "AGENTS.md", "../outside.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "../outside.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "no layout leaves the run unable to hand off");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to .*outside the repository/);
+    assert.equal(payload.claudeLineCommitted, true);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-agentsoutside");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c NF-3/probe U1: a commit tree without the CLAUDE.md line is refused despite a live worktree link", async () => {
+  const RUN = "run-c2c-uplink-uncommitted";
+  const fixture = await openFactoryPort("uplinkuncommitted", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    // The old m5 layout: an UNTRACKED worktree symlink the commit tree
+    // never holds. The gate reads the commit tree alone, so it refuses.
+    symlinkSync("AGENTS.md", join(worktree, "CLAUDE.md"), "file");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 0, "no snapshot is recorded without commit-tree proof");
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    await assert.rejects(
+      manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-uplink-uncommitted"),
+      /kernel handoff snapshot/,
+      "the owner's selection is refused while the proof is missing",
+    );
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    rmSync(join(fixture.integration.path, "CLAUDE.md"), { force: true });
+    await fixture.close();
+  }
+});
+
+test("C2c NF-3/probe U2: a commit tree holding a lineless CLAUDE.md is refused despite a live worktree link", async () => {
+  const RUN = "run-c2c-uplink-replaced";
+  const fixture = await openFactoryPort("uplinkreplaced", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    // A tracked regular CLAUDE.md with no pointer, replaced in the
+    // worktree by an UNCOMMITTED symlink. The commit tree holds 100644
+    // with no line, so the gate refuses even though the live checkout
+    // links to AGENTS.md.
+    writeFileSync(join(worktree, "CLAUDE.md"), "# user rules, no pointer\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "CLAUDE.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed regular claude file"] });
+    rmSync(join(worktree, "CLAUDE.md"), { force: true });
+    symlinkSync("AGENTS.md", join(worktree, "CLAUDE.md"), "file");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 0, "no snapshot is recorded without commit-tree proof");
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.ok(lstatSync(join(worktree, "CLAUDE.md")).isSymbolicLink(), "never written through the link");
+    await assert.rejects(
+      manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-uplink-replaced"),
+      /kernel handoff snapshot/,
+      "the owner's selection is refused while the proof is missing",
+    );
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    rmSync(join(fixture.integration.path, "CLAUDE.md"), { force: true });
+    await fixture.close();
+  }
+});
+
+/**
+ * C2c repair cycle 1, part A: the spec-copy preview is gone (BL-1/M-3/M-4)
+ * and the commit-reuse path re-describes skip reasons from the commit tree
+ * (BL-2). All through NativeBuildManager with the docs port
+ * NativeBuildFactory builds, real SQLite and git.
+ */
+async function driveFactoryHandoffSnapshotWithArtifacts(
+  fixture: Awaited<ReturnType<typeof openFactoryPort>>,
+  runId: string,
+  held: { store?: SqliteSchedulerStore },
+  artifacts: ArtifactStore,
+): Promise<NativeBuildManager> {
+  const architect = silentArchitect();
+  const manager = new NativeBuildManager({
+    specs: new SqliteBuildSpecStore(join(fixture.root, "builds.sqlite")),
+    createRuntime: async () => {
+      held.store = new SqliteSchedulerStore(join(fixture.state, "builds", safeSegment(runId), "scheduler.sqlite"), {
+        evidenceStore: fixture.evidence,
+        validateExecutionProfile: acceptFinalVerificationProfile,
+        validateCleanupReceipt: () => undefined,
+      });
+      const runtime = buildRuntimeForHandoff({
+        runId, store: held.store, projectDocs: fixture.port,
+        architect, clock: advancingClock(), runPolicy: "plan_only", artifacts,
+      });
+      return managedHandle(runtime, async () => ({ integrationRevision: "unused", integrationBranch: "unused", appliedToProject: false }), runId);
+    },
+  });
+  await manager.create(managerSpec(runId, "plan_only"));
+  manager.activate(runId);
+  await manager.awaitIdle(runId);
+  return manager;
+}
+
+/** Check out a committed directory link as a real link (core.symlinks=true, made with git only). */
+async function checkoutDirLinkAsRealLink(worktree: string, linkPath: string): Promise<void> {
+  await runGit({ cwd: worktree, args: ["config", "core.symlinks", "true"] });
+  rmSync(join(worktree, ...linkPath.split("/")), { recursive: true, force: true });
+  await runGit({ cwd: worktree, args: ["checkout", "--", linkPath] });
+  assert.ok(lstatSync(join(worktree, ...linkPath.split("/"))).isSymbolicLink(), `${linkPath} checks out as a real link`);
+  const staged = await runGit({ cwd: worktree, args: ["ls-files", "-s", "--", linkPath] });
+  assert.match(staged.stdout.trim(), /^120000 /);
+}
+
+test("C2c repair BL-1/probe A1: a committed specs-dir link to an absolute outside target writes nothing outside", async () => {
+  const RUN = "run-c2c-repair-a1";
+  const fixture = await openFactoryPort("repairabslink", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-a1-"));
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "docs", "project"), { recursive: true });
+    await commitEntryLinkMode(worktree, "docs/project/specs", outside);
+    await checkoutDirLinkAsRealLink(worktree, "docs/project/specs");
+    manager = await driveFactoryHandoffSnapshotWithArtifacts(fixture, RUN, held, artifacts);
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the link layout still commits and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.specCopySkipped, "write_failed", "the copy is skipped with a reason");
+    assert.ok(!("specCopied" in payload), "no copy is claimed");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    assert.ok(!("stateSkippedReason" in payload), "a committed STATE.md never carries a skip reason");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    const state = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(state.stdout.includes("spec: not recorded"), "the snapshot names no spec path the commit does not hold");
+    const treeMode = await runGit({ cwd: worktree, args: ["ls-tree", commit, "--", "docs/project/specs"] });
+    assert.match(treeMode.stdout.trim(), /^120000 /, "the commit still carries the link");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-a1");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair BL-1/probe A2: a committed specs-dir link to a relative outside target writes nothing outside", async () => {
+  const RUN = "run-c2c-repair-a2";
+  const fixture = await openFactoryPort("repairrellink", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = join(fixture.root, "zz-outside-specs-rel");
+  mkdirSync(outside, { recursive: true });
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "docs", "project"), { recursive: true });
+    const target = relative(join(worktree, "docs", "project"), outside);
+    await commitEntryLinkMode(worktree, "docs/project/specs", target);
+    await checkoutDirLinkAsRealLink(worktree, "docs/project/specs");
+    assert.equal(readlinkSync(join(worktree, "docs", "project", "specs")), target);
+    manager = await driveFactoryHandoffSnapshotWithArtifacts(fixture, RUN, held, artifacts);
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the link layout still commits and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.specCopySkipped, "write_failed", "the copy is skipped with a reason");
+    assert.ok(!("specCopied" in payload), "no copy is claimed");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    assert.ok(!("stateSkippedReason" in payload), "a committed STATE.md never carries a skip reason");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    const state = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(state.stdout.includes("spec: not recorded"), "the snapshot names no spec path the commit does not hold");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-a2");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair CD-17/probe A3: a committed docs/project link writes nothing outside and still completes", async () => {
+  const RUN = "run-c2c-repair-a3";
+  const fixture = await openFactoryPort("repairprojlink", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-a3-"));
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "docs"), { recursive: true });
+    await commitEntryLinkMode(worktree, "docs/project", outside);
+    await checkoutDirLinkAsRealLink(worktree, "docs/project");
+    manager = await driveFactoryHandoffSnapshotWithArtifacts(fixture, RUN, held, artifacts);
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the link layout still commits and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.match(String(payload.stateSkippedReason), /docs\/project is a symbolic link or junction/, "the STATE.md skip is recorded");
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.equal(payload.specCopySkipped, "write_failed", "the copy under the link is skipped too");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md"]);
+    const treeMode = await runGit({ cwd: worktree, args: ["ls-tree", commit, "--", "docs/project"] });
+    assert.match(treeMode.stdout.trim(), /^120000 /, "the commit still carries the link");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-a3");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair CD-17/probe A3n: a committed docs/project link with no spec due completes with a recorded reason", async () => {
+  const RUN = "run-c2c-repair-a3n";
+  const fixture = await openFactoryPort("repairprojlinkn", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-a3n-"));
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "docs"), { recursive: true });
+    await commitEntryLinkMode(worktree, "docs/project", outside);
+    await checkoutDirLinkAsRealLink(worktree, "docs/project");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the link layout still commits and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.match(String(payload.stateSkippedReason), /docs\/project is a symbolic link or junction/, "the STATE.md skip is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md"]);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-a3n");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair CD-17/probe A4: a committed docs link writes nothing outside and still completes", async () => {
+  const RUN = "run-c2c-repair-a4";
+  const fixture = await openFactoryPort("repairdocslink", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-a4-"));
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "docs", outside);
+    await checkoutDirLinkAsRealLink(worktree, "docs");
+    manager = await driveFactoryHandoffSnapshotWithArtifacts(fixture, RUN, held, artifacts);
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the link layout still commits and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.match(String(payload.stateSkippedReason), /docs is a symbolic link or junction/, "the STATE.md skip names the docs link");
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.equal(payload.specCopySkipped, "write_failed", "the copy under the link is skipped too");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md"]);
+    const treeMode = await runGit({ cwd: worktree, args: ["ls-tree", commit, "--", "docs"] });
+    assert.match(treeMode.stdout.trim(), /^120000 /, "the commit still carries the link");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-a4");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair M-1/probe D1: a junction above a redirect target refuses the redirect and writes nothing outside", async () => {
+  const RUN = "run-c2c-repair-d1";
+  const fixture = await openFactoryPort("repairjunction", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outsideRoot = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-d1-"));
+  const outsideSub = join(outsideRoot, "sub");
+  mkdirSync(outsideSub, { recursive: true });
+  writeFileSync(join(outsideSub, "notes.md"), "outside notes\n");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    // sub/notes.md is a tracked regular file; then the worktree sub is
+    // replaced out-of-band by a junction to an outside directory.
+    mkdirSync(join(worktree, "sub"), { recursive: true });
+    writeFileSync(join(worktree, "sub", "notes.md"), "inside notes\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "sub/notes.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed sub notes file"] });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "sub/notes.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "sub/notes.md");
+    rmSync(join(worktree, "sub"), { recursive: true, force: true });
+    symlinkSync(outsideSub, join(worktree, "sub"), "junction");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    assert.equal(readFileSync(join(outsideSub, "notes.md"), "utf8"), "outside notes\n", "nothing is written outside the repository");
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the refused redirect still commits and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to sub\/notes\.md/, "the redirect refusal is recorded");
+    assert.match(String(payload.agentsSectionViaLink), /sub is a symbolic link or junction/, "the reason names the junction above the target");
+    assert.equal(payload.claudeLineCommitted, true);
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-d1");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair M-2/probe C9: a backslash link target from the index blob writes the section into the tracked target", async () => {
+  const RUN = "run-c2c-repair-c9";
+  const fixture = await openFactoryPort("repairbackslash", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "docs"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "notes.md"), "pre-existing notes\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/notes.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed docs notes file"] });
+    // Git for Windows stores a real-link target with a backslash; the
+    // runner takes it from the index blob and normalizes it.
+    await commitEntryLinkMode(worktree, "AGENTS.md", "docs\\notes.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "docs\\notes.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the backslash-target layout completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.agentsSectionViaLink, "AGENTS.md is a symbolic link to docs/notes.md; the section is written into docs/notes.md.");
+    assert.equal(readFileSync(join(worktree, "AGENTS.md"), "utf8"), "docs\\notes.md", "the link entry is never touched");
+    const target = readFileSync(join(worktree, "docs", "notes.md"), "utf8");
+    assert.ok(target.includes(V2_AGENTS_SECTION_BODY), "the section is written into the regular tracked target");
+    assert.ok(target.includes("pre-existing notes"), "the target's own bytes survive");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/notes.md", "docs/project/STATE.md"]);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-c9");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair M-5/probe C11: a dot-dot target that resolves inside is skipped with the real reason", async () => {
+  const RUN = "run-c2c-repair-c11";
+  const fixture = await openFactoryPort("repairdotdot", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "sub"), { recursive: true });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "sub/../CLAUDE.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "sub/../CLAUDE.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "no layout leaves the run unable to hand off");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /uses "\.\." and is never followed \(it resolves inside the repository\)/, "the skip names the real reason");
+    assert.equal(payload.claudeLineCommitted, true);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-c11");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair M-5/probe C7: a kernel-owned redirect target is skipped with the real reason", async () => {
+  const RUN = "run-c2c-repair-c7";
+  const fixture = await openFactoryPort("repairkernelowned", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "docs", "project"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project", "STATE.md"), "a user-owned state file\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/project/STATE.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a tracked STATE.md"] });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "docs/project/STATE.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "docs/project/STATE.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "no layout leaves the run unable to hand off");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /target docs\/project\/STATE\.md is kernel-owned/, "the skip names the real reason");
+    assert.equal(payload.claudeLineCommitted, true);
+    const commit = String(payload.commit);
+    const state = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(verifyHandoffSnapshotDigest(state.stdout), "the kernel still writes its own STATE.md");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-c7");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair BL-2/probe B1: a reused skip-layout commit completes after resume", async () => {
+  const RUN = "run-c2c-repair-b1";
+  const fixture = await openFactoryPort("repairb1", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "AGENTS.md", "MISSING.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "MISSING.md");
+    const setupCount = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    // The commit lands, then the read-back fails; resume retries and reuses it.
+    failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), String(Number(setupCount.stdout.trim()) + 1), "the stop-1 kernel commit landed");
+    await manager.resume(RUN, "resume:c2c-repair-b1");
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "resume reuses the commit and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to MISSING\.md/, "the skip reason is re-described from the commit tree");
+    assert.equal(payload.claudeLineCommitted, true);
+    const reused = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(reused.stdout.trim(), landed.stdout.trim(), "no second commit: the landed commit is reused");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-b1");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair BL-2/probe B1c: a reused CLAUDE.md skip-layout commit completes after resume", async () => {
+  const RUN = "run-c2c-repair-b1c";
+  const fixture = await openFactoryPort("repairb1c", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "CLAUDE.md", "../outside.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "CLAUDE.md", "../outside.md");
+    const setupCount = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), String(Number(setupCount.stdout.trim()) + 1), "the stop-1 kernel commit landed");
+    await manager.resume(RUN, "resume:c2c-repair-b1c");
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "resume reuses the commit and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.claudeLineCommitted, false);
+    assert.match(String(payload.claudeLineViaLink), /CLAUDE\.md is a symbolic link to .*outside/, "the skip reason is re-described from the commit tree");
+    assert.equal(payload.agentsSectionCommitted, true);
+    const reused = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(reused.stdout.trim(), landed.stdout.trim(), "no second commit: the landed commit is reused");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-b1c");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair E1/E2: the stageability check stages nothing and leaves nothing behind", async () => {
+  const RUN = "run-c2c-repair-check";
+  const fixture = await openFactoryPort("repaircheck", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, ".gitignore"), "docs/project/specs/\n");
+    await runGit({ cwd: worktree, args: ["add", "--", ".gitignore"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "ignore the specs directory"] });
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain", "--ignored"] });
+    // An ignored path is unstageable, a normal absent path is stageable --
+    // and neither answer writes, stages, or leaves anything behind.
+    assert.equal((await fixture.port.canStageSpecPath({ path: "docs/project/specs/source_value.md", content: "spec bytes\n" })).stageable, false);
+    assert.equal((await fixture.port.canStageSpecPath({ path: "docs/project/normal-b.md", content: "spec bytes\n" })).stageable, true);
+    assert.equal(existsSync(join(worktree, "docs", "project", "specs", "source_value.md")), false, "no preview file is written");
+    assert.equal(existsSync(join(worktree, "docs", "project", "normal-b.md")), false, "no preview file is written");
+    const after = await runGit({ cwd: worktree, args: ["status", "--porcelain", "--ignored"] });
+    assert.equal(after.stdout, status.stdout, "the check leaves no ?? or !! entries behind");
+    const cached = await runGit({ cwd: worktree, args: ["diff", "--cached", "--name-only"] });
+    assert.equal(cached.stdout.trim(), "", "the check stages nothing");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2c repair M-4/probe E3: an untracked occupant at the target keeps spec: matching the commit", async () => {
+  const RUN = "run-c2c-repair-e3";
+  const fixture = await openFactoryPort("repairoccupant", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    // An UNTRACKED file with other bytes sits at the copy target: the tip
+    // has no such blob, so the resolver names the target -- but the copy
+    // can never land there, so the pre-render check skips it.
+    mkdirSync(join(worktree, "docs", "project", "specs"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project", "specs", "source_value.md"), "untracked other bytes\n");
+    manager = await driveFactoryHandoffSnapshotWithArtifacts(fixture, RUN, held, artifacts);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1);
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.specCopySkipped, "path_occupied", "the occupant is recorded as the real cause");
+    assert.ok(!("specCopied" in payload), "no copy is claimed");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    const state = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(state.stdout.includes("spec: not recorded"), "the snapshot names no spec path the commit does not hold");
+    assert.equal(
+      readFileSync(join(worktree, "docs", "project", "specs", "source_value.md"), "utf8"),
+      "untracked other bytes\n",
+      "the occupant survives byte-for-byte",
+    );
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-repair-e3");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+/**
+ * Seed many small tracked files under one directory (C2c repair cycle 2,
+ * G1): enough `ls-files` output to exceed the 4 MiB git cap when a whole
+ * subtree is listed. Long names keep the count at 40,000.
+ */
+async function seedManyTrackedFiles(worktree: string, dir: string, count: number): Promise<void> {
+  mkdirSync(join(worktree, ...dir.split("/")), { recursive: true });
+  for (let index = 0; index < count; index += 1) {
+    const name = `g-${String(index).padStart(5, "0")}-padding-to-inflate-index-output-0123456789.md`;
+    writeFileSync(join(worktree, ...dir.split("/"), name), `# generated ${index}\n`);
+  }
+  await runGit({ cwd: worktree, args: ["add", "--", dir] });
+  await runGit({ cwd: worktree, args: ["commit", "-m", `seed ${count} files under ${dir}`] });
+}
+
 test("C2b repair N-3/probe R: the reducer refuses a snapshot record for a sequence that is no stop", () => {
   const RUN = "run-c2b-r";
   const root = mkdtempSync(join(tmpdir(), "aiboard c2b r "));
@@ -3929,4 +4929,778 @@ test("C2b repair N-3/probe R: the reducer refuses a snapshot record for a sequen
     store.close();
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("C2c repair cycle 2/probe B2: a reused AGENTS.md-into-CLAUDE.md commit completes after resume", async () => {
+  const RUN = "run-c2c-r2-b2";
+  const fixture = await openFactoryPort("r2b2", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, "CLAUDE.md"), "pre-existing claude rules\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "CLAUDE.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed claude file"] });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "CLAUDE.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "CLAUDE.md");
+    const setupCount = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    // The merged commit lands, then the read-back fails; resume retries and
+    // reuses it. The M-6 omission must be re-derived from the commit tree.
+    failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), String(Number(setupCount.stdout.trim()) + 1), "the stop-1 kernel commit landed");
+    await manager.resume(RUN, "resume:c2c-r2-b2");
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "resume reuses the commit and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.agentsSectionViaLink, "AGENTS.md is a symbolic link to CLAUDE.md; the section is written into CLAUDE.md.");
+    assert.equal(payload.claudeLineCommitted, true, "the merged section satisfies both entry lines");
+    assert.match(String(payload.claudeLineViaLink), /CLAUDE\.md pointer omitted: AGENTS\.md resolves to CLAUDE\.md/, "the self-import omission is re-described from the commit tree");
+    assert.ok(!("stateSkippedReason" in payload), "a committed STATE.md never carries a skip reason");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    const reused = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(reused.stdout.trim(), landed.stdout.trim(), "no second commit: the landed commit is reused");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r2-b2");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair cycle 2/probe B2-real: a reused real AGENTS.md link commit completes after resume", async () => {
+  const RUN = "run-c2c-r2-b2real";
+  const fixture = await openFactoryPort("r2b2real", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, "CLAUDE.md"), "pre-existing claude rules\n");
+    symlinkSync("CLAUDE.md", join(worktree, "AGENTS.md"), "file");
+    await runGit({ cwd: worktree, args: ["add", "--", "AGENTS.md", "CLAUDE.md"] });
+    const staged = await runGit({ cwd: worktree, args: ["ls-files", "-s", "--", "AGENTS.md"] });
+    assert.match(staged.stdout.trim(), /^120000 /);
+    await runGit({ cwd: worktree, args: ["commit", "-m", "link AGENTS.md to CLAUDE.md"] });
+    assert.ok(lstatSync(join(worktree, "AGENTS.md")).isSymbolicLink());
+    const setupCount = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), String(Number(setupCount.stdout.trim()) + 1), "the stop-1 kernel commit landed");
+    await manager.resume(RUN, "resume:c2c-r2-b2real");
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "resume reuses the commit and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.claudeLineCommitted, true, "the merged section satisfies both entry lines");
+    assert.match(String(payload.claudeLineViaLink), /CLAUDE\.md pointer omitted: AGENTS\.md resolves to CLAUDE\.md/, "the self-import omission is re-described from the commit tree");
+    assert.ok(lstatSync(join(worktree, "AGENTS.md")).isSymbolicLink(), "never written through the link");
+    const reused = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(reused.stdout.trim(), landed.stdout.trim(), "no second commit: the landed commit is reused");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r2-b2real");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair cycle 2/probe S1-reuse: a reused STATE.md-link commit completes after resume", async () => {
+  const RUN = "run-c2c-r2-s1reuse";
+  const fixture = await openFactoryPort("r2s1reuse", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, "shared.txt"), "shared\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "shared.txt"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed shared file"] });
+    // STATE.md itself is a link (mode 120000): the skip names the file,
+    // re-described from the commit tree on the reuse path.
+    await commitEntryLinkMode(worktree, "docs/project/STATE.md", "../../shared.txt");
+    await checkoutEntryLinkAsPlainFile(worktree, "docs/project/STATE.md", "../../shared.txt");
+    const setupCount = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), String(Number(setupCount.stdout.trim()) + 1), "the stop-1 kernel commit landed");
+    await manager.resume(RUN, "resume:c2c-r2-s1reuse");
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "resume reuses the commit and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.match(String(payload.stateSkippedReason), /docs\/project\/STATE\.md is not written: docs\/project\/STATE\.md is a symbolic link or junction/, "the STATE.md skip is re-described from the commit tree");
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md"]);
+    assert.equal(readFileSync(join(worktree, "shared.txt"), "utf8"), "shared\n", "nothing is written outside the repository");
+    const reused = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(reused.stdout.trim(), landed.stdout.trim(), "no second commit: the landed commit is reused");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r2-s1reuse");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair cycle 2/probe CI-reuse: a reused capital-Docs link commit completes after resume", async () => {
+  const RUN = "run-c2c-r2-cireuse";
+  const fixture = await openFactoryPort("r2cireuse", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-cireuse-"));
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    // A committed capital-Docs link to an outside directory: the checkout
+    // is case-insensitive, so the commit-tree link backs the same skip.
+    await commitEntryLinkMode(worktree, "Docs", outside);
+    await checkoutDirLinkAsRealLink(worktree, "Docs");
+    const setupCount = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), String(Number(setupCount.stdout.trim()) + 1), "the stop-1 kernel commit landed");
+    await manager.resume(RUN, "resume:c2c-r2-cireuse");
+    manager.activate(RUN);
+    await manager.awaitIdle(RUN);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "resume reuses the commit and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.match(String(payload.stateSkippedReason), /docs\/project\/STATE\.md is not written: docs is a symbolic link or junction/, "the STATE.md skip is re-described from the case-folded commit tree");
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const reused = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(reused.stdout.trim(), landed.stdout.trim(), "no second commit: the landed commit is reused");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r2-cireuse");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair cycle 2/probe G1: a large docs tree still commits the snapshot and v1 documents", async () => {
+  const RUN = "run-c2c-r2-g1";
+  const fixture = await openFactoryPort("r2g1", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await seedManyTrackedFiles(worktree, "docs/generated", 40000);
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the snapshot commits despite the large docs tree");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.deepEqual(payload.paths, ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    assert.ok(!("stateSkippedReason" in payload), "a committed STATE.md never carries a skip reason");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r2-g1");
+    assert.equal(selected.status, "completed");
+    // v1 behaves as at HEAD under the same tree: the Architect document
+    // commit lands instead of throwing on the index listing.
+    const before = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const documents = await fixture.integration.commitProjectDocuments({
+      writes: [
+        { path: "docs/project/README.md", content: DEFAULT_README_TEMPLATE },
+        { path: "AGENTS.md", content: DEFAULT_AGENTS_SECTION_BODY },
+        { path: "CLAUDE.md", content: CLAUDE_POINTER_LINE },
+        { path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE },
+      ],
+      summary: "Record documents",
+      runId: RUN,
+      requestId: "project-doc:g1:docs/project/STATE.md",
+    });
+    assert.ok(documents.commit, "the v1 document commit lands");
+    const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(after.stdout.trim(), String(Number(before.stdout.trim()) + 1), "the v1 batch commits exactly once");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair cycle 2/probe G1-control: a large tree outside docs still commits", async () => {
+  const RUN = "run-c2c-r2-g1control";
+  const fixture = await openFactoryPort("r2g1control", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await seedManyTrackedFiles(worktree, "site/generated", 40000);
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the snapshot commits with a large tree elsewhere");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r2-g1control");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair cycle 2/probe E3-throw: a throwing stageability check never fails open", async () => {
+  const RUN = "run-c2c-r2-e3throw";
+  const fixture = await openFactoryPort("r2e3throw", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const artifacts = new ArtifactStore(join(fixture.root, "artifacts"));
+  await artifacts.put(Buffer.from(SOURCE_TEXT, "utf8"), "text/plain", "approved source");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "docs", "project", "specs"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project", "specs", "source_value.md"), "untracked other bytes\n");
+    // The E3 occupant plus one injected check throw: the copy must count as
+    // not stageable (rendered "not recorded"), never as stageable.
+    const port = fixture.port;
+    const orig = port.canStageSpecPath.bind(port);
+    let armed = true;
+    port.canStageSpecPath = async (input: { path: string; content: string }) => {
+      if (armed) {
+        armed = false;
+        throw new Error("A verified process backend with required semantic capabilities is unavailable");
+      }
+      return orig(input);
+    };
+    manager = await driveFactoryHandoffSnapshotWithArtifacts(fixture, RUN, held, artifacts);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1);
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.ok(!("specCopied" in payload), "no copy is claimed");
+    assert.ok(!("specPath" in payload), "no copy path is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    const state = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/project/STATE.md`] });
+    assert.ok(state.stdout.includes("spec: not recorded"), "the snapshot names no spec path the commit does not hold");
+    assert.equal(
+      readFileSync(join(worktree, "docs", "project", "specs", "source_value.md"), "utf8"),
+      "untracked other bytes\n",
+      "the occupant survives byte-for-byte",
+    );
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r2-e3throw");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair cycle 2/probe J-docs: an out-of-band docs junction pauses fail-closed", async () => {
+  const RUN = "run-c2c-r2-jdocs";
+  const fixture = await openFactoryPort("r2jdocs", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outsideRoot = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-jdocs-"));
+  writeFileSync(join(outsideRoot, "own.txt"), "outside owned\n");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    // docs/keep.md is tracked, so the commit tree holds a regular docs
+    // tree; then the worktree docs is replaced out-of-band by a junction.
+    // The stage-time skip has no commit-tree backing, so the run pauses
+    // fail-closed instead of recording it.
+    mkdirSync(join(worktree, "docs"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "keep.md"), "keep\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/keep.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed tracked docs file"] });
+    rmSync(join(worktree, "docs"), { recursive: true, force: true });
+    symlinkSync(outsideRoot, join(worktree, "docs"), "junction");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 0, "no snapshot is recorded without commit-tree proof");
+    assert.equal(manager.projection(RUN).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.deepEqual(readdirSync(outsideRoot), ["own.txt"], "nothing is written outside the repository");
+    await assert.rejects(
+      manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r2-jdocs"),
+      /kernel handoff snapshot/,
+      "the owner's selection is refused while the proof is missing",
+    );
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test("C2c round 3/probe DUP-A4: a docs link with entry files already current commits empty and completes", async () => {
+  const RUN = "run-c2c-r3-dupa4";
+  const fixture = await openFactoryPort("r3dupa4", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-dupa4-"));
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    // What an earlier AIBoard handoff leaves in the project: both entry
+    // files already hold exactly the v2 section and line.
+    writeFileSync(join(worktree, "AGENTS.md"), spliceMarkedArchitectSectionBytes(null, V2_AGENTS_SECTION_BODY));
+    writeFileSync(join(worktree, "CLAUDE.md"), spliceMarkedArchitectSectionBytes(null, V2_CLAUDE_POINTER_LINE));
+    await runGit({ cwd: worktree, args: ["add", "--", "AGENTS.md", "CLAUDE.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "entry files from an earlier handoff"] });
+    await commitEntryLinkMode(worktree, "docs", outside);
+    await checkoutDirLinkAsRealLink(worktree, "docs");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the empty snapshot commit is recorded instead of a pump error");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.deepEqual(payload.paths, [], "nothing changed, so the kernel commit holds no paths");
+    assert.match(String(payload.stateSkippedReason), /docs is a symbolic link or junction/);
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r3-dupa4");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c round 3/probe G1-flat: 40,000 files directly under docs still commit the snapshot and v1 documents", async () => {
+  const RUN = "run-c2c-r3-g1flat";
+  const fixture = await openFactoryPort("r3g1flat", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await seedManyTrackedFiles(worktree, "docs", 40000);
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the commit-tree walk never lists the whole docs directory");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r3-g1flat");
+    assert.equal(selected.status, "completed");
+    const documents = await fixture.integration.commitProjectDocuments({
+      writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+      summary: "Record documents",
+      runId: RUN,
+      requestId: "project-doc:g1flat:docs/project/STATE.md",
+    });
+    assert.ok(documents.commit, "the v1 document commit lands and returns");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c round 3/probe CI-lm: a committed capital-Docs link checked out as a plain file skips STATE.md and completes", async () => {
+  const RUN = "run-c2c-r3-cilm";
+  const fixture = await openFactoryPort("r3cilm", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-cilm-"));
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    await commitEntryLinkMode(worktree, "Docs", outside);
+    await checkoutEntryLinkAsPlainFile(worktree, "Docs", outside);
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the case-folded index check finds the Docs link at stage time");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.match(String(payload.stateSkippedReason), /docs is a symbolic link or junction/);
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r3-cilm");
+    assert.equal(selected.status, "completed");
+    await assert.rejects(
+      fixture.integration.commitProjectDocuments({
+        writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+        summary: "Record documents",
+        runId: RUN,
+        requestId: "project-doc:cilm:docs/project/STATE.md",
+      }),
+      /is refused because docs is a symbolic link or junction/,
+      "v1 gives the declared CD-17 refusal, not ENOTDIR",
+    );
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair cycle 4/probe RD-case: a link to notes.md when the index holds NOTES.md is refused and skipped", async () => {
+  const RUN = "run-c2c-r4-rdcase";
+  const fixture = await openFactoryPort("r4rdcase", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, "NOTES.md"), "# team notes\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "NOTES.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed notes file"] });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "notes.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "notes.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the case-variant redirect refusal still commits and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to notes\.md.*not a regular tracked file/);
+    assert.equal(payload.claudeLineCommitted, true);
+    assert.equal(readFileSync(join(worktree, "AGENTS.md"), "utf8"), "notes.md", "the link is never touched");
+    assert.equal(readFileSync(join(worktree, "NOTES.md"), "utf8"), "# team notes\n", "the case-variant target is never written");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["CLAUDE.md", "docs/project/STATE.md"]);
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r4-rdcase");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair cycle 4/probe RD-case-real: a real link to notes.md when the index holds NOTES.md is refused and skipped", async () => {
+  const RUN = "run-c2c-r4-rdcasereal";
+  const fixture = await openFactoryPort("r4rdcasereal", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(worktree, "NOTES.md"), "# team notes\n");
+    await runGit({ cwd: worktree, args: ["config", "core.symlinks", "true"] });
+    symlinkSync("notes.md", join(worktree, "AGENTS.md"), "file");
+    await runGit({ cwd: worktree, args: ["add", "--", "AGENTS.md", "NOTES.md"] });
+    const staged = await runGit({ cwd: worktree, args: ["ls-files", "-s", "--", "AGENTS.md"] });
+    assert.match(staged.stdout.trim(), /^120000 /);
+    await runGit({ cwd: worktree, args: ["commit", "-m", "link AGENTS.md to notes.md"] });
+    assert.ok(lstatSync(join(worktree, "AGENTS.md")).isSymbolicLink());
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the case-variant redirect refusal still commits and completes");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to notes\.md.*not a regular tracked file/);
+    assert.equal(payload.claudeLineCommitted, true);
+    assert.ok(lstatSync(join(worktree, "AGENTS.md")).isSymbolicLink(), "never written through the link");
+    assert.equal(readFileSync(join(worktree, "NOTES.md"), "utf8"), "# team notes\n", "the case-variant target is never written");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r4-rdcasereal");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+  }
+});
+
+test("C2c repair cycle 4/probe ALL-SKIP: every write skipped still records an empty snapshot commit and completes", async () => {
+  const RUN = "run-c2c-r4-allskip";
+  const fixture = await openFactoryPort("r4allskip", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-allskip-"));
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "docs", outside);
+    await checkoutDirLinkAsRealLink(worktree, "docs");
+    await commitEntryLinkMode(worktree, "AGENTS.md", "MISSING.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "MISSING.md");
+    await commitEntryLinkMode(worktree, "CLAUDE.md", "AGENTS.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "CLAUDE.md", "AGENTS.md");
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "every skip recorded still commits instead of throwing wrote-nothing");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.deepEqual(payload.paths, [], "nothing was staged, so the kernel commit holds no paths");
+    assert.match(String(payload.stateSkippedReason), /docs is a symbolic link or junction/);
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to MISSING\.md.*not a regular tracked file/);
+    assert.equal(payload.claudeLineViaLink, "CLAUDE.md is a symbolic link to AGENTS.md");
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const commit = String(payload.commit);
+    const parent = String(payload.parent);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), [], "the empty commit stages nothing");
+    const treeDiff = await runGit({ cwd: worktree, args: ["diff", "--quiet", parent, commit], allowFailure: true });
+    assert.equal(treeDiff.exitCode, 0, "the empty commit holds its parent's tree");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r4-allskip");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2c repair cycle 4/probe ALL-SKIP-out: links to outside files still record an empty snapshot commit and complete", async () => {
+  const RUN = "run-c2c-r4-allskipout";
+  const fixture = await openFactoryPort("r4allskipout", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2c-outside-allskipout-"));
+  const held: { store?: SqliteSchedulerStore } = {};
+  let manager: NativeBuildManager | undefined;
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "docs", outside);
+    await checkoutDirLinkAsRealLink(worktree, "docs");
+    await commitEntryLinkMode(worktree, "AGENTS.md", join(outside, "a.md"));
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", join(outside, "a.md"));
+    await commitEntryLinkMode(worktree, "CLAUDE.md", join(outside, "c.md"));
+    await checkoutEntryLinkAsPlainFile(worktree, "CLAUDE.md", join(outside, "c.md"));
+    manager = await driveFactoryHandoffSnapshot(fixture, RUN, held);
+    const snapshots = manager.events(RUN).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "every skip recorded still commits instead of throwing wrote-nothing");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.deepEqual(payload.paths, [], "nothing was staged, so the kernel commit holds no paths");
+    assert.match(String(payload.stateSkippedReason), /docs is a symbolic link or junction/);
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to .*outside the repository/);
+    assert.match(String(payload.claudeLineViaLink), /CLAUDE\.md is a symbolic link to .*outside the repository/);
+    assert.deepEqual(readdirSync(outside), [], "nothing is written outside the repository");
+    const commit = String(payload.commit);
+    const parent = String(payload.parent);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), [], "the empty commit stages nothing");
+    const treeDiff = await runGit({ cwd: worktree, args: ["diff", "--quiet", parent, commit], allowFailure: true });
+    assert.equal(treeDiff.exitCode, 0, "the empty commit holds its parent's tree");
+    const selected = await manager.selectProjectHandoff(RUN, "keep_integration_branch", "handoff:c2c-r4-allskipout");
+    assert.equal(selected.status, "completed");
+  } finally {
+    await manager?.close();
+    held.store?.close();
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+/**
+ * C2c repair cycle 4 (NB-7): a withdrawn stop whose commit holds a `Docs`
+ * link reconciles from its OWN commit even after the worktree drops that
+ * spelling. The finish-run harness mirrors G2: stop 1's snapshot commit
+ * lands, the read-back fails, guidance withdraws, a later integration
+ * commit changes `Docs`, FV re-runs and the Architect re-requests (stop 2).
+ */
+async function driveWithdrawnDocsLinkScenario(
+  label: string,
+  runId: string,
+  mutateDocs: (worktree: string) => Promise<string>,
+): Promise<{
+  snapshots: Array<Record<string, unknown>>;
+  stop1: number;
+  mutatedHead: string;
+  projection: ReturnType<NativeBuildManager["projection"]>;
+  outside: string[];
+  outsideOwnText: string;
+}> {
+  const repo = await openGitRepo(label, runId);
+  const schedulerPath = join(repo.root, "scheduler.sqlite");
+  const evidence = new SqliteEvidenceStore(join(repo.root, "evidence.sqlite"));
+  const seeder = new SqliteSchedulerStore(schedulerPath, {
+    evidenceStore: evidence,
+    validateExecutionProfile: acceptFinalVerificationProfile,
+    validateCleanupReceipt: () => undefined,
+  });
+  for (const input of v2FinishSeed(runId, repo.baselineRevision)) seeder.append(input);
+  seeder.close();
+  const outside = mkdtempSync(join(tmpdir(), `aiboard-c2c-outside-${label}-`));
+  writeFileSync(join(outside, "own.txt"), "outside\n");
+  // The checkout holds a committed `Docs` link to an outside directory. The
+  // target uses forward slashes: a backslash blob checks out with slashes,
+  // which would leave the worktree disagreeing with the index.
+  await commitEntryLinkMode(repo.integration.path, "Docs", outside.replace(/\\/g, "/"));
+  await checkoutDirLinkAsRealLink(repo.integration.path, "Docs");
+  // Stop 1's snapshot commit lands, then the read-back fails: a transient
+  // failure after the commit.
+  const hooks: DocsPortHooks = { failNextRead: true, snapshotCalls: [], readCalls: [] };
+  const architect = silentArchitect("The build is complete and verified.");
+  let store: SqliteSchedulerStore | undefined;
+  let manager: NativeBuildManager | undefined;
+  const order: string[] = [];
+  try {
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(repo.root, "builds.sqlite")),
+      createRuntime: async () => {
+        store = new SqliteSchedulerStore(schedulerPath, {
+          evidenceStore: evidence,
+          validateExecutionProfile: acceptFinalVerificationProfile,
+          validateCleanupReceipt: () => undefined,
+        });
+        const runtime = buildRuntimeForHandoff({
+          runId, store, projectDocs: gitDocsPort(repo.integration, hooks),
+          architect, clock: advancingClock(), runPolicy: "finish", evidenceStore: evidence,
+        });
+        return managedHandle(runtime, async () => {
+          order.push(`projectHandoff:${manager!.events(runId).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length}`);
+          const result = await repo.integration.applyToProject();
+          order.push("applied");
+          return result;
+        }, runId);
+      },
+    });
+    await manager.create(managerSpec(runId, "finish"));
+    manager.activate(runId);
+    await manager.awaitIdle(runId);
+    assert.equal(manager.projection(runId).pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(manager.events(runId).filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    assert.deepEqual(order, [], "no project mutation precedes the kernel record");
+    const landed = await runGit({ cwd: repo.integration.path, args: ["rev-list", "--count", `${repo.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), "2", "the link commit plus the stop-1 kernel commit landed");
+    const stop1 = manager.events(runId).find((event) => event.type === "project.handoff_requested")!.sequence;
+    // The owner submits guidance instead of resuming: the handoff is
+    // withdrawn. The Architect acknowledges with no plan change.
+    assert.ok(store);
+    const e = (
+      type: string,
+      key: string,
+      role: SchedulerActorRole,
+      id: string,
+      payload: Record<string, unknown>,
+    ): NewSchedulerEvent => seedEvent(runId, type, key, role, id, payload);
+    store.append(e("user.guidance_submitted", "guidance-1", "user", "local-user", {
+      guidanceId: "guidance-1",
+      text: "Hold the handoff and re-verify the plan.",
+      version: 1,
+      interruptionProtocolVersion: 1,
+    }));
+    store.append(e("user.guidance_interruption_completed", "guidance-1:interruption", "runner", "build-manager", {
+      guidanceId: "guidance-1",
+      expectedVersion: 1,
+    }));
+    const acknowledgementEvidence = evidence.record({
+      runId,
+      taskId: "architect",
+      actor: { role: "architect", id: "architect" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "the plan already incorporates the withdrawing guidance",
+        capturedAt: CLOCK,
+        screenshotArtifactHash: "c".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      },
+      createdAt: CLOCK,
+      idempotencyKey: "guidance-stale-stop:evidence",
+    });
+    store.append(e("user.guidance_acknowledged", "guidance-1:ack", "architect", "architect", {
+      guidanceId: "guidance-1",
+      expectedVersion: 1,
+      resolution: {
+        type: "no_plan_change",
+        rationale: "The initial plan already incorporates the durable guidance.",
+        evidenceIds: [acknowledgementEvidence.id],
+      },
+    }));
+    const withdrawn = manager.projection(runId);
+    assert.equal(withdrawn.projectHandoff, undefined, "guidance withdrew the handoff");
+    assert.equal((withdrawn.projectHandoffHistory ?? []).length, 1);
+    // A later integration commit changes `Docs` (removed, or replaced by a
+    // real directory): the live worktree no longer holds the old spelling.
+    // The removal is recorded as the new integration revision (as production
+    // records any later integration commit), so stop 2 continues the
+    // document chain from it instead of dangling past the runner's tracking.
+    const mutatedHead = await mutateDocs(repo.integration.path);
+    store.append(e("integration.revision_advanced", "integration-revision-docs-change", "runner", "integration", {
+      integrationRevision: mutatedHead,
+    }));
+    // Final verification re-runs green on the new canonical revision, and
+    // the Architect re-requests (stop 2).
+    for (const input of fvRerunSeed(runId, mutatedHead)) store.append(input);
+    store.append(e("project.handoff_requested", "handoff-2", "architect", "architect", { summary: COMPLETION_SUMMARY }));
+    manager.activate(runId);
+    await manager.awaitIdle(runId);
+    const snapshots = manager.events(runId).filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    const projection = manager.projection(runId);
+    const outsideFiles = readdirSync(outside);
+    const outsideOwnText = readFileSync(join(outside, "own.txt"), "utf8");
+    return {
+      snapshots: snapshots.map((event) => event.payload as Record<string, unknown>),
+      stop1,
+      mutatedHead,
+      projection,
+      outside: outsideFiles,
+      outsideOwnText,
+    };
+  } finally {
+    await manager?.close();
+    store?.close();
+    evidence.close();
+    await repo.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+}
+
+test("C2c repair cycle 4/probe W-CI-rm: a withdrawn stop reconciles its committed Docs link after Docs is removed", async () => {
+  const RUN = "run-c2c-r4-wcirm";
+  const { snapshots, stop1, mutatedHead, projection, outside, outsideOwnText } = await driveWithdrawnDocsLinkScenario(
+    "r4wcirm",
+    RUN,
+    async (worktree) => {
+      await runGit({ cwd: worktree, args: ["rm", "--", "Docs"] });
+      await runGit({ cwd: worktree, args: ["commit", "-m", "remove the Docs link"] });
+      return (await runGit({ cwd: worktree, args: ["rev-parse", "HEAD"] })).stdout.trim();
+    },
+  );
+  assert.equal(snapshots.length, 2, "the withdrawn stop is recorded as history before stop 2 commits");
+  const first = snapshots[0]!;
+  const second = snapshots[1]!;
+  assert.equal(first.stopSequence, stop1, "the withdrawn stop is recorded first, as history");
+  assert.match(String(first.stateSkippedReason), /docs is a symbolic link or junction/, "the withdrawn stop is described from its own commit");
+  const restop = second.stopSequence;
+  assert.ok(typeof restop === "number" && restop !== stop1, "the second record belongs to the re-request");
+  assert.equal(second.parent, mutatedHead, "the new snapshot commits on the post-removal head");
+  assert.ok((second.paths as string[]).includes("docs/project/STATE.md"), "stop 2 commits STATE.md");
+  assert.ok(!("stateSkippedReason" in second), "stop 2 holds no skip");
+  assert.equal(projection.status, "completed", "the run hands off after reconciliation");
+  assert.equal(projection.projectHandoff?.choice, "apply_to_project");
+  assert.deepEqual(outside, ["own.txt"], "nothing is written outside the repository");
+  assert.equal(outsideOwnText, "outside\n");
+});
+
+test("C2c repair cycle 4/probe W-CI-mv: a withdrawn stop reconciles its committed Docs link after Docs becomes a real directory", async () => {
+  const RUN = "run-c2c-r4-wcimv";
+  const { snapshots, stop1, mutatedHead, projection, outside, outsideOwnText } = await driveWithdrawnDocsLinkScenario(
+    "r4wcimv",
+    RUN,
+    async (worktree) => {
+      await runGit({ cwd: worktree, args: ["rm", "--", "Docs"] });
+      mkdirSync(join(worktree, "docs", "project"), { recursive: true });
+      writeFileSync(join(worktree, "docs", "project", ".keep"), "real directory\n");
+      await runGit({ cwd: worktree, args: ["add", "--", "docs"] });
+      await runGit({ cwd: worktree, args: ["commit", "-m", "replace the Docs link with a real docs directory"] });
+      return (await runGit({ cwd: worktree, args: ["rev-parse", "HEAD"] })).stdout.trim();
+    },
+  );
+  assert.equal(snapshots.length, 2, "the withdrawn stop is recorded as history before stop 2 commits");
+  const first = snapshots[0]!;
+  const second = snapshots[1]!;
+  assert.equal(first.stopSequence, stop1, "the withdrawn stop is recorded first, as history");
+  assert.match(String(first.stateSkippedReason), /docs is a symbolic link or junction/, "the withdrawn stop is described from its own commit");
+  const restop = second.stopSequence;
+  assert.ok(typeof restop === "number" && restop !== stop1, "the second record belongs to the re-request");
+  assert.equal(second.parent, mutatedHead, "the new snapshot commits on the post-replacement head");
+  assert.ok((second.paths as string[]).includes("docs/project/STATE.md"), "stop 2 commits STATE.md");
+  assert.ok(!("stateSkippedReason" in second), "stop 2 holds no skip");
+  assert.equal(projection.status, "completed", "the run hands off after reconciliation");
+  assert.equal(projection.projectHandoff?.choice, "apply_to_project");
+  assert.deepEqual(outside, ["own.txt"], "nothing is written outside the repository");
+  assert.equal(outsideOwnText, "outside\n");
 });

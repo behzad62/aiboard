@@ -144,6 +144,7 @@ function planOnlyDocumentPort(): ProjectDocsPort {
     // port; the in-memory kernel has no keyed lookup, so it reports none.
     findHandoffSnapshotCommit: async () => null,
     readIntegrationBaselineRevision: async () => ({ revision: "baseline_revision" }),
+    canStageSpecPath: async () => ({ stageable: true }),
   };
 }
 
@@ -2028,6 +2029,9 @@ test("recovery abandons a recorded multiline project-doc summary and continues",
         },
         readIntegrationBaselineRevision: async () => {
           throw new Error("unexpected baseline revision read");
+        },
+        canStageSpecPath: async () => {
+          throw new Error("unexpected spec stageability check");
         },
       },
     };

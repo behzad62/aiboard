@@ -180,18 +180,54 @@ export interface ProjectDocEntryPointFacts {
   agentsMarkedSectionV2: boolean;
   claudePointerV2: boolean;
   /**
-   * Docs policy v2 repair (C2b m5): the worktree CLAUDE.md is a symbolic link
-   * to AGENTS.md, so the pointer is satisfied through the link although the
-   * committed blob holds no marked line. Present-and-true only then.
+   * Docs policy v2 repair (C2b m5): the COMMIT tree holds CLAUDE.md as a
+   * link (mode 120000) to AGENTS.md, so the pointer is satisfied through
+   * the link although the committed blob holds no marked line.
+   * Present-and-true only then. Read from the commit, never the checkout
+   * (C2c NF-3).
    */
   claudePointerV2ViaAgentsLink?: boolean;
+  /**
+   * Docs policy v2 hardening (C2c NF-2/CD-15): the COMMIT tree holds the
+   * entry file as a link whose regular-file target blob holds the marked
+   * section (AGENTS.md) or line (CLAUDE.md) -- the runner wrote the
+   * section into the target path directly, never through the link.
+   * Present-and-true only then. Read from the commit, never the checkout.
+   */
+  agentsSectionV2ViaLink?: boolean;
+  claudePointerV2ViaLink?: boolean;
+  /**
+   * Docs policy v2 hardening (C2c NF-2/CD-15): the COMMIT tree holds the
+   * entry file as a link (mode 120000); the value is the raw link-target
+   * text. Present only then. A link to a missing or outside target
+   * carries no ViaLink flag above; the runner skips that entry file with
+   * a recorded reason instead, and the AR-R05 gate accepts the reason.
+   */
+  agentsLinkTarget?: string;
+  claudeLinkTarget?: string;
 }
 
 export interface ProjectDocCommitResult {
   /** True when the commit was found by key and reused, never duplicated. Absent means freshly committed. */
   reused?: boolean;
+  /**
+   * Docs policy v2 hardening (C2c NF-2/CD-15): entry-file writes the
+   * runner redirected into the link target path instead of writing
+   * through the link. Absent means nothing was redirected.
+   */
+  redirected?: Array<{ path: string; target: string; reason: string }>;
   /** Writes skipped with a recorded reason (never silent). Absent means nothing was skipped. */
   skipped?: Array<{ path: string; reason: string }>;
+  /**
+   * Docs policy v2 hardening (C2c repair CD-17, cycle 2): the STATE.md
+   * ancestor-or-self components (docs, docs/project, docs/project/STATE.md
+   * itself) the COMMIT tree holds as links (mode 120000), in first-link
+   * order. The runtime derives every skipped-STATE.md reason from these
+   * through describeSnapshotCommitFacts. Absent means none. Read from the
+   * commit, never the checkout (case-folded where the checkout is
+   * case-insensitive).
+   */
+  dirLinks?: string[];
   commit: string;
   parent: string;
   head: string;
@@ -346,6 +382,217 @@ function containsNormalized(span: string, statement: string): boolean {
   return normalizeDocWhitespace(span).includes(normalizeDocWhitespace(statement));
 }
 
+/**
+ * C2c repair cycle 2 (NB-1, NB-2, m-1, m-3, m-4): the path of the handoff
+ * STATE.md file all snapshot paths share.
+ */
+export const HANDOFF_STATE_PATH = "docs/project/STATE.md";
+
+/**
+ * C2c repair cycle 2: the STATE.md ancestor-or-self components, in
+ * first-link order. Only these back a STATE.md skip (m-1: specs is not an
+ * ancestor of STATE.md, so it never does).
+ */
+export const HANDOFF_STATE_LINK_COMPONENTS: readonly string[] = [
+  "docs",
+  "docs/project",
+  "docs/project/STATE.md",
+];
+
+/**
+ * C2c repair cycle 2 (m-4): the recorded STATE.md skip for one commit-tree
+ * link component. The single wording source for the fresh path, the
+ * commit-reuse path and the withdrawn-stop path.
+ */
+export function handoffStateSkipReason(linkComponent: string): string {
+  return `${HANDOFF_STATE_PATH} is not written: ${linkComponent} is a symbolic link or junction; the handoff proceeds without it.`;
+}
+
+/**
+ * C2c repair cycle 2 (NB-1, m-4): the recorded CLAUDE.md self-import
+ * omission (repair M-6). AGENTS.md resolves into CLAUDE.md, so merging the
+ * `@AGENTS.md` pointer there would import the file into itself; the merged
+ * AGENTS.md section satisfies both entry lines instead.
+ */
+export const HANDOFF_CLAUDE_SELF_IMPORT_OMISSION =
+  "CLAUDE.md pointer omitted: AGENTS.md resolves to CLAUDE.md, so @AGENTS.md here would import the file into itself; the AGENTS.md section satisfies both entry lines.";
+
+/**
+ * C2c repair cycle 2 (m-4): the generic commit-tree entry skip for a link
+ * whose target blob holds no marked section or line. The single wording
+ * source for every path that re-describes a skip from the tree.
+ */
+export function handoffEntryGenericSkipReason(entryPath: "AGENTS.md" | "CLAUDE.md", rawTarget: string): string {
+  const line = entryPath === "AGENTS.md" ? "marked section" : "marked line";
+  return `${entryPath} is a symbolic link to ${rawTarget}; the entry is skipped (the target holds no ${line}).`;
+}
+
+/**
+ * C2c repair cycle 2: the commit-tree redirect wording for an entry file
+ * whose regular-file target blob holds the marked section or line.
+ */
+export function handoffEntryRedirectReason(entryPath: "AGENTS.md" | "CLAUDE.md", target: string): string {
+  return `${entryPath} is a symbolic link to ${target}; the section is written into ${target}.`;
+}
+
+/**
+ * C2c repair cycle 2: resolve a raw entry-file link target to a
+ * repository-relative path, or null when it escapes or is unusable.
+ * Dot-only spellings ("./AGENTS.md") resolve to the sibling; an absolute
+ * path, a drive-letter path, or any ".." escape is never followed.
+ * Backslashes normalize to slashes first (git for Windows stores real-link
+ * targets like "docs\notes.md"). Shared by the stager and the describer so
+ * both spell the same target.
+ */
+export function resolveHandoffLinkTarget(target: string): string | null {
+  const trimmed = target.trim().replace(/\\/g, "/");
+  if (!trimmed || trimmed.includes("\0")) return null;
+  if (trimmed.startsWith("/")) return null;
+  if (/^[A-Za-z]:/.test(trimmed)) return null;
+  const parts: string[] = [];
+  for (const segment of trimmed.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") return null;
+    parts.push(segment);
+  }
+  if (parts.length === 0) return null;
+  return parts.join("/");
+}
+
+/**
+ * C2c repair cycle 2 (NB-1): true when a raw commit-tree link target names
+ * the sibling CLAUDE.md ("CLAUDE.md" and dot-only spellings, with the
+ * backslash normalization; never an escape, an absolute path, or a
+ * drive-letter path). Shared by the describer and the runtime gate helper.
+ */
+export function handoffLinkRawTargetsClaudeDotMd(rawTarget: string): boolean {
+  const normalized = rawTarget.trim().replace(/\\/g, "/");
+  if (!normalized || normalized.includes("\0")) return false;
+  if (normalized.startsWith("/")) return false;
+  if (/^[A-Za-z]:/.test(normalized)) return false;
+  const parts: string[] = [];
+  for (const segment of normalized.split("/")) {
+    if (segment === "" || segment === ".") continue;
+    if (segment === "..") return false;
+    parts.push(segment);
+  }
+  return parts.length === 1 && parts[0] === "CLAUDE.md";
+}
+
+/** Inputs to the single snapshot-commit describer. */
+export interface SnapshotCommitDescriptionInput {
+  entryPoint: ProjectDocCommitResult["entryPoint"];
+  /** The commit's real paths (the read-back, fresh or reused). */
+  storedPaths: readonly string[];
+  /**
+   * The first STATE.md ancestor-or-self link from the COMMIT tree
+   * (expected spelling), if any. Case-folded where the checkout is
+   * case-insensitive, including STATE.md itself.
+   */
+  commitStateLink?: string;
+  /** Stage-time skips: kept only when the commit tree corroborates the link. */
+  stageSkipped?: ReadonlyArray<{ path: string; reason: string }>;
+  /** Stage-time redirects: kept only when the commit tree proves the ViaLink. */
+  stageRedirected?: ReadonlyArray<{ path: string; target: string; reason: string }>;
+}
+
+/** Every recorded fact about one snapshot commit, derived from its tree. */
+export interface SnapshotCommitDescription {
+  stateChanged: boolean;
+  stateSkippedReason?: string;
+  agentsSkip?: string;
+  claudeSkip?: string;
+  agentsRedirect?: string;
+  agentsRedirectTarget?: string;
+  claudeRedirect?: string;
+}
+
+/**
+ * C2c repair cycle 2 (NB-1, NB-2, m-1, m-3, m-4): the ONE describer. Given
+ * a snapshot commit, derive every recorded fact from the COMMIT TREE (plus
+ * the stop's stage-time inputs, which may only confirm the tree, never
+ * replace it):
+ * - STATE.md is recorded as written, or skipped with the canonical reason
+ *   for the tree's first ancestor-or-self link (STATE.md itself counts).
+ *   A stage-time reason alone -- an out-of-band junction the tree never
+ *   held -- records nothing, so the caller pauses fail-closed (m-3); a
+ *   committed STATE.md never carries a reason (m-1).
+ * - Each entry file keeps its stage-time reason only when the tree holds
+ *   the link; otherwise the skip (and the M-6 omission, NB-1) is
+ *   re-described from the tree in the single wording (m-4).
+ * - A redirect reason counts only with its ViaLink proof, re-described
+ *   from the tree when the stop carries no stage-time record (reuse).
+ * The fresh path, the commit-reuse path and the withdrawn-stop path all
+ * call this, so every reuse layout shares one derivation.
+ */
+export function describeSnapshotCommitFacts(input: SnapshotCommitDescriptionInput): SnapshotCommitDescription {
+  const stateChanged = input.storedPaths.includes(HANDOFF_STATE_PATH);
+  const stateSkippedReason = !stateChanged && input.commitStateLink !== undefined
+    ? handoffStateSkipReason(input.commitStateLink)
+    : undefined;
+  const stageSkipFor = (path: string): string | undefined =>
+    input.stageSkipped?.find((entry) => entry.path === path)?.reason;
+  const stageRedirectFor = (path: string): { target: string; reason: string } | undefined => {
+    const found = input.stageRedirected?.find((entry) => entry.path === path);
+    return found === undefined ? undefined : { target: found.target, reason: found.reason };
+  };
+  const agentsLink = input.entryPoint.agentsLinkTarget;
+  const claudeLink = input.entryPoint.claudeLinkTarget;
+  const agentsIntoClaude = agentsLink !== undefined
+    && handoffLinkRawTargetsClaudeDotMd(agentsLink)
+    && input.entryPoint.agentsSectionV2ViaLink === true;
+  let agentsRedirect: string | undefined;
+  let agentsRedirectTarget: string | undefined;
+  if (input.entryPoint.agentsSectionV2ViaLink === true && agentsLink !== undefined) {
+    const stage = stageRedirectFor("AGENTS.md");
+    if (stage !== undefined) {
+      agentsRedirect = stage.reason;
+      agentsRedirectTarget = stage.target;
+    } else {
+      const target = resolveHandoffLinkTarget(agentsLink);
+      if (target !== null) {
+        agentsRedirect = handoffEntryRedirectReason("AGENTS.md", target);
+        agentsRedirectTarget = target;
+      }
+    }
+  }
+  let claudeRedirect: string | undefined;
+  if (input.entryPoint.claudePointerV2ViaLink === true && claudeLink !== undefined) {
+    const stage = stageRedirectFor("CLAUDE.md");
+    if (stage !== undefined) {
+      claudeRedirect = stage.reason;
+    } else {
+      const target = resolveHandoffLinkTarget(claudeLink);
+      if (target !== null) {
+        claudeRedirect = handoffEntryRedirectReason("CLAUDE.md", target);
+      }
+    }
+  }
+  const agentsStageSkip = stageSkipFor("AGENTS.md");
+  const agentsSkip = agentsStageSkip !== undefined && agentsLink !== undefined
+    ? agentsStageSkip
+    : agentsLink !== undefined
+      ? handoffEntryGenericSkipReason("AGENTS.md", agentsLink)
+      : undefined;
+  const claudeStageSkip = stageSkipFor("CLAUDE.md");
+  let claudeSkip: string | undefined;
+  if (claudeStageSkip !== undefined && (claudeLink !== undefined || agentsIntoClaude)) {
+    claudeSkip = claudeStageSkip;
+  } else if (claudeLink !== undefined) {
+    claudeSkip = handoffEntryGenericSkipReason("CLAUDE.md", claudeLink);
+  } else if (agentsIntoClaude) {
+    claudeSkip = HANDOFF_CLAUDE_SELF_IMPORT_OMISSION;
+  }
+  return {
+    stateChanged,
+    ...(stateSkippedReason !== undefined ? { stateSkippedReason } : {}),
+    ...(agentsSkip !== undefined ? { agentsSkip } : {}),
+    ...(claudeSkip !== undefined ? { claudeSkip } : {}),
+    ...(agentsRedirect !== undefined ? { agentsRedirect } : {}),
+    ...(agentsRedirectTarget !== undefined ? { agentsRedirectTarget } : {}),
+    ...(claudeRedirect !== undefined ? { claudeRedirect } : {}),
+  };
+}
 function normalizeDocWhitespace(value: string): string {
   return value.replace(/[ \t\r\n]+/g, " ").trim();
 }

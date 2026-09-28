@@ -1702,6 +1702,10 @@ export class NativeBuildFactory {
         // port, so dropping one is a type error, never a silent skip).
         findHandoffSnapshotCommit: (input) => integrationManager.findHandoffSnapshotCommit(input),
         readIntegrationBaselineRevision: () => integrationManager.readIntegrationBaselineRevision(),
+        // C2c (NF-1 residual): the pre-render spec stageability check is
+        // production-wired (required on the port, so dropping it is a type
+        // error, never a silently wrong `spec:` line).
+        canStageSpecPath: (input) => integrationManager.canStageSpecPath(input),
         relateRevision: (input) => integrationManager.relateToDocumentTip(input),
       },
     });
