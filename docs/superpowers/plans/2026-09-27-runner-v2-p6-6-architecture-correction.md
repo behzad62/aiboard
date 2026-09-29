@@ -158,6 +158,13 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   cause: case-variant spellings; commit the index's own spelling) and **C2e** (non-link layouts,
   the project-apply output cap, and the remaining minors). Out of scope and kept fail-closed: an
   out-of-band junction created after the commit (J-docs permanence; the owner fixes the checkout).
+- **CD-20 — Investigate the contained-launch cost (owner, 2026-09-29, "Investigate now").** The
+  controller profile (`evidence/test-time-profile-2026-09-29.md`) shows that one git call through
+  the audited execution host takes about 1 s on Windows (plain git: 30 ms); it is 93% of a handoff
+  harness test and about 1 minute of every real handoff. Packet **PX-1** measures where the time
+  goes and proposes a fix that keeps every containment guarantee. It changes no code; a fix
+  packet follows only after the owner approves the proposal. PX-1 runs in its own worktree
+  (lane C) next to lane A; it is outside the P6.6 source scope and does not gate P6.6.
 
 ---
 
@@ -545,6 +552,22 @@ Runs as C2a then C2b (CD-13).
   the narrowest real harness by default with at most 1-2 full-pump tests per packet. Test-only.
   Also (C2c review r5 T-1): W-CI-rm and W-CI-mv move from the hand-built `gitDocsPort` onto the
   factory-built port; the slow G1 and G1-flat tests go into their own file.
+
+### PX-1 — Contained-launch cost investigation (CD-20; lane C, investigation only)
+
+- **Question:** why does one git call through the runner's audited execution host take about
+  1,000 ms on Windows when plain git takes about 30 ms, and what is the smallest change that cuts
+  the overhead at least 5 times while keeping every containment and audit guarantee?
+- **Deliverable:** `evidence/PX-1.md`: the call path (file:line) with every process start and
+  every wait; a measured breakdown (median and p90 of at least 20 calls on a quiet machine); the
+  guarantee each step provides and the test that proves it; ranked options with expected time,
+  the guarantee at risk and how a test would prove it still holds; one recommendation.
+- **Decision criterion:** the owner approves a fix packet only for a design that keeps every
+  guarantee listed and targets at most 200 ms per git call.
+- **Writable:** `evidence/PX-1.md` and scratch probes in the system temp directory. **Forbidden:**
+  `runner-v2/src`, tests, package files. Worktree `D:\repos\ai-discussion-board\.worktrees\runner-v2-px1`,
+  branch `codex/runner-v2-px1` at `83f89cf5` (node_modules is a junction to lane A's).
+- **Unlocks:** a fix packet (PX-2) after owner approval; faster tests for every later packet.
 
 ### C2d — Case-variant docs spellings (CD-19, CD-15)
 
