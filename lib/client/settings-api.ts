@@ -361,8 +361,6 @@ async function fetchXaiLanguageModelCatalog(apiKey: string): Promise<ProviderCat
         image: model.input_modalities?.includes("image") === true,
         reasoningEffort: !model.id.toLowerCase().includes("non-reasoning"),
       }),
-      supportsTools: /^grok-/i.test(model.id),
-      supportsToolChoice: /^grok-/i.test(model.id),
       supportsTemperature: true,
       supportsMaxTokens: true,
     }))

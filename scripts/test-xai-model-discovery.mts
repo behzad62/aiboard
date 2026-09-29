@@ -26,11 +26,12 @@ try {
   const grok = catalog.find((model) => model.id === "grok-4.7");
   const fast = catalog.find((model) => model.id === "grok-4.7-fast-non-reasoning");
   assert.equal(grok?.supportsImageInput, true);
-  assert.equal(grok?.supportsTools, true);
+  assert.equal(grok?.supportsTools, false);
+  assert.equal(grok?.supportsToolChoice, false);
   assert.equal(grok?.supportsReasoningEffort, true);
   assert.equal(fast?.supportsImageInput, false);
   assert.equal(fast?.supportsReasoningEffort, false);
-  console.log("PASS xAI discovery uses the language-model catalog and preserves capabilities");
+  console.log("PASS xAI discovery lists models without inventing unreported tool support");
 } finally {
   globalThis.fetch = originalFetch;
 }
