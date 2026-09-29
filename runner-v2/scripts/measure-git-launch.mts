@@ -34,6 +34,7 @@ const EFFECT_METHODS = [
   "closeOwnedInput",
   "acknowledgeOwnedOutput",
   "claimOwnedFence",
+  "claimAndAttachOwnedChannel",
 ] as const;
 
 type EffectCounts = Record<(typeof EFFECT_METHODS)[number], number>;
@@ -50,6 +51,7 @@ function zeroCounts(): EffectCounts {
     closeOwnedInput: 0,
     acknowledgeOwnedOutput: 0,
     claimOwnedFence: 0,
+    claimAndAttachOwnedChannel: 0,
   };
 }
 

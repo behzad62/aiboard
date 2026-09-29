@@ -63,6 +63,40 @@ const status = {
 function persistStatus() {
   status.updatedAt = new Date().toISOString();
   appendFileSync(bootstrapStatusPath, `${JSON.stringify(status)}\n`, { mode: 0o600 });
+  settleStatusWaiters();
+}
+
+// PX-2b: event-driven settlement waits. Every durable state change persists,
+// so resolving parked /wait-status waiters on every persist cannot miss a
+// change (a change that already landed reads as terminal immediately at the
+// endpoint; a later change resolves the waiter). Spurious wakeups are
+// harmless: the host re-polls and re-attests after every wakeup.
+const statusWaiters = new Set();
+function settleStatusWaiters() {
+  if (statusWaiters.size === 0) return;
+  const pending = [...statusWaiters];
+  statusWaiters.clear();
+  for (const finish of pending) finish();
+}
+function waitForStatusPersist(timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      statusWaiters.delete(finish);
+      clearTimeout(timer);
+      resolve({ ...status });
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    statusWaiters.add(finish);
+  });
+}
+function parseWaitStatusTimeout(url) {
+  const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const timeoutMs = Number(new URLSearchParams(query).get("timeoutMs"));
+  if (!Number.isSafeInteger(timeoutMs)) return 1_000;
+  return Math.min(5_000, Math.max(1, timeoutMs));
 }
 
 // Persist identity before reading configuration. If the Runner dies after it
@@ -122,6 +156,21 @@ const server = createServer(async (request, response) => {
   }
   if (request.method === "GET" && request.url === "/status") {
     json(response, 200, status);
+    return;
+  }
+  if (request.method === "GET" && (request.url === "/wait-status" || request.url.startsWith("/wait-status?"))) {
+    // PX-2b: event-driven settlement. Terminal state is final, so a change
+    // that already landed returns immediately (no lost wakeup); otherwise the
+    // response parks until the next persist or the bounded timeout. Callers
+    // re-poll and re-attest after every return, and every existing deadline
+    // stays armed as the backstop.
+    const timeoutMs = parseWaitStatusTimeout(request.url);
+    if (status.status === "stopped" || status.status === "exited_unknown") {
+      json(response, 200, status);
+      return;
+    }
+    const next = await waitForStatusPersist(timeoutMs);
+    json(response, 200, next);
     return;
   }
   if (request.method === "POST" && request.url === "/write") {

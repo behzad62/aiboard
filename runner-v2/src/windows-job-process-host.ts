@@ -2,10 +2,10 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, watch, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { recoverRevokedOwnedFenceLock, withOwnedFenceLock } from "./owned-fence-lock.mjs";
@@ -57,6 +57,23 @@ export interface WindowsJobProcessHost {
   closeOwnedInput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
   acknowledgeOwnedOutput?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, stream: "stdout" | "stderr", endOffset: number): Promise<void>;
   claimOwnedFence?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<void>;
+  /**
+   * PX-2b: one atomic fence effect that performs the writer-fence claim
+   * compare-and-set and then the channel attachment read, with exactly the
+   * claimOwnedFence predicates followed by exactly the attachOwnedChannel
+   * predicates in the same order. Absent callers use the two separate
+   * methods; the guarantees are identical either way.
+   */
+  claimAndAttachOwnedChannel?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState>;
+  /**
+   * PX-2b: event-driven settlement wait. Returns after the supervisor
+   * durably persists a newer status or after timeoutMs (bounded server
+   * side). Read-only: it takes no fence lock and changes no state; every
+   * caller re-polls and re-attests afterwards, and every existing deadline
+   * stays armed. Throws on transport/auth failure so callers fall back to
+   * a timed delay.
+   */
+  waitOwnedStatusChange?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, timeoutMs: number): Promise<void>;
 }
 export interface WindowsJobChannelState {
   readonly nextSequence: number; readonly inputClosed: boolean;
@@ -79,7 +96,7 @@ export interface WindowsJobProcessHostOptions {
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release") => void | Promise<void>;
 }
 
-interface SupervisorRecord { protocol: typeof PROTOCOL; token: string; statusPath: string; supervisorPid: number; port: number }
+export interface SupervisorRecord { protocol: typeof PROTOCOL; token: string; statusPath: string; supervisorPid: number; port: number }
 interface HostRecord extends WindowsJobOwnershipKey {
   processId: string; pid: number; command: string; args: string[]; cwd: string; environmentKeys: string[];
   startedAt: string; updatedAt: string; status: "running" | "stopped" | "exited_unknown";
@@ -356,9 +373,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.throwIfTerminalOutputPending(status);
     if (status.status !== "stopped" || !status.ownershipReleased)
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job process ${processId} is not verified terminal.`);
-    const confirmed = await this.authenticatedStatus(record);
-    if (confirmed.status !== "stopped" || !confirmed.ownershipReleased)
-      throw new WindowsJobHostError("process_control_unavailable", `Windows Job process ${processId} terminal ownership changed before release.`);
+    // PX-2b: the second pre-lock terminal re-read is gone. It ran back-to-back
+    // with the check above with no intervening host action, and the same
+    // stopped+ownershipReleased predicate is still enforced authoritatively
+    // inside the release fence effect below before the tombstone write.
     let releaseEffectPersisted = false;
     try {
       return await this.withFenceEffect(record, fence, "release", async (current) => {
@@ -424,6 +442,15 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     });
   }
 
+  async waitOwnedStatusChange(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, timeoutMs: number): Promise<void> {
+    // PX-2b: read-only event wait, deliberately outside the fence lock (a
+    // parked wait must never block retained-output acknowledgements, which
+    // need the lock to drain). Preconditions match every other effect; the
+    // caller re-polls and re-attests under the fence afterwards.
+    const record = this.ownedRecord(processId, owner); this.assertActive(record); this.assertCurrentFence(record, fence);
+    await waitForSupervisorStatusChange(record.supervisor, timeoutMs);
+  }
+
   async probeActiveJobCreateClose(): Promise<boolean> {
     if (this.platform !== "win32" || process.platform !== "win32") return false;
     const jobHost = join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1");
@@ -462,6 +489,38 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         snapshot: { ...this.snapshot(current), ownershipReleased: status.ownershipReleased },
       };
     });
+  }
+
+  async claimAndAttachOwnedChannel(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState> {
+    if (!fence.ownerId || !Number.isSafeInteger(fence.fencingToken) || fence.fencingToken < 1) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is invalid.");
+    const record = this.ownedRecord(processId, owner); this.assertActive(record);
+    // PX-2b: the claimOwnedFence compare-and-set followed by the
+    // attachOwnedChannel read inside ONE fence effect. Every predicate below
+    // is byte-identical to the two separate methods, in the same order: the
+    // stale-writer rejection runs before any attachment observation, so a
+    // stale writer can never observe channel state.
+    return await this.withFenceEffect(record, fence, "attach", async (current) => {
+      this.assertActive(current);
+      const fenced = current.currentFence;
+      if (fenced && (fence.fencingToken < fenced.fencingToken || (fence.fencingToken === fenced.fencingToken && fence.ownerId !== fenced.ownerId))) throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
+      if (!fenced || fence.fencingToken > fenced.fencingToken) { current.currentFence = { ...fence }; current.updatedAt = this.clock(); this.persist(current); this.records.set(processId, current); }
+      this.assertCurrentFence(current, fence);
+      if (!current.interactive) throw new WindowsJobHostError("process_control_unavailable", "Windows Job process has no interactive input channel.");
+      const status = await this.authenticatedStatus(current);
+      return {
+        nextSequence: current.nextInputSequence ?? 1,
+        inputClosed: current.inputClosed === true,
+        outputOffsets: { ...(current.outputOffsets ?? { stdout: 0, stderr: 0 }) },
+        outputSequences: { ...(current.outputSequences ?? { stdout: 0, stderr: 0 }) },
+        retainedOutput: (["stdout", "stderr"] as const).flatMap((stream) => {
+          const frame = current.outputFrames?.[stream];
+          if (!frame) return [];
+          this.readRetainedOutputFrame(current, stream, frame);
+          return [{ ...frame }];
+        }),
+        snapshot: { ...this.snapshot(current), ownershipReleased: status.ownershipReleased },
+      };
+    }, { allowFenceUpgrade: true });
   }
 
   async writeOwnedInput(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, sequence: number, payload: Uint8Array): Promise<{ readonly acknowledged: true; readonly sequence: number }> {
@@ -649,7 +708,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     if (fence.ownerId !== record.currentFence.ownerId || fence.fencingToken !== record.currentFence.fencingToken)
       throw new WindowsJobHostError("process_identity_mismatch", "Windows Job writer fence is stale.");
   }
-  private async withFenceEffect<T>(record: HostRecord, fence: WindowsJobWriterFence | undefined, kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release", effect: (current: HostRecord) => Promise<T>): Promise<T> {
+  private async withFenceEffect<T>(record: HostRecord, fence: WindowsJobWriterFence | undefined, kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release", effect: (current: HostRecord) => Promise<T>, options: { allowFenceUpgrade?: boolean } = {}): Promise<T> {
     await this.beforeFenceEffect?.(kind);
     const previous = this.effectTails.get(record.processId) ?? Promise.resolve();
     let finishTurn!: () => void;
@@ -662,7 +721,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       return await withOwnedFenceLock(lockPath, async () => {
         const current = this.ownedRecord(record.processId, record);
         this.assertActive(current);
-        this.assertCurrentFence(current, fence);
+        // PX-2b: only the fused claim+attach sets allowFenceUpgrade. It runs
+        // the claim compare-and-set followed by the equality check inside
+        // its own body; every other effect keeps the precondition here.
+        if (options.allowFenceUpgrade !== true) this.assertCurrentFence(current, fence);
         return await effect(current);
       }, {
         retireAfterEffect: kind === "release",
@@ -743,9 +805,15 @@ function readSupervisorStatus(path: string): SupervisorStatus | null {
     return null;
   } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
-async function waitForSupervisor(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
+/**
+ * PX-2b: event-driven supervisor-startup wait. The status file is re-read on
+ * every directory event instead of every 25 ms; the start deadline stays
+ * armed as the backstop; a watcher failure resolves via the bounded timer
+ * (still bounded by the same deadline). Exported for tests.
+ */
+export async function waitForSupervisor(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
   const deadline = Date.now() + deadlineMs;
-  while (Date.now() < deadline) {
+  for (;;) {
     const status = readSupervisorStatus(supervisor.statusPath);
     if (status && status.protocol === PROTOCOL && status.processId === processId && status.supervisorPid === supervisor.supervisorPid && status.port > 0) {
       supervisor.port = status.port;
@@ -753,10 +821,53 @@ async function waitForSupervisor(supervisor: SupervisorRecord, processId: string
       if (status.status === "running")
         return await supervisorRequest(supervisor, "/status", "GET", undefined, Math.max(250, deadline - Date.now()));
     }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await waitForFileActivity(dirname(supervisor.statusPath), basename(supervisor.statusPath), remaining);
   }
   throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not become ready before the deadline.");
 }
+
+/**
+ * PX-2b: resolve on the next change notification for one file in its
+ * directory, or after timeoutMs. Never rejects: the caller re-reads and the
+ * outer deadline decides. Exported for tests.
+ */
+export function waitForFileActivity(directory: string, filename: string, timeoutMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let watcher: ReturnType<typeof watch> | undefined;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { watcher?.close(); } catch {}
+      resolve();
+    };
+    const timer = setTimeout(finish, Math.max(1, timeoutMs));
+    try {
+      watcher = watch(directory);
+    } catch {
+      return;
+    }
+    watcher.once("error", () => finish());
+    watcher.on("change", (_event, name) => { if (name === filename) finish(); });
+  });
+}
+
+/**
+ * PX-2b: event-driven settlement wait over the existing authenticated
+ * supervisor channel. The supervisor answers immediately when already
+ * terminal (no lost wakeup: terminal state is final) and otherwise parks
+ * the request until its next durable persist or the bounded timeout.
+ * Throws on transport/auth failure so the caller falls back to a timed
+ * delay; every existing deadline stays armed. Exported for tests.
+ */
+export async function waitForSupervisorStatusChange(supervisor: SupervisorRecord, timeoutMs: number): Promise<SupervisorStatus> {
+  const bounded = Number.isSafeInteger(timeoutMs) ? Math.min(5_000, Math.max(1, timeoutMs)) : 1_000;
+  return await supervisorRequest<SupervisorStatus>(supervisor, `/wait-status?timeoutMs=${bounded}`, "GET", undefined, bounded + 250);
+}
+
 async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = DEFAULT_START_DEADLINE_MS + 250): Promise<T> {
   const payload = body ? Buffer.from(JSON.stringify(body)) : undefined;
   return await new Promise<T>((resolvePromise, reject) => {

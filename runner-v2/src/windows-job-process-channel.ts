@@ -30,12 +30,25 @@ export function createWindowsJobProcessChannelProvider(options: {
   readonly clock?: () => number;
   authority(binding: ProcessBackendBinding, fence: ProcessEffectFence): WindowsJobChannelAuthority;
 }) {
-  const acquire = async (binding: ProcessBackendBinding, fence: ProcessEffectFence) => {
+      const acquire = async (binding: ProcessBackendBinding, fence: ProcessEffectFence) => {
     const authority = options.authority(binding, fence);
-    await authority.service.claimOwnedFence(authority.processId, authority.owner, fence);
+    const service = authority.service;
+    if (service.claimAndAttachOwnedChannel) {
+      // PX-2b: the claim compare-and-set and the attachment read run as one
+      // atomic fence effect (claim first, exactly as in the split path
+      // below); birth is re-attested right after, before the channel is
+      // returned or used. The attach snapshot therefore never escapes with
+      // an unverified birth: a stale birth throws here.
+      const state = await service.claimAndAttachOwnedChannel(authority.processId, authority.owner, fence);
+      await authority.reattest();
+      return new WindowsJobProcessChannel(authority, state.nextSequence, state.inputClosed, state.outputOffsets, state.outputSequences, options.pollIntervalMs, options.replayCapacityBytes, options.clock ?? Date.now, state.retainedOutput ?? [], state.snapshot.startedAt);
+    }
+    // Split path (fakes, hosts without the fused method): exactly the
+    // historical claim, reattest, attach order.
+    await service.claimOwnedFence(authority.processId, authority.owner, fence);
     await authority.reattest();
-    const state = await authority.service.attachOwnedChannel(authority.processId, authority.owner, fence);
-    return new WindowsJobProcessChannel(authority, state.nextSequence, state.inputClosed, state.outputOffsets, state.outputSequences, options.pollIntervalMs, options.replayCapacityBytes, options.clock ?? Date.now, state.retainedOutput ?? []);
+    const state = await service.attachOwnedChannel(authority.processId, authority.owner, fence);
+    return new WindowsJobProcessChannel(authority, state.nextSequence, state.inputClosed, state.outputOffsets, state.outputSequences, options.pollIntervalMs, options.replayCapacityBytes, options.clock ?? Date.now, state.retainedOutput ?? [], state.snapshot.startedAt);
   };
   return Object.freeze({
     version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
@@ -68,6 +81,7 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     private readonly maximumBytes: number,
     private readonly clock: () => number,
     private readonly retainedOutput: readonly BackpressuredOutputMetadata[],
+    private readonly attachedStartedAt: string,
   ) {}
 
   retainedWindow() { return this.retainedOutput.map((frame) => ({ ...frame })); }
@@ -130,20 +144,27 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
           await this.poll();
           if (this.offsets.stdout + this.offsets.stderr === before) {
             if (this.outputFailure) throw this.outputFailure;
-            if (await this.authority.reattest() !== "exited") throw new Error("Windows Job terminal identity changed during output settlement.");
             this.assertAttached();
+            // PX-2b: one attested terminal read carries every predicate the
+            // three back-to-back reconciles used to re-check: birth identity
+            // (against the attach-time snapshot, itself taken after the
+            // acquire reattest proved the binding birth), stopped state, and
+            // ownership release. No host action ran between those reads,
+            // supervisor terminal state is monotonic, and the backend
+            // observe-level reconcile still re-attests after return.
             const terminal = await this.authority.control(() => this.authority.service.reconcileOwned(
               this.authority.processId, this.authority.owner, this.authority.fence));
             this.assertAttached();
-            if (terminal.processId !== this.authority.processId || terminal.status !== "stopped" || !terminal.ownershipReleased ||
-                await this.authority.reattest() !== "exited") throw new Error("Windows Job terminal result is not currently authenticated.");
+            if (terminal.processId !== this.authority.processId || terminal.startedAt !== this.attachedStartedAt ||
+                terminal.status !== "stopped" || !terminal.ownershipReleased)
+              throw new Error("Windows Job terminal result is not currently authenticated.");
             this.assertAttached();
             return { state: "exited", ...(terminal.exitCode === null ? {} : { exitCode: terminal.exitCode }),
               ...(terminal.signal ? { signal: terminal.signal } : {}) };
           }
         }
       }
-      await delay(this.pollIntervalMs);
+      await this.waitForChange(1000);
     }
   }
   async detach(): Promise<unknown> {
@@ -193,7 +214,7 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
             return { status: "settled" };
           }
         }
-        await delay(Math.min(this.pollIntervalMs, Math.max(0, this.outputSettlementDeadlineAt! - this.clock())));
+        await this.waitForChange(Math.min(1000, Math.max(1, this.outputSettlementDeadlineAt! - this.clock())));
       }
     } catch (error) {
       return { status: "blocked", reason: error instanceof JobOutputDeadlineError ? "deadline" : "outcome_unknown" };
@@ -209,6 +230,19 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     if (this.detached || !this.sink) throw new Error("Windows Job terminal output reader is unavailable.");
   }
 
+    private async waitForChange(timeoutMs: number): Promise<void> {
+    // PX-2b: event-driven settlement wait over the authenticated supervisor
+    // channel. Any absence or transport/auth failure falls back to the
+    // previous timed delay; every existing deadline stays armed as the
+    // backstop, and the caller re-polls and re-attests after every return.
+    const wait = this.authority.service.waitOwnedStatusChange;
+    if (!wait) { await delay(this.pollIntervalMs); return; }
+    try {
+      await wait.call(this.authority.service, this.authority.processId, this.authority.owner, this.authority.fence, timeoutMs);
+    } catch {
+      await delay(this.pollIntervalMs);
+    }
+  }
   private startPolling() {
     if (this.timer || this.outputSettlementDeadlineAt !== undefined) return;
     this.timer = setInterval(() => { void this.poll().catch((error) => this.rememberOutputFailure(error)); }, this.pollIntervalMs); this.timer.unref?.();
