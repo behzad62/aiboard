@@ -4,10 +4,8 @@ import { normalizeBuildSettings } from "@/lib/orchestrator/build-policy";
 import { parseModelId } from "@/lib/providers/base";
 import { MODEL_CATALOG } from "@/lib/providers/catalog";
 import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
-import {
-  getProviderDefinition,
-  providerSupportsNativeBuildToolsFeature,
-} from "@/lib/providers/provider-registry";
+import { getProviderDefinition } from "@/lib/providers/provider-registry";
+import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
 import {
   getMessagesForDiscussion,
   getCustomModelById,
@@ -526,6 +524,27 @@ export function createNativeProviderConfig(
     audio: false,
     video: false,
   };
+  const resolvedFunctionTools = resolveProviderCapabilityProfile({
+    providerId,
+    modelId: model,
+    catalogEvidence:
+      providerId === "openrouter" && discoveredOpenRouter?.tools !== undefined
+        ? [
+            {
+              providerId,
+              modelId: model,
+              capabilityId: "function_calling" as const,
+              transport: "responses" as const,
+              support: discoveredOpenRouter.tools
+                ? ("supported" as const)
+                : ("unsupported" as const),
+              execution: "client" as const,
+              source: "provider-catalog" as const,
+              verifiedAt: discoveredOpenRouter.updatedAt,
+            },
+          ]
+        : undefined,
+  }).capabilities.function_calling;
   return {
     runtimeId,
     providerId,
@@ -550,8 +569,8 @@ export function createNativeProviderConfig(
     ...(providerId === "openrouter"
       ? {
           supportsTools:
-            discoveredOpenRouter?.tools ??
-            providerSupportsNativeBuildToolsFeature(providerId, model),
+            resolvedFunctionTools?.descriptor.support === "supported" &&
+            resolvedFunctionTools.readiness.status === "available",
           hostedTools: [
             { type: "web_search" as const },
             { type: "web_fetch" as const },

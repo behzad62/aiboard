@@ -3,6 +3,8 @@ import type { CapabilityInputType } from "../attachments/types";
 import type { ReasoningEffort } from "../db/schema";
 import type { ModelContextProfile } from "./model-context";
 import type { ProviderArtifactSink, ProviderToolEvent } from "./provider-events";
+import type { ProviderCallPlan, ToolIntent } from "./tool-capabilities";
+import type { LogicalToolEntry } from "./tool-inventory";
 
 export type { ModelContextProfile } from "./model-context";
 export type {
@@ -97,6 +99,12 @@ export interface ChatParams {
   temperature?: number;
   reasoningEffort?: ReasoningEffort;
   structuredOutput?: StructuredOutputFormat;
+  /** Normalized tool intent; new code consumes this instead of legacy booleans. */
+  toolIntents?: ToolIntent[];
+  /** Provider-neutral logical inventory for schema-bearing/client tools. */
+  toolInventory?: LogicalToolEntry[];
+  /** Resolved preflight plan. Provider adapters consume this during migration. */
+  callPlan?: ProviderCallPlan;
   /** Provider-native web search/grounding is available for this call. */
   webSearch?: boolean;
   /** Provider-native function/tool definitions available for this call. */

@@ -1,26 +1,33 @@
 import type { ChatMessage, StructuredOutputFormat } from "./base";
-import { providerSupportsNativeWebSearchFeature } from "./provider-registry";
+import type { ToolIntent } from "./tool-capabilities";
 
 export const WEB_SEARCH_CAPABILITY_NOTE =
   "Internet search is available when needed. Use it for current, time-sensitive, or source-dependent facts; avoid it for stable general knowledge. If you use search results, cite the sources you relied on.";
 
-export function providerSupportsNativeWebSearch(
-  providerId: string,
-  model?: string
-): boolean {
-  return providerSupportsNativeWebSearchFeature(providerId, model);
-}
-
-export function shouldEnableProviderNativeWebSearch(input: {
-  providerId: string;
+export interface WebSearchPolicyInput {
+  providerId?: string;
   model?: string;
   structuredOutput?: StructuredOutputFormat;
   allowWebSearch?: boolean;
-}): boolean {
-  if (input.allowWebSearch === false || input.structuredOutput) {
-    return false;
-  }
-  return providerSupportsNativeWebSearch(input.providerId, input.model);
+}
+
+/**
+ * Temporary legacy policy hook. This answers only whether the caller wants
+ * search available; provider/model support is resolved by the capability
+ * planner. Structured output is not a global suppression rule.
+ */
+export function shouldEnableProviderNativeWebSearch(
+  input: WebSearchPolicyInput,
+): boolean {
+  return input.allowWebSearch !== false;
+}
+
+export function webSearchToolIntent(
+  input: WebSearchPolicyInput,
+): ToolIntent | undefined {
+  return shouldEnableProviderNativeWebSearch(input)
+    ? { id: "web_search", requirement: "optional" }
+    : undefined;
 }
 
 export function withWebSearchCapabilityNote(

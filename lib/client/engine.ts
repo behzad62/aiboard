@@ -26,6 +26,7 @@ import {
   CUSTOM_PROVIDER_ID,
   getCustomModelByFullId,
   getDecryptedApiKey,
+  getDiscoveredOpenRouterApiCapabilities,
   getProvider,
   getProviderBaseURL,
   getProviderRunnerToken,
@@ -35,7 +36,9 @@ import {
 } from "./providers";
 import {
   parseModelId,
+  type AIProvider,
   type ChatMessage,
+  type ChatParams,
   type ModelContextProfile,
   type NativeToolCall,
   type NativeToolDefinition,
@@ -85,6 +88,16 @@ import {
   nativeToolCallsToActionText,
 } from "@/lib/orchestrator/build";
 import type { ProviderArtifactSink, ProviderToolEvent } from "@/lib/providers/provider-events";
+import { resolveProviderCallPlan } from "@/lib/providers/call-planner";
+import {
+  legacyChatParamsToToolRequest,
+  legacyHostedBuildCapabilities,
+} from "@/lib/providers/legacy-tool-intents";
+import type {
+  CapabilityEvidence,
+  ToolCapabilityDescriptor,
+  ToolResourceState,
+} from "@/lib/providers/tool-capabilities";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
@@ -107,6 +120,105 @@ export function providerToolEventFromChunk(
   chunk: StreamChunk
 ): ProviderToolEvent | undefined {
   return chunk.type === "provider_tool_event" ? chunk.providerToolEvent : undefined;
+}
+
+export interface ProviderPreflightOverrides {
+  evidence?: CapabilityEvidence[];
+  customOverrides?: ToolCapabilityDescriptor[];
+  resourceState?: ToolResourceState;
+  mode?: "discussion" | "build" | "benchmark" | "test";
+}
+
+function normalizedToolChoice(params: ChatParams) {
+  const choice = params.toolChoice;
+  if (choice === undefined) return "auto" as const;
+  if (typeof choice === "string") return choice;
+  return { name: choice.name };
+}
+
+function inferredCallMode(
+  params: ChatParams,
+  explicit: ProviderPreflightOverrides["mode"],
+): NonNullable<ProviderPreflightOverrides["mode"]> {
+  if (explicit) return explicit;
+  return params.nativeTools?.length || params.hostedBuildTools ? "build" : "discussion";
+}
+
+function enabledCapabilitySet(params: ChatParams): Set<string> {
+  return new Set(params.callPlan?.enabledTools.map((tool) => tool.intent.id) ?? []);
+}
+
+export function preflightProviderChatParams(
+  providerId: string,
+  params: ChatParams,
+  overrides: ProviderPreflightOverrides = {},
+): ChatParams {
+  const normalized = legacyChatParamsToToolRequest(params);
+  const callPlan = resolveProviderCallPlan({
+    context: {
+      providerId,
+      modelId: params.model,
+      evidence: overrides.evidence,
+      customOverrides: overrides.customOverrides,
+      resourceState: overrides.resourceState,
+      features: {
+        structuredOutput: Boolean(params.structuredOutput),
+        reasoning:
+          params.reasoningEffort !== undefined &&
+          params.reasoningEffort !== "default" &&
+          params.reasoningEffort !== "none",
+        attachments: Boolean(params.attachments?.length),
+        parallelTools: false,
+        toolChoice: normalizedToolChoice(params),
+        mode: inferredCallMode(params, overrides.mode),
+      },
+    },
+    requestedTools: normalized.toolIntents,
+  });
+  const prepared: ChatParams = {
+    ...params,
+    toolIntents: normalized.toolIntents,
+    toolInventory: normalized.toolInventory,
+    callPlan,
+  };
+  const enabled = enabledCapabilitySet(prepared);
+  prepared.webSearch = params.webSearch === true && enabled.has("web_search");
+  prepared.nativeTools = enabled.has("function_calling") ? params.nativeTools : undefined;
+  prepared.hostedTools = params.hostedTools?.filter((tool) => enabled.has(tool.type));
+  prepared.hostedBuildTools =
+    params.hostedBuildTools === true &&
+    legacyHostedBuildCapabilities().some((capabilityId) => enabled.has(capabilityId));
+  return prepared;
+}
+
+export function streamProviderWithPreflight(
+  provider: AIProvider,
+  providerId: string,
+  params: ChatParams,
+  overrides: ProviderPreflightOverrides = {},
+): AsyncIterable<StreamChunk> {
+  return provider.streamChat(preflightProviderChatParams(providerId, params, overrides));
+}
+
+function discoveredCapabilityEvidence(
+  providerId: string,
+  model: string,
+): CapabilityEvidence[] | undefined {
+  if (providerId !== "openrouter") return undefined;
+  const discovered = getDiscoveredOpenRouterApiCapabilities(model);
+  if (discovered?.tools === undefined) return undefined;
+  return [
+    {
+      providerId,
+      modelId: model,
+      capabilityId: "function_calling",
+      transport: "responses",
+      support: discovered.tools ? "supported" : "unsupported",
+      execution: "client",
+      source: "provider-catalog",
+      verifiedAt: discovered.updatedAt,
+    },
+  ];
 }
 
 const runningDiscussions = new Set<string>();
@@ -269,6 +381,27 @@ export async function collectStreamWithUsage(
     const customAttachments = attachments.filter(
       (a) => a.category !== "text_inline" && customCaps[a.category]
     );
+    const customParams = preflightProviderChatParams(
+      CUSTOM_PROVIDER_ID,
+      {
+        apiKey: "",
+        model: customModel.model,
+        messages,
+        attachments: customAttachments,
+        maxTokens,
+        temperature,
+        reasoningEffort,
+        structuredOutput,
+        webSearch: shouldEnableProviderNativeWebSearch({ allowWebSearch }),
+        contextProfile,
+        nativeTools,
+        hostedBuildTools,
+        artifactSink,
+      },
+    );
+    customParams.messages = customParams.webSearch
+      ? withWebSearchCapabilityNote(messages)
+      : messages;
     let customContent = "";
     let customNativeActionContent = "";
     let customReportedUsage: StreamUsage | undefined;
@@ -276,20 +409,7 @@ export async function collectStreamWithUsage(
     const customProviderToolEvents: ProviderToolEvent[] = [];
     return withTransientRetry(
       async () => {
-        for await (const chunk of streamCustomChat(customModel, {
-          apiKey: "",
-          model: customModel.model,
-          messages,
-          attachments: customAttachments,
-          maxTokens,
-          temperature,
-          reasoningEffort,
-          structuredOutput,
-          contextProfile,
-          nativeTools,
-          hostedBuildTools,
-          artifactSink,
-        })) {
+        for await (const chunk of streamCustomChat(customModel, customParams)) {
           if (signal?.aborted) throw abortError();
           if (
             chunk.type === "token" &&
@@ -360,13 +480,31 @@ export async function collectStreamWithUsage(
       ? resolvedCaps[a.category]
       : modelSupportsInputTypes(modelId, [a.category]);
   });
-  const webSearch = shouldEnableProviderNativeWebSearch({
+  const providerParams = preflightProviderChatParams(
     providerId,
-    model,
-    structuredOutput,
-    allowWebSearch,
-  });
-  const providerMessages = webSearch
+    {
+      apiKey,
+      baseURL: getProviderBaseURL(providerId),
+      runnerToken: getProviderRunnerToken(providerId),
+      model,
+      messages,
+      attachments: modelAttachments,
+      maxTokens,
+      temperature,
+      reasoningEffort,
+      structuredOutput,
+      webSearch: shouldEnableProviderNativeWebSearch({ allowWebSearch }),
+      nativeTools,
+      hostedBuildTools,
+      artifactSink,
+      contextProfile,
+      ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
+    },
+    {
+      evidence: discoveredCapabilityEvidence(providerId, model),
+    },
+  );
+  providerParams.messages = providerParams.webSearch
     ? withWebSearchCapabilityNote(messages)
     : messages;
 
@@ -377,24 +515,7 @@ export async function collectStreamWithUsage(
   const providerToolEvents: ProviderToolEvent[] = [];
   return withTransientRetry(
     async () => {
-      for await (const chunk of provider.streamChat({
-        apiKey,
-        baseURL: getProviderBaseURL(providerId),
-        runnerToken: getProviderRunnerToken(providerId),
-        model,
-        messages: providerMessages,
-        attachments: modelAttachments,
-        maxTokens,
-        temperature,
-        reasoningEffort,
-        structuredOutput,
-        webSearch,
-        nativeTools,
-        hostedBuildTools,
-        artifactSink,
-        contextProfile,
-        ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
-      })) {
+      for await (const chunk of provider.streamChat(providerParams)) {
         if (signal?.aborted) throw abortError();
         if (chunk.type === "token" && chunk.content && !nativeActionContent) {
           content += chunk.content;

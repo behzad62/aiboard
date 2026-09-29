@@ -31,7 +31,6 @@ import type {
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import {
-  getDiscoveredOpenRouterApiCapabilities,
   resolveClientModelContextProfile,
   resolveModelCapabilities,
   resolveModelName,
@@ -302,10 +301,6 @@ import {
   type ToolCallResultStatus,
   type ToolAction,
 } from "@/lib/orchestrator/build";
-import {
-  providerSupportsHostedBuildToolsFeature,
-  providerSupportsNativeBuildToolsFeature,
-} from "@/lib/providers/provider-registry";
 import {
   getProjectHandle,
   listProjectTree,
@@ -4187,25 +4182,9 @@ export async function runBuildDiscussion(
     round += 1;
     const messageId = uuidv4();
     const { providerId, model: rawModel } = parseModelId(model.modelId);
-    const discoveredOpenRouterTools =
-      providerId === "openrouter"
-        ? getDiscoveredOpenRouterApiCapabilities(rawModel)?.tools
-        : undefined;
-    const nativeTools =
-      opts.nativeTools?.length &&
-      providerSupportsNativeBuildToolsFeature(
-        providerId,
-        rawModel,
-        discoveredOpenRouterTools
-      )
-        ? opts.nativeTools
-        : undefined;
-    const hostedBuildTools =
-      !!runner &&
-      allowAllCommands &&
-      !benchmark &&
-      providerSupportsHostedBuildToolsFeature(providerId, rawModel);
-    const structuredOutput = nativeTools ? undefined : opts.structuredOutput;
+    const nativeTools = opts.nativeTools?.length ? opts.nativeTools : undefined;
+    const hostedBuildTools = !!runner && allowAllCommands && !benchmark;
+    const structuredOutput = opts.structuredOutput;
     const traceStartedAt = new Date().toISOString();
     const traceStartMs = Date.now();
     const tracePrompt = messages
