@@ -15,7 +15,7 @@ const config = sdk.buildCopilotSdkSessionConfig({
   model: "gemini-3.5-flash",
   reasoningEffort: "max",
   maxTokens: 1234,
-  webSearch: true,
+  toolIntents: [{ id: "web_search", requirement: "optional" }],
   messages: [
     { role: "system", content: "Use concise answers." },
     { role: "user", content: "Find the current answer." },
@@ -86,7 +86,7 @@ const result = await sdk.runCopilotSdkChat(
     model: "gemini-3.5-flash",
     reasoningEffort: "high",
     maxTokens: 512,
-    webSearch: true,
+    toolIntents: [{ id: "web_search", requirement: "optional" }],
     messages: [{ role: "user", content: "Search now." }],
   },
   "test-token",

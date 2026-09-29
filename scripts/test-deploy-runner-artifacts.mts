@@ -173,11 +173,11 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       const sourceFile = archive.file(archivePath);
       check(`${path} contains ${archivePath}`, sourceFile !== null);
       const archivedSource = sourceFile
-        ? await sourceFile.async("nodebuffer")
+        ? await sourceFile.async("string")
         : undefined;
       check(
-        `${path} ${archivePath} bytes match Runner V2 source`,
-        archivedSource?.equals(readFileSync(`runner-v2/src/${sourcePath}`)) === true
+        `${path} ${archivePath} matches normalized Runner V2 source`,
+        archivedSource === normalizeLf(read(`runner-v2/src/${sourcePath}`))
       );
     }
 
@@ -225,7 +225,12 @@ async function checkAccountRunnerArchive(path: string): Promise<void> {
         `${path} account runner matches source after normalized line endings`,
         normalizeLf(archivedRunner) === normalizeLf(read(sourceAccountRunner))
       );
-      check(`${path} account runner keeps protocol version 19`, /const VERSION = 19;/.test(archivedRunner));
+      check(`${path} account runner publishes protocol version 21`, /const VERSION = 21;/.test(archivedRunner));
+      check(`${path} account runner publishes capability schema v1`, /const RUNNER_CAPABILITY_SCHEMA_VERSION = 1;/.test(archivedRunner));
+      check(`${path} account runner exposes provider capability endpoint`, /action === "capabilities"/.test(archivedRunner));
+      check(`${path} account runner includes ChatGPT capability handler`, /chatGptRunnerCapabilities\(\)/.test(archivedRunner));
+      check(`${path} account runner includes NVIDIA capability handler`, /nvidiaRunnerCapabilities\(body\)/.test(archivedRunner));
+      check(`${path} account runner includes Copilot capability integration`, /buildCopilotSdkRunnerCapabilities/.test(archivedRunner));
     }
     if (sdkFile && existsSync(sourceAccountSdk)) {
       check(

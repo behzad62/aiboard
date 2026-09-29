@@ -92,8 +92,8 @@ try {
   console.log("PASS same browser build enables or omits ChatGPT tools from current runner truth");
 
   clearAccountRunnerCapabilityCache();
-  version = 20;
-  capabilityIndex = 0;
+  version = 21;
+  capabilityIndex = 1;
   const browserContext = await getRunnerCapabilityPlanningContext(
     "chatgpt",
     "gpt-5.6-sol",
@@ -103,7 +103,7 @@ try {
   assert.deepEqual(browserContext.allowedTransports, ["runner_proxy"]);
   assert.equal(
     browserContext.evidence?.find((item) => item.capabilityId === "web_search")?.support,
-    "supported",
+    "unsupported",
   );
   console.log("PASS browser provider registry converts runner handshake into planner context");
   const beforeFutureSchemaRequest = capabilityRequests;
