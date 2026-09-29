@@ -25,6 +25,7 @@ import {
 import {
   CUSTOM_PROVIDER_ID,
   getCustomModelByFullId,
+  customModelPlanningContext,
   getDecryptedApiKey,
   getDiscoveredOpenRouterCapabilityEvidence,
   getProvider,
@@ -384,12 +385,13 @@ export async function collectStreamWithUsage(
         temperature,
         reasoningEffort,
         structuredOutput,
-        webSearch: shouldEnableProviderNativeWebSearch({ allowWebSearch }),
+        webSearch: allowWebSearch,
         contextProfile,
         nativeTools,
         hostedBuildTools,
         artifactSink,
       },
+      customModelPlanningContext(customModel),
     );
     customParams.messages = customParams.webSearch
       ? withWebSearchCapabilityNote(messages)

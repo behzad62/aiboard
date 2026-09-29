@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { ChatParams, ModelInfo, StreamChunk } from "./base";
 import { parseModelId } from "./base";
 import { streamOpenAICompatibleChat } from "./openai-compat";
+import { streamOpenAIResponses } from "./openai";
 import { getCustomModels, getCustomModelById } from "../db";
 import { decrypt } from "../crypto/keys";
 import type { CustomModel } from "../db/schema";
@@ -70,13 +71,18 @@ export async function* streamCustomChat(
     baseURL: model.baseURL,
     ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
   });
+  const prepared = {
+    ...params,
+    model: model.model,
+    capabilities: model.capabilities ?? { ...TEXT_ONLY_CAPABILITIES },
+  };
+  if (params.callPlan?.transport === "responses") {
+    yield* streamOpenAIResponses(client, prepared, "custom");
+    return;
+  }
   yield* streamOpenAICompatibleChat(
     client,
-    {
-      ...params,
-      model: model.model,
-      capabilities: model.capabilities ?? { ...TEXT_ONLY_CAPABILITIES },
-    },
+    prepared,
     CUSTOM_PROVIDER_ID,
     model.label,
     "max_tokens"

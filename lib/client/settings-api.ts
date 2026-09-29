@@ -49,7 +49,12 @@ import {
 } from "./providers";
 import { formatModelId } from "@/lib/providers/base";
 import type { ProviderId } from "@/lib/providers/provider-registry";
-import type { CapabilityEvidence } from "@/lib/providers/tool-capabilities";
+import type {
+  CapabilityEvidence,
+  ProviderTransportId,
+  ToolCapabilityDescriptor,
+} from "@/lib/providers/tool-capabilities";
+import { customCompatibleTransports } from "@/lib/providers/custom-capabilities";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
 
@@ -915,6 +920,8 @@ export interface CustomModelView {
   model: string;
   hasKey: boolean;
   capabilities: { image: boolean; document: boolean; audio: boolean; video: boolean };
+  toolCapabilityOverrides: ToolCapabilityDescriptor[];
+  compatibleTransports: ProviderTransportId[];
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
 }
@@ -927,6 +934,8 @@ function redactCustom(m: CustomModel): CustomModelView {
     model: m.model,
     hasKey: !!m.apiKey,
     capabilities: m.capabilities ?? { ...NO_CAPS },
+    toolCapabilityOverrides: m.toolCapabilityOverrides ?? [],
+    compatibleTransports: customCompatibleTransports(m.compatibleTransports),
     lastValidationSucceeded: m.lastValidationSucceeded ?? null,
     lastValidatedAt: m.lastValidatedAt ?? null,
   };
@@ -942,6 +951,8 @@ export function addCustomModel(input: {
   model: string;
   apiKey?: string;
   capabilities?: CustomModelView["capabilities"];
+  toolCapabilityOverrides?: ToolCapabilityDescriptor[];
+  compatibleTransports?: ProviderTransportId[];
 }): CustomModelView {
   const record: CustomModel = {
     id: uuidv4(),
@@ -951,6 +962,8 @@ export function addCustomModel(input: {
     apiKey: input.apiKey || undefined,
     hasKey: !!input.apiKey,
     capabilities: input.capabilities ?? { ...NO_CAPS },
+    toolCapabilityOverrides: input.toolCapabilityOverrides ?? [],
+    compatibleTransports: customCompatibleTransports(input.compatibleTransports),
     createdAt: new Date().toISOString(),
   };
   storeAddCustomModel(record);
@@ -964,6 +977,18 @@ export function updateCustomModelCapabilities(
   storeUpdateCustomModel(id, { capabilities });
 }
 
+export function updateCustomModelToolConfiguration(
+  id: string,
+  input: {
+    toolCapabilityOverrides: ToolCapabilityDescriptor[];
+    compatibleTransports: ProviderTransportId[];
+  },
+): void {
+  storeUpdateCustomModel(id, {
+    toolCapabilityOverrides: input.toolCapabilityOverrides,
+    compatibleTransports: customCompatibleTransports(input.compatibleTransports),
+  });
+}
 export function deleteCustomModel(id: string): void {
   storeDeleteCustomModel(id);
 }

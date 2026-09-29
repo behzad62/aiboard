@@ -17,7 +17,7 @@ import {
   resolveModelContextProfile,
   type ModelContextOverrides,
 } from "@/lib/providers/model-context";
-import { openaiProvider } from "@/lib/providers/openai";
+import { openaiProvider, streamOpenAIResponses } from "@/lib/providers/openai";
 import { anthropicProvider } from "@/lib/providers/anthropic";
 import { foundryProvider } from "@/lib/providers/foundry";
 import { googleProvider } from "@/lib/providers/google";
@@ -30,6 +30,7 @@ import { nvidiaProvider } from "@/lib/providers/nvidia";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/constants";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
+import { customCompatibleTransports } from "@/lib/providers/custom-capabilities";
 import type { CustomModel } from "@/lib/db/schema";
 import type {
   CapabilityEvidence,
@@ -212,6 +213,15 @@ function withContextProfiles(
   return models.map((model) => withContextProfile(model, overrides));
 }
 
+export function customModelPlanningContext(model: CustomModel): {
+  customOverrides: CustomModel["toolCapabilityOverrides"];
+  allowedTransports: ProviderTransportId[];
+} {
+  return {
+    customOverrides: model.toolCapabilityOverrides ?? [],
+    allowedTransports: customCompatibleTransports(model.compatibleTransports),
+  };
+}
 function customModelToInfo(model: CustomModel): ModelInfo {
   return {
     id: model.id,
@@ -393,13 +403,18 @@ export async function* streamCustomChat(
     dangerouslyAllowBrowser: true,
     ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
   });
+  const prepared = {
+    ...params,
+    model: model.model,
+    capabilities: model.capabilities ?? { ...TEXT_ONLY },
+  };
+  if (params.callPlan?.transport === "responses") {
+    yield* streamOpenAIResponses(client, prepared, "custom");
+    return;
+  }
   yield* streamOpenAICompatibleChat(
     client,
-    {
-      ...params,
-      model: model.model,
-      capabilities: model.capabilities ?? { ...TEXT_ONLY },
-    },
+    prepared,
     CUSTOM_PROVIDER_ID,
     model.label,
     "max_tokens"

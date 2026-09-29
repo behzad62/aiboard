@@ -15,8 +15,18 @@ import {
   testCustomModel,
   testSavedCustomModel,
   updateCustomModelCapabilities,
+  updateCustomModelToolConfiguration,
 } from "@/lib/client/settings-api";
 import { ensureReady } from "@/lib/client/api";
+import {
+  buildCustomToolCapabilityOverrides,
+  CUSTOM_DECLARABLE_TOOL_CAPABILITIES,
+  type CustomDeclarableToolCapabilityId,
+} from "@/lib/providers/custom-capabilities";
+import type {
+  ProviderTransportId,
+  ToolCapabilityDescriptor,
+} from "@/lib/providers/tool-capabilities";
 import {
   resolveModelContextProfile,
   type ModelContextOverrides,
@@ -36,6 +46,8 @@ interface CustomModelView {
   model: string;
   hasKey: boolean;
   capabilities?: ModelCaps;
+  toolCapabilityOverrides?: ToolCapabilityDescriptor[];
+  compatibleTransports?: ProviderTransportId[];
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
   createdAt?: string;
@@ -55,6 +67,21 @@ const NO_CAPS: ModelCaps = {
   video: false,
 };
 const CUSTOM_PROVIDER_ID = "custom";
+const TOOL_LABELS: Record<CustomDeclarableToolCapabilityId, string> = {
+  function_calling: "Function calling",
+  web_search: "Web search",
+  file_search: "File search",
+  remote_mcp: "Remote MCP",
+  tool_search: "Tool search",
+  code_execution: "Code execution",
+  shell: "Hosted shell",
+  computer_use: "Computer use",
+  image_generation: "Image generation",
+};
+const TRANSPORT_OPTIONS: Array<{ id: ProviderTransportId; label: string }> = [
+  { id: "chat_completions", label: "Chat Completions" },
+  { id: "responses", label: "Responses API" },
+];
 
 export function CustomModelsManager({
   contextOverrides,
@@ -69,6 +96,8 @@ export function CustomModelsManager({
   const [model, setModel] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [capabilities, setCapabilities] = useState<ModelCaps>({ ...NO_CAPS });
+  const [declaredTools, setDeclaredTools] = useState<CustomDeclarableToolCapabilityId[]>([]);
+  const [compatibleTransports, setCompatibleTransports] = useState<ProviderTransportId[]>(["chat_completions"]);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -90,6 +119,8 @@ export function CustomModelsManager({
     setModel("");
     setApiKey("");
     setCapabilities({ ...NO_CAPS });
+    setDeclaredTools([]);
+    setCompatibleTransports(["chat_completions"]);
   };
 
   const canSubmit =
@@ -108,6 +139,8 @@ export function CustomModelsManager({
         model,
         apiKey: apiKey || undefined,
         capabilities,
+        toolCapabilityOverrides: buildCustomToolCapabilityOverrides(declaredTools),
+        compatibleTransports,
       });
       setMessage("Custom model added.");
       reset();
@@ -177,6 +210,56 @@ export function CustomModelsManager({
     onChanged?.();
   };
 
+  const declaredToolIds = (m: CustomModelView) =>
+    new Set(
+      (m.toolCapabilityOverrides ?? [])
+        .map((item) => item.id)
+        .filter((id): id is CustomDeclarableToolCapabilityId =>
+          CUSTOM_DECLARABLE_TOOL_CAPABILITIES.includes(
+            id as CustomDeclarableToolCapabilityId,
+          ),
+        ),
+    );
+
+  const toggleSavedToolCapability = async (
+    m: CustomModelView,
+    id: CustomDeclarableToolCapabilityId,
+  ) => {
+    const current = declaredToolIds(m);
+    if (current.has(id)) current.delete(id);
+    else current.add(id);
+    updateCustomModelToolConfiguration(m.id, {
+      toolCapabilityOverrides: buildCustomToolCapabilityOverrides([...current]),
+      compatibleTransports: m.compatibleTransports ?? ["chat_completions"],
+    });
+    await load();
+    onChanged?.();
+  };
+
+  const nextTransportSelection = (
+    current: ProviderTransportId[],
+    id: ProviderTransportId,
+  ): ProviderTransportId[] => {
+    if (current.includes(id)) {
+      return current.length === 1 ? current : current.filter((item) => item !== id);
+    }
+    return [...current, id];
+  };
+
+  const toggleSavedTransport = async (
+    m: CustomModelView,
+    id: ProviderTransportId,
+  ) => {
+    updateCustomModelToolConfiguration(m.id, {
+      toolCapabilityOverrides: m.toolCapabilityOverrides ?? [],
+      compatibleTransports: nextTransportSelection(
+        m.compatibleTransports ?? ["chat_completions"],
+        id,
+      ),
+    });
+    await load();
+    onChanged?.();
+  };
   return (
     <div className="space-y-6">
       <div className="rounded-lg border bg-muted/20 p-4 text-sm text-muted-foreground">
@@ -236,6 +319,53 @@ export function CustomModelsManager({
                           </button>
                         );
                       })}
+                    </div>
+                    <div className="mt-2 space-y-1">
+                      <p className="text-[0.65rem] font-medium text-muted-foreground">
+                        Declared tool support
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {CUSTOM_DECLARABLE_TOOL_CAPABILITIES.map((id) => {
+                          const on = declaredToolIds(m).has(id);
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              aria-pressed={on}
+                              onClick={() => toggleSavedToolCapability(m, id)}
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[0.65rem] font-medium transition-colors",
+                                on
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "text-muted-foreground hover:bg-accent",
+                              )}
+                            >
+                              {TOOL_LABELS[id]}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {TRANSPORT_OPTIONS.map(({ id, label: transportLabel }) => {
+                          const on = (m.compatibleTransports ?? ["chat_completions"]).includes(id);
+                          return (
+                            <button
+                              key={id}
+                              type="button"
+                              aria-pressed={on}
+                              onClick={() => toggleSavedTransport(m, id)}
+                              className={cn(
+                                "rounded-full border px-2 py-0.5 text-[0.65rem] font-medium transition-colors",
+                                on
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "text-muted-foreground hover:bg-accent",
+                              )}
+                            >
+                              {transportLabel}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                   <Badge
@@ -361,6 +491,75 @@ export function CustomModelsManager({
           <p className="text-xs text-muted-foreground">
             Text is always supported. Enable what this endpoint accepts — image
             and document attachments are sent over the OpenAI-compatible API.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Declared tool support</Label>
+          <p className="text-xs text-muted-foreground">
+            Tool support is not auto-detected. Enable a tool only when this
+            endpoint actually implements it; these switches are your explicit
+            declaration of endpoint support.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {CUSTOM_DECLARABLE_TOOL_CAPABILITIES.map((id) => {
+              const on = declaredTools.includes(id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    setDeclaredTools((current) =>
+                      current.includes(id)
+                        ? current.filter((item) => item !== id)
+                        : [...current, id],
+                    )
+                  }
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                    on
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  {TOOL_LABELS[id]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Compatible API transports</Label>
+          <div className="flex flex-wrap gap-2">
+            {TRANSPORT_OPTIONS.map(({ id, label: transportLabel }) => {
+              const on = compatibleTransports.includes(id);
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    setCompatibleTransports((current) =>
+                      nextTransportSelection(current, id),
+                    )
+                  }
+                  className={cn(
+                    "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+                    on
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-accent",
+                  )}
+                >
+                  {transportLabel}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Chat Completions is the conservative default. Declare Responses API
+            only if this endpoint implements the OpenAI-compatible Responses path.
           </p>
         </div>
 

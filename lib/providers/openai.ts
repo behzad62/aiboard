@@ -346,7 +346,7 @@ export async function* streamOpenAIByPlan(
 export async function* streamOpenAIResponses(
   client: OpenAI,
   params: ChatParams,
-  providerId: "openai" | "openrouter" = "openai"
+  providerId: "openai" | "openrouter" | "custom" = "openai"
 ): AsyncIterable<StreamChunk> {
   const instructions = params.messages
     .filter((m) => m.role === "system")
@@ -366,12 +366,14 @@ export async function* streamOpenAIResponses(
   const reasoningValue =
     providerId === "openrouter"
       ? openRouterReasoningEffort(params.reasoningEffort ?? "default", params.model)
-      : openAIReasoningEffort(params.reasoningEffort ?? "default", params.model);
+      : providerId === "openai"
+        ? openAIReasoningEffort(params.reasoningEffort ?? "default", params.model)
+        : undefined;
   const structuredOutputField = openAIResponsesTextFormatField(
     params.structuredOutput
   );
   const combinedToolField =
-    providerId === "openai"
+    providerId !== "openrouter"
       ? openAIResponsesToolField(params)
       : params.callPlan
         ? openRouterResponsesToolField(params)
@@ -637,7 +639,7 @@ export async function* streamOpenAIResponses(
 
 export function openAIResponsesWebSearchField(
   enabled?: boolean,
-  providerId: "openai" | "openrouter" = "openai"
+  providerId: "openai" | "openrouter" | "custom" = "openai"
 ): Record<string, unknown> {
   if (!enabled) return {};
   return {
@@ -689,7 +691,7 @@ export function openRouterHostedToolField(
 
 export function openAIResponsesHostedBuildToolsField(
   enabled?: boolean,
-  providerId: "openai" | "openrouter" = "openai"
+  providerId: "openai" | "openrouter" | "custom" = "openai"
 ): Record<string, unknown> {
   if (!enabled || providerId !== "openrouter") return {};
   return openRouterHostedToolField(DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS);

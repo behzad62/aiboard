@@ -13,6 +13,7 @@ import type {
   SkillEvidence,
 } from "@/lib/skills/types";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
+import type { ProviderTransportId, ToolCapabilityDescriptor } from "@/lib/providers/tool-capabilities";
 import type { BuildPhaseSpec } from "@/lib/orchestrator/build";
 import type { BuildPlanContractValidation } from "@/lib/orchestrator/build-plan-contract";
 import type { BuildEvidenceLedgerEntry } from "@/lib/orchestrator/build-progress";
@@ -407,6 +408,10 @@ export interface CustomModel {
     audio: boolean;
     video: boolean;
   };
+  /** Explicit endpoint-owned tool support declarations; absent means conservative/unknown. */
+  toolCapabilityOverrides?: ToolCapabilityDescriptor[];
+  /** OpenAI-compatible transports this endpoint explicitly declares. */
+  compatibleTransports?: ProviderTransportId[];
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
   createdAt: string;
