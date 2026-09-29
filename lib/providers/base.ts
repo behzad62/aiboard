@@ -2,6 +2,7 @@ import type { AttachmentPayload } from "../attachments/types";
 import type { CapabilityInputType } from "../attachments/types";
 import type { ReasoningEffort } from "../db/schema";
 import type { ModelContextProfile } from "./model-context";
+import type { ProviderArtifactSink, ProviderToolEvent } from "./provider-events";
 
 export type { ModelContextProfile } from "./model-context";
 export type {
@@ -112,6 +113,8 @@ export interface ChatParams {
   baseURL?: string;
   /** Local provider-runner token, when separate from the provider API key. */
   runnerToken?: string;
+  /** Optional sink for provider-generated binary outputs; providers stream only lightweight refs. */
+  artifactSink?: ProviderArtifactSink;
   /** Optional cancellation signal for UI validation, games, and benchmark runs. */
   signal?: AbortSignal;
   /** Build-mode context metadata resolved from the static registry + overrides. */
@@ -212,11 +215,13 @@ export interface StreamChunk {
    * unrecognized `"usage"` chunk passes through harmlessly — no consumer needs
    * to change to remain correct.
    */
-  type: "token" | "done" | "error" | "tool_call" | "usage";
+  type: "token" | "done" | "error" | "tool_call" | "provider_tool_event" | "usage";
   content?: string;
   error?: string;
   errorMetadata?: CertifiedProviderErrorMetadata;
   toolCall?: NativeToolCall;
+  /** Present on `type: "provider_tool_event"`; provider-managed work is never brokered locally. */
+  providerToolEvent?: ProviderToolEvent;
   /** Present on `type: "usage"` chunks (and optionally alongside `done`). */
   usage?: StreamUsage;
   /** Provider-native completion reason, e.g. `end_turn` or `max_tokens`. */

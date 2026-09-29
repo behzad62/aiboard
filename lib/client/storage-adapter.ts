@@ -33,6 +33,18 @@ export interface StorageAdapter {
   label(): string;
 }
 
+export interface ProviderArtifactStorage {
+  saveProviderArtifact(id: string, bytes: Uint8Array): Promise<string>;
+  loadProviderArtifact(storageRef: string): Promise<Uint8Array | null>;
+  deleteProviderArtifact(storageRef: string): Promise<void>;
+}
+
+export interface KeyValueStorage {
+  get<T>(key: string): Promise<T | undefined>;
+  set(key: string, value: unknown): Promise<void>;
+  delete(key: string): Promise<void>;
+}
+
 export const DISCUSSION_FILE_PATHS = [
   "discussion.json",
   "messages.json",
@@ -51,6 +63,28 @@ const HANDLE_KEY = "dirHandle";
 const CONFIG_KEY = "config";
 const BENCHMARK_RUN_IDS_KEY = "benchmarkRunIds";
 const DISCUSSION_IDS_KEY = "discussionIds";
+const PROVIDER_ARTIFACT_REF_PREFIX = "provider-artifact:";
+
+function providerArtifactStorageRef(id: string): string {
+  return `${PROVIDER_ARTIFACT_REF_PREFIX}${encodeURIComponent(id)}`;
+}
+
+function providerArtifactIdFromStorageRef(storageRef: string): string | null {
+  if (!storageRef.startsWith(PROVIDER_ARTIFACT_REF_PREFIX)) return null;
+  try {
+    return decodeURIComponent(storageRef.slice(PROVIDER_ARTIFACT_REF_PREFIX.length));
+  } catch {
+    return null;
+  }
+}
+
+function providerArtifactStoreKey(id: string): string {
+  return `provider:artifact:${encodeURIComponent(id)}`;
+}
+
+function providerArtifactFileName(id: string): string {
+  return `${encodeURIComponent(id)}.bin`;
+}
 
 function benchmarkRunStoreKey(runId: string): string {
   return `benchmark:run:${runId}`;
@@ -127,25 +161,32 @@ export async function idbDelete(key: string): Promise<void> {
   }
 }
 
+const DEFAULT_KEY_VALUE_STORAGE: KeyValueStorage = {
+  get: idbGet,
+  set: idbSet,
+  delete: idbDelete,
+};
+
 // ── Adapters ────────────────────────────────────────────────────────────────
 
-export class IndexedDBAdapter implements StorageAdapter {
+export class IndexedDBAdapter implements StorageAdapter, ProviderArtifactStorage {
   readonly kind = "indexeddb" as const;
+  constructor(private readonly kv: KeyValueStorage = DEFAULT_KEY_VALUE_STORAGE) {}
   async load(): Promise<string | null> {
-    return (await idbGet<string>(STORE_KEY)) ?? null;
+    return (await this.kv.get<string>(STORE_KEY)) ?? null;
   }
   async save(blob: string): Promise<void> {
-    await idbSet(STORE_KEY, blob);
+    await this.kv.set(STORE_KEY, blob);
   }
   async listDiscussionIds(): Promise<string[]> {
-    return (await idbGet<string[]>(DISCUSSION_IDS_KEY)) ?? [];
+    return (await this.kv.get<string[]>(DISCUSSION_IDS_KEY)) ?? [];
   }
   async loadDiscussionFile(
     discussionId: string,
     relativePath: string
   ): Promise<string | null> {
     return (
-      (await idbGet<string>(discussionFileStoreKey(discussionId, relativePath))) ??
+      (await this.kv.get<string>(discussionFileStoreKey(discussionId, relativePath))) ??
       null
     );
   }
@@ -154,49 +195,66 @@ export class IndexedDBAdapter implements StorageAdapter {
     relativePath: string,
     blob: string
   ): Promise<void> {
-    await idbSet(discussionFileStoreKey(discussionId, relativePath), blob);
+    await this.kv.set(discussionFileStoreKey(discussionId, relativePath), blob);
     const discussionIds = new Set(await this.listDiscussionIds());
     discussionIds.add(discussionId);
-    await idbSet(DISCUSSION_IDS_KEY, Array.from(discussionIds).sort());
+    await this.kv.set(DISCUSSION_IDS_KEY, Array.from(discussionIds).sort());
   }
   async deleteDiscussionFile(
     discussionId: string,
     relativePath: string
   ): Promise<void> {
-    await idbDelete(discussionFileStoreKey(discussionId, relativePath));
+    await this.kv.delete(discussionFileStoreKey(discussionId, relativePath));
   }
   async deleteDiscussion(discussionId: string): Promise<void> {
     for (const relativePath of DISCUSSION_FILE_PATHS) {
-      await idbDelete(discussionFileStoreKey(discussionId, relativePath));
+      await this.kv.delete(discussionFileStoreKey(discussionId, relativePath));
     }
     const discussionIds = (await this.listDiscussionIds()).filter(
       (id) => id !== discussionId
     );
-    await idbSet(DISCUSSION_IDS_KEY, discussionIds);
+    await this.kv.set(DISCUSSION_IDS_KEY, discussionIds);
   }
   async listBenchmarkRunIds(): Promise<string[]> {
-    return (await idbGet<string[]>(BENCHMARK_RUN_IDS_KEY)) ?? [];
+    return (await this.kv.get<string[]>(BENCHMARK_RUN_IDS_KEY)) ?? [];
   }
   async loadBenchmarkRun(runId: string): Promise<string | null> {
-    return (await idbGet<string>(benchmarkRunStoreKey(runId))) ?? null;
+    return (await this.kv.get<string>(benchmarkRunStoreKey(runId))) ?? null;
   }
   async saveBenchmarkRun(runId: string, blob: string): Promise<void> {
-    await idbSet(benchmarkRunStoreKey(runId), blob);
+    await this.kv.set(benchmarkRunStoreKey(runId), blob);
     const runIds = new Set(await this.listBenchmarkRunIds());
     runIds.add(runId);
-    await idbSet(BENCHMARK_RUN_IDS_KEY, Array.from(runIds).sort());
+    await this.kv.set(BENCHMARK_RUN_IDS_KEY, Array.from(runIds).sort());
   }
   async deleteBenchmarkRun(runId: string): Promise<void> {
-    await idbDelete(benchmarkRunStoreKey(runId));
+    await this.kv.delete(benchmarkRunStoreKey(runId));
     const runIds = (await this.listBenchmarkRunIds()).filter((id) => id !== runId);
-    await idbSet(BENCHMARK_RUN_IDS_KEY, runIds);
+    await this.kv.set(BENCHMARK_RUN_IDS_KEY, runIds);
+  }
+  async saveProviderArtifact(id: string, bytes: Uint8Array): Promise<string> {
+    await this.kv.set(providerArtifactStoreKey(id), bytes.slice());
+    return providerArtifactStorageRef(id);
+  }
+  async loadProviderArtifact(storageRef: string): Promise<Uint8Array | null> {
+    const id = providerArtifactIdFromStorageRef(storageRef);
+    if (!id) return null;
+    const value = await this.kv.get<Uint8Array | ArrayBuffer>(providerArtifactStoreKey(id));
+    if (value instanceof Uint8Array) return value.slice();
+    if (value instanceof ArrayBuffer) return new Uint8Array(value.slice(0));
+    return null;
+  }
+  async deleteProviderArtifact(storageRef: string): Promise<void> {
+    const id = providerArtifactIdFromStorageRef(storageRef);
+    if (!id) return;
+    await this.kv.delete(providerArtifactStoreKey(id));
   }
   label(): string {
     return "This browser (IndexedDB)";
   }
 }
 
-export class FileSystemAdapter implements StorageAdapter {
+export class FileSystemAdapter implements StorageAdapter, ProviderArtifactStorage {
   readonly kind = "filesystem" as const;
   constructor(private readonly dir: FileSystemDirectoryHandle) {}
 
@@ -217,6 +275,46 @@ export class FileSystemAdapter implements StorageAdapter {
     const writable = await fileHandle.createWritable();
     await writable.write(blob);
     await writable.close();
+  }
+
+  async saveProviderArtifact(id: string, bytes: Uint8Array): Promise<string> {
+    const artifactsDir = await this.getProviderArtifactsDir(true);
+    if (!artifactsDir) throw new Error("Provider artifact directory is unavailable.");
+    const fileHandle = await artifactsDir.getFileHandle(providerArtifactFileName(id), {
+      create: true,
+    });
+    const writable = await fileHandle.createWritable();
+    const artifactBytes = new Uint8Array(bytes.byteLength);
+    artifactBytes.set(bytes);
+    await writable.write(artifactBytes);
+    await writable.close();
+    return providerArtifactStorageRef(id);
+  }
+
+  async loadProviderArtifact(storageRef: string): Promise<Uint8Array | null> {
+    const id = providerArtifactIdFromStorageRef(storageRef);
+    if (!id) return null;
+    const artifactsDir = await this.getProviderArtifactsDir(false);
+    if (!artifactsDir) return null;
+    try {
+      const fileHandle = await artifactsDir.getFileHandle(providerArtifactFileName(id));
+      const file = await fileHandle.getFile();
+      return new Uint8Array(await file.arrayBuffer());
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteProviderArtifact(storageRef: string): Promise<void> {
+    const id = providerArtifactIdFromStorageRef(storageRef);
+    if (!id) return;
+    const artifactsDir = await this.getProviderArtifactsDir(false);
+    if (!artifactsDir) return;
+    try {
+      await artifactsDir.removeEntry(providerArtifactFileName(id));
+    } catch {
+      // Artifact already gone.
+    }
   }
 
   async listDiscussionIds(): Promise<string[]> {
@@ -365,6 +463,16 @@ export class FileSystemAdapter implements StorageAdapter {
       // File already gone.
     }
     await this.saveBenchmarkIndex();
+  }
+
+  private async getProviderArtifactsDir(
+    create: boolean
+  ): Promise<FileSystemDirectoryHandle | null> {
+    try {
+      return await this.dir.getDirectoryHandle("provider-artifacts", { create });
+    } catch {
+      return null;
+    }
   }
 
   private async getBenchmarkRunsDir(

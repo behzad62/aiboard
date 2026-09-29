@@ -37,8 +37,10 @@ import {
   parseModelId,
   type ChatMessage,
   type ModelContextProfile,
+  type NativeToolCall,
   type NativeToolDefinition,
   type SelectedModel,
+  type StreamChunk,
   type StreamUsage,
   type StructuredOutputFormat,
 } from "@/lib/providers/base";
@@ -82,6 +84,7 @@ import {
   mergeNativeToolActionContent,
   nativeToolCallsToActionText,
 } from "@/lib/orchestrator/build";
+import type { ProviderArtifactSink, ProviderToolEvent } from "@/lib/providers/provider-events";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
@@ -93,6 +96,17 @@ export interface CollectedStreamResult {
   content: string;
   reportedUsage?: StreamUsage;
   finishReason?: string;
+  providerToolEvents?: ProviderToolEvent[];
+}
+
+export function clientToolCallFromChunk(chunk: StreamChunk): NativeToolCall | undefined {
+  return chunk.type === "tool_call" ? chunk.toolCall : undefined;
+}
+
+export function providerToolEventFromChunk(
+  chunk: StreamChunk
+): ProviderToolEvent | undefined {
+  return chunk.type === "provider_tool_event" ? chunk.providerToolEvent : undefined;
 }
 
 const runningDiscussions = new Set<string>();
@@ -190,7 +204,8 @@ export async function collectStream(
   contextProfile?: ModelContextProfile,
   allowWebSearch = true,
   nativeTools?: NativeToolDefinition[],
-  hostedBuildTools = false
+  hostedBuildTools = false,
+  artifactSink?: ProviderArtifactSink
 ): Promise<string> {
   const result = await collectStreamWithUsage(
     modelId,
@@ -209,7 +224,8 @@ export async function collectStream(
     contextProfile,
     allowWebSearch,
     nativeTools,
-    hostedBuildTools
+    hostedBuildTools,
+    artifactSink
   );
   return result.content;
 }
@@ -235,7 +251,8 @@ export async function collectStreamWithUsage(
   contextProfile?: ModelContextProfile,
   allowWebSearch = true,
   nativeTools?: NativeToolDefinition[],
-  hostedBuildTools = false
+  hostedBuildTools = false,
+  artifactSink?: ProviderArtifactSink
 ): Promise<CollectedStreamResult> {
   if (signal?.aborted) throw abortError();
   if (providerId === CUSTOM_PROVIDER_ID) {
@@ -256,6 +273,7 @@ export async function collectStreamWithUsage(
     let customNativeActionContent = "";
     let customReportedUsage: StreamUsage | undefined;
     let customFinishReason: string | undefined;
+    const customProviderToolEvents: ProviderToolEvent[] = [];
     return withTransientRetry(
       async () => {
         for await (const chunk of streamCustomChat(customModel, {
@@ -270,6 +288,7 @@ export async function collectStreamWithUsage(
           contextProfile,
           nativeTools,
           hostedBuildTools,
+          artifactSink,
         })) {
           if (signal?.aborted) throw abortError();
           if (
@@ -281,8 +300,9 @@ export async function collectStreamWithUsage(
             onToken?.(chunk.content);
             if (stopWhen?.(customContent)) break;
           }
-          if (chunk.type === "tool_call" && chunk.toolCall) {
-            const actionText = nativeToolCallsToActionText([chunk.toolCall]);
+          const clientToolCall = clientToolCallFromChunk(chunk);
+          if (clientToolCall) {
+            const actionText = nativeToolCallsToActionText([clientToolCall]);
             if (actionText) {
               const merged = mergeNativeToolActionContent({
                 content: customContent,
@@ -294,6 +314,8 @@ export async function collectStreamWithUsage(
               onToken?.(actionText);
             }
           }
+          const providerEvent = providerToolEventFromChunk(chunk);
+          if (providerEvent) customProviderToolEvents.push(providerEvent);
           if (chunk.type === "usage") {
             customReportedUsage = mergeStreamUsage(
               customReportedUsage,
@@ -311,6 +333,9 @@ export async function collectStreamWithUsage(
           content: customContent,
           ...(customReportedUsage ? { reportedUsage: customReportedUsage } : {}),
           ...(customFinishReason ? { finishReason: customFinishReason } : {}),
+          ...(customProviderToolEvents.length > 0
+            ? { providerToolEvents: [...customProviderToolEvents] }
+            : {}),
         };
       },
       () => customContent.length > 0,
@@ -349,6 +374,7 @@ export async function collectStreamWithUsage(
   let nativeActionContent = "";
   let reportedUsage: StreamUsage | undefined;
   let finishReason: string | undefined;
+  const providerToolEvents: ProviderToolEvent[] = [];
   return withTransientRetry(
     async () => {
       for await (const chunk of provider.streamChat({
@@ -365,6 +391,7 @@ export async function collectStreamWithUsage(
         webSearch,
         nativeTools,
         hostedBuildTools,
+        artifactSink,
         contextProfile,
         ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
       })) {
@@ -374,8 +401,9 @@ export async function collectStreamWithUsage(
           onToken?.(chunk.content);
           if (stopWhen?.(content)) break;
         }
-        if (chunk.type === "tool_call" && chunk.toolCall) {
-          const actionText = nativeToolCallsToActionText([chunk.toolCall]);
+        const clientToolCall = clientToolCallFromChunk(chunk);
+        if (clientToolCall) {
+          const actionText = nativeToolCallsToActionText([clientToolCall]);
           if (actionText) {
             const merged = mergeNativeToolActionContent({
               content,
@@ -387,6 +415,8 @@ export async function collectStreamWithUsage(
             onToken?.(actionText);
           }
         }
+        const providerEvent = providerToolEventFromChunk(chunk);
+        if (providerEvent) providerToolEvents.push(providerEvent);
         if (chunk.type === "usage") {
           reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
         }
@@ -401,6 +431,9 @@ export async function collectStreamWithUsage(
         content,
         ...(reportedUsage ? { reportedUsage } : {}),
         ...(finishReason ? { finishReason } : {}),
+        ...(providerToolEvents.length > 0
+          ? { providerToolEvents: [...providerToolEvents] }
+          : {}),
       };
     },
     () => content.length > 0,
