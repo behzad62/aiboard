@@ -66,6 +66,18 @@ export interface WindowsJobProcessHost {
    */
   claimAndAttachOwnedChannel?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence): Promise<WindowsJobChannelState>;
   /**
+   * PX-2c: pre-started spare pair. prestartSpare boots one supervisor plus one
+   * Job host that waits idle with NO Job and NO child; the next launchOwned
+   * claims it for exactly one call over the private stdin/IPC channel and
+   * then runs that call's own Job exactly as today. Any miss, death,
+   * staleness, or identity failure falls back to a fresh launch. retireSpare
+   * kills an unclaimed spare without ever launching a call (run-end cleanup).
+   * All three are optional so fakes and older hosts keep working.
+   */
+  prestartSpare?(owner: WindowsJobOwnershipKey): Promise<WindowsJobSpareInfo>;
+  retireSpare?(): Promise<void>;
+  spareStats?(): WindowsJobSpareStats;
+  /**
    * PX-2b: event-driven settlement wait. Returns after the supervisor
    * durably persists a newer status or after timeoutMs (bounded server
    * side). Read-only: it takes no fence lock and changes no state; every
@@ -91,12 +103,25 @@ export interface WindowsJobProcessHostOptions {
   readonly maxRetainedOutputChunkBytes?: number;
   readonly maxInputBytes?: number;
   readonly supervisorScriptPath?: string;
+  /** PX-2c: pre-started spare pair. Absent (the default) disables it: no spare is ever started and every call launches fresh, exactly as today. */
+  readonly spare?: WindowsJobSpareOptions;
   /** Test seam for the optional active Job probe; product uses the real PowerShell create/close command. */
   readonly activeJobProbe?: { readonly executable: string; readonly arguments: readonly string[]; readonly deadlineMs?: number };
   readonly beforeFenceEffect?: (kind: "attach" | "read" | "write" | "close" | "signal" | "output_ack" | "reconcile" | "release") => void | Promise<void>;
 }
 
 export interface SupervisorRecord { protocol: typeof PROTOCOL; token: string; statusPath: string; supervisorPid: number; port: number }
+/** PX-2c: options for the pre-started spare pair. */
+export interface WindowsJobSpareOptions {
+  /** Idle budget for an unclaimed spare before its supervisor retires it. The supervisor clamps to 1-300 s; default 60 s. */
+  readonly idleTimeoutMs?: number;
+  /** Start a replacement spare in the background after a claim. Default false. */
+  readonly autoRefresh?: boolean;
+}
+/** PX-2c: identity of a waiting spare pair. */
+export interface WindowsJobSpareInfo { readonly processId: string; readonly supervisorPid: number; }
+/** PX-2c: spare counters (prestarts, successful claims, fallbacks to a fresh launch). */
+export interface WindowsJobSpareStats { readonly prestarts: number; readonly claims: number; readonly fallbacks: number; }
 interface HostRecord extends WindowsJobOwnershipKey {
   processId: string; pid: number; command: string; args: string[]; cwd: string; environmentKeys: string[];
   startedAt: string; updatedAt: string; status: "running" | "stopped" | "exited_unknown";
@@ -107,6 +132,9 @@ interface HostRecord extends WindowsJobOwnershipKey {
   outputSequences?: { stdout: number; stderr: number };
   outputFrames?: Partial<Record<"stdout" | "stderr", BackpressuredOutputMetadata>>;
   currentFence?: WindowsJobWriterFence;
+  /** PX-2c: durable spare mark. An unclaimed spare record must never be adopted as a call. */
+  spare?: boolean;
+  spareClaimed?: boolean;
 }
 interface SupervisorStatus {
   protocol: typeof PROTOCOL; processId: string; supervisorPid: number; childPid: number; port: number;
@@ -115,6 +143,11 @@ interface SupervisorStatus {
   retainedOutputChunks: number; retainedOutputBytes: number;
   jobEmptyProof?: boolean;
   terminationRequested?: boolean;
+  /** PX-2c: spare lifecycle marks persisted by the supervisor. */
+  spare?: boolean;
+  claimed?: boolean;
+  spareReady?: boolean;
+  spareRetired?: string;
 }
 
 export class WindowsJobHostError extends Error {
@@ -236,6 +269,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   private readonly records = new Map<string, HostRecord>();
   private readonly effectTails = new Map<string, Promise<void>>();
   private readonly launchers = new Set<ChildProcess>();
+  /** PX-2c: at most one pre-started spare pair per host instance. */
+  private readonly spareOptions: WindowsJobSpareOptions;
+  private spareEntry?: { launcher: ChildProcess; token: string; processId: string; owner: WindowsJobOwnershipKey };
+  private sparePrestartFlight?: Promise<WindowsJobSpareInfo>;
+  private readonly spareCounts = { prestarts: 0, claims: 0, fallbacks: 0 };
 
   constructor(options: WindowsJobProcessHostOptions) {
     this.stateDirectory = resolve(options.stateDirectory);
@@ -254,6 +292,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     this.supervisorScriptPath = options.supervisorScriptPath ?? join(dirname(fileURLToPath(import.meta.url)), "managed-process-supervisor.mjs");
     this.activeJobProbe = options.activeJobProbe;
     this.beforeFenceEffect = options.beforeFenceEffect;
+    this.spareOptions = options.spare ?? {};
     mkdirSync(this.stateDirectory, { recursive: true });
     for (const name of readdirSync(this.stateDirectory)) {
       if (!name.endsWith(".json")) continue;
@@ -265,11 +304,37 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
         this.records.set(requestedProcessId, value);
       }
     }
+    // PX-2c: crash recovery. An unclaimed spare is owned durably (its record
+    // survives a runner crash) but must never be adopted as a call: a new
+    // runner on this state directory kills the previous runner's spare
+    // processes and drops their records instead of relaunching anything.
+    for (const [processId, value] of [...this.records]) {
+      if (value.spare === true && value.spareClaimed !== true) {
+        try {
+          process.kill(value.supervisor.supervisorPid, "SIGKILL");
+        } catch {}
+        try {
+          rmSync(this.containedProcessPath(processId, ".json"), { force: true });
+        } catch {}
+        try {
+          rmSync(this.containedProcessPath(processId, ""), { recursive: true, force: true });
+        } catch {}
+        this.records.delete(processId);
+      }
+    }
   }
 
   async launchOwned(input: WindowsJobLaunchRequest): Promise<WindowsJobProcessSnapshot> {
     if (this.platform !== "win32" || process.platform !== "win32")
       throw new WindowsJobHostError("process_containment_unavailable", "Windows Job containment is unavailable on this platform.");
+    // PX-2c: claim the pre-started spare when one is waiting. Any miss, death,
+    // staleness, or identity failure returns null and the call starts the
+    // normal way below, exactly as today.
+    const spareSnapshot = await this.tryClaimSpareCall(input).catch(() => null);
+    if (spareSnapshot) {
+      this.refreshSpareInBackground(input);
+      return spareSnapshot;
+    }
     const processId = this.validatedProcessId(this.idFactory());
     if (this.readRecord(processId)) throw new WindowsJobHostError("process_id_conflict", `Process ${processId} already exists.`);
     const processDirectory = this.containedProcessPath(processId, "");
@@ -328,6 +393,319 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     }
     if (launcher.connected) launcher.disconnect(); launcher.unref(); this.launchers.delete(launcher);
     return this.snapshot(record);
+  }
+
+  /**
+   * PX-2c: pre-start at most one spare supervisor plus Job-host pair. The pair
+   * waits idle with NO Job and NO child until one launchOwned claims it; the
+   * claim then creates that call's own Job (suspended-create, assign, resume,
+   * kill-on-close) exactly as today. The reservation travels over the private
+   * supervisor stdin channel; the claim over the private IPC channel; HTTP
+   * only observes until the claim lands. The spare is recorded durably like a
+   * launch, retires on idle timeout or parent death, and is never reused.
+   */
+  async prestartSpare(owner: WindowsJobOwnershipKey): Promise<WindowsJobSpareInfo> {
+    if (this.platform !== "win32" || process.platform !== "win32")
+      throw new WindowsJobHostError("process_containment_unavailable", "Windows Job containment is unavailable on this platform.");
+    const live = this.liveSpareEntry();
+    if (live) {
+      const supervisorPid = live.launcher.pid;
+      return { processId: live.processId, supervisorPid: supervisorPid ?? 0 };
+    }
+    if (this.sparePrestartFlight) return await this.sparePrestartFlight;
+    const flight = this.startSpare(owner);
+    this.sparePrestartFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (this.sparePrestartFlight === flight) this.sparePrestartFlight = undefined;
+    }
+  }
+
+  /**
+   * PX-2c: run-end cleanup. Retire the tracked spare (if any) plus any spare
+   * records left behind on disk, without ever launching a call. Best-effort
+   * and never throws: calls never depend on the spare.
+   */
+  async retireSpare(): Promise<void> {
+    const flight = this.sparePrestartFlight;
+    if (flight) await flight.catch(() => undefined);
+    const entry = this.spareEntry;
+    this.spareEntry = undefined;
+    if (entry) {
+      await abortStartingSupervisor(entry.launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
+      if (entry.launcher.exitCode === null && entry.launcher.signalCode === null) {
+        try {
+          entry.launcher.kill("SIGKILL");
+        } catch {}
+      }
+      this.removeSpareFiles(entry.processId);
+      this.records.delete(entry.processId);
+    }
+    this.sweepRetiredSpareRecords();
+  }
+
+  /** PX-2c: spare counters for measurement and tests. */
+  spareStats(): WindowsJobSpareStats {
+    return { ...this.spareCounts };
+  }
+
+  private async startSpare(owner: WindowsJobOwnershipKey): Promise<WindowsJobSpareInfo> {
+    const processId = this.validatedProcessId(this.idFactory());
+    if (this.readRecord(processId)) throw new WindowsJobHostError("process_id_conflict", `Process ${processId} already exists.`);
+    const processDirectory = this.containedProcessPath(processId, "");
+    mkdirSync(processDirectory, { recursive: true });
+    const token = randomBytes(32).toString("hex");
+    const statusPath = join(processDirectory, "supervisor.jsonl");
+    const launcher = spawn(process.execPath, [this.supervisorScriptPath, processId, statusPath], {
+      detached: true, windowsHide: true, stdio: ["pipe", "ignore", "ignore", "ipc"],
+    });
+    this.launchers.add(launcher);
+    // The spare slot is NOT cleared here: a dead launcher must still be seen
+    // by the next claim (counted fallback with best-effort cleanup) or the
+    // next prestart (liveness check starts fresh), never silently dropped.
+    launcher.once("exit", () => {
+      this.launchers.delete(launcher);
+    });
+    launcher.once("error", () => {
+      this.launchers.delete(launcher);
+    });
+    const supervisorPid = launcher.pid;
+    if (!supervisorPid) throw new WindowsJobHostError("process_start_failed", "Supervisor process has no PID.");
+    const now = this.clock();
+    const record: HostRecord = {
+      processId, pid: 0, runId: owner.runId, sessionId: owner.sessionId,
+      command: "", args: [], cwd: this.stateDirectory,
+      environmentKeys: [], startedAt: now, updatedAt: now,
+      status: "running", exitCode: null, signal: null,
+      stdoutPath: join(processDirectory, "stdout.log"), stderrPath: join(processDirectory, "stderr.log"),
+      supervisor: { protocol: PROTOCOL, token, statusPath, supervisorPid, port: 0 },
+      interactive: true,
+      nextInputSequence: 1,
+      inputClosed: false,
+      outputOffsets: { stdout: 0, stderr: 0 },
+      outputSequences: { stdout: 0, stderr: 0 },
+      spare: true, spareClaimed: false,
+    };
+    this.records.set(processId, record); this.persist(record);
+    // PX-2a's helper compile happens here, off the call's critical path: the
+    // digest still travels over the private stdin channel per call site.
+    const helperAssembly = ensureJobHostHelperAssembly(this.stateDirectory);
+    const idleTimeoutMs = this.spareOptions.idleTimeoutMs;
+    try {
+      await writeSupervisorConfig(launcher, JSON.stringify({
+        processId, token, statusPath, stdoutPath: record.stdoutPath, stderrPath: record.stderrPath,
+        eventPath: join(processDirectory, "job-events.jsonl"),
+        recordPath: this.containedProcessPath(processId, ".json"),
+        stopDeadlineMs: this.stopDeadlineMs, interactive: true,
+        maxPollBytes: this.maxPollBytes,
+        maxRetainedOutputChunks: this.maxRetainedOutputChunks,
+        maxRetainedOutputBytes: this.maxRetainedOutputBytes,
+        maxRetainedOutputChunkBytes: this.maxRetainedOutputChunkBytes,
+        maxInputBytes: this.maxInputBytes,
+        ...(helperAssembly ? { helperAssemblyPath: helperAssembly.path, helperAssemblySha256: helperAssembly.sha256 } : {}),
+        spare: true,
+        ...(typeof idleTimeoutMs === "number" && Number.isSafeInteger(idleTimeoutMs) ? { spareIdleTimeoutMs: idleTimeoutMs } : {}),
+      }));
+      await waitForSpareReadyStatus(record.supervisor, processId, this.startDeadlineMs);
+    } catch (error) {
+      await abortStartingSupervisor(launcher, token, this.stopDeadlineMs).catch(() => undefined);
+      this.removeSpareFiles(processId);
+      this.records.delete(processId);
+      throw error;
+    }
+    // No disconnect/unref: the IPC channel stays open for the single claim,
+    // and its break retires the spare when the owning runner dies.
+    this.spareEntry = { launcher, token, processId, owner: { runId: owner.runId, sessionId: owner.sessionId } };
+    this.spareCounts.prestarts += 1;
+    return { processId, supervisorPid };
+  }
+
+  /** Synchronous liveness check for the spare slot; stale slots are cleaned so a fresh prestart never blocks on them. */
+  private liveSpareEntry(): { launcher: ChildProcess; token: string; processId: string; owner: WindowsJobOwnershipKey } | undefined {
+    const entry = this.spareEntry;
+    if (!entry) return undefined;
+    const { launcher, processId } = entry;
+    let record: HostRecord | null = null;
+    try {
+      record = this.readRecord(processId);
+    } catch {
+      record = null;
+    }
+    const status = record ? readSupervisorStatus(record.supervisor.statusPath) : null;
+    const alive = launcher.exitCode === null && launcher.signalCode === null && !launcher.killed && launcher.connected
+      && record !== null && record.spare === true && record.spareClaimed !== true
+      && status !== null && status.processId === processId
+      && status.supervisorPid === record.supervisor.supervisorPid
+      && status.spare === true && status.claimed !== true && status.spareReady === true && status.port > 0;
+    if (alive) return entry;
+    this.spareEntry = undefined;
+    void abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
+    this.removeSpareFiles(processId);
+    this.records.delete(processId);
+    return undefined;
+  }
+
+  /**
+   * PX-2c: claim the waiting spare for this call, or return null when there
+   * is no spare, it belongs to another run, or any liveness or identity check
+   * fails. Never throws: every failure falls back to a fresh launch, and a
+   * dead spare's leftovers are removed best-effort. The take is synchronous,
+   * so two concurrent calls can never claim one spare.
+   */
+  private async tryClaimSpareCall(input: WindowsJobLaunchRequest): Promise<WindowsJobProcessSnapshot | null> {
+    const entry = this.spareEntry;
+    this.spareEntry = undefined;
+    if (!entry) return null;
+    const { launcher, processId } = entry;
+    const fail = (): null => {
+      this.spareCounts.fallbacks += 1;
+      void (async () => {
+        try {
+          await abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs);
+        } catch {}
+        this.removeSpareFiles(processId);
+        this.records.delete(processId);
+      })();
+      return null;
+    };
+    try {
+      if (launcher.exitCode !== null || launcher.signalCode !== null || launcher.killed || !launcher.connected) return fail();
+      let record: HostRecord | null = null;
+      try {
+        record = this.readRecord(processId);
+      } catch {
+        record = null;
+      }
+      if (!record || record.spare !== true || record.spareClaimed === true) return fail();
+      if (record.runId !== input.runId || record.sessionId !== input.sessionId) {
+        // Another run's spare: leave it for its owner; this call is no fallback of ours.
+        if (!this.spareEntry) this.spareEntry = entry;
+        else void abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
+        return null;
+      }
+      if (input.interactive !== true) {
+        // The spare always runs the interactive backend (the production path).
+        if (!this.spareEntry) this.spareEntry = entry;
+        return null;
+      }
+      const status = readSupervisorStatus(record.supervisor.statusPath);
+      if (!status || status.processId !== processId || status.supervisorPid !== record.supervisor.supervisorPid
+        || status.spare !== true || status.claimed === true || status.spareReady !== true || status.port <= 0
+        || status.status !== "starting") return fail();
+      const acknowledged = await this.sendSpareClaim(launcher, entry.token, input);
+      if (!acknowledged) return fail();
+      // The claim landed: adopt the reservation for this call. The spare mark
+      // stays (spareClaimed) so a second claim of this pair is impossible.
+      const now = this.clock();
+      const claimed: HostRecord = {
+        ...record, command: input.command, args: [...input.args], cwd: resolve(input.workingDirectory),
+        environmentKeys: Object.keys(input.environment).sort(), updatedAt: now,
+        ...(input.fence ? { currentFence: { ...input.fence } } : {}),
+        spare: true, spareClaimed: true,
+      };
+      this.records.set(processId, claimed); this.persist(claimed);
+      if (launcher.connected) launcher.disconnect(); launcher.unref(); this.launchers.delete(launcher);
+      try {
+        const live = await waitForSupervisor(claimed.supervisor, processId, this.startDeadlineMs);
+        this.applyStatus(claimed, live);
+        if (live.status === "stopped" && live.error) throw new WindowsJobHostError("process_start_failed", live.error);
+        if (live.status === "starting") throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not confirm startup.");
+      } catch {
+        await abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
+        this.removeSpareFiles(processId);
+        this.records.delete(processId);
+        this.spareCounts.fallbacks += 1;
+        // The call never launched: the normal path runs it exactly once.
+        return null;
+      }
+      this.spareCounts.claims += 1;
+      return this.snapshot(claimed);
+    } catch {
+      return fail();
+    }
+  }
+
+  /** Deliver the call over the private IPC channel and await the single-claim acknowledgement. False on any transport, timeout, or identity failure. */
+  private sendSpareClaim(launcher: ChildProcess, token: string, input: WindowsJobLaunchRequest): Promise<boolean> {
+    return new Promise((resolvePromise) => {
+      let settled = false;
+      const finish = (value: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        launcher.off("message", onMessage);
+        launcher.off("exit", onExit);
+        resolvePromise(value);
+      };
+      const onMessage = (message: unknown): void => {
+        if (message && typeof message === "object"
+          && (message as { type?: unknown }).type === "claim_ack"
+          && (message as { token?: unknown }).token === token)
+          finish((message as { ok?: unknown }).ok === true);
+      };
+      const onExit = (): void => finish(false);
+      const timer = setTimeout(() => finish(false), Math.max(1_000, Math.min(10_000, this.controlDeadlineMs)));
+      launcher.on("message", onMessage);
+      launcher.once("exit", onExit);
+      if (!launcher.connected) {
+        finish(false);
+        return;
+      }
+      try {
+        launcher.send({
+          type: "claim", token,
+          job: {
+            command: input.command, args: [...input.args],
+            cwd: resolve(input.workingDirectory), env: { ...input.environment },
+          },
+        }, (error) => {
+          if (error) finish(false);
+        });
+      } catch {
+        finish(false);
+      }
+    });
+  }
+
+  /** After a successful claim, start one replacement spare when autoRefresh is on. Fire-and-forget: the call never waits for it. */
+  private refreshSpareInBackground(input: WindowsJobLaunchRequest): void {
+    if (this.spareOptions.autoRefresh !== true) return;
+    void this.prestartSpare({ runId: input.runId, sessionId: input.sessionId }).catch(() => undefined);
+  }
+
+  /** Best-effort removal of a spare's record file and process directory. Never throws. */
+  private removeSpareFiles(processId: string): void {
+    try {
+      rmSync(this.containedProcessPath(processId, ".json"), { force: true });
+    } catch {}
+    try {
+      rmSync(this.containedProcessPath(processId, ""), { recursive: true, force: true });
+    } catch {}
+  }
+
+  /** Best-effort sweep of spare records left on disk (retired or crashed). Never launches; never throws. */
+  private sweepRetiredSpareRecords(): void {
+    let names: string[] = [];
+    try {
+      names = readdirSync(this.stateDirectory).filter((name) => name.endsWith(".json"));
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      try {
+        const processId = name.slice(0, -".json".length);
+        this.assertProcessId(processId);
+        const value = JSON.parse(readFileSync(join(this.stateDirectory, name), "utf8")) as Partial<HostRecord>;
+        if (!isHostRecord(value) || value.spare !== true || value.spareClaimed === true) continue;
+        this.assertEmbeddedProcessId(processId, value);
+        try {
+          process.kill(value.supervisor.supervisorPid, "SIGKILL");
+        } catch {}
+        this.removeSpareFiles(processId);
+        this.records.delete(processId);
+      } catch {}
+    }
   }
 
   async signalOwned(processId: string, signal: "SIGTERM" | "SIGINT" | "SIGKILL", owner: WindowsJobOwnershipKey, fence?: WindowsJobWriterFence): Promise<WindowsJobProcessSnapshot> {
@@ -811,6 +1189,33 @@ function readSupervisorStatus(path: string): SupervisorStatus | null {
  * armed as the backstop; a watcher failure resolves via the bounded timer
  * (still bounded by the same deadline). Exported for tests.
  */
+/**
+ * PX-2c: prestart wait for a spare reservation. Resolves when the supervisor
+ * has bound its port, spawned the Job host, and persisted spareReady (the Job
+ * host is then either waiting on its stdin or will drain the claim from the
+ * pipe buffer: either way the claim never blocks on boot). Fails fast when
+ * the supervisor already died; throws at the same start deadline otherwise.
+ * Exported for tests.
+ */
+export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
+  const deadline = Date.now() + deadlineMs;
+  for (;;) {
+    const status = readSupervisorStatus(supervisor.statusPath);
+    if (status && status.protocol === PROTOCOL && status.processId === processId && status.supervisorPid === supervisor.supervisorPid) {
+      if (status.spare === true && status.spareReady === true && status.claimed !== true && status.port > 0 && status.status === "starting") {
+        supervisor.port = status.port;
+        return status;
+      }
+      if ((status.status === "stopped" || status.status === "exited_unknown") && status.spareReady !== true)
+        throw new WindowsJobHostError("process_start_failed", `Windows Job spare supervisor failed before becoming ready: ${status.error ?? status.status}.`);
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await waitForFileActivity(dirname(supervisor.statusPath), basename(supervisor.statusPath), remaining);
+  }
+  throw new WindowsJobHostError("process_start_failed", "Windows Job spare supervisor did not become ready before the deadline.");
+}
+
 export async function waitForSupervisor(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
   const deadline = Date.now() + deadlineMs;
   for (;;) {

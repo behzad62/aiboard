@@ -615,6 +615,11 @@ async function createRunBinding(input: CreateRunBindingInput): Promise<Execution
             }
           };
           if (!cleanupDutiesSettled) {
+            // PX-2c: retire the shared Job-host spare (if any) so run end
+            // leaves zero supervisor/Job-host processes behind. Best-effort:
+            // calls never depend on the spare, and a missing method (fakes)
+            // is skipped.
+            try { await input.windowsJobHost.retireSpare?.(); } catch (error) { failures.push(error); }
             try { await input.managedProcesses.stopRun(input.runId); } catch (error) { failures.push(error); }
             try { await executionGrants.revokeAll("cleanup"); } catch (error) { failures.push(error); }
             try {

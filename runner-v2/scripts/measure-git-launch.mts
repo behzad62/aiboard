@@ -126,8 +126,16 @@ try {
   const stateDir = join(root, "state");
   mkdirSync(stateDir, { recursive: true });
   const counts = zeroCounts();
+  // PX-2c: opt-in spare mode (`PX2C_SPARE=1`). The spare is prestarted before
+  // each timed call and refreshed in the background after every claim, so
+  // calls after the first never pay the supervisor/Job-host boot. Unset (the
+  // default) measures today's path exactly.
+  const SPARE = process.env["PX2C_SPARE"] === "1";
   const service = countingHost(
-    createWindowsJobProcessHost({ stateDirectory: join(stateDir, "managed-processes-job-host") }),
+    createWindowsJobProcessHost({
+      stateDirectory: join(stateDir, "managed-processes-job-host"),
+      ...(SPARE ? { spare: { autoRefresh: true } } : {}),
+    }),
     counts,
   );
   const host = createExecutionHost({
@@ -137,8 +145,12 @@ try {
     ambientEnvironment: { ...process.env },
     windowsJobHost: service,
   });
+  const measureRunId = `measure-git-launch-${Date.now()}`;
+  // Lifecycle git calls run under session `run-git:integration`
+  // (git-run-context.ts); the spare owner must match or claims fall back.
+  const spareOwner = { runId: measureRunId, sessionId: "run-git:integration" };
   const binding = await host.bindRun({
-    runId: `measure-git-launch-${Date.now()}`,
+    runId: measureRunId,
     permissionProfile: "full",
     capabilityContract: { digest: "c".repeat(64) } as never,
     capabilitiesConfig: emptyRunnerCapabilitiesConfig(),
@@ -160,6 +172,13 @@ try {
     const measure = async (options: { cwd: string; args: string[] }): Promise<{ ms: number; effects: EffectCounts }> => {
       const mark = zeroCounts();
       for (const name of EFFECT_METHODS) (counts as Record<string, number>)[name] = 0;
+      if (SPARE) {
+        // Best-effort warmup: with autoRefresh the slot is usually already
+        // live (refreshed after the previous claim); a miss falls back.
+        try {
+          await service.prestartSpare?.(spareOwner);
+        } catch {}
+      }
       const start = performance.now();
       await git.run(options);
       const ms = performance.now() - start;
@@ -216,6 +235,7 @@ try {
           revparseCommand: "git rev-parse HEAD (same command as PX-1)",
           revparse: stats(revparseSamples),
           revparseFenceEffectsPerCall: meanEffects(revparseEffects),
+          spare: SPARE ? (service.spareStats?.() ?? null) : null,
         },
         null,
         1,
