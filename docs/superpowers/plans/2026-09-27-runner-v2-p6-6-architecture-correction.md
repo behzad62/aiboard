@@ -165,6 +165,17 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   goes and proposes a fix that keeps every containment guarantee. It changes no code; a fix
   packet follows only after the owner approves the proposal. PX-1 runs in its own worktree
   (lane C) next to lane A; it is outside the P6.6 source scope and does not gate P6.6.
+- **CD-21 — PX-2 goes safe steps first (owner, 2026-09-29, "Safe steps first").** PX-1 review r1
+  (`evidence/PX-1-review-r1.md`, GAPS — 6 material) showed that the proposed shared per-run Job
+  host cannot keep the per-call kill and exact-empty proof "as-is" (F1), leaves broker lifecycle
+  and concurrency open (F2, F3), and that ~175 ms is not realistic (F4: about 19 ms per fence
+  effect, 14 effects per call). Cheaper steps keep every per-call semantic: a precompiled,
+  digest-pinned Job-host assembly instead of `Add-Type` compiling the same C# on every call (F5,
+  about 200 ms), the keep-alive fix for lingering supervisors (F7), fewer or cheaper fence effects,
+  and a pre-started spare pair. So PX-2 is four small packets, each measured with the PX-1 probe
+  (n ≥ 20, quiet machine) before the next: PX-2t (real-host guarantee tests first), PX-2a, PX-2b,
+  PX-2c. One Job per call always; the shared broker is not built unless the owner asks again.
+  Accepted PX-2 packets merge into lane A so later packets run faster.
 
 ---
 
@@ -568,6 +579,52 @@ Runs as C2a then C2b (CD-13).
   `runner-v2/src`, tests, package files. Worktree `D:\repos\ai-discussion-board\.worktrees\runner-v2-px1`,
   branch `codex/runner-v2-px1` at `83f89cf5` (node_modules is a junction to lane A's).
 - **Unlocks:** a fix packet (PX-2) after owner approval; faster tests for every later packet.
+- **Result:** done 2026-09-29 (`evidence/PX-1.md`, 934 ms median per git call); review r1 GAPS —
+  6 material; owner chose safe steps first (CD-21).
+
+### PX-2t — Real-host guarantee tests for the Windows Job path (CD-21; lane C; tests only)
+
+- **Outcome:** before any launcher change, every guarantee of the selected `runner-windows-job-v1`
+  path has a test that runs the REAL host (no fakes): exact grant scoping; Job membership and
+  kill-on-close per call; host death kills the whole tree; a surviving descendant is owned and
+  killed; timeout kills one call's tree while a concurrent call in the same run finishes; launch
+  proof fails closed; process-birth identity; output bounds under a flood and correct attribution
+  between two concurrent calls; deadlines; durable audit; crash recovery (fail closed, no
+  relaunch). Existing tests that already do this on the real host are cited, not duplicated (PX-1
+  review F6 lists the citations that do not). Plus the PX-1 probe kept as a repeatable
+  measurement script with fence effects per call, at `lifecycle("integration")`, for a
+  no-output and a large-output command.
+- **Writable:** `runner-v2/test/` (new files), a probe script under `runner-v2/scripts/` or
+  `runner-v2/test/support/`. **Forbidden:** `runner-v2/src`.
+- **Done when:** the tests pass on the current code, each with a recorded fault injection that
+  turns it red (for example a Job that is not kill-on-close), and the probe reproduces PX-1.
+
+### PX-2a — Precompiled Job-host helper and supervisor keep-alive (CD-21; lane C)
+
+- **Outcome:** the Job host loads a precompiled, digest-pinned helper assembly instead of
+  compiling C# with `Add-Type` on every call (PX-1 review F5), with a fail-closed fallback when
+  the digest does not match; the host's HTTP client stops keeping the supervisor connection
+  alive so supervisors exit with the result (F7). Per-call PowerShell, per-call Job,
+  suspended-create → assign → resume, and every proof stay unchanged.
+- **Done when:** PX-2t and the Windows Job suites (PX-1 review condition 9) are green, and the
+  probe shows the measured gain (target: about 200 ms less per call; no lingering supervisor).
+
+### PX-2b — Fewer or cheaper fence effects and event-driven settlement (CD-21; lane C)
+
+- **Outcome:** measure the per-effect fence-lock floor first; then cut effects per call and poll
+  waits without weakening the fence protocol (PX-1 review F4, conditions 1 and 8). If a target
+  needs a weaker protocol, stop and ask the owner.
+- **Done when:** PX-2t and the Windows Job suites are green; the probe reports fence effects per
+  call before and after.
+
+### PX-2c — Pre-started spare Job-host pair (CD-21; lane C)
+
+- **Outcome:** one pre-started PowerShell host and supervisor wait for the next call, so a call
+  does not pay their boot; each call still gets its own Job and its own proofs; the spare is
+  owned, bounded (at most one), cleaned at run end and after a crash, and never reused after a
+  call.
+- **Done when:** PX-2t, the Windows Job suites and the lifecycle tests (parent death, run end with
+  zero leftover processes, recovery after a runner crash) are green; the probe shows the gain.
 
 ### C2d — Case-variant docs spellings (CD-19, CD-15)
 
