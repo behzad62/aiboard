@@ -21,6 +21,7 @@ import { formatModelId } from "./base";
 import { geminiThinkingConfig } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
 import { googleStructuredOutputConfig } from "./structured-output";
+import { streamGoogleInteractions } from "./google-interactions";
 
 function attachmentToPart(
   file: AttachmentPayload,
@@ -122,32 +123,11 @@ function messageToGeminiContent(message: {
   };
 }
 
-export const googleProvider: AIProvider = {
-  id: "google",
-  name: "Google Gemini",
-
-  listModels() {
-    return getCatalogModelsForProvider("google").map(
-      ({ validationCandidate, ...model }) => model
-    );
-  },
-
-  async validateApiKey(apiKey: string) {
+export async function* streamGoogleGenerateContent(
+  genAI: GoogleGenAI,
+  params: ChatParams,
+): AsyncIterable<StreamChunk> {
     try {
-      const genAI = new GoogleGenAI({ apiKey });
-      await genAI.models.generateContent({
-        model: getValidationModelId("google"),
-        contents: "Hi",
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  },
-
-  async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
-    try {
-      const genAI = new GoogleGenAI({ apiKey: params.apiKey });
       const webSearchTools = googleWebSearchTools(
         params.model,
         params.webSearch && !params.structuredOutput
@@ -325,5 +305,44 @@ export const googleProvider: AIProvider = {
         errorMetadata: safeProviderErrorMetadata(err),
       };
     }
+
+}
+
+export async function* streamGoogleByPlan(
+  genAI: GoogleGenAI,
+  params: ChatParams,
+): AsyncIterable<StreamChunk> {
+  if (params.callPlan?.transport === "gemini_interactions") {
+    yield* streamGoogleInteractions(genAI as never, params);
+    return;
+  }
+  yield* streamGoogleGenerateContent(genAI, params);
+}
+export const googleProvider: AIProvider = {
+  id: "google",
+  name: "Google Gemini",
+
+  listModels() {
+    return getCatalogModelsForProvider("google").map(
+      ({ validationCandidate, ...model }) => model
+    );
+  },
+
+  async validateApiKey(apiKey: string) {
+    try {
+      const genAI = new GoogleGenAI({ apiKey });
+      await genAI.models.generateContent({
+        model: getValidationModelId("google"),
+        contents: "Hi",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
+    const genAI = new GoogleGenAI({ apiKey: params.apiKey });
+    yield* streamGoogleByPlan(genAI, params);
   },
 };

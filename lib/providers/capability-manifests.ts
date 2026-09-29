@@ -334,6 +334,7 @@ const GOOGLE_MANIFEST: ProviderCapabilityManifest = {
     }),
     documentedCapability({
       id: "computer_use",
+      support: "unsupported",
       execution: "client",
       transports: ["gemini_interactions"],
       prerequisites: [COMPUTER_EXECUTOR],
@@ -345,8 +346,15 @@ const GOOGLE_MANIFEST: ProviderCapabilityManifest = {
       prerequisites: [REMOTE_MCP],
     }),
   ],
+  modelRules: [
+    {
+      modelPattern: /^gemini-3(?:\.|-|$)/i,
+      capabilities: {
+        computer_use: { support: "supported" },
+      },
+    },
+  ],
 };
-
 const OPENROUTER_MANIFEST: ProviderCapabilityManifest = {
   providerId: "openrouter",
   transports: ["responses", "chat_completions"],
