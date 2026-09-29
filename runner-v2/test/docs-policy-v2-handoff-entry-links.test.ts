@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -606,5 +606,148 @@ test("C2c repair cycle 4/probe RD-case-real: a real link to notes.md when the in
     assert.equal(selected.status, "completed");
   } finally {
     await fixture.close();
+  }
+});
+
+test("C2d/probe F-LC-agents: a lowercase agents.md link redirects through its own index spelling", async () => {
+  const RUN = "run-c2d-flcagents";
+  const fixture = await openFactoryPort("c2dflcagents", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = join(fixture.root, "zz-outside-c2d-flcagents");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "own.txt"), "outside\n");
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    // A lowercase `agents.md` link-mode entry to a tracked regular file.
+    // The gate must see the link fact through the entry's own spelling;
+    // the section must land in the target the commit records.
+    writeFileSync(join(worktree, "NOTES.md"), "# team notes\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "NOTES.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed notes file"] });
+    await commitEntryLinkMode(worktree, "agents.md", "NOTES.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "agents.md", "NOTES.md");
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the lowercase entry layout still hands off");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.agentsSectionViaLink, "AGENTS.md is a symbolic link to NOTES.md; the section is written into NOTES.md.");
+    assert.equal(payload.claudeLineCommitted, true);
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["CLAUDE.md", "NOTES.md", "docs/project/STATE.md"],
+      "the commit records the redirect target, not the link",
+    );
+    const target = readFileSync(join(worktree, "NOTES.md"), "utf8");
+    assert.ok(target.includes(V2_AGENTS_SECTION_BODY), "the section is written into the regular tracked target");
+    assert.ok(target.includes("# team notes"), "the target's own bytes survive");
+    assert.equal(readFileSync(join(worktree, "agents.md"), "utf8"), "NOTES.md", "the link entry is never touched");
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+    assert.equal(readFileSync(join(outside, "own.txt"), "utf8"), "outside\n", "nothing is written outside the repository");
+    assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2d-flcagents");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2d/probe D-rd-lcagents: a lowercase claude.md regular file takes the line through its own spelling", async () => {
+  const RUN = "run-c2d-lcagents";
+  const fixture = await openFactoryPort("c2dlcagents", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = join(fixture.root, "zz-outside-c2d-lcagents");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "own.txt"), "outside\n");
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    // A lowercase `claude.md` regular tracked file (not a link): the
+    // pointer line must be spliced through the index's own spelling, and
+    // the AGENTS.md section must still land in its own file.
+    writeFileSync(join(worktree, "claude.md"), "pre-existing claude\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "claude.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a lowercase claude.md file"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the lowercase entry layout still hands off");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.claudeLineCommitted, true);
+    assert.equal(payload.claudeLineViaLink, undefined, "a regular file needs no link reason");
+    assert.equal(payload.agentsSectionCommitted, true);
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "claude.md", "docs/project/STATE.md"],
+      "the commit holds the index's own spelling",
+    );
+    const line = readFileSync(join(worktree, "claude.md"), "utf8");
+    assert.ok(line.includes(V2_CLAUDE_POINTER_LINE), "the pointer line is written into the tracked file");
+    assert.ok(line.includes("pre-existing claude"), "the file's own bytes survive");
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+    assert.equal(readFileSync(join(outside, "own.txt"), "utf8"), "outside\n", "nothing is written outside the repository");
+    assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2d-lcagents");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2d/probe D-rd-collide: a redirect into a case-colliding target is refused and skipped", async () => {
+  const RUN = "run-c2d-rdcollide";
+  const fixture = await openFactoryPort("c2drdcollide", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = join(fixture.root, "zz-outside-c2d-rdcollide");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "own.txt"), "outside\n");
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    // A colliding index: tracked `NOTES.md` and `notes.md` with different
+    // bytes. The extra entry is built through the index alone (plumbing,
+    // no checkout), since both spellings cannot live on disk together.
+    writeFileSync(join(worktree, "NOTES.md"), "# team notes\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "NOTES.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed notes file"] });
+    writeFileSync(join(worktree, "other-staging.txt"), "# other notes\n");
+    const blob = (await runGit({ cwd: worktree, args: ["hash-object", "-w", "other-staging.txt"] })).stdout.trim();
+    assert.match(blob, /^[a-f0-9]{40}$/);
+    rmSync(join(worktree, "other-staging.txt"), { force: true });
+    await runGit({ cwd: worktree, args: ["update-index", "--add", "--cacheinfo", `100644,${blob},notes.md`] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "colliding notes.md index entry"] });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "notes.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "notes.md");
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the colliding-target layout still hands off");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.match(String(payload.agentsSectionViaLink), /AGENTS\.md is a symbolic link to notes\.md.*not a regular tracked file/);
+    assert.equal(payload.claudeLineCommitted, true);
+    assert.equal(readFileSync(join(worktree, "NOTES.md"), "utf8"), "# team notes\n", "the colliding target is never written");
+    assert.equal(readFileSync(join(worktree, "AGENTS.md"), "utf8"), "notes.md", "the link is never touched");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["CLAUDE.md", "docs/project/STATE.md"],
+      "no colliding write enters the commit",
+    );
+    assert.equal(readFileSync(join(outside, "own.txt"), "utf8"), "outside\n", "nothing is written outside the repository");
+    assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2d-rdcollide");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
   }
 });

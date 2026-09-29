@@ -826,7 +826,11 @@ export class IntegrationManager {
         skipped.push({ path, reason: `spec copy skipped (write_failed): ${briefErrorDetail(error)}.` });
         continue;
       }
-      const outcome = await this.writeHandoffSpecCopy(path, write.content);
+      // C2d (DOCS-dir): a spec copy under a case-variant docs directory
+      // writes and stages through the index's own spelling, like STATE.md.
+      // The skipped record keeps the canonical path.
+      const realPath = await this.resolveIndexSpelling(path);
+      const outcome = await this.writeHandoffSpecCopy(realPath, write.content);
       if ("skipped" in outcome) {
         skipped.push({ path, reason: outcome.skipped });
         continue;
@@ -884,21 +888,37 @@ export class IntegrationManager {
       if (!input.commit.trim()) {
         throw new Error("Handoff snapshot commit is required.");
       }
-      const stored = await this.git(
+      // C2d (DOCS-dir, D-rd-lcagents): the blob is read through the commit's
+      // own spelling when the canonical one matches nothing (git stores
+      // `Docs/project/STATE.md` or `claude.md`).
+      let stored = await this.git(
         this.path,
         ["show", `${input.commit}:${checked.path}`],
         true,
       );
+      if (stored.exitCode !== 0 && (await this.checkoutIgnoresCase())) {
+        const real = await this.resolveSpellingInTree(input.commit, checked.path);
+        if (real !== checked.path) {
+          stored = await this.git(this.path, ["show", `${input.commit}:${real}`], true);
+        }
+      }
       const names = await this.git(this.path, [
         "show",
         "--name-only",
         "--format=",
         input.commit,
       ]);
+      // C2d: on a case-insensitive checkout the commit's real spellings are
+      // reported under the canonical handoff spellings, so the unchanged
+      // AR-R05 gate (exact `docs/project/STATE.md` membership) and the
+      // commit-tree describer keep working. The real spellings stay
+      // observable through `git show --name-only` itself.
+      const insensitive = await this.checkoutIgnoresCase();
       const paths = names.stdout
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .map((path) => (insensitive ? canonicalHandoffSpelling(path) : path));
       return { content: stored.exitCode === 0 ? stored.stdout : null, paths };
     });
   }
@@ -918,11 +938,20 @@ export class IntegrationManager {
       }
       await this.ensureIntegrationWorkspace();
       const commit = await this.head();
-      const stored = await this.git(
+      // C2d (DOCS-dir): read through the tip's own spelling when the
+      // canonical one matches nothing, so hand-edit detection still sees a
+      // snapshot committed under a case-variant docs directory.
+      let stored = await this.git(
         this.path,
         ["show", `${commit}:${checked.path}`],
         true,
       );
+      if (stored.exitCode !== 0 && (await this.checkoutIgnoresCase())) {
+        const real = await this.resolveSpellingInTree(commit, checked.path);
+        if (real !== checked.path) {
+          stored = await this.git(this.path, ["show", `${commit}:${real}`], true);
+        }
+      }
       return { content: stored.exitCode === 0 ? stored.stdout : null, commit };
     });
   }
@@ -1011,6 +1040,17 @@ export class IntegrationManager {
     // link target when the entry file is a link to a regular tracked file.
     const planned: Array<{ writePath: string; physicalPath: string; content: string }> = [];
     for (const write of staged) {
+      // C2d (DOCS-dir, D-walk-projdir, F-LC-agents, D-rd-lcagents): on a
+      // case-insensitive checkout the commit pathspec must use the index's
+      // own spelling of each existing path component (the canonical spelling
+      // matches nothing when git stores `Docs/`, `docs/Project/` or
+      // `agents.md`). Components that do not exist yet keep the canonical
+      // spelling. The recorded skip/redirect reasons keep the canonical
+      // entry path; only the physical write and the staged path use the
+      // resolved spelling, so no write lands in a file the commit does not
+      // record. Redirect targets are never resolved here: they keep the
+      // NB-8 exact-spelling rule below.
+      const realPath = await this.resolveIndexSpelling(write.path);
       if (skipClaudeAgentsLink && write.path === "CLAUDE.md" && (await this.claudeLinksAgents())) {
         skipped.push({
           path: write.path,
@@ -1062,7 +1102,7 @@ export class IntegrationManager {
         }
       }
       await this.refuseProjectDocLink(write.path);
-      planned.push({ writePath: write.path, physicalPath: write.path, content: write.content });
+      planned.push({ writePath: write.path, physicalPath: realPath, content: write.content });
     }
     // Two entry writes can land on one physical file (AGENTS.md linking to
     // CLAUDE.md): the marked section holds a single body, so the AGENTS.md
@@ -1071,9 +1111,13 @@ export class IntegrationManager {
     // AGENTS.md resolves to -- it would import the file into itself. The
     // omission is recorded below; the runtime accepts it when the commit
     // tree proves the redirect, so both entry lines still count.
+    // C2d: a physical path that only differs in case from the entry file
+    // (a lowercase `agents.md` regular file) is the entry's own file, not a
+    // redirect -- otherwise the M-6 omission below would drop the CLAUDE.md
+    // pointer for a layout that holds two distinct entry files.
     const agentsRedirectTargets = new Set(
       planned
-        .filter((op) => op.writePath === "AGENTS.md" && op.physicalPath !== "AGENTS.md")
+        .filter((op) => op.writePath === "AGENTS.md" && op.physicalPath.toLowerCase() !== "agents.md")
         .map((op) => op.physicalPath),
     );
     const merged = new Map<string, { entry: boolean; bodies: string[] }>();
@@ -2443,6 +2487,10 @@ export class IntegrationManager {
     const wanted = new Set(variants);
     const listing = await this.git(this.path, ["ls-tree", treeRef, "--", ...variants], true);
     if (listing.exitCode !== 0) return undefined;
+    // C2d (F-collide): when several case variants match (a colliding tree),
+    // prefer the link entry (mode 120000), so the commit-tree walk agrees
+    // with the stage-time check, which sees the link and skips.
+    let fallback: { mode: string; name: string } | undefined;
     for (const record of listing.stdout.split("\n")) {
       const line = record.trim();
       const tab = line.lastIndexOf("\t");
@@ -2450,9 +2498,11 @@ export class IntegrationManager {
       const name = line.slice(tab + 1);
       if (!wanted.has(name)) continue;
       const mode = line.slice(0, tab).split(" ")[0];
-      if (mode) return { mode, name };
+      if (!mode) continue;
+      if (mode === "120000") return { mode, name };
+      fallback ??= { mode, name };
     }
-    return undefined;
+    return fallback;
   }
 
   /**
@@ -2490,8 +2540,11 @@ export class IntegrationManager {
       ["cat-file", "-e", `${revision}:docs/project/README.md`],
       true,
     );
-    const agents = await this.readBlob(revision, "AGENTS.md");
-    const claude = await this.readBlob(revision, "CLAUDE.md");
+    // C2d (D-rd-lcagents, F-LC-agents): entry facts fold case on a
+    // case-insensitive checkout, so a section committed through the index's
+    // own spelling (`agents.md`, `claude.md`) still satisfies the gate.
+    const agents = await this.readBlobFolded(revision, "AGENTS.md");
+    const claude = await this.readBlobFolded(revision, "CLAUDE.md");
     return {
       readme: readme.exitCode === 0,
       agentsMarkedSection: agents !== null && agentsMarkedSectionSatisfies(agents),
@@ -2508,6 +2561,58 @@ export class IntegrationManager {
       true,
     );
     return result.exitCode === 0 ? result.stdout : null;
+  }
+
+  /**
+   * The blob for a canonical entry path, folding case on a case-insensitive
+   * checkout (C2d): the exact spelling first, then the commit's own spelling
+   * of that path. Exact-case repositories behave byte-identically.
+   */
+  private async readBlobFolded(revision: string, path: string): Promise<string | null> {
+    const exact = await this.readBlob(revision, path);
+    if (exact !== null) return exact;
+    if (!(await this.checkoutIgnoresCase())) return null;
+    const real = await this.resolveSpellingInTree(revision, path);
+    if (real === path) return null;
+    return await this.readBlob(revision, real);
+  }
+
+  /**
+   * The index's own spelling of a canonical write path (C2d root cause):
+   * each existing path component resolved through the HEAD commit tree,
+   * keeping the canonical spelling only for components that do not exist
+   * yet. On a case-sensitive checkout this is the identity. Bounded: one
+   * exact `ls-tree` per level, plus one folded multi-name `ls-tree` per
+   * missed level; the live worktree is never consulted.
+   */
+  private async resolveIndexSpelling(canonical: string): Promise<string> {
+    if (!(await this.checkoutIgnoresCase())) return canonical;
+    return await this.resolveSpellingInTree("HEAD", canonical);
+  }
+
+  /**
+   * One component at a time from `treeRef` down: the exact entry, else its
+   * case-folded match (link entries preferred, per F-collide), else the
+   * canonical remainder for everything below the first miss.
+   */
+  private async resolveSpellingInTree(treeRef: string, canonical: string): Promise<string> {
+    if (!canonical || canonical.includes("\0")) return canonical;
+    const parts = canonical.split("/");
+    const actual: string[] = [];
+    for (let level = 0; level < parts.length; level += 1) {
+      const parentRef = actual.length === 0 ? treeRef : `${treeRef}:${actual.join("/")}`;
+      const want = parts[level] ?? "";
+      let entry = await this.commitTreeEntry(parentRef, want);
+      if (entry === undefined && (await this.checkoutIgnoresCase())) {
+        entry = await this.commitTreeEntryFolded(parentRef, want);
+      }
+      if (entry === undefined) {
+        actual.push(want, ...parts.slice(level + 1));
+        break;
+      }
+      actual.push(entry.name);
+    }
+    return actual.join("/");
   }
 
   private containedProjectDocPath(relativePath: string): string {
@@ -2575,13 +2680,32 @@ export class IntegrationManager {
    * fact from the commit, never the checkout.
    */
   private async commitEntryLinkTarget(commit: string, entryPath: string): Promise<string | undefined> {
-    const tree = await this.git(this.path, ["ls-tree", commit, "--", entryPath], true);
+    // C2d (F-LC-agents): on a case-insensitive checkout the entry file itself
+    // may be stored under its own spelling (`agents.md`, `claude.md`); fall
+    // back to the folded lookup so the link fact is still found.
+    const exact = await this.commitEntryLinkBlob(commit, [entryPath]);
+    if (exact !== undefined) return exact;
+    if (!(await this.checkoutIgnoresCase())) return undefined;
+    return await this.commitEntryLinkBlob(commit, caseVariants(entryPath));
+  }
+
+  /**
+   * The raw link target when one of the given pathspecs names a link (mode
+   * 120000) in the commit tree, otherwise undefined (C2c NF-2/NF-3). With
+   * several matches the first link entry wins.
+   */
+  private async commitEntryLinkBlob(commit: string, pathspecs: readonly string[]): Promise<string | undefined> {
+    const tree = await this.git(this.path, ["ls-tree", commit, "--", ...pathspecs], true);
     if (tree.exitCode !== 0) return undefined;
-    const line = tree.stdout.split("\n").map((entry) => entry.trim()).find(Boolean) ?? "";
-    const match = /^120000 blob ([a-f0-9]{40,64})\t(\S.*)$/.exec(line);
-    if (!match) return undefined;
-    const target = await this.blobText(match[1] ?? "");
-    return target ?? undefined;
+    for (const record of tree.stdout.split("\n")) {
+      const line = record.trim();
+      if (!line) continue;
+      const match = /^120000 blob ([a-f0-9]{40,64})\t(\S.*)$/.exec(line);
+      if (!match) continue;
+      const target = await this.blobText(match[1] ?? "");
+      if (target !== null) return target;
+    }
+    return undefined;
   }
 
   /**
@@ -2668,6 +2792,14 @@ export class IntegrationManager {
     const modes = await this.indexEntryModes([target]);
     const found = IntegrationManager.findIndexEntry(modes, target, false);
     if (found?.mode === undefined || found?.mode === "120000") return false;
+    // C2d (D-rd-collide): refuse a redirect whose target collides
+    // case-insensitively with another index entry (tracked `NOTES.md` and
+    // `notes.md`). On disk there is one file, so writing through the target
+    // would substitute one entry's bytes for the other's; the entry file is
+    // skipped with a reason instead.
+    for (const entryPath of modes.keys()) {
+      if (entryPath !== found.path && entryPath.toLowerCase() === target.toLowerCase()) return false;
+    }
     let stats;
     try {
       stats = await lstat(this.containedProjectDocPath(target));
@@ -3013,7 +3145,31 @@ async function pathExists(path: string): Promise<boolean> {
  * entry writes keep their strict staging.
  */
 function isHandoffSpecCopyPath(path: string): boolean {
-  return path.startsWith("docs/project/specs/") && path.endsWith(".md");
+  // C2d: fold case so a spec copy staged through the index's own spelling
+  // (`Docs/project/specs/...`) still classifies as a spec copy.
+  const folded = path.toLowerCase();
+  return folded.startsWith("docs/project/specs/") && folded.endsWith(".md");
+}
+
+/**
+ * Report a commit's real spelling under the canonical handoff spelling
+ * (C2d): `Docs/project/STATE.md` reads as `docs/project/STATE.md`, and the
+ * same for the entry files and spec copies. Applied only on a
+ * case-insensitive checkout, where both spellings name the same file, so
+ * the unchanged AR-R05 gate and describer keep working while the commit
+ * holds the index's own spelling. Every other path passes through
+ * untouched.
+ */
+function canonicalHandoffSpelling(path: string): string {
+  if (path === "AGENTS.md" || path === "CLAUDE.md" || path === "docs/project/STATE.md") return path;
+  const folded = path.toLowerCase();
+  if (folded === "agents.md") return "AGENTS.md";
+  if (folded === "claude.md") return "CLAUDE.md";
+  if (folded === "docs/project/state.md") return "docs/project/STATE.md";
+  if (folded.startsWith("docs/project/specs/") && folded.endsWith(".md")) {
+    return `docs/project/specs/${path.slice("docs/project/specs/".length)}`;
+  }
+  return path;
 }
 
 /**
@@ -3042,6 +3198,19 @@ function resolveEntryLinkTarget(target: string): string | null {
  * spelling is always included.
  */
 function caseVariants(want: string): string[] {
+  // C2d: bound the explosion. Folding doubles per ASCII letter; the fixed
+  // handoff names need at most 128 variants (`project`, `STATE.md`). A
+  // longer dynamic name (a spec-copy filename) would produce millions of
+  // pathspecs and break the `ls-tree` call, so folding is skipped there
+  // and the single exact spelling is returned (one harmless repeat of the
+  // exact query in `commitTreeEntryFolded`).
+  let letters = 0;
+  for (const char of want) {
+    if (char.toLowerCase() !== char.toUpperCase()) {
+      letters += 1;
+      if (letters > 8) return [want];
+    }
+  }
   let variants = [""];
   for (const char of want) {
     const lower = char.toLowerCase();

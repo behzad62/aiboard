@@ -6,6 +6,7 @@ import test from "node:test";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import type { IndependentVerifierDriver } from "../src/build-runtime.js";
+import { verifyHandoffSnapshotDigest } from "../src/handoff-snapshot.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
 import {
   DEFAULT_STATE_TEMPLATE,
@@ -822,4 +823,150 @@ test("C2c repair cycle 4/probe W-CI-mv: a withdrawn stop reconciles its committe
   assert.equal(projection.projectHandoff?.choice, "apply_to_project");
   assert.deepEqual(outside, ["own.txt"], "nothing is written outside the repository");
   assert.equal(outsideOwnText, "outside\n");
+});
+
+test("C2d/probe DOCS-dir: a regular capital Docs directory hands off through the index spelling", async () => {
+  const RUN = "run-c2d-docsdir";
+  const fixture = await openFactoryPort("c2ddocsdir", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = join(fixture.root, "zz-outside-c2d-docsdir");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "own.txt"), "outside\n");
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    // A regular capital `Docs/` directory (not a link): git stores
+    // `Docs/project/STATE.md`, so the canonical commit pathspec matches
+    // nothing on a case-insensitive checkout.
+    mkdirSync(join(worktree, "Docs", "project"), { recursive: true });
+    writeFileSync(join(worktree, "Docs", "project", "keep.md"), "user keep\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "Docs/project/keep.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a regular capital Docs directory"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the run hands off instead of wedging on the pathspec");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.ok(!("stateSkippedReason" in payload), "STATE.md is committed, not skipped");
+    assert.deepEqual(
+      payload.paths,
+      ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"],
+      "the event reports the canonical handoff spellings",
+    );
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "CLAUDE.md", "Docs/project/STATE.md"],
+      "the commit holds the index's own spelling",
+    );
+    const state = await runGit({ cwd: worktree, args: ["show", `${commit}:Docs/project/STATE.md`] });
+    assert.equal(verifyHandoffSnapshotDigest(state.stdout), true, "the committed STATE.md verifies");
+    assert.equal(
+      verifyHandoffSnapshotDigest(readFileSync(join(worktree, "Docs", "project", "STATE.md"), "utf8")),
+      true,
+      "the write landed in the committed file",
+    );
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+    assert.equal(readFileSync(join(outside, "own.txt"), "utf8"), "outside\n", "nothing is written outside the repository");
+    assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2d-docsdir");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2d/probe D-walk-projdir: a regular docs/Project directory hands off through the index spelling", async () => {
+  const RUN = "run-c2d-projdir";
+  const fixture = await openFactoryPort("c2dprojdir", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = join(fixture.root, "zz-outside-c2d-projdir");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "own.txt"), "outside\n");
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    // The same case-variant class one level down: git stores
+    // `docs/Project/keep.md`, so the canonical STATE.md pathspec matches
+    // nothing on a case-insensitive checkout.
+    mkdirSync(join(worktree, "docs", "Project"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "Project", "keep.md"), "user keep\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/Project/keep.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a regular docs/Project directory"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the run hands off instead of wedging on the pathspec");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.ok(!("stateSkippedReason" in payload), "STATE.md is committed, not skipped");
+    assert.deepEqual(payload.paths, ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "CLAUDE.md", "docs/Project/STATE.md"],
+      "the commit holds the index's own spelling",
+    );
+    const state = await runGit({ cwd: worktree, args: ["show", `${commit}:docs/Project/STATE.md`] });
+    assert.equal(verifyHandoffSnapshotDigest(state.stdout), true, "the committed STATE.md verifies");
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+    assert.equal(readFileSync(join(outside, "own.txt"), "utf8"), "outside\n", "nothing is written outside the repository");
+    assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2d-projdir");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2d/probe F-collide: a colliding tree prefers the link entry and skips STATE.md", async () => {
+  const RUN = "run-c2d-fcollide";
+  const fixture = await openFactoryPort("c2dfcollide", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2d-outside-fcollide-"));
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    writeFileSync(join(outside, "own.txt"), "outside\n");
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    // A colliding tree: the commit holds both a `Docs` link and a
+    // `DOCS/project/keep.md` tree. The tree entry is built through the
+    // index alone (plumbing, no checkout), since git cannot check such a
+    // tree out on a case-insensitive filesystem.
+    await commitEntryLinkMode(worktree, "Docs", outside.replace(/\\/g, "/"));
+    await checkoutDirLinkAsRealLink(worktree, "Docs");
+    writeFileSync(join(worktree, "keep-staging.txt"), "keep\n");
+    const blob = (await runGit({ cwd: worktree, args: ["hash-object", "-w", "keep-staging.txt"] })).stdout.trim();
+    assert.match(blob, /^[a-f0-9]{40}$/);
+    rmSync(join(worktree, "keep-staging.txt"), { force: true });
+    await runGit({ cwd: worktree, args: ["update-index", "--add", "--cacheinfo", `100644,${blob},DOCS/project/keep.md`] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "colliding DOCS tree next to the Docs link"] });
+    const root = await runGit({ cwd: worktree, args: ["ls-tree", "HEAD"] });
+    assert.match(root.stdout, /^120000 blob [a-f0-9]+[ \t]Docs$/m, "the commit holds the Docs link");
+    assert.match(root.stdout, /^040000 tree [a-f0-9]+[ \t]DOCS$/m, "the commit holds the colliding DOCS tree");
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the colliding layout still hands off");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.match(String(payload.stateSkippedReason), /docs is a symbolic link or junction/, "the walk agrees with the stage-time link check");
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.claudeLineCommitted, true);
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "CLAUDE.md"],
+      "only the entry files commit; nothing is written under the link",
+    );
+    assert.equal(readlinkSync(join(worktree, "Docs")).replace(/\\/g, "/"), outside.replace(/\\/g, "/"), "the link is never touched");
+    assert.deepEqual(readdirSync(outside), ["own.txt"], "nothing is written outside the repository");
+    assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2d-fcollide");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
 });

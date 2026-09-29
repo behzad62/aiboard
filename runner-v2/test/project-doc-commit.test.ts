@@ -1441,6 +1441,37 @@ test("v1 Architect documents refuse a link-mode CLAUDE.md checked out as a plain
   }
 });
 
+test("v1 Architect documents commit through the index's Docs spelling on a case-insensitive checkout (C2d DOCS-dir)", async () => {
+  const fixture = await openGitFixture("v1docsdir");
+  try {
+    const worktree = fixture.integration.path;
+    await gitText(worktree, ["config", "core.ignorecase", "true"]);
+    // A regular capital `Docs/` directory (not a link): git stores
+    // `Docs/project/STATE.md`, so the canonical commit pathspec matches
+    // nothing on a case-insensitive checkout.
+    mkdirSync(join(worktree, "Docs", "project"), { recursive: true });
+    writeFileSync(join(worktree, "Docs", "project", "keep.md"), "user keep\n");
+    await gitText(worktree, ["add", "--", "Docs/project/keep.md"]);
+    await gitText(worktree, ["commit", "-m", "seed a regular capital Docs directory"]);
+    const before = await gitText(worktree, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    const result = await fixture.integration.commitProjectDocuments({
+      writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+      summary: "Record documents",
+      runId: fixture.runId,
+      requestId: "project-doc:c2d-docsdir:docs/project/STATE.md",
+    });
+    const after = await gitText(worktree, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    assert.equal(Number(after), Number(before) + 1, "the v1 batch commits instead of failing the pathspec");
+    const files = await gitText(worktree, ["show", "--name-only", "--format=", result.commit]);
+    assert.ok(files.split("\n").includes("Docs/project/STATE.md"), "the commit holds the index's own spelling");
+    const state = await gitText(worktree, ["show", `${result.commit}:Docs/project/STATE.md`]);
+    assert.ok(state.includes(DEFAULT_STATE_TEMPLATE.trim()), "the committed STATE.md holds the written bytes");
+    assert.equal(readFileSync(join(worktree, "Docs", "project", "keep.md"), "utf8"), "user keep\n", "the user's own file survives");
+  } finally {
+    fixture.close();
+  }
+});
+
 test("v1 Architect documents refuse a committed docs link instead of writing outside (C2c repair CD-17/A4)", async () => {
   const fixture = await openGitFixture("v1docslink");
   const outside = mkdtempSync(join(tmpdir(), "aiboard-v1-docslink-"));
