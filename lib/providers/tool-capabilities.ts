@@ -140,12 +140,14 @@ export interface ToolResourceState {
   prerequisites: Record<string, ToolResourceStateEntry>;
 }
 
+export type NormalizedToolChoice = "auto" | "none" | "required" | { name: string };
+
 export interface ProviderCallFeatures {
   structuredOutput?: boolean;
   reasoning?: boolean;
   attachments?: boolean;
   parallelTools?: boolean;
-  toolChoice?: "auto" | "none" | "required" | { name: string };
+  toolChoice?: NormalizedToolChoice;
   mode?: "discussion" | "build" | "benchmark" | "test";
 }
 
@@ -201,6 +203,8 @@ export interface ProviderCallPlan {
   enabledTools: ResolvedTool[];
   omittedOptionalTools: CapabilityDecision[];
   toolPolicyTrace: ToolPolicyTrace;
+  toolChoice: NormalizedToolChoice;
+  parallelToolCalls: boolean;
 }
 
 export interface ProviderModelCapabilityRule {

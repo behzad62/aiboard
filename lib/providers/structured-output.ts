@@ -1,4 +1,11 @@
 import type { JsonSchemaObject, StructuredOutputFormat } from "./base";
+import type { ProviderCallFeatures } from "./tool-capabilities";
+
+export function structuredOutputCallFeatures(
+  format: StructuredOutputFormat | undefined,
+): ProviderCallFeatures {
+  return format ? { structuredOutput: true } : {};
+}
 
 const OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_PROVIDERS = new Set([
   "openai",
