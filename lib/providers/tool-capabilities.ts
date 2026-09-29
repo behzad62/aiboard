@@ -226,6 +226,8 @@ export interface ProviderRuntimeContext {
   providerId: string;
   modelId: string;
   evidence?: CapabilityEvidence[];
+  /** Runtime-validated transport narrowing (for example a local runner handshake). */
+  allowedTransports?: ProviderTransportId[];
   runnerHandshake?: unknown;
   customOverrides?: ToolCapabilityDescriptor[];
   resourceConfig?: ToolResourceConfig;

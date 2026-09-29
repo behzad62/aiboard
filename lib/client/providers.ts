@@ -31,7 +31,19 @@ import { getModelDisplayName } from "@/lib/providers/catalog";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/constants";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import type { CustomModel } from "@/lib/db/schema";
-import type { CapabilityEvidence } from "@/lib/providers/tool-capabilities";
+import type {
+  CapabilityEvidence,
+  ProviderTransportId,
+} from "@/lib/providers/tool-capabilities";
+import {
+  ACCOUNT_RUNNER_CAPABILITY_MINIMUM_VERSION,
+  getCachedAccountRunnerCapabilities,
+} from "@/lib/providers/account-runner";
+import {
+  runnerCapabilityEvidence,
+  type RunnerCapabilityProviderId,
+  type RunnerCapabilityValidationResult,
+} from "@/lib/providers/runner-capabilities";
 import {
   getCustomModelById,
   getCustomModels,
@@ -45,6 +57,63 @@ export const CHATGPT_PROVIDER_ID = "chatgpt";
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 export const NVIDIA_PROVIDER_ID = "nvidia";
 export const OPENROUTER_PROVIDER_ID = "openrouter";
+
+const RUNNER_CAPABILITY_PROVIDER_IDS = new Set<RunnerCapabilityProviderId>([
+  "chatgpt",
+  "github-copilot",
+  "nvidia",
+]);
+
+export interface RunnerCapabilityPlanningContext {
+  evidence?: CapabilityEvidence[];
+  allowedTransports?: ProviderTransportId[];
+  validation?: RunnerCapabilityValidationResult;
+}
+
+export function isRunnerCapabilityProvider(
+  providerId: string,
+): providerId is RunnerCapabilityProviderId {
+  return RUNNER_CAPABILITY_PROVIDER_IDS.has(providerId as RunnerCapabilityProviderId);
+}
+
+export async function getRunnerCapabilityPlanningContext(
+  providerId: string,
+  modelId: string,
+  signal?: AbortSignal,
+  connectionOverride?: {
+    baseURL?: string;
+    runnerToken?: string;
+    apiKey?: string;
+  },
+): Promise<RunnerCapabilityPlanningContext> {
+  if (!isRunnerCapabilityProvider(providerId)) return {};
+  const needsStoredConnection =
+    !connectionOverride?.baseURL ||
+    !connectionOverride?.runnerToken ||
+    (providerId === "nvidia" && !connectionOverride?.apiKey);
+  const row = needsStoredConnection ? getProviderKey(providerId) : undefined;
+  const baseURL = connectionOverride?.baseURL ?? row?.baseURL ?? undefined;
+  const providerApiKey = connectionOverride?.apiKey ?? row?.apiKey ?? undefined;
+  const runnerToken =
+    connectionOverride?.runnerToken ??
+    (providerId === "nvidia" ? row?.runnerToken ?? undefined : providerApiKey);
+  if (!baseURL?.trim() || !runnerToken?.trim()) return {};
+
+  const validation = await getCachedAccountRunnerCapabilities({
+    baseURL,
+    runnerToken,
+    providerId,
+    ...(providerId === "nvidia" && providerApiKey ? { apiKey: providerApiKey } : {}),
+    signal,
+    minimumRunnerVersion: ACCOUNT_RUNNER_CAPABILITY_MINIMUM_VERSION,
+  });
+  if (validation.status !== "valid") return { validation, evidence: [] };
+  return {
+    validation,
+    evidence: runnerCapabilityEvidence(validation, modelId),
+    allowedTransports: [...validation.handshake.transports],
+  };
+}
 
 const TEXT_ONLY = {
   image: false,

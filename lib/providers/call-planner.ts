@@ -339,7 +339,24 @@ export function resolveProviderCallPlan(
 
   applyMcpDedupe(items);
   const toolChoice = normalizeToolChoice(context);
-  const evaluations = manifest.transports.map((transport) =>
+  const transports = context.allowedTransports
+    ? manifest.transports.filter((transport) =>
+        context.allowedTransports!.includes(transport),
+      )
+    : manifest.transports;
+  if (transports.length === 0) {
+    throw new ProviderCallPlanError(
+      requestedTools
+        .filter((intent) => intent.requirement === "required")
+        .map((intent) => ({
+          capabilityId: intent.id,
+          code: "transport_incompatible" as const,
+          reason: `No runtime-validated transport is available for ${context.providerId}.`,
+        })),
+      `No runtime-validated transport is available for ${context.providerId}`,
+    );
+  }
+  const evaluations = transports.map((transport) =>
     evaluateTransport(
       context,
       transport,

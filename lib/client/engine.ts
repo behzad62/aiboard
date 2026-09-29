@@ -30,6 +30,7 @@ import {
   getProvider,
   getProviderBaseURL,
   getProviderRunnerToken,
+  getRunnerCapabilityPlanningContext,
   resolveClientModelContextProfile,
   resolveModelCapabilities,
   streamCustomChat,
@@ -95,6 +96,7 @@ import {
 } from "@/lib/providers/legacy-tool-intents";
 import type {
   CapabilityEvidence,
+  ProviderTransportId,
   ToolCapabilityDescriptor,
   ToolResourceState,
 } from "@/lib/providers/tool-capabilities";
@@ -124,6 +126,7 @@ export function providerToolEventFromChunk(
 
 export interface ProviderPreflightOverrides {
   evidence?: CapabilityEvidence[];
+  allowedTransports?: ProviderTransportId[];
   customOverrides?: ToolCapabilityDescriptor[];
   resourceState?: ToolResourceState;
   mode?: "discussion" | "build" | "benchmark" | "test";
@@ -159,6 +162,7 @@ export function preflightProviderChatParams(
       providerId,
       modelId: params.model,
       evidence: overrides.evidence,
+      allowedTransports: overrides.allowedTransports,
       customOverrides: overrides.customOverrides,
       resourceState: overrides.resourceState,
       features: {
@@ -468,6 +472,25 @@ export async function collectStreamWithUsage(
       ? resolvedCaps[a.category]
       : modelSupportsInputTypes(modelId, [a.category]);
   });
+  const runnerContext = await getRunnerCapabilityPlanningContext(
+    providerId,
+    model,
+    signal,
+  );
+  const evidence = [
+    ...(discoveredCapabilityEvidence(providerId, model) ?? []),
+    ...(runnerContext.evidence ?? []),
+  ];
+  const runnerWebSearch = runnerContext.evidence?.find(
+    (item) => item.capabilityId === "web_search",
+  );
+  const requestWebSearch = runnerWebSearch
+    ? allowWebSearch && runnerWebSearch.support === "supported"
+    : shouldEnableProviderNativeWebSearch({
+        providerId,
+        model,
+        allowWebSearch,
+      });
   const providerParams = preflightProviderChatParams(
     providerId,
     {
@@ -481,7 +504,7 @@ export async function collectStreamWithUsage(
       temperature,
       reasoningEffort,
       structuredOutput,
-      webSearch: shouldEnableProviderNativeWebSearch({ allowWebSearch }),
+      webSearch: requestWebSearch,
       nativeTools,
       hostedBuildTools,
       artifactSink,
@@ -489,7 +512,8 @@ export async function collectStreamWithUsage(
       ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
     },
     {
-      evidence: discoveredCapabilityEvidence(providerId, model),
+      ...(evidence.length > 0 ? { evidence } : {}),
+      allowedTransports: runnerContext.allowedTransports,
     },
   );
   providerParams.messages = providerParams.webSearch
