@@ -81,11 +81,17 @@ export function BattleshipPlayerCard({
             </div>
           </div>
         </div>
-        {active && (
-          <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300">
+        <span className="flex h-7 shrink-0 items-center">
+          <span
+            className={cn(
+              "rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300",
+              !active && "invisible"
+            )}
+            aria-hidden={!active || undefined}
+          >
             Turn
           </span>
-        )}
+        </span>
       </div>
       {isAI && modelName && (
         <div className="mt-3 truncate text-xs text-slate-500 dark:text-slate-400">

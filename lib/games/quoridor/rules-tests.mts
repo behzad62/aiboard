@@ -9,6 +9,7 @@ import {
   hasPathToGoal,
   isLegalAction,
   setQuoridorPaused,
+  wallCoversIntersection,
 } from "./engine";
 import type {
   QuoridorAction,
@@ -439,6 +440,47 @@ check(
   "a player with zero walls cannot place one",
   !getLegalActions(noWallsLeft).some((action) => action.type === "wall") &&
     !isLegalAction(noWallsLeft, wall(3, 3, "H"))
+);
+
+check(
+  "a placed wall covers its middle intersection",
+  wallCoversIntersection([{ row: 4, col: 4, orientation: "H" }], 4, 4) &&
+    wallCoversIntersection([{ row: 2, col: 5, orientation: "V" }], 2, 5)
+);
+check(
+  "a lone wall leaves neighboring intersections uncovered",
+  !wallCoversIntersection([{ row: 4, col: 4, orientation: "H" }], 4, 3) &&
+    !wallCoversIntersection([{ row: 4, col: 4, orientation: "H" }], 4, 5) &&
+    !wallCoversIntersection([{ row: 2, col: 5, orientation: "V" }], 1, 5) &&
+    !wallCoversIntersection([{ row: 2, col: 5, orientation: "V" }], 3, 5) &&
+    !wallCoversIntersection([], 4, 4)
+);
+check(
+  "abutting wall ends share their joint intersection",
+  wallCoversIntersection(
+    [
+      { row: 4, col: 3, orientation: "H" },
+      { row: 4, col: 5, orientation: "H" },
+    ],
+    4,
+    4
+  ) &&
+    wallCoversIntersection(
+      [
+        { row: 1, col: 5, orientation: "V" },
+        { row: 3, col: 5, orientation: "V" },
+      ],
+      2,
+      5
+    ) &&
+    wallCoversIntersection(
+      [
+        { row: 4, col: 3, orientation: "H" },
+        { row: 3, col: 4, orientation: "V" },
+      ],
+      4,
+      4
+    )
 );
 
 if (failures > 0) {

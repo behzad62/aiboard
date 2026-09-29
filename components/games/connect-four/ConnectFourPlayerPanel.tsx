@@ -69,7 +69,7 @@ export function ConnectFourPlayerPanel({
   return (
     <section
       className={cn(
-        "rounded-xl border p-4 shadow-sm transition duration-200",
+        "w-full min-w-0 max-w-[640px] rounded-xl border p-4 shadow-sm transition duration-200",
         styles.panel,
         active && "ring-2 ring-amber-400 ring-offset-2 ring-offset-white dark:ring-offset-slate-950",
         winner && "shadow-[0_12px_28px_rgba(245,158,11,0.22)]"
@@ -94,21 +94,28 @@ export function ConnectFourPlayerPanel({
           </div>
         </div>
 
-        {winner ? (
-          <span
-            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
-            aria-label={`${label} won`}
-          >
-            <Trophy className="h-3.5 w-3.5" aria-hidden="true" />
-            Winner
-          </span>
-        ) : active ? (
-          <span
-            className={cn("rounded-full px-2 py-1 text-xs font-semibold", styles.text)}
-          >
-            Turn
-          </span>
-        ) : null}
+        <span className="flex h-7 shrink-0 items-center">
+          {winner ? (
+            <span
+              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-950/50 dark:text-amber-300"
+              aria-label={`${label} won`}
+            >
+              <Trophy className="h-3.5 w-3.5" aria-hidden="true" />
+              Winner
+            </span>
+          ) : (
+            <span
+              className={cn(
+                "rounded-full px-2 py-1 text-xs font-semibold",
+                styles.text,
+                !active && "invisible"
+              )}
+              aria-hidden={!active || undefined}
+            >
+              Turn
+            </span>
+          )}
+        </span>
       </div>
 
       <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-current/10 bg-white/60 px-3 py-2 dark:bg-slate-950/40">
