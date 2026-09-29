@@ -4,6 +4,11 @@ import type { ReasoningEffort } from "../db/schema";
 import type { ModelContextProfile } from "./model-context";
 
 export type { ModelContextProfile } from "./model-context";
+export type {
+  ProviderCallPlan,
+  ProviderTransportId,
+  ToolIntent,
+} from "./tool-capabilities";
 
 export type ModelCapabilities = Record<CapabilityInputType, boolean>;
 
