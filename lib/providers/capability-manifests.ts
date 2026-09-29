@@ -405,6 +405,13 @@ const XAI_MANIFEST: ProviderCapabilityManifest = {
   ],
 };
 
+const META_AUTO_TOOL_CHOICE_CONSTRAINT: ToolCombinationConstraint = {
+  when: "tool_choice",
+  effect: "requires_tool_choice",
+  value: "auto",
+  reason: "Meta Model API supports only automatic tool choice.",
+};
+
 const META_MANIFEST: ProviderCapabilityManifest = {
   providerId: "meta",
   transports: ["responses", "chat_completions"],
@@ -413,13 +420,20 @@ const META_MANIFEST: ProviderCapabilityManifest = {
       id: "function_calling",
       execution: "client",
       transports: ["responses", "chat_completions"],
+      constraints: [META_AUTO_TOOL_CHOICE_CONSTRAINT],
     }),
-    documentedCapability({ id: "web_search", execution: "provider", transports: ["responses"] }),
+    documentedCapability({
+      id: "web_search",
+      execution: "provider",
+      transports: ["responses"],
+      constraints: [META_AUTO_TOOL_CHOICE_CONSTRAINT],
+    }),
     documentedCapability({
       id: "tool_search",
       execution: "provider",
       transports: ["responses"],
       constraints: [
+        META_AUTO_TOOL_CHOICE_CONSTRAINT,
         {
           when: "structured_output",
           effect: "forbid",

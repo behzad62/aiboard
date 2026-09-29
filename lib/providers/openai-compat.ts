@@ -172,7 +172,7 @@ export function openAICompatibleNativeToolField(
 ): Record<string, unknown> {
   if (
     !tools?.length ||
-    !["openai", "openrouter", "custom", "nvidia", "meta"].includes(providerId)
+    !["openai", "openrouter", "custom", "nvidia"].includes(providerId)
   ) {
     return {};
   }
@@ -343,7 +343,7 @@ export async function* streamOpenAICompatibleChat(
   const reasoningValue =
     providerId === "openai"
       ? openAIReasoningEffort(params.reasoningEffort ?? "default", params.model)
-      : providerId === "openrouter" || providerId === "meta"
+      : providerId === "openrouter"
         ? openRouterReasoningEffort(
             params.reasoningEffort ?? "default",
             params.model

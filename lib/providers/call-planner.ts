@@ -109,6 +109,8 @@ function featureIsActive(
       return context.features.attachments === true;
     case "parallel_tools":
       return context.features.parallelTools === true;
+    case "tool_choice":
+      return true;
   }
 }
 

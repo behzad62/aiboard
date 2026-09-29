@@ -77,7 +77,8 @@ export type ToolCombinationWhen =
   | "structured_output"
   | "reasoning"
   | "attachments"
-  | "parallel_tools";
+  | "parallel_tools"
+  | "tool_choice";
 
 export type ToolCombinationEffect =
   | "forbid"
@@ -261,6 +262,7 @@ const CONSTRAINT_WHEN_SET = new Set<ToolCombinationWhen>([
   "reasoning",
   "attachments",
   "parallel_tools",
+  "tool_choice",
 ]);
 const CONSTRAINT_EFFECT_SET = new Set<ToolCombinationEffect>([
   "forbid",

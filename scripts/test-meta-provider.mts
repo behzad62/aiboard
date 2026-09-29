@@ -35,9 +35,19 @@ try {
   assert.equal(requests[1]?.url, `${META_MODEL_API_BASE_URL}/models`);
   assert.equal(requests[1]?.authorization, "Bearer meta-key");
   assert.equal(catalog.every((model) => model.id.startsWith("muse-spark-")), true);
-  assert.equal(catalog.every((model) => model.supportsTools && model.supportsStructuredOutputs), true);
-  assert.equal(catalog.every((model) => model.supportsReasoningEffort), true);
-  console.log("PASS Meta Model API uses the live model catalog and OpenAI-compatible endpoint");
+  assert.equal(
+    catalog.every(
+      (model) =>
+        !model.supportsTools &&
+        !model.supportsToolChoice &&
+        !model.supportsStructuredOutputs &&
+        !model.supportsReasoning &&
+        !model.supportsReasoningEffort
+    ),
+    true,
+    "Meta model listing proves model existence only; tool/structured/reasoning support comes from manifests or scoped evidence"
+  );
+  console.log("PASS Meta model discovery filters Muse Spark without guessing tool capability truth");
 } finally {
   globalThis.fetch = originalFetch;
 }

@@ -11,7 +11,6 @@ const OPENAI_COMPATIBLE_STRUCTURED_OUTPUT_PROVIDERS = new Set([
   "openai",
   "openrouter",
   "nvidia",
-  "meta",
 ]);
 
 export function openAICompatibleStructuredOutputField(

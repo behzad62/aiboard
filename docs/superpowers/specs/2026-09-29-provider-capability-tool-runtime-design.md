@@ -205,7 +205,7 @@ Represent constraints such as:
 
 ```ts
 interface ToolCombinationConstraint {
-  when: "structured_output" | "reasoning" | "attachments" | "parallel_tools";
+  when: "structured_output" | "reasoning" | "attachments" | "parallel_tools" | "tool_choice";
   effect: "forbid" | "requires_transport" | "requires_tool_choice";
   value?: string;
   reason: string;
@@ -216,7 +216,7 @@ Examples:
 
 - Meta `tool_search` + JSON-schema structured output is forbidden; ordinary function tools are a separate question and must not inherit that prohibition accidentally.
 - Google Gemini 3 built-in + custom tool combinations require the supported native combination mode; older models may have narrower combinations.
-- Provider APIs may restrict named/required `tool_choice`; Meta Chat Completions, for example, accepts only automatic choice for function tools.
+- Provider APIs may restrict named/required `tool_choice`; Meta Responses and Chat Completions accept only automatic `tool_choice` for function tools; model this as an unconditional `tool_choice` constraint.
 - Anthropic server tools and client tools can coexist, but server-tool pause/continuation semantics must be handled correctly.
 
 The call planner produces an explainable decision before the provider adapter serializes the request.

@@ -330,18 +330,12 @@ async function fetchMetaModelCatalog(apiKey: string): Promise<ProviderCatalogMod
     .filter((model): model is { id: string; name?: string; display_name?: string } =>
       typeof model.id === "string" && /^muse-spark-/i.test(model.id)
     )
-    .map((model) => ({
-      ...basicCatalogModel(
+    .map((model) =>
+      basicCatalogModel(
         model.id,
-        model.display_name?.trim() || model.name?.trim() || model.id,
-        { image: true, reasoningEffort: true }
-      ),
-      supportsTools: true,
-      supportsToolChoice: true,
-      supportsStructuredOutputs: true,
-      supportsTemperature: true,
-      supportsMaxTokens: true,
-    }))
+        model.display_name?.trim() || model.name?.trim() || model.id
+      )
+    )
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
