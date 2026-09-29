@@ -41,7 +41,9 @@ function normalizeToolChoice(context: ProviderRuntimeContext): NormalizedToolCho
 function partitionEvidence(context: ProviderRuntimeContext) {
   const evidence = context.evidence ?? [];
   return {
-    catalogEvidence: evidence.filter((item) => item.source === "provider-catalog"),
+    catalogEvidence: evidence.filter((item) =>
+      item.source === "provider-catalog" || item.source === "probed",
+    ),
     runnerEvidence: evidence.filter((item) => item.source === "runner"),
   };
 }

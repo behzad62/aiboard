@@ -125,7 +125,7 @@ assert.deepEqual(
     },
     googleComputer: {
       id: "computer_use",
-      support: "supported",
+      support: "unsupported",
       execution: "client",
       transports: ["gemini_interactions"],
       prerequisites: [
@@ -161,6 +161,12 @@ assert.deepEqual(
       execution: "provider",
       transports: ["responses"],
       constraints: [
+        {
+          when: "tool_choice",
+          effect: "requires_tool_choice",
+          value: "auto",
+          reason: "Meta Model API supports only automatic tool choice.",
+        },
         {
           when: "structured_output",
           effect: "forbid",

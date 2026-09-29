@@ -7,6 +7,10 @@ import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
 import {
+  getDiscoveredModelMetadata,
+  getPersistedProviderCapabilityEvidence,
+} from "./providers";
+import {
   getMessagesForDiscussion,
   getCustomModelById,
   getProviderKey,
@@ -514,11 +518,8 @@ export function createNativeProviderConfig(
   const catalogModel = MODEL_CATALOG.find(
     (candidate) => candidate.providerId === providerId && candidate.id === model
   );
-  const discoveredOpenRouter =
-    providerId === "openrouter"
-      ? getUserSettings().discoveredModelCapabilities?.[runtimeId]
-      : undefined;
-  const inputCapabilities = discoveredOpenRouter ?? catalogModel?.capabilities ?? {
+  const discoveredMetadata = getDiscoveredModelMetadata(runtimeId);
+  const inputCapabilities = discoveredMetadata ?? catalogModel?.capabilities ?? {
     image: false,
     document: false,
     audio: false,
@@ -527,23 +528,7 @@ export function createNativeProviderConfig(
   const resolvedFunctionTools = resolveProviderCapabilityProfile({
     providerId,
     modelId: model,
-    catalogEvidence:
-      providerId === "openrouter" && discoveredOpenRouter?.tools !== undefined
-        ? [
-            {
-              providerId,
-              modelId: model,
-              capabilityId: "function_calling" as const,
-              transport: "responses" as const,
-              support: discoveredOpenRouter.tools
-                ? ("supported" as const)
-                : ("unsupported" as const),
-              execution: "client" as const,
-              source: "provider-catalog" as const,
-              verifiedAt: discoveredOpenRouter.updatedAt,
-            },
-          ]
-        : undefined,
+    catalogEvidence: getPersistedProviderCapabilityEvidence(providerId, model),
   }).capabilities.function_calling;
   return {
     runtimeId,

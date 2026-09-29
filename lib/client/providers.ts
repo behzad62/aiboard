@@ -124,34 +124,51 @@ const TEXT_ONLY = {
 } as const;
 
 function getDiscoveredCapabilities(fullModelId: string): ModelCapabilities | null {
-  return getUserSettings().discoveredModelCapabilities?.[fullModelId] ?? null;
+  const metadata = getUserSettings().discoveredModelMetadata?.[fullModelId];
+  if (!metadata) return null;
+  return {
+    image: metadata.image,
+    document: metadata.document,
+    audio: metadata.audio,
+    video: metadata.video,
+  };
 }
 
+export function getDiscoveredModelMetadata(fullModelId: string) {
+  return getUserSettings().discoveredModelMetadata?.[fullModelId] ?? null;
+}
+
+export function getPersistedProviderCapabilityEvidence(
+  providerId: string,
+  modelId: string,
+  nowMs = Date.now(),
+): CapabilityEvidence[] | undefined {
+  const evidence = (getUserSettings().providerToolCapabilityEvidence ?? []).filter((item) => {
+    if (item.providerId !== providerId) return false;
+    if (item.modelId !== undefined && item.modelId !== modelId) return false;
+    if (item.expiresAt) {
+      const expiresAt = Date.parse(item.expiresAt);
+      if (Number.isFinite(expiresAt) && expiresAt <= nowMs) return false;
+    }
+    return true;
+  });
+  return evidence.length > 0 ? evidence : undefined;
+}
+
+/** Compatibility alias for callers/tests that still use the OpenRouter-specific name. */
 export function getDiscoveredOpenRouterApiCapabilities(modelId: string) {
-  return (
-    getUserSettings().discoveredModelCapabilities?.[
-      formatModelId(OPENROUTER_PROVIDER_ID, normalizeOpenRouterModelId(modelId))
-    ] ?? null
+  return getDiscoveredModelMetadata(
+    formatModelId(OPENROUTER_PROVIDER_ID, normalizeOpenRouterModelId(modelId)),
   );
 }
 
 export function getDiscoveredOpenRouterCapabilityEvidence(
   modelId: string,
 ): CapabilityEvidence[] | undefined {
-  const discovered = getDiscoveredOpenRouterApiCapabilities(modelId);
-  if (discovered?.tools === undefined) return undefined;
-  return [
-    {
-      providerId: "openrouter",
-      modelId: normalizeOpenRouterModelId(modelId),
-      capabilityId: "function_calling",
-      transport: "responses",
-      support: discovered.tools ? "supported" : "unsupported",
-      execution: "client",
-      source: "provider-catalog",
-      verifiedAt: discovered.updatedAt,
-    },
-  ];
+  return getPersistedProviderCapabilityEvidence(
+    OPENROUTER_PROVIDER_ID,
+    normalizeOpenRouterModelId(modelId),
+  );
 }
 
 // Foundry serves Claude models, which accept image + document inputs.

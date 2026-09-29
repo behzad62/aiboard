@@ -55,6 +55,7 @@ export const CAPABILITY_SUPPORT_SOURCES = [
   "provider-docs",
   "provider-catalog",
   "runner",
+    "probed",
   "user-override",
 ] as const;
 export type CapabilitySupportSource = (typeof CAPABILITY_SUPPORT_SOURCES)[number];

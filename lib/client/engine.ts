@@ -27,7 +27,7 @@ import {
   getCustomModelByFullId,
   customModelPlanningContext,
   getDecryptedApiKey,
-  getDiscoveredOpenRouterCapabilityEvidence,
+  getPersistedProviderCapabilityEvidence,
   getProvider,
   getProviderBaseURL,
   getProviderRunnerToken,
@@ -209,9 +209,7 @@ function discoveredCapabilityEvidence(
   providerId: string,
   model: string,
 ): CapabilityEvidence[] | undefined {
-  return providerId === "openrouter"
-    ? getDiscoveredOpenRouterCapabilityEvidence(model)
-    : undefined;
+  return getPersistedProviderCapabilityEvidence(providerId, model);
 }
 
 const runningDiscussions = new Set<string>();

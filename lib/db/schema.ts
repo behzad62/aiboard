@@ -13,7 +13,7 @@ import type {
   SkillEvidence,
 } from "@/lib/skills/types";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
-import type { ProviderTransportId, ToolCapabilityDescriptor } from "@/lib/providers/tool-capabilities";
+import type { CapabilityEvidence, ProviderTransportId, ToolCapabilityDescriptor } from "@/lib/providers/tool-capabilities";
 import type { BuildPhaseSpec } from "@/lib/orchestrator/build";
 import type { BuildPlanContractValidation } from "@/lib/orchestrator/build-plan-contract";
 import type { BuildEvidenceLedgerEntry } from "@/lib/orchestrator/build-progress";
@@ -294,6 +294,7 @@ export interface UserSettings {
   defaultBuildAlwaysRequireIndependentVerifier?: boolean;
   modelPricingOverrides?: Record<string, ModelPricingOverride>;
   modelContextOverrides?: ModelContextOverrides;
+  /** @deprecated Migrated on hydration into discoveredModelMetadata + providerToolCapabilityEvidence. */
   discoveredModelCapabilities?: Record<
     string,
     {
@@ -312,6 +313,28 @@ export interface UserSettings {
       source: "openrouter-models" | "provider-models";
     }
   >;
+  /** Discovery metadata only. This never proves runtime tool support. */
+  discoveredModelMetadata?: Record<
+    string,
+    {
+      image: boolean;
+      document: boolean;
+      audio: boolean;
+      video: boolean;
+      apiParameters?: {
+        toolChoice?: boolean;
+        structuredOutputs?: boolean;
+        reasoning?: boolean;
+        reasoningEffort?: boolean;
+        temperature?: boolean;
+        maxTokens?: boolean;
+      };
+      updatedAt: string;
+      source: "openrouter-models" | "provider-models";
+    }
+  >;
+  /** Verified/scoped tool evidence; expired probed entries are ignored at runtime. */
+  providerToolCapabilityEvidence?: CapabilityEvidence[];
 }
 
 export interface ProviderKey {

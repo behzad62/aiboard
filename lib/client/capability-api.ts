@@ -3,11 +3,15 @@ import type {
   ChatMessage,
   ModelCapabilities,
   ModelInfo,
+  NativeToolCall,
+  NativeToolDefinition,
   StreamChunk,
   StructuredOutputFormat,
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
 import { providerSupportsMaxTokensFeature } from "@/lib/providers/provider-registry";
+import { getProviderCapabilityManifest } from "@/lib/providers/capability-manifests";
+import type { ProviderCallPlan, ProviderTransportId } from "@/lib/providers/tool-capabilities";
 import {
   CAPABILITY_PROBES,
   CONCURRENCY_A_MESSAGES,
@@ -23,13 +27,14 @@ import {
   TEMPERATURE_PROBE_MESSAGES,
   TEXT_PROBE_MESSAGES,
   TOOL_CALL_PROBE_MESSAGES,
+  capabilityEvidenceFromToolProbe,
   defaultCapabilityProfile,
-  toolResultProbeMessages,
   type CapabilityProbeId,
   type CapabilityProbeResult,
   type ModelCapabilityProbeProfile,
 } from "@/lib/providers/capability-probes";
 import { getProviderKey, getUserSettings, updateUserSettings } from "./store";
+import { mergeCapabilityEvidenceRecords } from "./provider-capability-migration";
 import {
   CUSTOM_PROVIDER_ID,
   FOUNDRY_PROVIDER_ID,
@@ -57,7 +62,9 @@ interface ProbeTarget {
 interface CollectedProbeOutput {
   text: string;
   chunks: number;
+  toolCalls: NativeToolCall[];
   error?: string;
+  errorMetadata?: StreamChunk["errorMetadata"];
 }
 
 const DEFAULT_PROBE_CAPABILITIES: ModelCapabilities = {
@@ -138,10 +145,20 @@ async function collectStream(
 ): Promise<CollectedProbeOutput> {
   let text = "";
   let chunks = 0;
+  const toolCalls: NativeToolCall[] = [];
   try {
     for await (const chunk of stream) {
       if (chunk.type === "error") {
-        return { text, chunks, error: chunk.error ?? "Provider returned an error" };
+        return {
+          text,
+          chunks,
+          toolCalls,
+          error: chunk.error ?? "Provider returned an error",
+          errorMetadata: chunk.errorMetadata,
+        };
+      }
+      if (chunk.type === "tool_call" && chunk.toolCall) {
+        toolCalls.push(chunk.toolCall);
       }
       if (chunk.type === "token" && chunk.content) {
         chunks += 1;
@@ -153,10 +170,11 @@ async function collectStream(
     return {
       text,
       chunks,
+      toolCalls,
       error: err instanceof Error ? err.message : "Provider request failed",
     };
   }
-  return { text: text.trim(), chunks };
+  return { text: text.trim(), chunks, toolCalls };
 }
 
 function extractJson(text: string): unknown | null {
@@ -179,11 +197,33 @@ function outputPreview(output: CollectedProbeOutput): string | undefined {
 }
 
 function pass(id: CapabilityProbeId, detail: string, output?: CollectedProbeOutput): CapabilityProbeResult {
-  return { id, status: "pass", detail, preview: outputPreview(output ?? { text: "", chunks: 0 }) };
+  return { id, status: "pass", detail, preview: outputPreview(output ?? { text: "", chunks: 0, toolCalls: [] }) };
+}
+
+function classifyProbeFailure(output: CollectedProbeOutput): CapabilityProbeResult["failureKind"] {
+  const status = output.errorMetadata?.statusCode;
+  const detail = output.error ?? "";
+  if (
+    status === 401 || status === 403 || status === 408 || status === 409 ||
+    status === 429 || (status !== undefined && status >= 500) ||
+    /network|fetch failed|failed to fetch|econn|socket|timeout|timed out|rate.?limit/i.test(detail)
+  ) return "transient";
+  if (
+    (status === 400 || status === 404 || status === 405 || status === 415 || status === 422) &&
+    /(tool|function).*(unsupported|not supported|unknown|invalid)|unsupported.*(tool|function)/i.test(detail)
+  ) return "protocol_unsupported";
+  return "behavior";
 }
 
 function fail(id: CapabilityProbeId, detail: string, output?: CollectedProbeOutput): CapabilityProbeResult {
-  return { id, status: "fail", detail, preview: outputPreview(output ?? { text: "", chunks: 0 }) };
+  return {
+    id,
+    status: "fail",
+    detail,
+    preview: outputPreview(output ?? { text: "", chunks: 0, toolCalls: [] }),
+    ...(output?.error ? { failureKind: classifyProbeFailure(output) } : { failureKind: "behavior" as const }),
+    ...(output?.errorMetadata ? { errorMetadata: output.errorMetadata } : {}),
+  };
 }
 
 function markerMatches(text: string, marker: string | RegExp): boolean {
@@ -235,11 +275,14 @@ async function runProbeCall(input: {
   temperature?: number;
   structuredOutput?: StructuredOutputFormat;
   capabilities?: ModelCapabilities;
+  nativeTools?: NativeToolDefinition[];
+  toolChoice?: "auto" | "required";
+  callPlan?: ProviderCallPlan;
 }): Promise<CollectedProbeOutput> {
   const { target } = input;
   if (target.providerId === CUSTOM_PROVIDER_ID) {
     const custom = getCustomModelByFullId(target.fullModelId);
-    if (!custom) return { text: "", chunks: 0, error: "Custom model not found" };
+    if (!custom) return { text: "", chunks: 0, toolCalls: [], error: "Custom model not found" };
     return collectStream(
       streamCustomChat(custom, {
         apiKey: "",
@@ -250,13 +293,16 @@ async function runProbeCall(input: {
         temperature: input.temperature,
         structuredOutput: input.structuredOutput,
         capabilities: input.capabilities ?? custom.capabilities,
+        nativeTools: input.nativeTools,
+        toolChoice: input.toolChoice,
+        callPlan: input.callPlan,
       })
     );
   }
 
   const provider = getProvider(target.providerId);
   const key = getProviderKey(target.providerId);
-  if (!provider || !key?.apiKey) return { text: "", chunks: 0, error: "Provider is not configured" };
+  if (!provider || !key?.apiKey) return { text: "", chunks: 0, toolCalls: [], error: "Provider is not configured" };
   return collectStream(
     provider.streamChat({
       apiKey: key.apiKey,
@@ -269,22 +315,11 @@ async function runProbeCall(input: {
       temperature: input.temperature,
       structuredOutput: input.structuredOutput,
       capabilities: input.capabilities,
+      nativeTools: input.nativeTools,
+      toolChoice: input.toolChoice,
+      callPlan: input.callPlan,
     })
   );
-}
-
-function parseHelperRequest(text: string): { a: number; b: number } | null {
-  const parsed = extractJson(text) as {
-    action?: string;
-    helper?: string;
-    input?: { a?: number; b?: number };
-    args?: { a?: number; b?: number };
-  } | null;
-  if (!parsed) return null;
-  const input = parsed.input ?? parsed.args;
-  if (parsed.action !== "use_helper" || parsed.helper !== "sum") return null;
-  if (input?.a !== 2 || input.b !== 3) return null;
-  return { a: input.a, b: input.b };
 }
 
 async function runOneProbe(
@@ -356,19 +391,58 @@ async function runOneProbe(
   }
 
   if (id === "toolCalls") {
-    const request = await runProbeCall({ target, messages: TOOL_CALL_PROBE_MESSAGES, maxTokens: 256 });
-    if (request.error) return fail(id, request.error, request);
-    const helper = parseHelperRequest(request.text);
-    if (!helper) return fail(id, "Model did not emit the expected safe build-action JSON", request);
-    const response = await runProbeCall({
+    const manifest = getProviderCapabilityManifest(target.providerId);
+    const descriptor = manifest?.capabilities.find((item) => item.id === "function_calling");
+    const transport = descriptor?.transports[0] ?? manifest?.transports[0];
+    if (!descriptor || !transport) {
+      return fail(id, "Provider has no function-calling transport to probe");
+    }
+    const tool: NativeToolDefinition = {
+      name: "aiboard_sum",
+      description: "Add two small integers for an AI Board capability probe.",
+      parameters: {
+        type: "object",
+        properties: {
+          a: { type: "integer" },
+          b: { type: "integer" },
+        },
+        required: ["a", "b"],
+        additionalProperties: false,
+      },
+      strict: true,
+    };
+    const intent = { id: "function_calling" as const, requirement: "required" as const };
+    const callPlan: ProviderCallPlan = {
+      transport,
+      enabledTools: [{
+        intent,
+        descriptor: { ...descriptor, support: "supported", supportSource: "probed" },
+        transport,
+        readiness: "available",
+      }],
+      omittedOptionalTools: [],
+      toolPolicyTrace: {
+        requestedTools: [intent],
+        enabledTools: ["function_calling"],
+        omittedTools: [],
+        transport,
+        decisions: [],
+      },
+      toolChoice: "auto",
+      parallelToolCalls: false,
+    };
+    const output = await runProbeCall({
       target,
-      messages: toolResultProbeMessages(request.text),
-      maxTokens: EXACT_MARKER_PROBE_MAX_TOKENS,
+      messages: TOOL_CALL_PROBE_MESSAGES,
+      maxTokens: 256,
+      nativeTools: [tool],
+      toolChoice: "auto",
+      callPlan,
     });
-    if (response.error) return fail(id, response.error, response);
-    return response.text.includes("AIBOARD_TOOL_OK=5")
-      ? pass(id, "Build action protocol passed", response)
-      : fail(id, "Model emitted the action JSON but did not use the returned helper result", response);
+    if (output.error) return fail(id, output.error, output);
+    const call = output.toolCalls.find((item) => item.name === "aiboard_sum");
+    if (!call) return fail(id, "Provider did not emit the requested function call", output);
+    return pass(id, "Provider emitted the requested function call", output);
   }
 
   if (id === "concurrency") {
@@ -388,6 +462,7 @@ async function runOneProbe(
       return fail(id, a.error ?? b.error ?? "Parallel probe failed", {
         text: [a.text, b.text].filter(Boolean).join("\n"),
         chunks: a.chunks + b.chunks,
+        toolCalls: [...a.toolCalls, ...b.toolCalls],
         error: a.error ?? b.error,
       });
     }
@@ -395,10 +470,12 @@ async function runOneProbe(
       ? pass(id, "Two parallel requests completed successfully", {
           text: `${a.text}\n${b.text}`,
           chunks: a.chunks + b.chunks,
+          toolCalls: [...a.toolCalls, ...b.toolCalls],
         })
       : fail(id, "Parallel requests completed but expected markers were missing", {
           text: `${a.text}\n${b.text}`,
           chunks: a.chunks + b.chunks,
+          toolCalls: [...a.toolCalls, ...b.toolCalls],
         });
   }
 
@@ -474,5 +551,29 @@ export async function runCapabilityProbes(input: {
     : 1;
 
   saveCapabilityProfile(profile);
+  const toolResult = results.find((result) => result.id === "toolCalls");
+  if (toolResult) {
+    const manifest = getProviderCapabilityManifest(target.providerId);
+    const transport = manifest?.capabilities.find((item) => item.id === "function_calling")?.transports[0]
+      ?? manifest?.transports[0];
+    if (transport) {
+      const evidence = capabilityEvidenceFromToolProbe({
+        providerId: target.providerId,
+        modelId: target.modelId,
+        transport,
+        testedAt: profile.testedAt,
+        expiresAt: profile.expiresAt,
+        result: toolResult,
+      });
+      if (evidence) {
+        updateUserSettings({
+          providerToolCapabilityEvidence: mergeCapabilityEvidenceRecords(
+            getUserSettings().providerToolCapabilityEvidence,
+            [evidence],
+          ),
+        });
+      }
+    }
+  }
   return profile;
 }

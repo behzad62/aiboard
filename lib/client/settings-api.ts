@@ -55,6 +55,7 @@ import type {
   ToolCapabilityDescriptor,
 } from "@/lib/providers/tool-capabilities";
 import { customCompatibleTransports } from "@/lib/providers/custom-capabilities";
+import { mergeCapabilityEvidenceRecords } from "./provider-capability-migration";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
 
@@ -498,23 +499,26 @@ export async function fetchProviderModelCatalog(input: {
   throw new Error(`Live model discovery is not supported for ${input.providerId}`);
 }
 
-function openRouterCapabilitiesFromEntry(
-  entry: NonNullable<OpenRouterModelsResponse["data"]>[number]
+function discoveryMetadataFromCatalogModel(
+  model: ProviderCatalogModel,
+  source: "openrouter-models" | "provider-models",
+  updatedAt: string,
 ) {
-  const modalities = normalizeOpenRouterInputModalities(entry.architecture?.input_modalities);
-  const parameters = normalizeOpenRouterSupportedParameters(entry.supported_parameters);
   return {
-    image: modalities.has("image"),
-    document: modalities.has("file"),
-    audio: modalities.has("audio"),
-    video: modalities.has("video"),
-    tools: parameters.has("tools"),
-    toolChoice: parameters.has("tool_choice"),
-    structuredOutputs: parameters.has("structured_outputs"),
-    reasoning: parameters.has("reasoning"),
-    reasoningEffort: parameters.has("reasoning_effort"),
-    temperature: parameters.has("temperature"),
-    maxTokens: parameters.has("max_tokens"),
+    image: model.supportsImageInput,
+    document: model.supportsDocumentInput,
+    audio: model.supportsAudioInput,
+    video: model.supportsVideoInput,
+    apiParameters: {
+      toolChoice: model.supportsToolChoice,
+      structuredOutputs: model.supportsStructuredOutputs,
+      reasoning: model.supportsReasoning,
+      reasoningEffort: model.supportsReasoningEffort,
+      temperature: model.supportsTemperature,
+      maxTokens: model.supportsMaxTokens,
+    },
+    updatedAt,
+    source,
   };
 }
 
@@ -535,7 +539,9 @@ export async function refreshOpenRouterModelCapabilities(
       .map((entry) => [entry.id, entry])
   );
 
-  const next = { ...(getUserSettings().discoveredModelCapabilities ?? {}) };
+  const settings = getUserSettings();
+  const nextMetadata = { ...(settings.discoveredModelMetadata ?? {}) };
+  let nextEvidence = [...(settings.providerToolCapabilityEvidence ?? [])];
   const missing: string[] = [];
   let synced = 0;
   const updatedAt = new Date().toISOString();
@@ -545,14 +551,19 @@ export async function refreshOpenRouterModelCapabilities(
       missing.push(id);
       continue;
     }
-    next[formatModelId(OPENROUTER_PROVIDER_ID, id)] = {
-      ...openRouterCapabilitiesFromEntry(entry),
-      updatedAt,
-      source: "openrouter-models",
-    };
+    const model = buildOpenRouterCatalogModel(entry);
+    nextMetadata[formatModelId(OPENROUTER_PROVIDER_ID, id)] =
+      discoveryMetadataFromCatalogModel(model, "openrouter-models", updatedAt);
+    nextEvidence = mergeCapabilityEvidenceRecords(
+      nextEvidence,
+      openRouterCatalogCapabilityEvidence(model, updatedAt),
+    );
     synced += 1;
   }
-  updateUserSettings({ discoveredModelCapabilities: next });
+  updateUserSettings({
+    discoveredModelMetadata: nextMetadata,
+    providerToolCapabilityEvidence: nextEvidence,
+  });
   return { synced, missing };
 }
 
@@ -575,7 +586,7 @@ export async function refreshProviderModelCapabilities(input: {
 
   const catalog = await fetchProviderModelCatalog(input);
   const modelIndex = new Map(catalog.map((model) => [model.id, model]));
-  const next = { ...(getUserSettings().discoveredModelCapabilities ?? {}) };
+  const nextMetadata = { ...(getUserSettings().discoveredModelMetadata ?? {}) };
   const missing: string[] = [];
   let synced = 0;
   const updatedAt = new Date().toISOString();
@@ -585,24 +596,11 @@ export async function refreshProviderModelCapabilities(input: {
       missing.push(id);
       continue;
     }
-    next[formatModelId(input.providerId, id)] = {
-      image: model.supportsImageInput,
-      document: model.supportsDocumentInput,
-      audio: model.supportsAudioInput,
-      video: model.supportsVideoInput,
-      tools: model.supportsTools,
-      toolChoice: model.supportsToolChoice,
-      structuredOutputs: model.supportsStructuredOutputs,
-      reasoning: model.supportsReasoning,
-      reasoningEffort: model.supportsReasoningEffort,
-      temperature: model.supportsTemperature,
-      maxTokens: model.supportsMaxTokens,
-      updatedAt,
-      source: "provider-models",
-    };
+    nextMetadata[formatModelId(input.providerId, id)] =
+      discoveryMetadataFromCatalogModel(model, "provider-models", updatedAt);
     synced += 1;
   }
-  updateUserSettings({ discoveredModelCapabilities: next });
+  updateUserSettings({ discoveredModelMetadata: nextMetadata });
   return { synced, missing };
 }
 
