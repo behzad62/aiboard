@@ -42,6 +42,10 @@ import {
   OPENROUTER_PROVIDER_ID,
   getAllProviders,
   getProvider,
+  getPersistedProviderCapabilityEvidence,
+  getRunnerCapabilityPlanningContext,
+  getCustomModelByFullId,
+  customModelPlanningContext,
   listProviderModelInfos,
   normalizeProviderModelId,
   normalizeOpenRouterModelId,
@@ -53,8 +57,11 @@ import type {
   CapabilityEvidence,
   ProviderTransportId,
   ToolCapabilityDescriptor,
+  ToolResourceState,
 } from "@/lib/providers/tool-capabilities";
 import { customCompatibleTransports } from "@/lib/providers/custom-capabilities";
+import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
+import { capabilityStatusRows, type ProviderCapabilityStatusRow } from "@/lib/providers/capability-status";
 import { mergeCapabilityEvidenceRecords } from "./provider-capability-migration";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
@@ -109,6 +116,35 @@ export function loadProviders(): {
   return { providers, settings };
 }
 
+export async function resolveProviderCapabilityStatus(input: {
+  providerId: string;
+  modelId: string;
+  resourceState?: ToolResourceState;
+}): Promise<ProviderCapabilityStatusRow[]> {
+  const persistedEvidence = getPersistedProviderCapabilityEvidence(
+    input.providerId,
+    input.modelId,
+  );
+  const runner = await getRunnerCapabilityPlanningContext(
+    input.providerId,
+    input.modelId,
+  );
+  const custom = input.providerId === CUSTOM_PROVIDER_ID
+    ? getCustomModelByFullId(formatModelId(CUSTOM_PROVIDER_ID, input.modelId))
+    : null;
+  const customContext = custom ? customModelPlanningContext(custom) : undefined;
+  const profile = resolveProviderCapabilityProfile({
+    providerId: input.providerId,
+    modelId: input.modelId,
+    catalogEvidence: persistedEvidence,
+    runnerEvidence: runner.evidence,
+    resourceState: input.resourceState,
+    customOverrides: customContext?.customOverrides,
+  });
+  return capabilityStatusRows(profile, {
+    allowedTransports: customContext?.allowedTransports ?? runner.allowedTransports,
+  });
+}
 export function saveProviderKey(input: {
   providerId: string;
   apiKey?: string;

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ModelContextEditor } from "@/components/ModelContextEditor";
+import { ProviderCapabilityTable } from "@/components/ProviderCapabilityTable";
 import { Plus, Server, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -27,6 +28,8 @@ import type {
   ProviderTransportId,
   ToolCapabilityDescriptor,
 } from "@/lib/providers/tool-capabilities";
+import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
+import { capabilityStatusRows } from "@/lib/providers/capability-status";
 import {
   resolveModelContextProfile,
   type ModelContextOverrides,
@@ -288,6 +291,14 @@ export function CustomModelsManager({
               CUSTOM_PROVIDER_ID,
               contextOverrides,
             );
+            const resolvedCapabilityRows = capabilityStatusRows(
+              resolveProviderCapabilityProfile({
+                providerId: CUSTOM_PROVIDER_ID,
+                modelId: m.id,
+                customOverrides: m.toolCapabilityOverrides ?? [],
+              }),
+              { allowedTransports: m.compatibleTransports ?? ["chat_completions"] },
+            );
 
             return (
               <div key={m.id} className="space-y-3 rounded-lg border p-3">
@@ -406,6 +417,10 @@ export function CustomModelsManager({
                     {testResults[m.id]}
                   </p>
                 )}
+                <ProviderCapabilityTable
+                  rows={resolvedCapabilityRows}
+                  title="Declared tool support & readiness"
+                />
                 <ModelContextEditor
                   fullModelId={fullModelId}
                   profile={contextProfile}

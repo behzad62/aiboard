@@ -15,13 +15,16 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Copy } from "lucide-react";
+import { ProviderCapabilityTable } from "@/components/ProviderCapabilityTable";
 import type { ModelInfo } from "@/lib/providers/base";
+import type { ProviderCapabilityStatusRow } from "@/lib/providers/capability-status";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
 import {
   fetchProviderModelCatalog,
   type OpenRouterCatalogModel,
   refreshProviderModelCapabilities,
+  resolveProviderCapabilityStatus,
   saveProviderKey,
   validateProvider,
 } from "@/lib/client/settings-api";
@@ -66,7 +69,6 @@ interface ApiKeyFormProps {
 }
 
 type OpenRouterCatalogFilterId =
-  | "tools"
   | "structuredOutputs"
   | "imageInput"
   | "documentInput"
@@ -77,11 +79,6 @@ const OPENROUTER_CATALOG_FILTERS: Array<{
   label: string;
   match: (model: OpenRouterCatalogModel) => boolean;
 }> = [
-  {
-    id: "tools",
-    label: "Supports tools",
-    match: (model) => model.supportsTools,
-  },
   {
     id: "structuredOutputs",
     label: "Structured output",
@@ -121,10 +118,12 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [openRouterCatalogQuery, setOpenRouterCatalogQuery] = useState("");
   const [loadingOpenRouterCatalog, setLoadingOpenRouterCatalog] = useState(false);
   const [openRouterCatalogError, setOpenRouterCatalogError] = useState<string | null>(null);
+  const [capabilityRows, setCapabilityRows] = useState<ProviderCapabilityStatusRow[]>([]);
+  const [capabilityLoading, setCapabilityLoading] = useState(false);
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
   const [openRouterCatalogFilters, setOpenRouterCatalogFilters] = useState<
     Record<OpenRouterCatalogFilterId, boolean>
   >({
-    tools: false,
     structuredOutputs: false,
     imageInput: false,
     documentInput: false,
@@ -169,14 +168,44 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setOpenRouterCatalogQuery("");
     setOpenRouterCatalogError(null);
     setOpenRouterCatalogFilters({
-      tools: false,
-      structuredOutputs: false,
+        structuredOutputs: false,
       imageInput: false,
       documentInput: false,
       reasoningEffort: false,
     });
   }, [provider.defaultModel, provider.enabled, provider.models, provider.baseURL, provider.modelIds]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!defaultModel) {
+      setCapabilityRows([]);
+      setCapabilityError(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setCapabilityLoading(true);
+    setCapabilityError(null);
+    resolveProviderCapabilityStatus({
+      providerId: provider.providerId,
+      modelId: defaultModel,
+    })
+      .then((rows) => {
+        if (!cancelled) setCapabilityRows(rows);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setCapabilityRows([]);
+          setCapabilityError(err instanceof Error ? err.message : "Failed to resolve capability status");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCapabilityLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider.providerId, defaultModel, provider.lastValidatedAt, provider.baseURL, provider.runnerTokenHint]);
   const filteredOpenRouterCatalog = openRouterCatalog
     .filter((model) => {
       const query = openRouterCatalogQuery.trim().toLowerCase();
@@ -707,9 +736,6 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                                 ) : (
                                   <Badge variant="secondary">text</Badge>
                                 )}
-                                {model.supportsTools && (
-                                  <Badge variant="secondary">tools</Badge>
-                                )}
                                 {model.supportsStructuredOutputs && (
                                   <Badge variant="secondary">structured output</Badge>
                                 )}
@@ -758,6 +784,11 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
             ))}
           </SelectContent>
         </Select>
+        <ProviderCapabilityTable
+          rows={capabilityRows}
+          loading={capabilityLoading}
+          error={capabilityError}
+        />
         <div className="rounded-md border bg-muted/30 p-3 text-sm">
           <p className="font-medium">Runtime behavior</p>
           <p className="mt-1 text-muted-foreground">{runtimeBehavior.temperatureLabel}</p>
