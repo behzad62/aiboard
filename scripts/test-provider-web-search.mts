@@ -112,7 +112,7 @@ check(
   "OpenAI Responses web search field uses auto tool choice",
   JSON.stringify(openAIResponsesWebSearchField(true)) ===
     JSON.stringify({
-      tools: [{ type: "web_search_preview" }],
+      tools: [{ type: "web_search" }],
       tool_choice: "auto",
     }),
   openAIResponsesWebSearchField(true)

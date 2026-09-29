@@ -633,13 +633,9 @@ function usdToMicros(usd: number): number {
 
 export function nativeProviderProtocol(
   providerId: string,
-  modelId: string
+  _modelId: string
 ): "chat-completions" | "responses" {
-  if (providerId === "openrouter") return "responses";
-  return providerId === "openai" &&
-    MODEL_CATALOG.some((model) =>
-      model.providerId === "openai" && model.id === modelId && model.api === "responses"
-    )
+  return providerId === "openai" || providerId === "openrouter"
     ? "responses"
     : "chat-completions";
 }

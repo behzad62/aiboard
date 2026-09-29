@@ -15,6 +15,13 @@ import { openAIResponsesTextFormatField } from "./structured-output";
 import { buildAttachmentPromptSection } from "../attachments/prompt-text";
 import { safeProviderErrorMetadata } from "./base";
 import {
+  normalizeProviderToolEvent,
+  type CitationRef,
+  type ProviderArtifactSink,
+  type ProviderToolEvent,
+} from "./provider-events";
+import type { ToolCapabilityId } from "./tool-capabilities";
+import {
   DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS,
   openRouterFunctionToolsForResponses,
   openRouterHostedToolsForApi,
@@ -31,14 +38,6 @@ type OpenAIResponseInputMessage = {
         | { type: "input_file"; filename: string; file_data: string }
       >;
 };
-
-/** Codex models reject v1/chat/completions and must use v1/responses. */
-function usesResponsesApi(model: string): boolean {
-  return (
-    MODEL_CATALOG.find((m) => m.providerId === "openai" && m.id === model)
-      ?.api === "responses"
-  );
-}
 
 export function buildOpenAIResponsesInput(
   params: ChatParams,
@@ -87,6 +86,255 @@ export function buildOpenAIResponsesInput(
   });
 }
 
+function enabledPlanTool(params: ChatParams, id: ToolCapabilityId) {
+  return params.callPlan?.enabledTools.find((tool) => tool.intent.id === id);
+}
+
+function intentParameters(params: ChatParams, id: ToolCapabilityId): Record<string, unknown> {
+  return enabledPlanTool(params, id)?.intent.parameters ?? {};
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function decodeBase64Bytes(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+function normalizedResponsesToolChoice(params: ChatParams): string | Record<string, unknown> {
+  const choice = params.callPlan?.toolChoice ?? "auto";
+  return typeof choice === "object"
+    ? { type: "function", name: choice.name }
+    : choice;
+}
+
+export function openAIResponsesToolField(params: ChatParams): {
+  tools?: Array<Record<string, unknown>>;
+  tool_choice?: string | Record<string, unknown>;
+  parallel_tool_calls?: boolean;
+} {
+  const plan = params.callPlan;
+  if (!plan || plan.transport !== "responses") return {};
+  const tools: Array<Record<string, unknown>> = [];
+
+  if (enabledPlanTool(params, "function_calling")) {
+    for (const tool of params.nativeTools ?? []) {
+      tools.push({
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        strict: tool.strict ?? false,
+        ...(tool.deferLoading ? { defer_loading: true } : {}),
+      });
+    }
+  }
+  if (enabledPlanTool(params, "web_search")) {
+    const p = intentParameters(params, "web_search");
+    const contextSize = stringValue(p.searchContextSize ?? p.search_context_size);
+    tools.push({
+      type: "web_search",
+      ...(contextSize ? { search_context_size: contextSize } : {}),
+    });
+  }
+  if (enabledPlanTool(params, "file_search")) {
+    const p = intentParameters(params, "file_search");
+    const vectorStoreIds = stringArray(p.vectorStoreIds ?? p.vector_store_ids);
+    if (!vectorStoreIds?.length) {
+      throw new Error("OpenAI file_search requires vector store ids in tool resource configuration.");
+    }
+    tools.push({ type: "file_search", vector_store_ids: vectorStoreIds });
+  }
+  if (enabledPlanTool(params, "remote_mcp")) {
+    const p = intentParameters(params, "remote_mcp");
+    const serverLabel = stringValue(p.serverLabel ?? p.server_label);
+    const serverUrl = stringValue(p.serverUrl ?? p.server_url);
+    const connectorId = stringValue(p.connectorId ?? p.connector_id);
+    const tunnelId = stringValue(p.tunnelId ?? p.tunnel_id);
+    if (!serverLabel || (!serverUrl && !connectorId && !tunnelId)) {
+      throw new Error("OpenAI remote MCP requires serverLabel plus serverUrl, connectorId, or tunnelId.");
+    }
+    tools.push({
+      type: "mcp",
+      server_label: serverLabel,
+      ...(serverUrl ? { server_url: serverUrl } : {}),
+      ...(connectorId ? { connector_id: connectorId } : {}),
+      ...(tunnelId ? { tunnel_id: tunnelId } : {}),
+      ...(stringValue(p.authorization) ? { authorization: p.authorization } : {}),
+      ...(stringArray(p.allowedTools ?? p.allowed_tools)
+        ? { allowed_tools: stringArray(p.allowedTools ?? p.allowed_tools) }
+        : {}),
+      ...(p.headers && typeof p.headers === "object" ? { headers: p.headers } : {}),
+      ...(p.deferLoading === true || p.defer_loading === true ? { defer_loading: true } : {}),
+    });
+  }
+  if (enabledPlanTool(params, "tool_search")) {
+    tools.push({ type: "tool_search", execution: "server" });
+  }
+  if (enabledPlanTool(params, "shell")) {
+    const p = intentParameters(params, "shell");
+    tools.push({
+      type: "shell",
+      environment:
+        p.environment && typeof p.environment === "object"
+          ? p.environment
+          : { type: "container_auto" },
+    });
+  }
+  if (enabledPlanTool(params, "code_execution")) {
+    const p = intentParameters(params, "code_execution");
+    const fileIds = stringArray(p.fileIds ?? p.file_ids);
+    const memoryLimit = stringValue(p.memoryLimit ?? p.memory_limit);
+    tools.push({
+      type: "code_interpreter",
+      container: {
+        type: "auto",
+        ...(fileIds?.length ? { file_ids: fileIds } : {}),
+        ...(memoryLimit ? { memory_limit: memoryLimit } : {}),
+      },
+    });
+  }
+  if (enabledPlanTool(params, "computer_use")) {
+    tools.push({ type: "computer" });
+  }
+  if (enabledPlanTool(params, "image_generation")) {
+    const p = intentParameters(params, "image_generation");
+    tools.push({ type: "image_generation", ...p });
+  }
+
+  if (!tools.length) return {};
+  return {
+    tools,
+    tool_choice: normalizedResponsesToolChoice(params),
+    parallel_tool_calls: plan.parallelToolCalls,
+  };
+}
+
+const OPENAI_HOSTED_ITEM_TO_CAPABILITY: Record<string, ToolCapabilityId> = {
+  web_search_call: "web_search",
+  file_search_call: "file_search",
+  mcp_call: "remote_mcp",
+  mcp_list_tools: "remote_mcp",
+  tool_search_call: "tool_search",
+  shell_call: "shell",
+  code_interpreter_call: "code_execution",
+  computer_call: "computer_use",
+  image_generation_call: "image_generation",
+};
+
+function citationRefs(annotations: unknown): CitationRef[] {
+  if (!Array.isArray(annotations)) return [];
+  return annotations.flatMap((annotation) => {
+    if (!annotation || typeof annotation !== "object") return [];
+    const a = annotation as Record<string, unknown>;
+    const url = stringValue(a.url);
+    if (!url) return [];
+    return [{
+      url,
+      ...(stringValue(a.title) ? { title: stringValue(a.title) } : {}),
+      ...(typeof a.start_index === "number" || typeof a.end_index === "number"
+        ? {
+            sourceSpan: {
+              ...(typeof a.start_index === "number" ? { start: a.start_index } : {}),
+              ...(typeof a.end_index === "number" ? { end: a.end_index } : {}),
+            },
+          }
+        : {}),
+      providerData: { ...(stringValue(a.type) ? { type: a.type } : {}) },
+    }];
+  });
+}
+
+async function normalizeOpenAIHostedEvent(
+  raw: Record<string, unknown>,
+  artifactSink?: ProviderArtifactSink,
+): Promise<ProviderToolEvent | undefined> {
+  const rawType = stringValue(raw.type);
+  const item = raw.item && typeof raw.item === "object"
+    ? (raw.item as Record<string, unknown>)
+    : undefined;
+  const itemType = item ? stringValue(item.type) : undefined;
+  const capability = itemType ? OPENAI_HOSTED_ITEM_TO_CAPABILITY[itemType] : undefined;
+
+  if (capability && rawType === "response.output_item.added") {
+    return normalizeProviderToolEvent({
+      id: stringValue(item?.id) ?? stringValue(raw.item_id),
+      tool: capability,
+      phase: "started",
+      providerManaged: capability !== "computer_use",
+      rawType,
+    });
+  }
+  if (capability && rawType === "response.output_item.done") {
+    const result = capability === "image_generation" ? stringValue(item?.result) : undefined;
+    return normalizeProviderToolEvent(
+      {
+        id: stringValue(item?.id) ?? stringValue(raw.item_id),
+        tool: capability,
+        phase: item?.status === "failed" ? "failed" : "completed",
+        providerManaged: capability !== "computer_use",
+        rawType,
+        ...(result
+          ? {
+              artifactPayloads: [
+                {
+                  id: stringValue(item?.id),
+                  bytes: decodeBase64Bytes(result),
+                  mimeType: "image/png",
+                  filename: `${stringValue(item?.id) ?? "openai-image"}.png`,
+                },
+              ],
+            }
+          : {}),
+      },
+      artifactSink,
+    );
+  }
+  if (rawType === "response.output_text.done") {
+    const citations = citationRefs(raw.annotations);
+    if (citations.length) {
+      return normalizeProviderToolEvent({
+        tool: "web_search",
+        phase: "completed",
+        providerManaged: true,
+        rawType,
+        citations,
+      });
+    }
+  }
+  return undefined;
+}
+
+export async function* streamOpenAIByPlan(
+  client: OpenAI,
+  params: ChatParams,
+): AsyncIterable<StreamChunk> {
+  const transport = params.callPlan?.transport ?? "responses";
+  if (transport === "responses") {
+    yield* streamOpenAIResponses(client, params, "openai");
+    return;
+  }
+  if (transport === "chat_completions") {
+    yield* streamOpenAICompatibleChat(client, params, "openai", "OpenAI");
+    return;
+  }
+  yield {
+    type: "error",
+    error: `OpenAI transport ${transport} is not supported by this adapter.`,
+  };
+}
+
 /** Stream through the OpenAI-style Responses API for OpenAI or OpenRouter. */
 export async function* streamOpenAIResponses(
   client: OpenAI,
@@ -115,41 +363,41 @@ export async function* streamOpenAIResponses(
   const structuredOutputField = openAIResponsesTextFormatField(
     params.structuredOutput
   );
-  const webSearchField = openAIResponsesWebSearchField(
-    params.webSearch && !params.structuredOutput,
-    providerId
-  );
-  const nativeToolField = openAIResponsesNativeToolField(
-    params.structuredOutput ? undefined : params.nativeTools,
-    { providerId, toolChoice: params.toolChoice }
-  );
-  const requestedHostedTools =
-    providerId === "openrouter" && !params.structuredOutput
-      ? [
-          ...(params.hostedBuildTools ? DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS : []),
-          ...(params.hostedTools ?? []),
-        ]
-      : [];
-  const hostedToolField = openRouterHostedToolField(requestedHostedTools);
-  const combinedTools = dedupeResponseTools([
-    ...((webSearchField.tools as unknown[] | undefined) ?? []),
-    ...((nativeToolField.tools as unknown[] | undefined) ?? []),
-    ...((hostedToolField.tools as unknown[] | undefined) ?? []),
-  ]);
   const combinedToolField =
-    combinedTools.length > 0
-      ? {
-          tools: combinedTools,
-          tool_choice:
-            nativeToolField.tool_choice ??
-            (providerId === "openrouter"
-              ? toolChoiceForResponses(params.toolChoice)
-              : params.toolChoice ?? "auto"),
-          ...(nativeToolField.parallel_tool_calls
-            ? { parallel_tool_calls: nativeToolField.parallel_tool_calls }
-            : {}),
-        }
-      : {};
+    providerId === "openai"
+      ? openAIResponsesToolField(params)
+      : (() => {
+          const webSearchField = openAIResponsesWebSearchField(
+            params.webSearch && !params.structuredOutput,
+            providerId
+          );
+          const nativeToolField = openAIResponsesNativeToolField(
+            params.structuredOutput ? undefined : params.nativeTools,
+            { providerId, toolChoice: params.toolChoice }
+          );
+          const requestedHostedTools = !params.structuredOutput
+            ? [
+                ...(params.hostedBuildTools ? DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS : []),
+                ...(params.hostedTools ?? []),
+              ]
+            : [];
+          const hostedToolField = openRouterHostedToolField(requestedHostedTools);
+          const combinedTools = dedupeResponseTools([
+            ...((webSearchField.tools as unknown[] | undefined) ?? []),
+            ...((nativeToolField.tools as unknown[] | undefined) ?? []),
+            ...((hostedToolField.tools as unknown[] | undefined) ?? []),
+          ]);
+          return combinedTools.length > 0
+            ? {
+                tools: combinedTools,
+                tool_choice:
+                  nativeToolField.tool_choice ?? toolChoiceForResponses(params.toolChoice),
+                ...(nativeToolField.parallel_tool_calls
+                  ? { parallel_tool_calls: nativeToolField.parallel_tool_calls }
+                  : {}),
+              }
+            : {};
+        })();
 
   try {
     const pendingToolCalls = new Map<
@@ -216,6 +464,13 @@ export async function* streamOpenAIResponses(
         name?: string;
         arguments?: string;
       };
+      const providerToolEvent = await normalizeOpenAIHostedEvent(
+        event as unknown as Record<string, unknown>,
+        params.artifactSink,
+      );
+      if (providerToolEvent) {
+        yield { type: "provider_tool_event", providerToolEvent };
+      }
       // Responses reports usage on the terminal response.completed event.
       const responseUsage = (
         event as unknown as {
@@ -380,7 +635,7 @@ export function openAIResponsesWebSearchField(
     tools:
       providerId === "openrouter"
         ? [{ type: "openrouter:web_search", parameters: { search_context_size: "medium" } }]
-        : [{ type: "web_search_preview" }],
+        : [{ type: "web_search" }],
     tool_choice: "auto",
   };
 }
@@ -472,10 +727,6 @@ export const openaiProvider: AIProvider = {
       dangerouslyAllowBrowser: true,
       ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
     });
-    if (usesResponsesApi(params.model)) {
-      yield* streamOpenAIResponses(client, params);
-      return;
-    }
-    yield* streamOpenAICompatibleChat(client, params, "openai", "OpenAI");
+    yield* streamOpenAIByPlan(client, params);
   },
 };
