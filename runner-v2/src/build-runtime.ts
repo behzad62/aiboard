@@ -2543,15 +2543,20 @@ export class BuildRuntime {
     const eventSpecCopySkipped = commitClaim.specCopied
       ? undefined
       : (commitClaim.specCopySkipped ?? stagedSpecSkipped ?? specCopySkipped);
-    this.appendHandoffSnapshotCommitted({
-      stopSequence,
-      stopKind,
-      revision,
-      commit: result.commit,
-      parent: result.parent,
-      head: result.head,
-      bodyDigest: committedDigest,
-      paths: stored.paths,
+    // C2e (m-7): a snapshot append the reducer refuses (any future
+    // runtime/reducer disagreement) is a retryable pause with the
+    // reducer's reason -- never a pump error. A resume retries the same
+    // stop, reusing the landed commit by key.
+    try {
+      this.appendHandoffSnapshotCommitted({
+        stopSequence,
+        stopKind,
+        revision,
+        commit: result.commit,
+        parent: result.parent,
+        head: result.head,
+        bodyDigest: committedDigest,
+        paths: stored.paths,
       // C2c repair CD-17: with no fresh STATE.md there is no committed
       // notice line to read; the skip reason below carries the facts.
       previousSnapshotEdited: stateChanged && stored.content !== null
@@ -2565,7 +2570,10 @@ export class BuildRuntime {
       ...(agentsSectionCommitted ? {} : { agentsSectionCommitted: false as const }),
       ...(claudeLineCommitted ? {} : { claudeLineCommitted: false as const }),
       ...(stateSkippedReason !== undefined ? { stateSkippedReason } : {}),
-    });
+      });
+    } catch (error) {
+      return this.pauseForHandoffSnapshotFailure(stopSequence, lastSequence, error);
+    }
     return { status: "paused", action: "handoff_snapshot_committed" };
   }
 
@@ -2723,10 +2731,14 @@ export class BuildRuntime {
       // failure, so the current stop never wedges on it. History only: the
       // gate still binds to the latest request, so this never satisfies a
       // later gate.
+      // C2e (m-4): a withdrawn commit carries the fresh-worded entry skips
+      // the port re-derived from its own tree, so the history record uses
+      // the same wording a fresh commit of the same layout records.
       const withdrawnDescribed = describeSnapshotCommitFacts({
         entryPoint: found.entryPoint,
         storedPaths: stored.paths,
         ...(found.dirLinks?.[0] !== undefined ? { commitStateLink: found.dirLinks[0] } : {}),
+        ...(found.skipped !== undefined ? { stageSkipped: found.skipped } : {}),
       });
       const withdrawnStateChanged = withdrawnDescribed.stateChanged;
       const withdrawnStateSkipped = withdrawnDescribed.stateSkippedReason;

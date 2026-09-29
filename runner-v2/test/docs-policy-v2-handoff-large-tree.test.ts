@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
+import { verifyHandoffSnapshotDigest } from "../src/handoff-snapshot.js";
 import {
   CLAUDE_POINTER_LINE,
   DEFAULT_AGENTS_SECTION_BODY,
@@ -86,6 +87,31 @@ test("C2c repair cycle 2/probe G1-control: a large tree outside docs still commi
     assert.equal(snapshots.length, 1, `the snapshot commits with a large tree elsewhere (pause=${JSON.stringify(driven.projection.pauseReason)})`);
     const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2c-r2-g1control");
     assert.equal(selected.status, "completed");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2e/probe G1-select: a large docs tree still applies the owner's selection", async () => {
+  const RUN = "run-c2e-g1select";
+  const fixture = await openFactoryPort("c2eg1select", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    await seedManyTrackedFiles(worktree, "docs/generated", 40000);
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, `the snapshot commits despite the large docs tree (pause=${JSON.stringify(driven.projection.pauseReason)})`);
+    // The owner's apply selection completes: the apply never buffers the
+    // whole-tree diff into the capped git output (the old 4 MiB refusal is
+    // gone), while conflict refusal and the audit record are unchanged.
+    const selected = await selectHandoffOwner(fixture, RUN, "apply_to_project", "handoff:c2e-g1select");
+    assert.equal(selected.status, "completed", "the apply selection completes on the large tree");
+    assert.equal(selected.projectHandoff?.choice, "apply_to_project");
+    const applied = await runGit({ cwd: fixture.project, args: ["show", "HEAD:docs/project/STATE.md"] });
+    assert.equal(verifyHandoffSnapshotDigest(applied.stdout), true, "the project holds the applied snapshot");
+    const generated = await runGit({ cwd: fixture.project, args: ["show", "HEAD:docs/generated/g-00000-padding-to-inflate-index-output-0123456789.md"] });
+    assert.match(generated.stdout, /generated 0/, "the large tree applied with the handoff");
   } finally {
     await fixture.close();
   }

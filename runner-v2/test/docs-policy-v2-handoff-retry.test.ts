@@ -25,13 +25,16 @@ import {
   CLOCK,
   COMPLETION_SUMMARY,
   SOURCE_TEXT,
+  advancingClock,
   appendHandoffEvents,
   applyAutomaticHandoff,
+  buildRuntimeForHandoff,
   checkoutDirLinkAsRealLink,
   checkoutEntryLinkAsPlainFile,
   commitEntryLinkMode,
   driveHandoff,
   type FactoryPortFixture,
+  failNextSnapshotAppendOnce,
   failNextSnapshotCommits,
   failNextSnapshotLookupOnce,
   failNextSnapshotReadOnce,
@@ -1068,5 +1071,185 @@ test("C2c repair cycle 2/probe J-docs: an out-of-band docs junction pauses fail-
   } finally {
     await fixture.close();
     rmSync(outsideRoot, { recursive: true, force: true });
+  }
+});
+
+test("C2e/m-7 refused append pauses: a refused snapshot append pauses with the reason and resume retries", async () => {
+  const RUN = "run-c2e-m7append";
+  const fixture = await openFactoryPort("c2em7append", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    // Fault injection: the reducer refuses the snapshot append once, as if
+    // the runtime and the reducer disagreed about the record.
+    const store = openHandoffStore(fixture, RUN);
+    try {
+      failNextSnapshotAppendOnce(store, "Handoff snapshots must include docs/project/STATE.md.");
+      const runtime = buildRuntimeForHandoff({
+        runId: RUN,
+        store,
+        projectDocs: fixture.port,
+        architect,
+        clock: advancingClock(),
+        runPolicy: "plan_only",
+        evidenceStore: fixture.evidence,
+      });
+      await runtime.runUntilBlocked();
+      const events = store.readRun(RUN);
+      assert.equal(events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0, "the refused append records nothing");
+      const pauses = events.filter((event) => event.type === "run.paused");
+      assert.equal(pauses.length, 1, "the refusal is a pause, not a pump error");
+      assert.equal((pauses[0]!.payload as Record<string, unknown>).reason, "handoff_snapshot_failed");
+      assert.match(String((pauses[0]!.payload as Record<string, unknown>).detail), /Handoff snapshots must include docs\/project\/STATE\.md/, "the pause carries the reducer's reason");
+      const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+      assert.equal(landed.stdout.trim(), "1", "the kernel commit landed before the refused append");
+    } finally {
+      store.close();
+    }
+    // A resume retries the same stop, reusing the landed commit by key.
+    await resumeHandoff(fixture, RUN, "resume:c2e-m7append", { architect });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the resume retries and records the snapshot");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2e-m7append");
+    assert.equal(selected.status, "completed", "the owner selection completes after the retry");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2e/m-8 W-A4 second stop: a withdrawn docs-link stop records its empty second commit and completes", async () => {
+  const RUN = "run-c2e-m8wa4";
+  // The finish-run harness mirrors G2: stop 1's snapshot commit lands, the
+  // read-back fails, guidance withdraws, FV re-runs and the Architect's
+  // real second complete_run re-requests (stop 2). The layout is the exact
+  // `docs` link (W-A4), so stop 2 commits empty: the entry files already
+  // hold their sections.
+  const preSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
+    v2FinishSeed(runId, baseline).filter((event) => !event.type.startsWith("final_verification."));
+  const fvSeed = (runId: string, baseline: string): NewSchedulerEvent[] =>
+    v2FinishSeed(runId, baseline).filter((event) => event.type.startsWith("final_verification."));
+  const fixture = await openFactoryPort("c2em8wa4", RUN, preSeed, "finish");
+  appendHandoffEvents(fixture, RUN, fvSeed(RUN, fixture.baselineRevision));
+  appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, fixture.baselineRevision));
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2e-outside-m8-"));
+  writeFileSync(join(outside, "own.txt"), "outside\n");
+  const worktree = fixture.integration.path;
+  await commitEntryLinkMode(worktree, "docs", outside);
+  await checkoutDirLinkAsRealLink(worktree, "docs");
+  const setupHead = (await runGit({ cwd: worktree, args: ["rev-parse", "HEAD"] })).stdout.trim();
+  // The stop-1 commit lands (entry files only: STATE.md is skipped under
+  // the link), then the read-back fails: a transient failure after the
+  // commit.
+  failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+  const architect = silentArchitect("The build is complete and verified.");
+  const verifierCalls = { calls: 0 };
+  const verifier = productionRiskVerifier(fixture, RUN, verifierCalls);
+  const driveOpts = { runPolicy: "finish" as const, architect, independentVerifier: verifier };
+  try {
+    let driven = await driveHandoff(fixture, RUN, { runPolicy: "finish", architect });
+    assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), "2", "the link setup plus the stop-1 kernel commit landed");
+    const stop1 = driven.events.find((event) => event.type === "project.handoff_requested")!.sequence;
+    // The owner submits guidance instead of resuming: the handoff is
+    // withdrawn. The Architect acknowledges with no plan change.
+    const e = (
+      type: string,
+      key: string,
+      role: SchedulerActorRole,
+      id: string,
+      payload: Record<string, unknown>,
+    ): NewSchedulerEvent => seedEvent(RUN, type, key, role, id, payload);
+    const acknowledgementEvidence = fixture.evidence.record({
+      runId: RUN,
+      taskId: "architect",
+      actor: { role: "architect", id: "architect" },
+      fact: {
+        kind: "browser_screenshot",
+        label: "the plan already incorporates the withdrawing guidance",
+        capturedAt: CLOCK,
+        screenshotArtifactHash: "c".repeat(64),
+        mediaType: "image/png",
+        byteLength: 1,
+      },
+      createdAt: CLOCK,
+      idempotencyKey: "guidance-stale-stop:evidence",
+    });
+    appendHandoffEvents(fixture, RUN, [
+      e("user.guidance_submitted", "guidance-1", "user", "local-user", {
+        guidanceId: "guidance-1",
+        text: "Hold the handoff and re-verify the plan.",
+        version: 1,
+        interruptionProtocolVersion: 1,
+      }),
+      e("user.guidance_interruption_completed", "guidance-1:interruption", "runner", "build-manager", {
+        guidanceId: "guidance-1",
+        expectedVersion: 1,
+      }),
+      e("user.guidance_acknowledged", "guidance-1:ack", "architect", "architect", {
+        guidanceId: "guidance-1",
+        expectedVersion: 1,
+        resolution: {
+          type: "no_plan_change",
+          rationale: "The initial plan already incorporates the durable guidance.",
+          evidenceIds: [acknowledgementEvidence.id],
+        },
+      }),
+    ]);
+    const withdrawn = readHandoffLog(fixture, RUN).projection;
+    assert.equal(withdrawn.projectHandoff, undefined, "guidance withdrew the handoff");
+    assert.equal((withdrawn.projectHandoffHistory ?? []).length, 1);
+    // The link setup is an integration-branch move, so it is recorded as the
+    // integration revision (as production records any later integration
+    // commit, W-CI pattern): stop 1's landed commit then continues the
+    // documents instead of dangling past the runner's tracking. Final
+    // verification re-runs green on that head. Guidance invalidated the
+    // stop-1 assessment, so the drive re-assesses through the real kernel
+    // derivation (driveOpts) before the Architect's real second
+    // complete_run re-requests (stop 2): no seeded risk event, no seeded
+    // re-request.
+    appendHandoffEvents(fixture, RUN, [
+      seedEvent(RUN, "integration.revision_advanced", "integration-revision-setup", "runner", "integration", {
+        integrationRevision: setupHead,
+      }),
+      ...fvRerunSeed(RUN, setupHead),
+    ]);
+    driven = await driveHandoff(fixture, RUN, driveOpts);
+    const risks = driven.events.filter((event) => event.type === "build.risk_assessed");
+    assert.equal(risks.length, 2, "the runtime re-assesses after the invalidation");
+    assert.equal(
+      risks[1]!.idempotencyKey,
+      `build-risk:${setupHead}:generation-c2a-finish-rerun`,
+      "the re-assessment is keyed by the re-run revision and generation",
+    );
+    assert.ok(verifierCalls.calls <= 3, `no assessRisk spin (${verifierCalls.calls} calls)`);
+    // The withdrawn stop's landed commit was recorded as history before the
+    // next stop committed: two snapshot events, one chain, the second one
+    // empty.
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 2, "the withdrawn stop is history and the second stop commits");
+    const first = snapshots[0]!.payload as Record<string, unknown>;
+    const second = snapshots[1]!.payload as Record<string, unknown>;
+    assert.equal(first.stopSequence, stop1, "the withdrawn stop is recorded first, as history");
+    assert.match(String(first.stateSkippedReason), /docs is a symbolic link or junction/, "the withdrawn stop names the docs link");
+    assert.deepEqual(second.paths, [], "stop 2 commits empty: the entry files already hold their sections");
+    assert.match(String(second.stateSkippedReason), /docs is a symbolic link or junction/, "the empty commit still names the docs link");
+    assert.equal(second.parent, first.commit, "the empty commit continues the withdrawn commit");
+    assert.equal(driven.projection.projectDocs?.documentTip, second.commit);
+    assert.deepEqual(readdirSync(outside), ["own.txt"], "nothing is written outside the repository");
+    // The handoff succeeds only after the kernel record, and the project
+    // holds the applied entry section plus the applied docs link.
+    const projection = await applyAutomaticHandoff(fixture, RUN, { runPolicy: "finish" });
+    assert.equal(projection.status, "completed", "the handoff succeeds after the empty commit");
+    assert.equal(projection.projectHandoff?.choice, "apply_to_project");
+    assert.equal(architect.calls(), 2, "stop 1 plus the real re-request; the kernel snapshot itself makes no model call");
+    const appliedAgents = await runGit({ cwd: fixture.project, args: ["show", "HEAD:AGENTS.md"] });
+    assert.ok(appliedAgents.stdout.includes(V2_AGENTS_SECTION_BODY), "the project holds the applied entry section");
+    const appliedDocs = await runGit({ cwd: fixture.project, args: ["ls-tree", "HEAD", "--", "docs"] });
+    assert.match(appliedDocs.stdout.trim(), /^120000 /, "the apply carries the docs link itself");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
   }
 });

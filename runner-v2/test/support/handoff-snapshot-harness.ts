@@ -884,6 +884,19 @@ export function failNextSnapshotLookupOnce(integration: ProductionIntegrationMan
   };
 }
 
+/** Fail the harness store's next handoff-snapshot append once (a refused reducer append). */
+export function failNextSnapshotAppendOnce(store: SqliteSchedulerStore, message: string): void {
+  const orig = store.append.bind(store);
+  let armed = true;
+  store.append = (event: NewSchedulerEvent) => {
+    if (armed && event.type === "project_docs.handoff_snapshot_committed") {
+      armed = false;
+      throw new Error(message);
+    }
+    return orig(event);
+  };
+}
+
 /** Fail the factory integration's next N snapshot commits (a persistent commit failure). */
 export function failNextSnapshotCommits(integration: ProductionIntegrationManager, count: number, message: string): void {
   const orig = integration.commitHandoffSnapshot.bind(integration);

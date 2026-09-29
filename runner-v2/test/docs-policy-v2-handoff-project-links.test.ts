@@ -12,6 +12,7 @@ import {
   DEFAULT_STATE_TEMPLATE,
   V2_AGENTS_SECTION_BODY,
   V2_CLAUDE_POINTER_LINE,
+  handoffStateSkipReason,
   spliceMarkedArchitectSectionBytes,
 } from "../src/project-docs.js";
 import {
@@ -610,6 +611,47 @@ test("C2c repair cycle 4/probe ALL-SKIP-out: links to outside files still record
   }
 });
 
+test("C2e/m-11 unclean index reason: the empty-commit refusal names the unclean index", async () => {
+  const RUN = "run-c2e-m11dirty";
+  const fixture = await openFactoryPort("c2em11dirty", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = mkdtempSync(join(tmpdir(), "aiboard-c2e-outside-m11-"));
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "docs", outside);
+    await checkoutDirLinkAsRealLink(worktree, "docs");
+    await commitEntryLinkMode(worktree, "AGENTS.md", "MISSING.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "MISSING.md");
+    await commitEntryLinkMode(worktree, "CLAUDE.md", "AGENTS.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "CLAUDE.md", "AGENTS.md");
+    // An unrelated staged file makes the integration index unclean while
+    // every handoff write is skipped.
+    writeFileSync(join(worktree, "unrelated.txt"), "unrelated\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "unrelated.txt"] });
+    const before = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    await assert.rejects(
+      () => fixture.integration.commitHandoffSnapshot({
+        writes: [
+          { path: "docs/project/STATE.md", content: "kernel body\n" },
+          { path: "AGENTS.md", content: V2_AGENTS_SECTION_BODY },
+          { path: "CLAUDE.md", content: V2_CLAUDE_POINTER_LINE },
+        ],
+        summary: `AIBoard handoff snapshot (plan_only) for run ${RUN}`,
+        runId: RUN,
+        snapshotKey: "handoff-snapshot:9",
+      }),
+      /integration index is not clean/,
+      "the refusal names the unclean index instead of the recorded skips",
+    );
+    const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(after.stdout.trim(), before.stdout.trim(), "the refused commit lands nothing");
+    const staged = await runGit({ cwd: worktree, args: ["diff", "--cached", "--name-only"] });
+    assert.match(staged.stdout, /unrelated\.txt/, "the staged stranger is left alone");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 /**
  * C2c repair cycle 4 (NB-7): a withdrawn stop whose commit holds a `Docs`
  * link reconciles from its OWN commit even after the worktree drops that
@@ -968,5 +1010,153 @@ test("C2d/probe F-collide: a colliding tree prefers the link entry and skips STA
   } finally {
     await fixture.close();
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2e/probe F-docs-file: a tracked file at docs skips STATE.md and still hands off", async () => {
+  const RUN = "run-c2e-fdocsfile";
+  const fixture = await openFactoryPort("c2efdocsfile", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    // A tracked regular file at `docs` (today: ENOTDIR from the write, on
+    // every attempt).
+    writeFileSync(join(worktree, "docs"), "user file\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a tracked file at docs"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the run hands off instead of stalling on ENOTDIR");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.stateSkippedReason, handoffStateSkipReason("docs"), "the skip reason is tree-derived, exactly as for a link");
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.claudeLineCommitted, true);
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "CLAUDE.md"],
+      "only the entry files commit; nothing is written under the file",
+    );
+    assert.equal(readFileSync(join(worktree, "docs"), "utf8"), "user file\n", "the user's file is untouched");
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2e-fdocsfile");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+    // The v1 Architect path refuses with a clear reason, never with a crash.
+    const before = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+        summary: "Record documents",
+        runId: RUN,
+        requestId: "project-doc:c2e-fdocsfile:docs/project/STATE.md",
+      }),
+      /Project document path docs\/project\/STATE\.md is refused because docs is a regular file, not a directory\./,
+      "a file at docs refuses the v1 batch before any write",
+    );
+    const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(after.stdout.trim(), before.stdout.trim(), "the refused batch commits nothing");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2e/probe F-project-file: a tracked file at docs/project skips STATE.md and still hands off", async () => {
+  const RUN = "run-c2e-fprojectfile";
+  const fixture = await openFactoryPort("c2efprojectfile", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    // A tracked regular file at `docs/project` (today: EEXIST from the
+    // write, on every attempt).
+    mkdirSync(join(worktree, "docs"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project"), "user file\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/project"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a tracked file at docs/project"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the run hands off instead of stalling on EEXIST");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.stateSkippedReason, handoffStateSkipReason("docs/project"), "the skip reason is tree-derived, exactly as for a link");
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "CLAUDE.md"],
+      "only the entry files commit; nothing is written under the file",
+    );
+    assert.equal(readFileSync(join(worktree, "docs", "project"), "utf8"), "user file\n", "the user's file is untouched");
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2e-fprojectfile");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+    // The v1 Architect path refuses with a clear reason, never with a crash.
+    const before = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+        summary: "Record documents",
+        runId: RUN,
+        requestId: "project-doc:c2e-fprojectfile:docs/project/STATE.md",
+      }),
+      /Project document path docs\/project\/STATE\.md is refused because docs\/project is a regular file, not a directory\./,
+      "a file at docs/project refuses the v1 batch before any write",
+    );
+    const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(after.stdout.trim(), before.stdout.trim(), "the refused batch commits nothing");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2e/probe F-state-dir: a tracked directory at docs/project/STATE.md skips STATE.md and still hands off", async () => {
+  const RUN = "run-c2e-fstatedir";
+  const fixture = await openFactoryPort("c2efstatedir", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    // A tracked directory at `docs/project/STATE.md` (today: EISDIR from
+    // the write, on every attempt).
+    mkdirSync(join(worktree, "docs", "project", "STATE.md"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project", "STATE.md", "keep.md"), "user keep\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/project/STATE.md/keep.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a tracked directory at docs/project/STATE.md"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the run hands off instead of stalling on EISDIR");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.stateSkippedReason, handoffStateSkipReason("docs/project/STATE.md"), "the skip reason is tree-derived, exactly as for a link");
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "CLAUDE.md"],
+      "only the entry files commit; nothing is written under the directory",
+    );
+    assert.equal(readFileSync(join(worktree, "docs", "project", "STATE.md", "keep.md"), "utf8"), "user keep\n", "the user's file is untouched");
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2e-fstatedir");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+    // The v1 Architect path refuses with a clear reason, never with a crash.
+    const before = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+        summary: "Record documents",
+        runId: RUN,
+        requestId: "project-doc:c2e-fstatedir:docs/project/STATE.md",
+      }),
+      /Project document path docs\/project\/STATE\.md is refused because docs\/project\/STATE\.md is a directory\./,
+      "a directory at STATE.md refuses the v1 batch before any write",
+    );
+    const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(after.stdout.trim(), before.stdout.trim(), "the refused batch commits nothing");
+  } finally {
+    await fixture.close();
   }
 });

@@ -25,8 +25,10 @@ import {
   checkoutEntryLinkAsPlainFile,
   commitEntryLinkMode,
   driveHandoff,
+  failNextSnapshotReadOnce,
   openFactoryPort,
   readHandoffLog,
+  resumeHandoff,
   seedEvent,
   seedHandoffRequested,
   selectHandoffOwner,
@@ -749,5 +751,42 @@ test("C2d/probe D-rd-collide: a redirect into a case-colliding target is refused
   } finally {
     await fixture.close();
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("C2e/m-4 reuse wording: a reused commit records the fresh skip wording, not the generic one", async () => {
+  const RUN = "run-c2e-m4reuse";
+  const fixture = await openFactoryPort("c2em4reuse", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    await commitEntryLinkMode(worktree, "AGENTS.md", "MISSING.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "MISSING.md");
+    // The commit lands, then the read-back fails; the resume retries and
+    // reuses the landed commit by key.
+    failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+    let driven = await driveHandoff(fixture, RUN, { architect });
+    assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
+    assert.equal(driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
+    const landed = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(landed.stdout.trim(), "2", "the link setup plus the kernel commit landed before the failed read");
+    await resumeHandoff(fixture, RUN, "resume:c2e-m4reuse", { architect });
+    driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the retry reuses the landed commit instead of wedging");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.agentsSectionCommitted, false);
+    assert.equal(
+      String(payload.agentsSectionViaLink),
+      "AGENTS.md is a symbolic link to MISSING.md; the entry is skipped (target MISSING.md is not a regular tracked file).",
+      "the reuse records the fresh wording, not the generic re-description",
+    );
+    const relanded = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(relanded.stdout.trim(), "2", "the retry reuses the landed commit instead of committing again");
+    assert.equal(readFileSync(join(worktree, "AGENTS.md"), "utf8"), "MISSING.md", "the link is never touched");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2e-m4reuse");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+  } finally {
+    await fixture.close();
   }
 });

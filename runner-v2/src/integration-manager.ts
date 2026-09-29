@@ -8,6 +8,7 @@ import {
   rename,
   rm,
   rmdir,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
@@ -24,6 +25,8 @@ import {
   agentsMarkedSectionSatisfiesV2,
   claudePointerSatisfies,
   claudePointerSatisfiesV2,
+  handoffEntryGenericSkipReason,
+  handoffStateSkipReason,
   HANDOFF_STATE_LINK_COMPONENTS,
   resolveHandoffLinkTarget,
   spliceMarkedArchitectSectionBytes,
@@ -671,8 +674,15 @@ export class IntegrationManager {
         // C2b repair m2: a reused commit still describes the committed tree.
         // The caller derives previousSnapshotEdited and specCopied from the
         // read-back, never from fresh reads, so the reuse is marked.
+        // C2e (m-4): a reused commit carries no stage-time records, so the
+        // shared describer would re-word every entry skip generically. The
+        // skip reasons below are re-derived from the same commit tree in the
+        // fresh wording, so the reuse records exactly what a fresh commit
+        // of the same layout records.
         const reusedResult = await this.documentCommitResult(existing);
         reusedResult.reused = true;
+        const reusedSkips = await this.commitEntrySkipReasonsFromTree(existing, reusedResult.entryPoint);
+        if (reusedSkips.length > 0) reusedResult.skipped = reusedSkips;
         return reusedResult;
       }
       // C2b (M7): entry files go through the marked-section splice, never a
@@ -698,13 +708,16 @@ export class IntegrationManager {
         // elsewhere) still hands off. The reducer accepts the `paths: []`
         // shape with those reasons (round 3, NB-4), so record an empty
         // snapshot commit instead of wedging the run. Nothing else may be
-        // staged into it: the index must be clean (fail closed with the
-        // original throw otherwise), and the commit carries every runner
-        // trailer so key reuse still finds it. The v1 Architect path below
-        // keeps the throw.
+        // staged into it: the index must be clean, and the commit carries
+        // every runner trailer so key reuse still finds it. The v1
+        // Architect path below keeps the throw.
+        // C2e (m-11): the unclean-index refusal names the integration
+        // index, not "wrote nothing" -- the skips are recorded, the staged
+        // stranger is the cause. Fail closed: HEAD is unchanged and nothing
+        // is staged into the empty commit.
         const indexStatus = await this.git(this.path, ["diff", "--cached", "--quiet"], true);
         if (indexStatus.exitCode !== 0) {
-          throw new Error(`Project document commit wrote nothing: ${skipped.map((entry) => entry.reason).join(" ") || "every write was skipped."}`);
+          throw new Error(`Project document commit refused: the integration index is not clean (staged changes remain while every write was skipped: ${skipped.map((entry) => entry.reason).join(" ") || "every write was skipped."}).`);
         }
         try {
           await this.execute({
@@ -1074,6 +1087,33 @@ export class IntegrationManager {
           });
           continue;
         }
+        // C2e (F-matrix): a tracked file where docs/ or docs/project/ is
+        // expected, or a tracked directory where STATE.md is expected,
+        // stalls every attempt today (ENOTDIR/EEXIST/EISDIR from the write
+        // below). The kernel skips STATE.md instead with the same
+        // tree-derived reason the commit walk reports (dirLinks), which
+        // the AR-R05 gate accepts exactly as the CD-17 link reason -- and
+        // the run hands off. Nothing is written under the blocker.
+        if (write.path === "docs/project/STATE.md") {
+          const blocker = await this.commitStateNonLinkBlocker("HEAD");
+          if (blocker !== null) {
+            skipped.push({ path: write.path, reason: handoffStateSkipReason(blocker.component) });
+            continue;
+          }
+        }
+      }
+      if (!skipClaudeAgentsLink && write.path !== "AGENTS.md" && write.path !== "CLAUDE.md" && write.path.toLowerCase().startsWith("docs/")) {
+        // C2e (F-matrix): the v1 Architect path refuses with a clear
+        // reason naming the blocker (as it does for a docs link), never
+        // with a raw ENOTDIR/EEXIST/EISDIR crash from the write below.
+        const blocker = await this.commitStateNonLinkBlocker("HEAD");
+        if (blocker !== null) {
+          throw new Error(
+            blocker.kind === "file-not-dir"
+              ? `Project document path ${write.path} is refused because ${blocker.component} is a regular file, not a directory.`
+              : `Project document path ${write.path} is refused because ${blocker.component} is a directory.`,
+          );
+        }
       }
       if (skipClaudeAgentsLink && (write.path === "AGENTS.md" || write.path === "CLAUDE.md")) {
         const link = await this.entryLinkRawTarget(write.path);
@@ -1296,19 +1336,6 @@ export class IntegrationManager {
           "Automatic project handoff requires a clean project worktree and index."
         );
       }
-      const diff = await this.git(this.path, [
-        "diff",
-        "--binary",
-        "--full-index",
-        this.baselineRevision,
-        this.revision,
-        "--",
-      ]);
-      if (!diff.stdout) return this.descriptor(true, projectRevision);
-      if (await this.isAppliedProjectCommit(projectRevision)) {
-        return this.descriptor(true, projectRevision);
-      }
-
       const handoffDirectory = resolve(this.stateDirectory, "handoff");
       const transitionId = randomUUID();
       const transitionSegment = safeName(transitionId);
@@ -1333,7 +1360,30 @@ export class IntegrationManager {
       await mkdir(handoffDirectory, { recursive: true });
       await rm(indexPath, { force: true });
       await rm(`${indexPath}.lock`, { force: true });
-      await writeFile(patchPath, diff.stdout, "utf8");
+      // C2e (G1): the integration diff of a large tree (40,000 files under
+      // docs/generated/) exceeds the 4 MiB git output cap, so buffering the
+      // whole diff refuses the owner's selection. Git writes the patch file
+      // directly (--output) instead: the runner's git output stays a few
+      // bytes no matter how large the tree is, while the patch bytes -- and
+      // every downstream guarantee (conflict refusal via --check, the audit
+      // patch file, the journal) -- are unchanged.
+      await this.git(this.path, [
+        "diff",
+        "--binary",
+        "--full-index",
+        `--output=${patchPath}`,
+        this.baselineRevision,
+        this.revision,
+        "--",
+      ]);
+      if ((await stat(patchPath)).size === 0) {
+        await rm(patchPath, { force: true });
+        return this.descriptor(true, projectRevision);
+      }
+      if (await this.isAppliedProjectCommit(projectRevision)) {
+        await rm(patchPath, { force: true });
+        return this.descriptor(true, projectRevision);
+      }
       try {
         const isolatedIndex = { GIT_INDEX_FILE: indexPath };
         await this.execute({
@@ -1408,7 +1458,8 @@ export class IntegrationManager {
         };
         await this.assertCheckoutWillNotOverwriteUntracked(
           projectRevision,
-          committedRevision
+          committedRevision,
+          `${indexPath}.names`
         );
         const ownership = await this.git(
           this.repositoryRoot,
@@ -1500,7 +1551,8 @@ export class IntegrationManager {
         try {
           await this.assertCheckoutWillNotOverwriteUntracked(
             projectRevision,
-            committedRevision
+            committedRevision,
+            `${indexPath}.names`
           );
           const currentBranch = await this.git(
             this.repositoryRoot,
@@ -1977,28 +2029,40 @@ export class IntegrationManager {
 
   private async assertCheckoutWillNotOverwriteUntracked(
     fromRevision: string,
-    toRevision: string
+    toRevision: string,
+    scratchPath: string
   ): Promise<void> {
-    const [changed, untracked] = await Promise.all([
-      this.git(this.repositoryRoot, [
-        "diff",
-        "--name-only",
-        "-z",
-        fromRevision,
-        toRevision,
-        "--",
-      ]),
-      this.git(this.repositoryRoot, ["ls-files", "--others", "-z"]),
+    // C2e (G1): the changed-name listing of a large apply is a whole-tree
+    // listing too, so it also goes through --output into a scratch file
+    // (removed before returning) instead of one capped git buffer. The
+    // project is proven clean just before the apply, so the untracked
+    // listing stays a few bytes; the collision refusal itself is unchanged.
+    await this.git(this.repositoryRoot, [
+      "diff",
+      "--name-only",
+      "-z",
+      `--output=${scratchPath}`,
+      fromRevision,
+      toRevision,
+      "--",
     ]);
-    const changedPaths = new Set(changed.stdout.split("\0").filter(Boolean));
-    const collision = untracked.stdout
-      .split("\0")
-      .filter(Boolean)
-      .find((path) => changedPaths.has(path));
-    if (collision) {
-      throw new Error(
-        `Automatic project handoff would overwrite the untracked or ignored path ${collision}.`
-      );
+    try {
+      const [changedBytes, untracked] = await Promise.all([
+        readFile(scratchPath),
+        this.git(this.repositoryRoot, ["ls-files", "--others", "-z"]),
+      ]);
+      const changedPaths = new Set(changedBytes.toString("utf8").split("\0").filter(Boolean));
+      const collision = untracked.stdout
+        .split("\0")
+        .filter(Boolean)
+        .find((path) => changedPaths.has(path));
+      if (collision) {
+        throw new Error(
+          `Automatic project handoff would overwrite the untracked or ignored path ${collision}.`
+        );
+      }
+    } finally {
+      await rm(scratchPath, { force: true });
     }
   }
 
@@ -2418,6 +2482,12 @@ export class IntegrationManager {
    * names compare case-folded where the checkout is case-insensitive.
    * Returns expected spellings (HANDOFF_STATE_LINK_COMPONENTS) in
    * first-link order; the walk stops at the first link.
+   * C2e (F-matrix): a tracked non-link blocker counts the same way -- a
+   * file where a directory is expected (`docs`, `docs/project`), or a
+   * directory where STATE.md is expected. The shared describer records the
+   * same tree-derived skip reason for it, which the AR-R05 gate accepts
+   * exactly as it accepts the CD-17 link reason, so no such layout wedges
+   * the run.
    */
   private async commitStateLinkComponents(commit: string): Promise<string[]> {
     const insensitive = await this.checkoutIgnoresCase();
@@ -2446,13 +2516,172 @@ export class IntegrationManager {
         return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
       }
       if (level < parts.length - 1) {
-        // A non-tree where a directory is expected (a tracked file at docs
-        // or docs/project): no link fact, and nothing below can be one.
-        if (mode !== "040000") return [];
+        // C2e (F-matrix): a tracked file where a directory is expected
+        // blocks STATE.md the way a link does -- nothing below can be a
+        // link, and the blocker itself is reported.
+        if (mode !== "040000") {
+          return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
+        }
         actual.push(name);
+      } else if (mode === "040000") {
+        // C2e (F-matrix): a tracked directory where STATE.md is expected.
+        return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
       }
     }
     return [];
+  }
+
+  /**
+   * The first STATE.md ancestor-or-self component the HEAD tree holds as a
+   * tracked non-link blocker (C2e F-matrix): a file where `docs/` or
+   * `docs/project/` is expected, or a directory where `STATE.md` is
+   * expected. Links are NOT reported here (the CD-17 link path owns them);
+   * a missing entry is not a blocker either. Bounded: three exact
+   * `ls-tree` queries against the commit, never a directory listing and
+   * never the live worktree.
+   */
+  private async commitStateNonLinkBlocker(
+    treeRef: string,
+  ): Promise<{ component: string; kind: "file-not-dir" | "dir-not-file" } | null> {
+    const insensitive = await this.checkoutIgnoresCase();
+    const parts = ["docs", "project", "STATE.md"];
+    const actual: string[] = [];
+    for (let level = 0; level < parts.length; level += 1) {
+      const parentRef = actual.length === 0 ? treeRef : `${treeRef}:${actual.join("/")}`;
+      const want = parts[level] ?? "";
+      let entry = await this.commitTreeEntry(parentRef, want);
+      if (entry === undefined && insensitive) {
+        entry = await this.commitTreeEntryFolded(parentRef, want);
+      }
+      if (entry === undefined) return null;
+      const component = HANDOFF_STATE_LINK_COMPONENTS[level] ?? "";
+      if (!component) return null;
+      if (entry.mode === "120000") return null;
+      if (level < parts.length - 1) {
+        if (entry.mode !== "040000") return { component, kind: "file-not-dir" };
+        actual.push(entry.name);
+      } else if (entry.mode === "040000") {
+        return { component, kind: "dir-not-file" };
+      } else {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Entry-file skip reasons re-derived from a landed commit's own tree in
+   * the fresh stage-time wording (C2e m-4). A reused or withdrawn commit
+   * carries no stage-time records, so without this the shared describer
+   * re-words every skip generically ("the target holds no marked
+   * section") while a fresh commit of the same layout records the real
+   * cause ("target MISSING.md is not a regular tracked file"). Only
+   * commit-tree facts are used: an unresolvable target keeps the
+   * outside/".." wording, a kernel-owned target keeps its wording, a
+   * commit-tree ancestor link names the junction, and a missing or
+   * non-regular target keeps "not a regular tracked file" -- each through
+   * the same detail function the stager uses. A redirect the tree proves
+   * (the target blob holds the section) is left to the describer, whose
+   * redirect wording already matches; a regular blob without the section
+   * (worktree/index tampering the tree cannot corroborate) keeps the
+   * generic wording so the outcome never regresses to a pause.
+   */
+  private async commitEntrySkipReasonsFromTree(
+    commit: string,
+    entryPoint: ProjectDocCommitResult["entryPoint"],
+  ): Promise<Array<{ path: string; reason: string }>> {
+    const skipped: Array<{ path: string; reason: string }> = [];
+    for (const entryPath of ["AGENTS.md", "CLAUDE.md"] as const) {
+      const raw = entryPath === "AGENTS.md" ? entryPoint.agentsLinkTarget : entryPoint.claudeLinkTarget;
+      if (raw === undefined) continue;
+      const viaLink = entryPath === "AGENTS.md"
+        ? entryPoint.agentsSectionV2ViaLink === true
+        : entryPoint.claudePointerV2ViaLink === true || entryPoint.claudePointerV2ViaAgentsLink === true;
+      if (viaLink) continue;
+      const display = raw.replace(/\s+/g, " ").trim().slice(0, 120) || "an unreadable target";
+      const shape = (detail: string): { path: string; reason: string } => ({
+        path: entryPath,
+        reason: `${entryPath} is a symbolic link to ${display}; the entry is skipped (${detail}).`,
+      });
+      const target = resolveEntryLinkTarget(raw);
+      if (target === null) {
+        skipped.push(shape(entryLinkSkipDetail(raw, null)));
+        continue;
+      }
+      if (target === "docs/project/STATE.md" || isHandoffSpecCopyPath(target)) {
+        skipped.push(shape(entryLinkSkipDetail(raw, target)));
+        continue;
+      }
+      const ancestor = await this.commitTreeAncestorLink(commit, target);
+      if (ancestor !== null) {
+        skipped.push(shape(entryLinkSkipDetail(raw, target, ancestor)));
+        continue;
+      }
+      const mode = await this.commitTreePathMode(commit, target);
+      if (mode === undefined || mode === "120000") {
+        skipped.push(shape(entryLinkSkipDetail(raw, target)));
+        continue;
+      }
+      skipped.push({ path: entryPath, reason: handoffEntryGenericSkipReason(entryPath, raw) });
+    }
+    return skipped;
+  }
+
+  /**
+   * The first linked directory above a commit-tree path, in requested
+   * spelling (C2e m-4): the commit-tree counterpart of the stage-time
+   * ancestor check, so a re-derived skip names the same junction a fresh
+   * commit names. Bounded: one exact `ls-tree` per path level.
+   */
+  private async commitTreeAncestorLink(commit: string, target: string): Promise<string | null> {
+    const slash = target.lastIndexOf("/");
+    if (slash <= 0) return null;
+    const parts = target.slice(0, slash).split("/");
+    const actual: string[] = [];
+    const requested: string[] = [];
+    const insensitive = await this.checkoutIgnoresCase();
+    for (const part of parts) {
+      requested.push(part);
+      const parentRef = actual.length === 0 ? commit : `${commit}:${actual.join("/")}`;
+      let entry = await this.commitTreeEntry(parentRef, part);
+      if (entry === undefined && insensitive) {
+        entry = await this.commitTreeEntryFolded(parentRef, part);
+      }
+      if (entry === undefined) return null;
+      if (entry.mode === "120000") return requested.join("/");
+      if (entry.mode !== "040000") return null;
+      actual.push(entry.name);
+    }
+    return null;
+  }
+
+  /**
+   * The mode of one commit-tree path, or undefined when any level misses
+   * (C2e m-4). A mid-level non-tree (a file where a directory is expected)
+   * also reports undefined: the target is unreachable, which the caller
+   * words as "not a regular tracked file" exactly as the stager does.
+   */
+  private async commitTreePathMode(commit: string, path: string): Promise<string | undefined> {
+    const parts = path.split("/");
+    const actual: string[] = [];
+    const insensitive = await this.checkoutIgnoresCase();
+    for (let index = 0; index < parts.length; index += 1) {
+      const want = parts[index] ?? "";
+      if (!want) return undefined;
+      const parentRef = actual.length === 0 ? commit : `${commit}:${actual.join("/")}`;
+      let entry = await this.commitTreeEntry(parentRef, want);
+      if (entry === undefined && insensitive) {
+        entry = await this.commitTreeEntryFolded(parentRef, want);
+      }
+      if (entry === undefined) return undefined;
+      if (index < parts.length - 1) {
+        if (entry.mode !== "040000") return undefined;
+        actual.push(entry.name);
+      } else {
+        return entry.mode;
+      }
+    }
+    return undefined;
   }
 
   /** One exact entry of a commit tree (mode and name), or undefined. */
@@ -2913,7 +3142,13 @@ export class IntegrationManager {
       await this.ensureIntegrationWorkspace();
       const existing = await this.findSnapshotCommit(input.snapshotKey, this.runId);
       if (!existing) return null;
-      return await this.documentCommitResult(existing);
+      // C2e (m-4): the withdrawn-stop path carries no stage-time records
+      // either, so re-derive the fresh-worded entry skips here as well; the
+      // runtime passes them to the shared describer as the reuse path does.
+      const found = await this.documentCommitResult(existing);
+      const foundSkips = await this.commitEntrySkipReasonsFromTree(existing, found.entryPoint);
+      if (foundSkips.length > 0) found.skipped = foundSkips;
+      return found;
     });
   }
 
@@ -3008,7 +3243,11 @@ export class IntegrationManager {
       try {
         stats = await lstat(absolute);
       } catch (error) {
-        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
+        // C2e (F-matrix): a component below a tracked file (a `docs` file
+        // with `docs/project` queried) reports ENOTDIR, not ENOENT. Neither
+        // means a link: the file itself is not one, and nothing below it
+        // can be one either.
+        if (!isNodeError(error) || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) throw error;
         continue;
       }
       if (stats.isSymbolicLink()) return component;
