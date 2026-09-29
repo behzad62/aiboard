@@ -169,7 +169,6 @@ export const MODEL_CATALOG: CatalogModel[] = [
     description:
       "Fast GitHub Copilot account model through the local account-provider runner",
     capabilities: { image: true, document: true, audio: false, video: false },
-    validationCandidate: true,
   },
   {
     id: "gemini-3.5-flash",
@@ -228,12 +227,19 @@ export const MODEL_CATALOG: CatalogModel[] = [
 
   // Google — https://ai.google.dev/gemini-api/docs/models
   {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    providerId: "google",
+    description: "Stable Flash model for long-horizon coding, agents, and multimodal work",
+    capabilities: { image: true, document: true, audio: true, video: true },
+    validationCandidate: true,
+  },
+  {
     id: "gemini-3.6-flash",
     name: "Gemini 3.6 Flash",
     providerId: "google",
     description: "Stable frontier-speed model for agentic and multimodal work",
     capabilities: { image: true, document: true, audio: true, video: true },
-    validationCandidate: true,
   },
   {
     id: "gemini-3.5-flash",
@@ -255,6 +261,16 @@ export const MODEL_CATALOG: CatalogModel[] = [
     providerId: "google",
     description: "Stable fast model (supported through Oct 2026)",
     capabilities: { image: true, document: true, audio: true, video: true },
+  },
+
+  // Meta Model API — live model discovery supplements the latest Muse Spark fallback.
+  {
+    id: "muse-spark-1.3",
+    name: "Muse Spark 1.3",
+    providerId: "meta",
+    description: "Meta's latest agentic and coding model through Meta Model API",
+    capabilities: { image: true, document: false, audio: false, video: false },
+    validationCandidate: true,
   },
 
   // OpenRouter — https://openrouter.ai/models (Qwen, DeepSeek, etc.)

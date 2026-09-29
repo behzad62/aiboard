@@ -19,9 +19,9 @@ import type { ModelInfo } from "@/lib/providers/base";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
 import {
-  fetchOpenRouterModelCatalog,
+  fetchProviderModelCatalog,
   type OpenRouterCatalogModel,
-  refreshOpenRouterModelCapabilities,
+  refreshProviderModelCapabilities,
   saveProviderKey,
   validateProvider,
 } from "@/lib/client/settings-api";
@@ -142,6 +142,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   );
   const builtInModelIds = new Set(builtInModels.map((model) => model.id));
   const isOpenRouter = provider.providerId === "openrouter";
+  const hasModelDiscovery = providerDefinition?.modelDiscovery != null;
 
   const parsedModelIds = modelIdsText
     .split(/[\n,]/)
@@ -213,11 +214,16 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setLoadingOpenRouterCatalog(true);
     setOpenRouterCatalogError(null);
     try {
-      const models = await fetchOpenRouterModelCatalog();
+      const models = await fetchProviderModelCatalog({
+        providerId: provider.providerId,
+        apiKey: apiKey || undefined,
+        baseURL: baseUrlField ? baseURL : undefined,
+        runnerToken: runnerTokenField ? runnerToken.trim() || undefined : undefined,
+      });
       setOpenRouterCatalog(models);
     } catch (err) {
       setOpenRouterCatalogError(
-        err instanceof Error ? err.message : "Failed to load OpenRouter models"
+        err instanceof Error ? err.message : `Failed to load ${provider.name} models`
       );
     } finally {
       setLoadingOpenRouterCatalog(false);
@@ -262,23 +268,27 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         enabled,
       });
       let savedMessage = "Saved successfully";
-      if (provider.providerId === "openrouter" && selectableModels.length > 0) {
+      const capabilitySyncIds = isOpenRouter
+        ? selectableModels.map((model) => model.id)
+        : parsedModelIds;
+      if (hasModelDiscovery && capabilitySyncIds.length > 0) {
         try {
-          const sync = await refreshOpenRouterModelCapabilities(
-            selectableModels.map((model) => model.id)
-          );
+          const sync = await refreshProviderModelCapabilities({
+            providerId: provider.providerId,
+            modelIds: capabilitySyncIds,
+          });
           if (sync.synced > 0 && sync.missing.length === 0) {
-            savedMessage = `Saved successfully. Synced OpenRouter capabilities for ${sync.synced} model${sync.synced === 1 ? "" : "s"}.`;
+            savedMessage = `Saved successfully. Synced live capabilities for ${sync.synced} model${sync.synced === 1 ? "" : "s"}.`;
           } else if (sync.synced > 0) {
-            savedMessage = `Saved successfully. Synced ${sync.synced} OpenRouter model${sync.synced === 1 ? "" : "s"}; ${sync.missing.length} id${sync.missing.length === 1 ? " was" : "s were"} not found in the live catalog.`;
+            savedMessage = `Saved successfully. Synced ${sync.synced} model${sync.synced === 1 ? "" : "s"}; ${sync.missing.length} id${sync.missing.length === 1 ? " was" : "s were"} not found in the live catalog.`;
           } else if (sync.missing.length > 0) {
-            savedMessage = `Saved successfully, but the live OpenRouter catalog did not recognize: ${sync.missing.join(", ")}.`;
+            savedMessage = `Saved successfully, but the live ${provider.name} catalog did not recognize: ${sync.missing.join(", ")}.`;
           }
         } catch (err) {
           savedMessage =
             err instanceof Error
-              ? `Saved successfully, but OpenRouter capability sync failed: ${err.message}`
-              : "Saved successfully, but OpenRouter capability sync failed.";
+              ? `Saved successfully, but live capability sync failed: ${err.message}`
+              : "Saved successfully, but live capability sync failed.";
         }
       }
       setApiKey("");
@@ -602,7 +612,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
             onChange={(e) => setModelIdsText(e.target.value)}
           />
           <p className="text-xs text-muted-foreground">{modelIdsField.hint}</p>
-          {isOpenRouter && (
+          {hasModelDiscovery && (
             <div className="rounded-md border bg-muted/20 p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Button
@@ -612,11 +622,15 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                   onClick={loadOpenRouterCatalog}
                   disabled={loadingOpenRouterCatalog}
                 >
-                  {loadingOpenRouterCatalog ? "Loading catalog..." : openRouterCatalog.length > 0 ? "Refresh OpenRouter catalog" : "Browse OpenRouter models"}
+                  {loadingOpenRouterCatalog
+                    ? "Loading catalog..."
+                    : openRouterCatalog.length > 0
+                      ? `Refresh ${provider.name} catalog`
+                      : `Browse ${provider.name} models`}
                 </Button>
                 {openRouterCatalog.length > 0 && (
                   <span className="text-xs text-muted-foreground">
-                    {openRouterCatalog.length.toLocaleString()} models available from the live OpenRouter catalog.
+                    {openRouterCatalog.length.toLocaleString()} models available from the live {provider.name} catalog.
                   </span>
                 )}
               </div>
@@ -634,6 +648,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                       placeholder="Search by model id, name, or modality"
                     />
                   </div>
+                  {isOpenRouter && (
                     <div className="flex flex-wrap gap-2">
                       {OPENROUTER_CATALOG_FILTERS.map((filter) => {
                         const active = openRouterCatalogFilters[filter.id];
@@ -655,16 +670,17 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                         );
                       })}
                     </div>
+                  )}
                   <div className="max-h-80 space-y-2 overflow-auto pr-1">
                     {filteredOpenRouterCatalog.map((model) => {
                       const isBuiltIn = builtInModelIds.has(model.id);
                       const isAdded = parsedModelIdSet.has(model.id);
-                        const modalityBadges = [
-                          model.supportsImageInput ? "image" : null,
-                          model.supportsDocumentInput ? "file" : null,
-                          model.supportsAudioInput ? "audio" : null,
-                          model.supportsVideoInput ? "video" : null,
-                        ].filter((value): value is string => value !== null);
+                      const modalityBadges = [
+                        model.supportsImageInput ? "image" : null,
+                        model.supportsDocumentInput ? "file" : null,
+                        model.supportsAudioInput ? "audio" : null,
+                        model.supportsVideoInput ? "video" : null,
+                      ].filter((value): value is string => value !== null);
                       return (
                         <div
                           key={model.id}
@@ -717,7 +733,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                     })}
                     {filteredOpenRouterCatalog.length === 0 && (
                       <p className="text-xs text-muted-foreground">
-                        No OpenRouter models matched that filter.
+                        No {provider.name} models matched that filter.
                       </p>
                     )}
                   </div>

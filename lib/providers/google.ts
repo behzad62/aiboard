@@ -104,7 +104,7 @@ export function googleSamplingConfig(
   model: string,
   temperature: number | undefined
 ): Pick<GenerateContentConfig, "temperature"> {
-  if (model.trim().toLowerCase() === "gemini-3.6-flash") return {};
+  if (["gemini-3.6-flash", "gemini-3.8-flash"].includes(model.trim().toLowerCase())) return {};
   return { temperature: temperature ?? 0.7 };
 }
 

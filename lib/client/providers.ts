@@ -23,6 +23,7 @@ import { foundryProvider } from "@/lib/providers/foundry";
 import { googleProvider } from "@/lib/providers/google";
 import { openrouterProvider } from "@/lib/providers/openrouter";
 import { xaiProvider } from "@/lib/providers/xai";
+import { metaProvider } from "@/lib/providers/meta";
 import { chatgptProvider } from "@/lib/providers/chatgpt";
 import { githubCopilotProvider } from "@/lib/providers/github-copilot";
 import { nvidiaProvider } from "@/lib/providers/nvidia";
@@ -87,6 +88,7 @@ const providers: Record<ProviderId, AIProvider> = {
   google: googleProvider,
   openrouter: openrouterProvider,
   xai: xaiProvider,
+  meta: metaProvider,
   chatgpt: chatgptProvider,
   "github-copilot": githubCopilotProvider,
   nvidia: nvidiaProvider,
@@ -156,67 +158,60 @@ export function listFoundryModelInfos(): ModelInfo[] {
     }));
 }
 
-export function normalizeOpenRouterModelId(id: string): string {
+export function normalizeProviderModelId(providerId: string, id: string): string {
   const trimmed = id.trim();
   const parsed = parseModelId(trimmed);
-  return parsed.providerId === OPENROUTER_PROVIDER_ID ? parsed.model : trimmed;
+  return parsed.providerId === providerId ? parsed.model : trimmed;
 }
 
-export function listOpenRouterModelInfos(): ModelInfo[] {
-  const catalogModels = openrouterProvider.listModels();
+export function normalizeOpenRouterModelId(id: string): string {
+  return normalizeProviderModelId(OPENROUTER_PROVIDER_ID, id);
+}
+
+/** Built-in models plus user-added live-catalog ids for one provider. */
+export function listProviderModelInfos(providerId: ProviderId): ModelInfo[] {
+  if (providerId === FOUNDRY_PROVIDER_ID) return listFoundryModelInfos();
+
+  const provider = getProvider(providerId);
+  const catalogModels = provider?.listModels() ?? [];
   const knownIds = new Set(catalogModels.map((model) => model.id));
-  const customModels = (getProviderKey(OPENROUTER_PROVIDER_ID)?.models ?? [])
-    .map(normalizeOpenRouterModelId)
+  const additions = (getProviderKey(providerId)?.models ?? [])
+    .map((id) => normalizeProviderModelId(providerId, id))
     .filter((id) => id.length > 0 && !knownIds.has(id))
     .map((id) => ({
       id,
       name: id,
-      providerId: OPENROUTER_PROVIDER_ID,
-      description: "User-added OpenRouter model",
+      providerId,
+      description: `User-added ${provider?.name ?? providerId} model`,
       capabilities:
-        getDiscoveredCapabilities(formatModelId(OPENROUTER_PROVIDER_ID, id)) ??
-        { ...TEXT_ONLY },
+        getDiscoveredCapabilities(formatModelId(providerId, id)) ??
+        (providerId === NVIDIA_PROVIDER_ID
+          ? { ...(NVIDIA_MODEL_CAPABILITIES[id] ?? TEXT_ONLY) }
+          : { ...TEXT_ONLY }),
     }));
-  return [...catalogModels, ...customModels];
+  return [...catalogModels, ...additions];
 }
 
-/** User-defined NVIDIA NIM model ids (from the provider key). */
+export function listOpenRouterModelInfos(): ModelInfo[] {
+  return listProviderModelInfos(OPENROUTER_PROVIDER_ID);
+}
+
 export function normalizeNvidiaModelId(id: string): string {
-  const trimmed = id.trim();
-  const parsed = parseModelId(trimmed);
-  return parsed.providerId === NVIDIA_PROVIDER_ID ? parsed.model : trimmed;
+  return normalizeProviderModelId(NVIDIA_PROVIDER_ID, id);
 }
 
-function nvidiaCapabilitiesForModel(modelId: string) {
-  return {
-    ...(NVIDIA_MODEL_CAPABILITIES[modelId] ?? TEXT_ONLY),
-  };
-}
 
 export function listNvidiaModelInfos(): ModelInfo[] {
-  const ids = getProviderKey(NVIDIA_PROVIDER_ID)?.models ?? [];
-  return ids
-    .map(normalizeNvidiaModelId)
-    .filter((id) => id.length > 0)
-    .map((id) => ({
-      id,
-      name: id,
-      providerId: NVIDIA_PROVIDER_ID,
-      description: "NVIDIA NIM model",
-      capabilities: nvidiaCapabilitiesForModel(id),
-    }));
+  return listProviderModelInfos(NVIDIA_PROVIDER_ID);
 }
 
 export function getAllModels(): ModelInfo[] {
   const overrides = getUserSettings().modelContextOverrides;
   return withContextProfiles(
     [
-      ...getAllProviders().flatMap((p) => p.listModels()),
-      ...listFoundryModelInfos(),
-      ...listOpenRouterModelInfos().filter(
-        (model) => !getProvider(model.providerId)?.listModels().some((builtin) => builtin.id === model.id)
+      ...getAllProviders().flatMap((provider) =>
+        listProviderModelInfos(provider.id as ProviderId)
       ),
-      ...listNvidiaModelInfos(),
       ...listCustomModelInfos(),
     ],
     overrides
@@ -243,24 +238,13 @@ export function getProviderRunnerToken(providerId: string): string | undefined {
 export function getEnabledModels(): ModelInfo[] {
   const overrides = getUserSettings().modelContextOverrides;
   const keyed = getAllProviders()
-    .map((p) => p.id)
+    .map((p) => p.id as ProviderId)
     .filter((id) => getDecryptedApiKey(id) !== null);
-  const builtin = getAllProviders()
-    .flatMap((p) => p.listModels())
-    .filter((m) => keyed.includes(m.providerId));
-  const foundry = keyed.includes(FOUNDRY_PROVIDER_ID)
-    ? listFoundryModelInfos()
-    : [];
-  const openrouter = keyed.includes(OPENROUTER_PROVIDER_ID)
-    ? listOpenRouterModelInfos().filter(
-        (model) => !openrouterProvider.listModels().some((builtin) => builtin.id === model.id)
-      )
-    : [];
-  const nvidia = keyed.includes(NVIDIA_PROVIDER_ID)
-    ? listNvidiaModelInfos()
-    : [];
   return withContextProfiles(
-    [...builtin, ...foundry, ...openrouter, ...nvidia, ...listCustomModelInfos()],
+    [
+      ...keyed.flatMap((providerId) => listProviderModelInfos(providerId)),
+      ...listCustomModelInfos(),
+    ],
     overrides
   );
 }
@@ -279,16 +263,12 @@ export function resolveModelName(fullId: string): string {
   if (providerId === CUSTOM_PROVIDER_ID) {
     return getCustomModelById(model)?.label ?? model;
   }
-  // Foundry model ids are user-defined (not in the catalog) — show the id.
-  if (providerId === FOUNDRY_PROVIDER_ID) return model;
-  if (providerId === OPENROUTER_PROVIDER_ID) {
-    return listOpenRouterModelInfos().find((entry) => entry.id === model)?.name ?? model;
+  if (PROVIDER_IDS.includes(providerId as ProviderId)) {
+    return (
+      listProviderModelInfos(providerId as ProviderId).find((entry) => entry.id === model)
+        ?.name ?? model
+    );
   }
-  if (providerId === NVIDIA_PROVIDER_ID) return model;
-  const providerModel = getProvider(providerId)
-    ?.listModels()
-    .find((m) => m.id === model);
-  if (providerModel) return providerModel.name;
   return getModelDisplayName(fullId);
 }
 
@@ -298,21 +278,14 @@ export function resolveModelName(fullId: string): string {
  */
 export function resolveModelCapabilities(fullId: string) {
   const { providerId, model } = parseModelId(fullId);
-  if (providerId === FOUNDRY_PROVIDER_ID) return { ...FOUNDRY_CAPABILITIES };
-  if (providerId === OPENROUTER_PROVIDER_ID) {
-    return (
-      listOpenRouterModelInfos().find((entry) => entry.id === model)?.capabilities ??
-      null
-    );
-  }
-  if (providerId === NVIDIA_PROVIDER_ID) return nvidiaCapabilitiesForModel(model);
   if (providerId === CUSTOM_PROVIDER_ID) {
     return getCustomModelById(model)?.capabilities ?? { ...TEXT_ONLY };
   }
-  const providerModel = getProvider(providerId)
-    ?.listModels()
-    .find((m) => m.id === model);
-  return providerModel?.capabilities ?? null; // otherwise use the catalog registry
+  if (!PROVIDER_IDS.includes(providerId as ProviderId)) return null;
+  return (
+    listProviderModelInfos(providerId as ProviderId).find((entry) => entry.id === model)
+      ?.capabilities ?? null
+  );
 }
 
 export function getCustomModelByFullId(fullId: string): CustomModel | null {

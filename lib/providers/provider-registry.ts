@@ -5,6 +5,7 @@ export const PROVIDER_IDS = [
   "google",
   "openrouter",
   "xai",
+  "meta",
   "chatgpt",
   "github-copilot",
   "nvidia",
@@ -56,6 +57,9 @@ export interface ProviderDefinition {
   runnerTokenField?: ProviderSetupField;
   runnerTokenRequiredMessage?: string;
   modelIdsField?: ProviderSetupField;
+  modelDiscovery?: {
+    source: "provider-api" | "public-api" | "runner";
+  };
   accountRunner?: AccountRunnerProviderSetup;
   runnerDownload?: ProviderRunnerDownload;
   nativeWebSearch: boolean | ((modelId: string) => boolean);
@@ -194,6 +198,11 @@ const MODEL_TOOL_SUPPORT: Partial<
     nativeWebSearch: isGrokLike,
     nativeBuildTools: isGrokLike,
   },
+  meta: {
+    nativeWebSearch: false,
+    nativeBuildTools: (modelId) => /^muse-spark-/i.test(modelId.trim()),
+    hostedBuildTools: false,
+  },
   chatgpt: {
     // The ChatGPT/Codex account backend accepts the current Responses hosted
     // web_search tool on GPT-5.4+ account models (including GPT-5.6 family);
@@ -229,6 +238,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "openai",
     name: "OpenAI",
     modelSource: "catalog",
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "gpt-5.7",
+      hint: "Browse the live provider catalog or add a model id manually when the built-in catalog has not caught up yet.",
+    },
     nativeWebSearch: true,
     reasoningEffort: true,
     maxTokens: true,
@@ -245,6 +260,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "anthropic",
     name: "Anthropic",
     modelSource: "catalog",
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "claude-opus-5",
+      hint: "Browse the live Anthropic model catalog or add a model id manually.",
+    },
     nativeWebSearch: true,
     reasoningEffort: (modelId: string) =>
       modelId !== "claude-haiku-4-5-20251001",
@@ -289,13 +310,19 @@ export const PROVIDER_DEFINITIONS = {
     id: "google",
     name: "Google Gemini",
     modelSource: "catalog",
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "gemini-3.8-flash",
+      hint: "Browse the live Gemini model catalog or add a model id manually.",
+    },
     nativeWebSearch: true,
     reasoningEffort: true,
     maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Model-dependent",
       temperatureNote:
-        "Gemini 3.6 Flash omits deprecated sampling parameters; older Gemini models receive the effort-level temperature in generationConfig.",
+        "Gemini 3.6/3.8 Flash omit deprecated sampling parameters; older Gemini models receive the effort-level temperature in generationConfig.",
       promptCachingLabel: "Implicit prompt caching enabled",
       promptCachingNote:
         "Gemini 2.5 and newer models cache repeated prefixes automatically. Cache hits still depend on matching large shared prefixes and model-specific minimum token thresholds.",
@@ -305,6 +332,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "openrouter",
     name: "OpenRouter",
     modelSource: "catalog",
+    modelDiscovery: { source: "public-api" },
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "qwen/qwen3-coder",
@@ -328,6 +356,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "xai",
     name: "xAI",
     modelSource: "catalog",
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "grok-4.7",
+      hint: "Browse the live xAI language-model catalog or add a model id manually.",
+    },
     nativeWebSearch: true,
     reasoningEffort: (modelId: string) => !isXAINonReasoningModel(modelId),
     maxTokens: true,
@@ -338,6 +372,26 @@ export const PROVIDER_DEFINITIONS = {
       promptCachingLabel: "Prompt caching enabled",
       promptCachingNote:
         "xAI's Responses API automatically caches repeated prefixes; usage reports cached input tokens when a cache hit occurs.",
+    },
+  },
+  meta: {
+    id: "meta",
+    name: "Meta Model API",
+    modelSource: "catalog",
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "muse-spark-1.3",
+      hint: "Browse Meta's live Model API catalog or add a model id manually.",
+    },
+    nativeWebSearch: false,
+    reasoningEffort: (modelId: string) => /^muse-spark-/i.test(modelId.trim()),
+    maxTokens: true,
+    runtimeBehavior: {
+      temperatureLabel: "Temperature is sent",
+      temperatureNote: "Temperature and supported reasoning effort are forwarded through Meta's OpenAI-compatible Model API.",
+      promptCachingLabel: "Provider-dependent",
+      promptCachingNote: "Caching and rate limits are controlled by Meta Model API.",
     },
   },
   chatgpt: {
@@ -385,6 +439,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "github-copilot",
     name: "GitHub Copilot",
     modelSource: "catalog",
+    modelDiscovery: { source: "runner" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "gemini-3.8-flash",
+      hint: "Browse the models available to the signed-in Copilot account or add a model id manually.",
+    },
     credentialLabel: "Runner session token",
     credentialPlaceholder: "Paste the current token printed by the account runner",
     savedCredentialPlaceholder: "Leave blank to keep existing runner token",
@@ -429,6 +489,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "nvidia",
     name: "NVIDIA NIM",
     modelSource: "user-defined",
+    modelDiscovery: { source: "runner" },
     credentialLabel: "NVIDIA API key",
     credentialPlaceholder: "nvapi-...",
     savedCredentialPlaceholder: "Leave blank to keep existing NVIDIA API key",

@@ -308,7 +308,7 @@ export interface UserSettings {
       temperature?: boolean;
       maxTokens?: boolean;
       updatedAt: string;
-      source: "openrouter-models";
+      source: "openrouter-models" | "provider-models";
     }
   >;
 }
