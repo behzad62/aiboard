@@ -3,10 +3,15 @@ import type {
   NativeToolChoice,
   NativeToolDefinition,
 } from "./base";
+import {
+  DEFAULT_TOOL_SEARCH_THRESHOLD,
+  resolveToolLoadingPolicy,
+  type LogicalToolEntry,
+} from "./tool-inventory";
 
 export type OpenRouterToolApi = "chat-completions" | "responses";
 
-export const OPENROUTER_TOOL_SEARCH_THRESHOLD = 16;
+export const OPENROUTER_TOOL_SEARCH_THRESHOLD = DEFAULT_TOOL_SEARCH_THRESHOLD;
 
 export const DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS: HostedToolDefinition[] = [
   { type: "web_search" },
@@ -47,22 +52,38 @@ export function openRouterHostedToolsForApi(
   return result;
 }
 
+function nativeToolInventory(tools: readonly NativeToolDefinition[]): LogicalToolEntry[] {
+  return tools.map((tool) => ({
+    logicalName: tool.name,
+    capabilityId: "function_calling",
+    execution: "client",
+    deferLoading: tool.deferLoading,
+    payload: tool,
+  }));
+}
+
 export function openRouterFunctionToolsForResponses(
   tools: readonly NativeToolDefinition[] | undefined,
   threshold = OPENROUTER_TOOL_SEARCH_THRESHOLD
 ): { tools: Array<Record<string, unknown>>; toolSearchEnabled: boolean } {
   if (!tools?.length) return { tools: [], toolSearchEnabled: false };
-  const toolSearchEnabled = tools.length > threshold;
-  const mapped = tools.map((tool) => ({
-    type: "function",
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-    strict: tool.strict ?? false,
-    ...(toolSearchEnabled && tool.deferLoading !== false
-      ? { defer_loading: true }
-      : {}),
-  }));
+  const loading = resolveToolLoadingPolicy({
+    entries: nativeToolInventory(tools),
+    threshold,
+    nativeToolSearchAvailable: true,
+  });
+  const mapped = loading.modelVisibleTools.map((entry) => {
+    const tool = entry.payload as NativeToolDefinition;
+    return {
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict ?? false,
+      ...(entry.deferLoading ? { defer_loading: true } : {}),
+    };
+  });
+  const toolSearchEnabled = loading.strategy === "native_tool_search";
   return {
     tools: toolSearchEnabled
       ? [{ type: "openrouter:tool_search" }, ...mapped]
