@@ -64,7 +64,11 @@ for (const providerId of ["openai", "chatgpt"] as const) {
     ]);
 
     assert.equal(providerSupportsReasoning(`${providerId}:${id}`), true);
-    assert.equal(providerSupportsNativeWebSearchFeature(providerId, id), true);
+    assert.equal(
+      providerSupportsNativeWebSearchFeature(providerId, id),
+      providerId === "openai",
+      "OpenAI API web-search support is manifest-backed; ChatGPT account support waits for runner evidence"
+    );
 
     const pricing = getModelPricing(formatModelId(providerId, id));
     assert.equal(pricing?.inputUsdPer1M, prices[id][0]);

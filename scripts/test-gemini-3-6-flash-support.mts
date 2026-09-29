@@ -32,7 +32,11 @@ assert.deepEqual(model.capabilities, {
   audio: true,
   video: true,
 });
-assert.equal(getValidationModelId("google"), modelId);
+assert.equal(
+  getValidationModelId("google"),
+  "gemini-3.8-flash",
+  "Google validation should use the inherited Gemini 3.8 Flash candidate while 3.6 stays supported"
+);
 
 const pricing = getModelPricing(fullModelId);
 assert.equal(pricing?.inputUsdPer1M, 1.5);
