@@ -1,7 +1,7 @@
 # RUNNER_RAW_PROCESS_BOUNDARY: audited Win32 CreateProcess/Job Object host for managed and LSP workloads.
 $ErrorActionPreference = "Stop"
 
-Add-Type -TypeDefinition @'
+$jobHostCsSource = @'
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -705,6 +705,70 @@ public static class ManagedProcessJobHost
 }
 '@
 
+# PX-2a: load the Job-host helper from a precompiled, digest-pinned assembly
+# when the host provides one over the private stdin config. The file bytes are
+# read once into memory, hashed, and loaded FROM THOSE BYTES
+# ([Reflection.Assembly]::Load(byte[])), so the file cannot be swapped between
+# check and load. On a missing file, a digest mismatch, or a load error the
+# assembly is never loaded: this falls back to compiling the same source
+# in-process (today's Add-Type behavior) and records why in the Job event
+# file. One PowerShell host per call, one Job per call, and every proof below
+# are unchanged.
+function Initialize-JobHostType {
+    param($HelperAssemblyPath, $HelperAssemblySha256, $EventPath)
+    $script:jobHostHelperMode = "fallback"
+    $script:jobHostHelperReason = "no-helper-config"
+    $helperPath = [string]$HelperAssemblyPath
+    $helperDigest = [string]$HelperAssemblySha256
+    if (-not [string]::IsNullOrWhiteSpace($helperPath) -and -not [string]::IsNullOrWhiteSpace($helperDigest)) {
+        $haveBytes = $false
+        $helperBytes = $null
+        try {
+            $helperBytes = [IO.File]::ReadAllBytes($helperPath)
+            $haveBytes = $true
+        } catch {
+            $script:jobHostHelperReason = "missing-file"
+        }
+        if ($haveBytes) {
+            $hasher = [Security.Cryptography.SHA256]::Create()
+            try {
+                $actualDigest = ([BitConverter]::ToString($hasher.ComputeHash($helperBytes))).Replace("-", "").ToLowerInvariant()
+            } finally {
+                $hasher.Dispose()
+            }
+            if ($actualDigest -cne $helperDigest.ToLowerInvariant()) {
+                $script:jobHostHelperReason = "digest-mismatch"
+            } else {
+                try {
+                    [Reflection.Assembly]::Load($helperBytes) | Out-Null
+                    $script:jobHostHelperMode = "precompiled"
+                    $script:jobHostHelperReason = $null
+                } catch {
+                    $script:jobHostHelperReason = "load-error"
+                }
+            }
+        }
+        if ($script:jobHostHelperMode -ne "precompiled") {
+            Add-Type -TypeDefinition $jobHostCsSource
+        }
+    } else {
+        Add-Type -TypeDefinition $jobHostCsSource
+    }
+    try {
+        if (-not [string]::IsNullOrWhiteSpace([string]$EventPath)) {
+            if ($null -eq $script:jobHostHelperReason) {
+                $reasonJson = "null"
+            } else {
+                $reasonJson = '"' + ([string]$script:jobHostHelperReason).Replace("\", "\\").Replace('"', '\"') + '"'
+            }
+            [IO.File]::AppendAllText([string]$EventPath,
+                '{"type":"helper","mode":"' + $script:jobHostHelperMode + '","reason":' + $reasonJson + '}' + [Environment]::NewLine,
+                [Text.UTF8Encoding]::new($false))
+        }
+    } catch {
+    }
+}
+
 if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
     try {
         $bootstrap = [Console]::In.ReadLine()
@@ -725,6 +789,7 @@ if ($args.Count -eq 1 -and $args[0] -eq "--aiboard-lsp-pipe") {
         foreach ($property in $configuration.env.PSObject.Properties) {
             $environment[$property.Name] = [string]$property.Value
         }
+        Initialize-JobHostType -HelperAssemblyPath $configuration.helperAssemblyPath -HelperAssemblySha256 $configuration.helperAssemblySha256 -EventPath $configuration.eventPath
         $exitCode = [ManagedProcessJobHost]::RunInteractive(
             [string]$configuration.command,
             [string[]]@($configuration.args | ForEach-Object { [string]$_ }),
@@ -749,6 +814,7 @@ $environment = New-Object 'System.Collections.Generic.Dictionary[string,string]'
 foreach ($property in $configuration.env.PSObject.Properties) {
     $environment[$property.Name] = [string]$property.Value
 }
+Initialize-JobHostType -HelperAssemblyPath $configuration.helperAssemblyPath -HelperAssemblySha256 $configuration.helperAssemblySha256 -EventPath $configuration.eventPath
 $exitCode = [ManagedProcessJobHost]::Run(
     [string]$configuration.command,
     [string[]]@($configuration.args),

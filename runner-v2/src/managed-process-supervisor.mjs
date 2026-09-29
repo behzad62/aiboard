@@ -298,6 +298,8 @@ function launchWindowsJob() {
     stdoutPath: config.stdoutPath,
     stderrPath: config.stderrPath,
     eventPath: config.eventPath,
+    helperAssemblyPath: config.helperAssemblyPath,
+    helperAssemblySha256: config.helperAssemblySha256,
   };
   backendInput.write(config.interactive
     ? `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(jobConfiguration)).toString("base64") })}\n`
