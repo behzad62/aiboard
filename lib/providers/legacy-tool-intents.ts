@@ -3,7 +3,10 @@ import type {
   HostedToolDefinition,
   NativeToolChoice,
 } from "./base";
-import type { LogicalToolEntry } from "./tool-inventory";
+import {
+  DEFAULT_TOOL_SEARCH_THRESHOLD,
+  type LogicalToolEntry,
+} from "./tool-inventory";
 import type { ToolCapabilityId, ToolIntent } from "./tool-capabilities";
 
 export interface LegacyToolRequest {
@@ -98,6 +101,9 @@ export function legacyChatParamsToToolRequest(
     deferLoading: tool.deferLoading,
     payload: tool,
   }));
+  if (toolInventory.length > DEFAULT_TOOL_SEARCH_THRESHOLD) {
+    addIntent(toolIntents, { id: "tool_search", requirement: "optional" });
+  }
 
   return { toolIntents, toolInventory };
 }

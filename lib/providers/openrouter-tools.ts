@@ -1,4 +1,5 @@
 import type {
+  ChatParams,
   HostedToolDefinition,
   NativeToolChoice,
   NativeToolDefinition,
@@ -92,6 +93,105 @@ export function openRouterFunctionToolsForResponses(
   };
 }
 
+function openRouterEnabledPlanTool(params: ChatParams, id: string) {
+  return params.callPlan?.enabledTools.find((tool) => tool.intent.id === id);
+}
+
+function openRouterIntentParameters(
+  params: ChatParams,
+  id: string,
+): Record<string, unknown> {
+  return openRouterEnabledPlanTool(params, id)?.intent.parameters ?? {};
+}
+
+function planInventory(params: ChatParams): LogicalToolEntry[] {
+  if (params.toolInventory?.length) {
+    return params.toolInventory.filter(
+      (entry) => entry.capabilityId === "function_calling",
+    );
+  }
+  return nativeToolInventory(params.nativeTools ?? []);
+}
+
+const OPENROUTER_PLAN_HOSTED_CAPABILITIES = [
+  "web_search",
+  "web_fetch",
+  "shell",
+  "apply_patch",
+  "datetime",
+  "image_generation",
+  "advisor",
+  "subagent",
+  "fusion",
+] as const;
+
+export function openRouterResponsesToolField(params: ChatParams): {
+  tools?: Array<Record<string, unknown>>;
+  tool_choice?: string | Record<string, unknown>;
+  parallel_tool_calls?: boolean;
+} {
+  const plan = params.callPlan;
+  if (!plan || plan.transport !== "responses") return {};
+
+  const tools: Array<Record<string, unknown>> = [];
+  let toolSearchAdded = false;
+  if (openRouterEnabledPlanTool(params, "function_calling")) {
+    const loading = resolveToolLoadingPolicy({
+      entries: planInventory(params),
+      plan,
+      threshold: OPENROUTER_TOOL_SEARCH_THRESHOLD,
+      nativeToolSearchAvailable:
+        openRouterEnabledPlanTool(params, "tool_search") !== undefined,
+    });
+    for (const entry of loading.modelVisibleTools) {
+      const tool = entry.payload as NativeToolDefinition | undefined;
+      if (!tool) continue;
+      tools.push({
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        strict: tool.strict ?? false,
+        ...(entry.deferLoading ? { defer_loading: true } : {}),
+      });
+    }
+    if (loading.strategy === "native_tool_search") {
+      tools.unshift({ type: "openrouter:tool_search" });
+      toolSearchAdded = true;
+    }
+  }
+
+  for (const capabilityId of OPENROUTER_PLAN_HOSTED_CAPABILITIES) {
+    if (!openRouterEnabledPlanTool(params, capabilityId)) continue;
+    tools.push({
+      type: `openrouter:${capabilityId}`,
+      ...(Object.keys(openRouterIntentParameters(params, capabilityId)).length
+        ? { parameters: openRouterIntentParameters(params, capabilityId) }
+        : {}),
+    });
+  }
+  if (openRouterEnabledPlanTool(params, "tool_search") && !toolSearchAdded) {
+    tools.push({ type: "openrouter:tool_search" });
+  }
+
+  const seen = new Set<string>();
+  const deduped = tools.filter((tool, index) => {
+    const type = String(tool.type ?? "unknown");
+    const key = type === "function" ? `${type}:${String(tool.name ?? index)}` : type;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (!deduped.length) return {};
+  return {
+    tools: deduped,
+    tool_choice:
+      typeof plan.toolChoice === "object"
+        ? { type: "function", name: plan.toolChoice.name }
+        : plan.toolChoice,
+    parallel_tool_calls: plan.parallelToolCalls,
+  };
+}
 export function toolChoiceForResponses(
   choice: NativeToolChoice | undefined
 ): string | Record<string, unknown> {

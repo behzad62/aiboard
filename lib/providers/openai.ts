@@ -25,6 +25,7 @@ import {
   DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS,
   openRouterFunctionToolsForResponses,
   openRouterHostedToolsForApi,
+  openRouterResponsesToolField,
   toolChoiceForResponses,
 } from "./openrouter-tools";
 
@@ -223,6 +224,12 @@ export function openAIResponsesToolField(params: ChatParams): {
 
 const OPENAI_HOSTED_ITEM_TO_CAPABILITY: Record<string, ToolCapabilityId> = {
   web_search_call: "web_search",
+  web_fetch_call: "web_fetch",
+  apply_patch_call: "apply_patch",
+  datetime_call: "datetime",
+  advisor_call: "advisor",
+  subagent_call: "subagent",
+  fusion_call: "fusion",
   file_search_call: "file_search",
   mcp_call: "remote_mcp",
   mcp_list_tools: "remote_mcp",
@@ -366,7 +373,9 @@ export async function* streamOpenAIResponses(
   const combinedToolField =
     providerId === "openai"
       ? openAIResponsesToolField(params)
-      : (() => {
+      : params.callPlan
+        ? openRouterResponsesToolField(params)
+        : (() => {
           const webSearchField = openAIResponsesWebSearchField(
             params.webSearch && !params.structuredOutput,
             providerId

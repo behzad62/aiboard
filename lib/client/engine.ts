@@ -26,7 +26,7 @@ import {
   CUSTOM_PROVIDER_ID,
   getCustomModelByFullId,
   getDecryptedApiKey,
-  getDiscoveredOpenRouterApiCapabilities,
+  getDiscoveredOpenRouterCapabilityEvidence,
   getProvider,
   getProviderBaseURL,
   getProviderRunnerToken,
@@ -204,21 +204,9 @@ function discoveredCapabilityEvidence(
   providerId: string,
   model: string,
 ): CapabilityEvidence[] | undefined {
-  if (providerId !== "openrouter") return undefined;
-  const discovered = getDiscoveredOpenRouterApiCapabilities(model);
-  if (discovered?.tools === undefined) return undefined;
-  return [
-    {
-      providerId,
-      modelId: model,
-      capabilityId: "function_calling",
-      transport: "responses",
-      support: discovered.tools ? "supported" : "unsupported",
-      execution: "client",
-      source: "provider-catalog",
-      verifiedAt: discovered.updatedAt,
-    },
-  ];
+  return providerId === "openrouter"
+    ? getDiscoveredOpenRouterCapabilityEvidence(model)
+    : undefined;
 }
 
 const runningDiscussions = new Set<string>();

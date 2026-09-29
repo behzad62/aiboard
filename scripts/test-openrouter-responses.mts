@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 
 import type { NativeToolDefinition, StreamChunk } from "../lib/providers/base";
 import { openrouterProvider } from "../lib/providers/openrouter";
+import { resolveProviderCallPlan } from "../lib/providers/call-planner";
+import type {
+  GeneratedArtifactRef,
+  ProviderArtifactPayload,
+  ProviderArtifactSink,
+} from "../lib/providers/provider-events";
 
 function sseResponse(events: unknown[]): Response {
   const body = events
@@ -30,7 +36,56 @@ const readTool: NativeToolDefinition = {
   },
   strict: true,
 };
+class ArtifactSink implements ProviderArtifactSink {
+  payloads: ProviderArtifactPayload[] = [];
+  async persist(payload: ProviderArtifactPayload): Promise<GeneratedArtifactRef> {
+    this.payloads.push(payload);
+    const bytes = payload.bytes instanceof Uint8Array
+      ? payload.bytes
+      : new Uint8Array(payload.bytes);
+    return {
+      id: payload.id ?? "artifact",
+      mimeType: payload.mimeType,
+      filename: payload.filename,
+      size: bytes.byteLength,
+      storageRef: `provider-artifact:${payload.id ?? "artifact"}`,
+    };
+  }
+}
 
+const artifactSink = new ArtifactSink();
+
+const responsesPlan = resolveProviderCallPlan({
+  context: {
+    providerId: "openrouter",
+    modelId: "openai/gpt-5.6",
+    evidence: [
+      {
+        providerId: "openrouter",
+        modelId: "openai/gpt-5.6",
+        capabilityId: "function_calling",
+        transport: "responses",
+        support: "supported",
+        execution: "client",
+        source: "provider-catalog",
+        verifiedAt: "2026-09-30T00:00:00.000Z",
+      },
+    ],
+    features: { parallelTools: true, toolChoice: "auto" },
+  },
+  requestedTools: [
+    { id: "function_calling", requirement: "required" },
+    { id: "web_search", requirement: "optional" },
+    { id: "web_fetch", requirement: "optional" },
+    { id: "shell", requirement: "optional" },
+    { id: "datetime", requirement: "optional" },
+    { id: "apply_patch", requirement: "optional" },
+    { id: "image_generation", requirement: "optional" },
+    { id: "advisor", requirement: "optional" },
+    { id: "subagent", requirement: "optional" },
+    { id: "fusion", requirement: "optional" },
+  ],
+});
 const originalFetch = globalThis.fetch;
 try {
   {
@@ -55,6 +110,52 @@ try {
           logprobs: [],
         },
         {
+          type: "response.output_item.added",
+          item: { id: "fetch_1", type: "web_fetch_call" },
+        },
+        {
+          type: "response.output_item.done",
+          item: { id: "fetch_1", type: "web_fetch_call", status: "completed" },
+        },
+        {
+          type: "response.output_item.added",
+          item: { id: "shell_1", type: "shell_call" },
+        },
+        {
+          type: "response.output_item.done",
+          item: { id: "shell_1", type: "shell_call", status: "completed" },
+        },        {
+          type: "response.output_text.done",
+          text: "grounded",
+          annotations: [
+            {
+              type: "url_citation",
+              url: "https://example.com/openrouter-source",
+              title: "OpenRouter source",
+              start_index: 0,
+              end_index: 8,
+            },
+          ],
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            id: "image_1",
+            type: "image_generation_call",
+            status: "completed",
+            result: Buffer.from([9, 8, 7]).toString("base64"),
+          },
+        },
+        { type: "response.output_item.added", item: { id: "patch_1", type: "apply_patch_call" } },
+        { type: "response.output_item.done", item: { id: "patch_1", type: "apply_patch_call", status: "completed" } },
+        { type: "response.output_item.added", item: { id: "time_1", type: "datetime_call" } },
+        { type: "response.output_item.done", item: { id: "time_1", type: "datetime_call", status: "completed" } },
+        { type: "response.output_item.added", item: { id: "advisor_1", type: "advisor_call" } },
+        { type: "response.output_item.done", item: { id: "advisor_1", type: "advisor_call", status: "completed" } },
+        { type: "response.output_item.added", item: { id: "subagent_1", type: "subagent_call" } },
+        { type: "response.output_item.done", item: { id: "subagent_1", type: "subagent_call", status: "completed" } },
+        { type: "response.output_item.added", item: { id: "fusion_1", type: "fusion_call" } },
+        { type: "response.output_item.done", item: { id: "fusion_1", type: "fusion_call", status: "completed" } },        {
           type: "response.output_item.done",
           output_index: 1,
           sequence_number: 2,
@@ -97,8 +198,10 @@ try {
         { role: "user", content: "Inspect the README." },
       ],
       nativeTools: [readTool],
-      webSearch: true,
-      hostedBuildTools: true,
+      callPlan: responsesPlan,
+      artifactSink,
+      webSearch: false,
+      hostedBuildTools: false,
       maxTokens: 512,
       temperature: 0.2,
       reasoningEffort: "high",
@@ -137,7 +240,41 @@ try {
       chunks.find((chunk) => chunk.type === "tool_call")?.toolCall,
       { id: "call_1", name: "read", argumentsJson: '{"paths":["README.md"]}' }
     );
-    assert.deepEqual(chunks.find((chunk) => chunk.type === "usage")?.usage, {
+    for (const tool of ["web_fetch", "shell"] as const) {
+      assert.ok(
+        chunks.some(
+          (chunk) =>
+            chunk.type === "provider_tool_event" &&
+            chunk.providerToolEvent?.tool === tool &&
+            chunk.providerToolEvent.phase === "started",
+        ),
+      );
+      assert.ok(
+        chunks.some(
+          (chunk) =>
+            chunk.type === "provider_tool_event" &&
+            chunk.providerToolEvent?.tool === tool &&
+            chunk.providerToolEvent.phase === "completed",
+        ),
+      );
+    }    for (const tool of ["apply_patch", "datetime", "advisor", "subagent", "fusion"] as const) {
+      assert.ok(chunks.some((chunk) => chunk.type === "provider_tool_event" && chunk.providerToolEvent?.tool === tool && chunk.providerToolEvent.phase === "completed"));
+    }
+    const citationEvent = chunks.find(
+      (chunk) => chunk.type === "provider_tool_event" && chunk.providerToolEvent?.citations?.length,
+    );
+    assert.equal(
+      citationEvent?.providerToolEvent?.citations?.[0]?.url,
+      "https://example.com/openrouter-source",
+    );
+    const imageEvent = chunks.find(
+      (chunk) => chunk.type === "provider_tool_event" && chunk.providerToolEvent?.tool === "image_generation",
+    );
+    assert.equal(
+      imageEvent?.providerToolEvent?.artifacts?.[0]?.storageRef,
+      "provider-artifact:image_1",
+    );
+    assert.deepEqual(Array.from(artifactSink.payloads[0]?.bytes as Uint8Array), [9, 8, 7]);    assert.deepEqual(chunks.find((chunk) => chunk.type === "usage")?.usage, {
       inputTokens: 21,
       outputTokens: 7,
       totalTokens: 28,

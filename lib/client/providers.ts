@@ -31,6 +31,7 @@ import { getModelDisplayName } from "@/lib/providers/catalog";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/constants";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
 import type { CustomModel } from "@/lib/db/schema";
+import type { CapabilityEvidence } from "@/lib/providers/tool-capabilities";
 import {
   getCustomModelById,
   getCustomModels,
@@ -62,6 +63,25 @@ export function getDiscoveredOpenRouterApiCapabilities(modelId: string) {
       formatModelId(OPENROUTER_PROVIDER_ID, normalizeOpenRouterModelId(modelId))
     ] ?? null
   );
+}
+
+export function getDiscoveredOpenRouterCapabilityEvidence(
+  modelId: string,
+): CapabilityEvidence[] | undefined {
+  const discovered = getDiscoveredOpenRouterApiCapabilities(modelId);
+  if (discovered?.tools === undefined) return undefined;
+  return [
+    {
+      providerId: "openrouter",
+      modelId: normalizeOpenRouterModelId(modelId),
+      capabilityId: "function_calling",
+      transport: "responses",
+      support: discovered.tools ? "supported" : "unsupported",
+      execution: "client",
+      source: "provider-catalog",
+      verifiedAt: discovered.updatedAt,
+    },
+  ];
 }
 
 // Foundry serves Claude models, which accept image + document inputs.

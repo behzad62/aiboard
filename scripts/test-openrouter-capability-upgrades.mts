@@ -15,8 +15,16 @@ import {
   openRouterHostedToolField,
 } from "../lib/providers/openai";
 import { openrouterProvider } from "../lib/providers/openrouter";
-import { buildOpenRouterCatalogModel } from "../lib/client/settings-api";
+import {
+  buildOpenRouterCatalogModel,
+  openRouterCatalogCapabilityEvidence,
+} from "../lib/client/settings-api";
 import { providerSupportsNativeBuildToolsFeature } from "../lib/providers/provider-registry";
+import { resolveProviderCallPlan } from "../lib/providers/call-planner";
+import { resolveToolLoadingPolicy } from "../lib/providers/tool-inventory";
+import { openRouterResponsesToolField } from "../lib/providers/openrouter-tools";
+import { ProviderCallPlanError } from "../lib/providers/tool-capabilities";
+import { legacyChatParamsToToolRequest } from "../lib/providers/legacy-tool-intents";
 
 const discovered = buildOpenRouterCatalogModel({
   id: "xiaomi/mimo-v2.6-pro",
@@ -39,6 +47,51 @@ assert.equal(discovered.supportsTemperature, true);
 assert.equal(discovered.supportsMaxTokens, true);
 assert.equal(discovered.supportsAudioInput, true);
 assert.equal(discovered.supportsVideoInput, true);
+const catalogEvidence = openRouterCatalogCapabilityEvidence(discovered, "2026-09-30T00:00:00.000Z");
+assert.deepEqual(catalogEvidence, [
+  {
+    providerId: "openrouter",
+    modelId: "xiaomi/mimo-v2.6-pro",
+    capabilityId: "function_calling",
+    transport: "responses",
+    support: "supported",
+    execution: "client",
+    source: "provider-catalog",
+    verifiedAt: "2026-09-30T00:00:00.000Z",
+  },
+]);
+const supportedPlan = resolveProviderCallPlan({
+  context: {
+    providerId: "openrouter",
+    modelId: discovered.id,
+    evidence: catalogEvidence,
+    features: {},
+  },
+  requestedTools: [{ id: "function_calling", requirement: "required" }],
+});
+assert.equal(supportedPlan.enabledTools[0]?.intent.id, "function_calling");
+const noToolsCatalog = buildOpenRouterCatalogModel({
+  id: "example/no-tools",
+  supported_parameters: [],
+  architecture: { input_modalities: ["text"] },
+});
+assert.throws(
+  () =>
+    resolveProviderCallPlan({
+      context: {
+        providerId: "openrouter",
+        modelId: noToolsCatalog.id,
+        evidence: openRouterCatalogCapabilityEvidence(
+          noToolsCatalog,
+          "2026-09-30T00:00:00.000Z",
+        ),
+        features: {},
+      },
+      requestedTools: [{ id: "function_calling", requirement: "required" }],
+    }),
+  ProviderCallPlanError,
+);
+console.log("PASS OpenRouter supported_parameters becomes provider-catalog planner evidence");
 
 assert.equal(
   providerSupportsNativeBuildToolsFeature("openrouter", "brand-new/model", true),
@@ -120,6 +173,86 @@ const manyTools: NativeToolDefinition[] = Array.from({ length: 18 }, (_, index) 
   parameters: { type: "object", properties: {} },
   ...(index === 0 ? { deferLoading: false } : {}),
 }));
+const genericInventory = manyTools.map((tool) => ({
+  logicalName: tool.name,
+  capabilityId: "function_calling" as const,
+  execution: "client" as const,
+  deferLoading: tool.deferLoading,
+  payload: tool,
+}));
+const genericLoading = resolveToolLoadingPolicy({
+  entries: genericInventory,
+  threshold: 16,
+  nativeToolSearchAvailable: true,
+});
+assert.equal(genericLoading.strategy, "native_tool_search");
+assert.equal(genericLoading.tools.find((tool) => tool.logicalName === "read")?.deferLoading, false);
+assert.equal(genericLoading.tools.find((tool) => tool.logicalName === "tool_1")?.deferLoading, true);
+const promotedLegacyRequest = legacyChatParamsToToolRequest({
+  nativeTools: manyTools,
+  toolChoice: "auto",
+});
+assert.equal(
+  promotedLegacyRequest.toolIntents.some((intent) => intent.id === "tool_search"),
+  true,
+  "large legacy inventories should request optional tool_search before provider planning",
+);
+const richPlan = resolveProviderCallPlan({
+  context: {
+    providerId: "openrouter",
+    modelId: discovered.id,
+    evidence: catalogEvidence,
+    features: { toolChoice: "auto", parallelTools: true },
+  },
+  requestedTools: [
+    { id: "function_calling", requirement: "required" },
+    { id: "web_search", requirement: "optional" },
+    { id: "web_fetch", requirement: "optional" },
+    { id: "shell", requirement: "optional" },
+    { id: "apply_patch", requirement: "optional" },
+    { id: "datetime", requirement: "optional" },
+    { id: "image_generation", requirement: "optional" },
+    { id: "advisor", requirement: "optional", parameters: { model: "~anthropic/claude-opus-latest" } },
+    { id: "subagent", requirement: "optional" },
+    { id: "fusion", requirement: "optional" },
+    { id: "tool_search", requirement: "optional" },
+  ],
+});
+const plannedField = openRouterResponsesToolField({
+  apiKey: "test",
+  model: discovered.id,
+  messages: [{ role: "user", content: "Use the resolved tools." }],
+  nativeTools: manyTools,
+  toolInventory: genericInventory,
+  callPlan: richPlan,
+  webSearch: false,
+  hostedBuildTools: false,
+  hostedTools: [],
+});
+const plannedTypes = (plannedField.tools ?? []).map((tool) => tool.type);
+for (const type of [
+  "openrouter:web_search",
+  "openrouter:web_fetch",
+  "openrouter:shell",
+  "openrouter:apply_patch",
+  "openrouter:datetime",
+  "openrouter:image_generation",
+  "openrouter:advisor",
+  "openrouter:subagent",
+  "openrouter:fusion",
+  "openrouter:tool_search",
+]) {
+  assert.ok(plannedTypes.includes(type), `resolved OpenRouter plan must serialize ${type}`);
+}
+assert.equal(
+  plannedField.tools?.find((tool) => tool.name === "tool_1")?.defer_loading,
+  true,
+);
+assert.equal(
+  plannedField.tools?.find((tool) => tool.name === "read")?.defer_loading,
+  undefined,
+);
+console.log("PASS OpenRouter Responses serialization follows callPlan and generic inventory policy");
 const searched = openAIResponsesNativeToolField(manyTools, {
   providerId: "openrouter",
   toolChoice: "auto",

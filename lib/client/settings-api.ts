@@ -49,6 +49,7 @@ import {
 } from "./providers";
 import { formatModelId } from "@/lib/providers/base";
 import type { ProviderId } from "@/lib/providers/provider-registry";
+import type { CapabilityEvidence } from "@/lib/providers/tool-capabilities";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
 
@@ -194,6 +195,23 @@ export interface OpenRouterCatalogModel {
 }
 
 export type ProviderCatalogModel = OpenRouterCatalogModel;
+export function openRouterCatalogCapabilityEvidence(
+  model: OpenRouterCatalogModel,
+  verifiedAt?: string,
+): CapabilityEvidence[] {
+  return [
+    {
+      providerId: "openrouter",
+      modelId: model.id,
+      capabilityId: "function_calling",
+      transport: "responses",
+      support: model.supportsTools ? "supported" : "unsupported",
+      execution: "client",
+      source: "provider-catalog",
+      ...(verifiedAt ? { verifiedAt } : {}),
+    },
+  ];
+}
 
 function normalizeOpenRouterSupportedParameters(
   parameters?: string[]
