@@ -6,7 +6,22 @@ import type {
   StreamChunk,
 } from "./base";
 import { providerSupportsMaxTokensFeature } from "./provider-registry";
+import {
+  fetchRunnerCapabilityHandshake,
+  type RunnerCapabilityProviderId,
+  type RunnerCapabilityValidationResult,
+} from "./runner-capabilities";
 
+export async function fetchAccountRunnerCapabilities(input: {
+  baseURL: string;
+  runnerToken: string;
+  providerId: RunnerCapabilityProviderId;
+  apiKey?: string;
+  signal?: AbortSignal;
+  minimumRunnerVersion?: number;
+}): Promise<RunnerCapabilityValidationResult> {
+  return fetchRunnerCapabilityHandshake(input);
+}
 export const ACCOUNT_RUNNER_TEXT_ONLY = {
   image: false,
   document: false,

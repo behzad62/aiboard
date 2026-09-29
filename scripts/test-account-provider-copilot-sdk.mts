@@ -370,4 +370,30 @@ await assert.rejects(resolvedAfterAbortRun, (error) => error === resolvedSendRea
 assert.deepEqual(resolvedSendCleanup, ["abort", "disconnect", "stop"]);
 check("Copilot SDK does not return send content after cancellation", true);
 
+const capabilityBuilder = (sdk as unknown as {
+  buildCopilotSdkRunnerCapabilities?: (models: unknown[]) => Record<string, unknown>;
+}).buildCopilotSdkRunnerCapabilities;
+check("Copilot SDK exposes runner capability metadata builder", typeof capabilityBuilder === "function");
+if (capabilityBuilder) {
+  const capabilities = capabilityBuilder([
+    { id: "gpt-5.4", name: "GPT-5.4" },
+    { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+  ]) as {
+    transports?: string[];
+    capabilities?: Array<{ id?: string; support?: string }>;
+    models?: Array<{ modelId?: string; capabilities?: unknown[] }>;
+  };
+  check(
+    "Copilot SDK handshake advertises only runner-wired web tools",
+    JSON.stringify(capabilities.capabilities?.map((item) => item.id)) ===
+      JSON.stringify(["web_search", "web_fetch"]),
+    capabilities
+  );
+  check(
+    "Copilot SDK handshake preserves discovered model ids without guessing tool support",
+    JSON.stringify(capabilities.models?.map((item) => [item.modelId, item.capabilities?.length])) ===
+      JSON.stringify([["gpt-5.4", 0], ["gemini-3.5-flash", 0]]),
+    capabilities.models
+  );
+}
 process.exit(failed === 0 ? 0 : 1);

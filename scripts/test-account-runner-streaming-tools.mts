@@ -6,7 +6,7 @@ import { once } from "node:events";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { createAccountRunnerProvider } from "../lib/providers/account-runner";
+import { createAccountRunnerProvider, fetchAccountRunnerCapabilities } from "../lib/providers/account-runner";
 import type { ChatParams, NativeToolDefinition, StreamChunk } from "../lib/providers/base";
 
 let failures = 0;
@@ -115,6 +115,44 @@ async function collectProviderChunks(params: ChatParams): Promise<{
   }
 }
 
+async function testBrowserCapabilityHandshake(): Promise<void> {
+  let token = "";
+  const { server, url } = await withServer(async (req, res) => {
+    token = String(req.headers["x-runner-token"] ?? "");
+    await readJsonBody(req);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      schemaVersion: 1,
+      runnerVersion: 20,
+      providerId: "chatgpt",
+      transports: ["runner_proxy"],
+      capabilities: [
+        {
+          id: "web_search",
+          support: "supported",
+          execution: "provider",
+          transports: ["runner_proxy"],
+          supportSource: "runner",
+        },
+      ],
+    }));
+  });
+  try {
+    const result = await fetchAccountRunnerCapabilities({
+      baseURL: url,
+      runnerToken: "runner-token",
+      providerId: "chatgpt",
+    });
+    check(
+      "account-runner browser helper returns only a validated handshake",
+      result.status === "valid" && result.handshake.providerId === "chatgpt" && token === "runner-token",
+      result
+    );
+  } finally {
+    server.close();
+    await once(server, "close");
+  }
+}
 async function testBrowserProviderStreaming(): Promise<void> {
   const { chunks, requestBody } = await collectProviderChunks({
     apiKey: "runner-token",
@@ -665,6 +703,7 @@ async function testLocalRunnerSurvivesUpstreamStreamError(): Promise<void> {
   }
 }
 
+await testBrowserCapabilityHandshake();
 await testBrowserProviderStreaming();
 await testLocalRunnerForwardsNativeTools();
 await testLocalRunnerStreamsCompletedOutputText();
