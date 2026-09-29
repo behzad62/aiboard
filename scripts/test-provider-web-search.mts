@@ -42,12 +42,12 @@ check(
 );
 check(
   "structured output does not globally suppress web-search intent",
-  shouldEnableProviderNativeWebSearch({
+  webSearchToolIntent({
     providerId: "google",
     model: "gemini-3.5-flash",
     structuredOutput,
     allowWebSearch: true,
-  }),
+  })?.id === "web_search",
   structuredOutput
 );
 check(

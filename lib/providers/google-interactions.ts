@@ -133,7 +133,7 @@ export function googleInteractionsToolField(params: ChatParams): {
   const tools: Array<Record<string, unknown>> = [];
 
   if (toolEnabled(params, "function_calling")) {
-    for (const tool of params.nativeTools ?? []) {
+    for (const tool of params.functionTools ?? []) {
       tools.push({
         type: "function",
         name: tool.name,
@@ -380,7 +380,7 @@ function interactionFunctionCall(
     step.arguments && typeof step.arguments === "object"
       ? ({ ...(step.arguments as Record<string, unknown>) } as Record<string, unknown>)
       : {};
-  const nativeNames = new Set((params.nativeTools ?? []).map((tool) => tool.name));
+  const nativeNames = new Set((params.functionTools ?? []).map((tool) => tool.name));
   if (toolEnabled(params, "computer_use") && !nativeNames.has(step.name)) {
     const intent = typeof args.intent === "string" ? args.intent : undefined;
     return {

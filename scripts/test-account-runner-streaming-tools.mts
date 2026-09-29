@@ -8,6 +8,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { createAccountRunnerProvider, fetchAccountRunnerCapabilities } from "../lib/providers/account-runner";
 import type { ChatParams, NativeToolDefinition, StreamChunk } from "../lib/providers/base";
+import { resolveProviderCallPlan } from "../lib/providers/call-planner";
 
 let failures = 0;
 
@@ -18,7 +19,7 @@ function check(name: string, ok: boolean, detail?: unknown): void {
   );
 }
 
-const nativeTools: NativeToolDefinition[] = [
+const functionTools: NativeToolDefinition[] = [
   {
     name: "echo_tool",
     description: "Echo a message.",
@@ -31,6 +32,38 @@ const nativeTools: NativeToolDefinition[] = [
     strict: false,
   },
 ];
+const accountCallPlan = resolveProviderCallPlan({
+  context: {
+    providerId: "chatgpt",
+    modelId: "gpt-5.4-mini",
+    allowedTransports: ["runner_proxy"],
+    evidence: [
+      {
+        providerId: "chatgpt",
+        modelId: "gpt-5.4-mini",
+        capabilityId: "function_calling",
+        transport: "runner_proxy",
+        support: "supported",
+        execution: "runner",
+        source: "runner",
+      },
+      {
+        providerId: "chatgpt",
+        modelId: "gpt-5.4-mini",
+        capabilityId: "web_search",
+        transport: "runner_proxy",
+        support: "supported",
+        execution: "provider",
+        source: "runner",
+      },
+    ],
+    features: { toolChoice: "auto", parallelTools: true },
+  },
+  requestedTools: [
+    { id: "function_calling", requirement: "required" },
+    { id: "web_search", requirement: "optional" },
+  ],
+});
 
 function sseEvent(payload: unknown): string {
   return `data: ${JSON.stringify(payload)}\n\n`;
@@ -158,16 +191,17 @@ async function testBrowserProviderStreaming(): Promise<void> {
     apiKey: "runner-token",
     model: "gpt-5.4-mini",
     messages: [{ role: "user", content: "Use the tool." }],
-    nativeTools,
-    hostedBuildTools: true,
-    webSearch: true,
+    functionTools,
+    callPlan: accountCallPlan,
     attachments: [],
   });
   check(
     "account provider forwards native tools without deprecated hosted shell flag",
-    Array.isArray(requestBody?.nativeTools) &&
+    Array.isArray(requestBody?.functionTools) &&
+      Array.isArray(requestBody?.toolIntents) &&
+      (requestBody?.toolIntents as Array<{ id?: string }>).some((intent) => intent.id === "web_search") &&
       requestBody?.hostedBuildTools === undefined &&
-      requestBody?.webSearch === true &&
+      requestBody?.webSearch === undefined &&
       requestBody?.stream === true,
     requestBody
   );
@@ -311,9 +345,10 @@ async function testLocalRunnerForwardsNativeTools(): Promise<void> {
       body: JSON.stringify({
         model: "gpt-5.4-mini",
         messages: [{ role: "user", content: "Call echo_tool." }],
-        nativeTools,
-        hostedBuildTools: true,
-        webSearch: true,
+        functionTools,
+        toolIntents: accountCallPlan.enabledTools.map((tool) => tool.intent),
+        toolChoice: accountCallPlan.toolChoice,
+        parallelToolCalls: accountCallPlan.parallelToolCalls,
         attachments: [],
         stream: true,
       }),

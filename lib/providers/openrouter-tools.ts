@@ -14,12 +14,6 @@ export type OpenRouterToolApi = "chat-completions" | "responses";
 
 export const OPENROUTER_TOOL_SEARCH_THRESHOLD = DEFAULT_TOOL_SEARCH_THRESHOLD;
 
-export const DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS: HostedToolDefinition[] = [
-  { type: "web_search" },
-  { type: "web_fetch" },
-  { type: "shell", parameters: { engine: "openrouter" } },
-  { type: "datetime" },
-];
 
 const CHAT_COMPLETIONS_HOSTED_TOOLS = new Set<HostedToolDefinition["type"]>([
   "web_search",
@@ -110,7 +104,7 @@ function planInventory(params: ChatParams): LogicalToolEntry[] {
       (entry) => entry.capabilityId === "function_calling",
     );
   }
-  return nativeToolInventory(params.nativeTools ?? []);
+  return nativeToolInventory(params.functionTools ?? []);
 }
 
 const OPENROUTER_PLAN_HOSTED_CAPABILITIES = [
@@ -124,6 +118,22 @@ const OPENROUTER_PLAN_HOSTED_CAPABILITIES = [
   "subagent",
   "fusion",
 ] as const;
+export function openRouterChatHostedToolsFromPlan(
+  params: ChatParams,
+): Array<Record<string, unknown>> {
+  const definitions: HostedToolDefinition[] = [];
+  for (const capabilityId of OPENROUTER_PLAN_HOSTED_CAPABILITIES) {
+    if (!openRouterEnabledPlanTool(params, capabilityId)) continue;
+    if (capabilityId === "web_search") continue;
+    if (!CHAT_COMPLETIONS_HOSTED_TOOLS.has(capabilityId)) continue;
+    const parameters = openRouterIntentParameters(params, capabilityId);
+    definitions.push({
+      type: capabilityId,
+      ...(Object.keys(parameters).length > 0 ? { parameters } : {}),
+    });
+  }
+  return openRouterHostedToolsForApi(definitions, "chat-completions");
+}
 
 export function openRouterResponsesToolField(params: ChatParams): {
   tools?: Array<Record<string, unknown>>;

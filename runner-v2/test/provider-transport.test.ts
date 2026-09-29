@@ -429,9 +429,9 @@ test("account runner transport maps native tool calls, usage, and tool results",
       outputTokens: 3,
     });
     assert.match(JSON.stringify(requests[0]), /TOOL_RESULT/);
-    assert.equal((requests[0].nativeTools as unknown[]).length, 1);
+    assert.equal((requests[0].functionTools as unknown[]).length, 1);
     assert.equal(
-      (requests[0].nativeTools as Array<{ name: string }>)[0].name,
+      (requests[0].functionTools as Array<{ name: string }>)[0].name,
       "fs_read"
     );
   } finally {

@@ -11,23 +11,12 @@ export interface WebSearchPolicyInput {
   allowWebSearch?: boolean;
 }
 
-/**
- * Temporary legacy policy hook. This answers only whether the caller wants
- * search available; provider/model support is resolved by the capability
- * planner. Structured output is not a global suppression rule.
- */
-export function shouldEnableProviderNativeWebSearch(
-  input: WebSearchPolicyInput,
-): boolean {
-  return input.allowWebSearch !== false;
-}
-
 export function webSearchToolIntent(
   input: WebSearchPolicyInput,
 ): ToolIntent | undefined {
-  return shouldEnableProviderNativeWebSearch(input)
-    ? { id: "web_search", requirement: "optional" }
-    : undefined;
+  return input.allowWebSearch === false
+    ? undefined
+    : { id: "web_search", requirement: "optional" };
 }
 
 export function withWebSearchCapabilityNote(

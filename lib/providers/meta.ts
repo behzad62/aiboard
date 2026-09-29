@@ -65,7 +65,7 @@ export function metaResponsesToolField(params: ChatParams): {
   let deferredFunctionCount = 0;
 
   if (enabledPlanTool(params, "function_calling")) {
-    for (const tool of params.nativeTools ?? []) {
+    for (const tool of params.functionTools ?? []) {
       const deferred = toolSearchEnabled && tool.deferLoading === true;
       if (deferred) deferredFunctionCount++;
       tools.push({

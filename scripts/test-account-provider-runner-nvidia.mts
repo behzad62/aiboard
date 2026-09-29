@@ -72,7 +72,7 @@ function parseNormalizedSse(text: string): Array<Record<string, unknown>> {
   return events;
 }
 
-const nativeTools: NativeToolDefinition[] = [
+const functionTools: NativeToolDefinition[] = [
   {
     name: "echo_tool",
     description: "Echo a short message.",
@@ -328,7 +328,7 @@ try {
           properties: { ok: { type: "boolean" } },
         },
       },
-      nativeTools,
+      functionTools,
       attachments: [],
       stream: true,
     }),
@@ -425,7 +425,7 @@ try {
           properties: { ok: { type: "boolean" } },
         },
       },
-      nativeTools,
+      functionTools,
       attachments: [],
       stream: true,
     }),

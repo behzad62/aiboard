@@ -4,10 +4,7 @@ import type { ReasoningEffort } from "../lib/db/schema";
 import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { formatModelId } from "../lib/providers/base";
 import { getModelPricing } from "../lib/providers/pricing";
-import {
-  providerSupportsNativeBuildToolsFeature,
-  providerSupportsNativeWebSearchFeature,
-} from "../lib/providers/provider-registry";
+import { resolveProviderCapabilityProfile } from "../lib/providers/capability-resolution";
 import {
   openRouterReasoningEffort,
 } from "../lib/providers/reasoning";
@@ -65,17 +62,25 @@ check(
   pricing
 );
 
+const kimiToolProfile = resolveProviderCapabilityProfile({
+  providerId: "openrouter",
+  modelId: "moonshotai/kimi-k3",
+});
 check(
-  "Kimi K3 exposes native web search",
-  providerSupportsNativeWebSearchFeature("openrouter", "moonshotai/kimi-k3")
+  "Kimi K3 exposes provider web search",
+  kimiToolProfile.capabilities.web_search?.descriptor.support === "supported"
 );
 check(
-  "Kimi K3 exposes native Build tools",
-  providerSupportsNativeBuildToolsFeature("openrouter", "moonshotai/kimi-k3")
+  "Kimi K3 exposes verified function calling",
+  kimiToolProfile.capabilities.function_calling?.descriptor.support === "supported"
 );
+const unknownToolProfile = resolveProviderCapabilityProfile({
+  providerId: "openrouter",
+  modelId: "unknown/model",
+});
 check(
-  "Unknown OpenRouter models remain fail-closed for native Build tools",
-  !providerSupportsNativeBuildToolsFeature("openrouter", "unknown/model")
+  "Unknown OpenRouter models remain conditional for function calling",
+  unknownToolProfile.capabilities.function_calling?.descriptor.support === "conditional"
 );
 
 const mapOpenRouterReasoning = openRouterReasoningEffort as unknown as (

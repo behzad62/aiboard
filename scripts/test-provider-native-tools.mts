@@ -6,7 +6,6 @@ import {
   nativeToolCallsToActionText,
 } from "../lib/orchestrator/build";
 import {
-  openAIResponsesHostedBuildToolsField,
   openAIResponsesNativeToolField,
 } from "../lib/providers/openai";
 import { openAICompatibleNativeToolField } from "../lib/providers/openai-compat";
@@ -264,12 +263,6 @@ check(
   googleConfig
 );
 
-check(
-  "OpenAI hosted Build tools omit unsupported local_shell",
-  JSON.stringify(openAIResponsesHostedBuildToolsField(false)) === "{}" &&
-    JSON.stringify(openAIResponsesHostedBuildToolsField(true)) === "{}",
-  openAIResponsesHostedBuildToolsField(true)
-);
 
 check(
   "Google hosted Build tools are gated",

@@ -192,7 +192,7 @@ const runtimeParams: ChatParams = {
   apiKey: "test-key",
   model: runtimeModel.model,
   messages: [{ role: "user", content: "Search and call the tool." }],
-  nativeTools: [responseNativeTool],
+  functionTools: [responseNativeTool],
   webSearch: true,
   callPlan: responsesPlan,
 };

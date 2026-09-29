@@ -559,7 +559,6 @@ export function createNativeProviderConfig(
           hostedTools: [
             { type: "web_search" as const },
             { type: "web_fetch" as const },
-            { type: "shell" as const, parameters: { engine: "openrouter" } },
             { type: "datetime" as const },
           ],
         }

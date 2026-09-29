@@ -12,8 +12,7 @@ import { openAIReasoningEffort, openRouterReasoningEffort } from "./reasoning";
 import { DISCUSSION_TRANSCRIPT_MARKER } from "../orchestrator/prompts";
 import { openAICompatibleStructuredOutputField } from "./structured-output";
 import {
-  DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS,
-  openRouterHostedToolsForApi,
+  openRouterChatHostedToolsFromPlan,
   toolChoiceForChatCompletions,
 } from "./openrouter-tools";
 
@@ -142,6 +141,10 @@ function needsExplicitCacheControl(providerId: string, model: string): boolean {
     providerId === "openrouter" &&
     OPENROUTER_EXPLICIT_CACHE_PREFIXES.some((p) => model.startsWith(p))
   );
+}
+
+function compatiblePlanEnables(params: ChatParams, id: string): boolean {
+  return params.callPlan?.enabledTools.some((tool) => tool.intent.id === id) === true;
 }
 
 export function openAICompatibleWebSearchField(
@@ -376,24 +379,17 @@ export async function* streamOpenAICompatibleChat(
   );
   const webSearchField = openAICompatibleWebSearchField(
     providerId,
-    params.webSearch && !params.structuredOutput
+    compatiblePlanEnables(params, "web_search") && !params.structuredOutput
   );
   const nativeToolField = openAICompatibleNativeToolField(
     providerId,
-    params.structuredOutput ? undefined : params.nativeTools,
+    params.structuredOutput ? undefined : params.functionTools,
     params.toolChoice
   );
-  const requestedHostedTools =
+  const hostedTools =
     providerId === "openrouter"
-      ? [
-          ...(params.hostedBuildTools ? DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS : []),
-          ...(params.hostedTools ?? []),
-        ]
+      ? openRouterChatHostedToolsFromPlan(params)
       : [];
-  const hostedTools = openRouterHostedToolsForApi(
-    requestedHostedTools,
-    "chat-completions"
-  );
   const combinedTools = dedupeOpenAICompatibleTools([
     ...((webSearchField.tools as unknown[] | undefined) ?? []),
     ...hostedTools,

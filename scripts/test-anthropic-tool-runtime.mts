@@ -79,7 +79,7 @@ const params: ChatParams = {
   apiKey: "test",
   model: "claude-opus-5",
   messages: [{ role: "user", content: "Use the available tools." }],
-  nativeTools: [
+  functionTools: [
     {
       name: "lookup",
       description: "Look up app data",

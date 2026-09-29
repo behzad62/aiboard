@@ -85,7 +85,7 @@ const params: ChatParams = {
   apiKey: "test",
   model: "grok-4.7",
   messages: [{ role: "user", content: "Use all tools." }],
-  nativeTools: [
+  functionTools: [
     {
       name: "lookup",
       description: "Look up data",

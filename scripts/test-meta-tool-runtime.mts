@@ -69,7 +69,7 @@ const params: ChatParams = {
   model: "muse-spark-1.3",
   messages: [{ role: "user", content: "Find current weather" }],
   reasoningEffort: "high",
-  nativeTools: [
+  functionTools: [
     {
       name: "weather.lookup",
       description: "Look up weather",

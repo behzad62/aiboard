@@ -11,7 +11,7 @@ import type {
 import { parseModelId } from "@/lib/providers/base";
 import { providerSupportsMaxTokensFeature } from "@/lib/providers/provider-registry";
 import { getProviderCapabilityManifest } from "@/lib/providers/capability-manifests";
-import type { ProviderCallPlan, ProviderTransportId } from "@/lib/providers/tool-capabilities";
+import type { ProviderCallPlan } from "@/lib/providers/tool-capabilities";
 import {
   CAPABILITY_PROBES,
   CONCURRENCY_A_MESSAGES,
@@ -275,7 +275,7 @@ async function runProbeCall(input: {
   temperature?: number;
   structuredOutput?: StructuredOutputFormat;
   capabilities?: ModelCapabilities;
-  nativeTools?: NativeToolDefinition[];
+  functionTools?: NativeToolDefinition[];
   toolChoice?: "auto" | "required";
   callPlan?: ProviderCallPlan;
 }): Promise<CollectedProbeOutput> {
@@ -293,7 +293,7 @@ async function runProbeCall(input: {
         temperature: input.temperature,
         structuredOutput: input.structuredOutput,
         capabilities: input.capabilities ?? custom.capabilities,
-        nativeTools: input.nativeTools,
+        functionTools: input.functionTools,
         toolChoice: input.toolChoice,
         callPlan: input.callPlan,
       })
@@ -315,7 +315,7 @@ async function runProbeCall(input: {
       temperature: input.temperature,
       structuredOutput: input.structuredOutput,
       capabilities: input.capabilities,
-      nativeTools: input.nativeTools,
+      functionTools: input.functionTools,
       toolChoice: input.toolChoice,
       callPlan: input.callPlan,
     })
@@ -435,7 +435,7 @@ async function runOneProbe(
       target,
       messages: TOOL_CALL_PROBE_MESSAGES,
       maxTokens: 256,
-      nativeTools: [tool],
+      functionTools: [tool],
       toolChoice: "auto",
       callPlan,
     });

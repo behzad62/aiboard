@@ -82,7 +82,7 @@ import {
   recordBenchmarkModelCallTrace,
 } from "@/lib/benchmark/model-call-traces";
 import {
-  shouldEnableProviderNativeWebSearch,
+  webSearchToolIntent,
   withWebSearchCapabilityNote,
 } from "@/lib/providers/web-search";
 import {
@@ -92,9 +92,9 @@ import {
 import type { ProviderArtifactSink, ProviderToolEvent } from "@/lib/providers/provider-events";
 import { resolveProviderCallPlan } from "@/lib/providers/call-planner";
 import {
-  legacyChatParamsToToolRequest,
-  legacyHostedBuildCapabilities,
-} from "@/lib/providers/legacy-tool-intents";
+  buildProviderToolRequest,
+  type ProviderToolRequest,
+} from "@/lib/providers/tool-request";
 import type {
   CapabilityEvidence,
   ProviderTransportId,
@@ -145,11 +145,20 @@ function inferredCallMode(
   explicit: ProviderPreflightOverrides["mode"],
 ): NonNullable<ProviderPreflightOverrides["mode"]> {
   if (explicit) return explicit;
-  return params.nativeTools?.length || params.hostedBuildTools ? "build" : "discussion";
+  return params.functionTools?.length ? "build" : "discussion";
 }
 
 function enabledCapabilitySet(params: ChatParams): Set<string> {
   return new Set(params.callPlan?.enabledTools.map((tool) => tool.intent.id) ?? []);
+}
+
+function callPlanEnables(params: ChatParams, capabilityId: string): boolean {
+  return params.callPlan?.enabledTools.some((tool) => tool.intent.id === capabilityId) === true;
+}
+
+function optionalWebSearchRequest(allowWebSearch = true): ProviderToolRequest {
+  const intent = webSearchToolIntent({ allowWebSearch });
+  return buildProviderToolRequest({ toolIntents: intent ? [intent] : [] });
 }
 
 export function preflightProviderChatParams(
@@ -157,7 +166,7 @@ export function preflightProviderChatParams(
   params: ChatParams,
   overrides: ProviderPreflightOverrides = {},
 ): ChatParams {
-  const normalized = legacyChatParamsToToolRequest(params);
+  const normalized = buildProviderToolRequest(params);
   const callPlan = resolveProviderCallPlan({
     context: {
       providerId,
@@ -187,12 +196,7 @@ export function preflightProviderChatParams(
     callPlan,
   };
   const enabled = enabledCapabilitySet(prepared);
-  prepared.webSearch = params.webSearch === true && enabled.has("web_search");
-  prepared.nativeTools = enabled.has("function_calling") ? params.nativeTools : undefined;
-  prepared.hostedTools = params.hostedTools?.filter((tool) => enabled.has(tool.type));
-  prepared.hostedBuildTools =
-    params.hostedBuildTools === true &&
-    legacyHostedBuildCapabilities().some((capabilityId) => enabled.has(capabilityId));
+  prepared.functionTools = enabled.has("function_calling") ? params.functionTools : undefined;
   return prepared;
 }
 
@@ -305,9 +309,7 @@ export async function collectStream(
     message: string;
   }) => void,
   contextProfile?: ModelContextProfile,
-  allowWebSearch = true,
-  nativeTools?: NativeToolDefinition[],
-  hostedBuildTools = false,
+  toolRequest: ProviderToolRequest = { toolIntents: [], toolInventory: [] },
   artifactSink?: ProviderArtifactSink
 ): Promise<string> {
   const result = await collectStreamWithUsage(
@@ -325,9 +327,7 @@ export async function collectStream(
     structuredOutput,
     onProviderRetry,
     contextProfile,
-    allowWebSearch,
-    nativeTools,
-    hostedBuildTools,
+    toolRequest,
     artifactSink
   );
   return result.content;
@@ -352,9 +352,7 @@ export async function collectStreamWithUsage(
     message: string;
   }) => void,
   contextProfile?: ModelContextProfile,
-  allowWebSearch = true,
-  nativeTools?: NativeToolDefinition[],
-  hostedBuildTools = false,
+  toolRequest: ProviderToolRequest = { toolIntents: [], toolInventory: [] },
   artifactSink?: ProviderArtifactSink
 ): Promise<CollectedStreamResult> {
   if (signal?.aborted) throw abortError();
@@ -383,15 +381,13 @@ export async function collectStreamWithUsage(
         temperature,
         reasoningEffort,
         structuredOutput,
-        webSearch: allowWebSearch,
         contextProfile,
-        nativeTools,
-        hostedBuildTools,
+        ...toolRequest,
         artifactSink,
       },
       customModelPlanningContext(customModel),
     );
-    customParams.messages = customParams.webSearch
+    customParams.messages = callPlanEnables(customParams, "web_search")
       ? withWebSearchCapabilityNote(messages)
       : messages;
     let customContent = "";
@@ -481,16 +477,6 @@ export async function collectStreamWithUsage(
     ...(discoveredCapabilityEvidence(providerId, model) ?? []),
     ...(runnerContext.evidence ?? []),
   ];
-  const runnerWebSearch = runnerContext.evidence?.find(
-    (item) => item.capabilityId === "web_search",
-  );
-  const requestWebSearch = runnerWebSearch
-    ? allowWebSearch && runnerWebSearch.support === "supported"
-    : shouldEnableProviderNativeWebSearch({
-        providerId,
-        model,
-        allowWebSearch,
-      });
   const providerParams = preflightProviderChatParams(
     providerId,
     {
@@ -504,9 +490,7 @@ export async function collectStreamWithUsage(
       temperature,
       reasoningEffort,
       structuredOutput,
-      webSearch: requestWebSearch,
-      nativeTools,
-      hostedBuildTools,
+      ...toolRequest,
       artifactSink,
       contextProfile,
       ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
@@ -516,7 +500,7 @@ export async function collectStreamWithUsage(
       allowedTransports: runnerContext.allowedTransports,
     },
   );
-  providerParams.messages = providerParams.webSearch
+  providerParams.messages = callPlanEnables(providerParams, "web_search")
     ? withWebSearchCapabilityNote(messages)
     : messages;
 
@@ -746,7 +730,9 @@ export async function runDiscussion(
               attempt: retry.attempt,
               type: "request",
               message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
-            })
+            }),
+          undefined,
+          optionalWebSearchRequest(true)
         );
         const output = collected.content;
         const usage = resolveModelCallUsage({

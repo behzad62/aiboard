@@ -7,11 +7,7 @@ import {
 } from "../lib/providers/catalog";
 import { resolveModelContextProfile } from "../lib/providers/model-context";
 import { getModelPricing } from "../lib/providers/pricing";
-import {
-  providerSupportsHostedBuildToolsFeature,
-  providerSupportsNativeBuildToolsFeature,
-  providerSupportsNativeWebSearchFeature,
-} from "../lib/providers/provider-registry";
+import { resolveProviderCapabilityProfile } from "../lib/providers/capability-resolution";
 import {
   geminiThinkingConfig,
   providerSupportsReasoning,
@@ -58,9 +54,10 @@ assert.deepEqual(context.recommendedBuildRoles, [
 ]);
 
 assert.equal(providerSupportsReasoning(fullModelId), true);
-assert.equal(providerSupportsNativeWebSearchFeature("google", modelId), true);
-assert.equal(providerSupportsNativeBuildToolsFeature("google", modelId), true);
-assert.equal(providerSupportsHostedBuildToolsFeature("google", modelId), true);
+const toolProfile = resolveProviderCapabilityProfile({ providerId: "google", modelId });
+assert.equal(toolProfile.capabilities.web_search?.descriptor.support, "supported");
+assert.equal(toolProfile.capabilities.function_calling?.descriptor.support, "supported");
+assert.equal(toolProfile.capabilities.code_execution?.descriptor.support, "supported");
 
 for (const effort of ["none", "low", "medium"] as const) {
   assert.deepEqual(geminiThinkingConfig(modelId, effort, 4096), {

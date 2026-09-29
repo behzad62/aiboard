@@ -1,5 +1,3 @@
-import { resolveProviderCapabilityProfile } from "./capability-resolution";
-import type { CapabilityEvidence, ToolCapabilityId } from "./tool-capabilities";
 
 export const PROVIDER_IDS = [
   "openai",
@@ -383,30 +381,6 @@ export function providerUsesCatalogModels(providerId: string): boolean {
   return getProviderDefinition(providerId)?.modelSource === "catalog";
 }
 
-function resolvedToolSupport(
-  providerId: string,
-  modelId: string,
-  capabilityId: ToolCapabilityId,
-  catalogEvidence?: CapabilityEvidence[]
-): boolean {
-  try {
-    const entry = resolveProviderCapabilityProfile({
-      providerId,
-      modelId,
-      catalogEvidence,
-    }).capabilities[capabilityId];
-    return entry?.descriptor.support === "supported";
-  } catch {
-    return false;
-  }
-}
-
-export function providerSupportsNativeWebSearchFeature(
-  providerId: string,
-  modelId = ""
-): boolean {
-  return resolvedToolSupport(providerId, modelId, "web_search");
-}
 export function providerSupportsReasoningEffortFeature(
   providerId: string,
   modelId = ""
@@ -421,39 +395,4 @@ export function providerSupportsMaxTokensFeature(
 ): boolean {
   const support = getProviderDefinition(providerId)?.maxTokens;
   return typeof support === "function" ? support(modelId) : support === true;
-}
-
-export function providerSupportsNativeBuildToolsFeature(
-  providerId: string,
-  modelId = "",
-  discoveredOpenRouterTools?: boolean
-): boolean {
-  const catalogEvidence =
-    providerId === "openrouter" && discoveredOpenRouterTools !== undefined
-      ? [
-          {
-            providerId,
-            modelId,
-            capabilityId: "function_calling" as const,
-            support: discoveredOpenRouterTools ? ("supported" as const) : ("unsupported" as const),
-            execution: "client" as const,
-            source: "provider-catalog" as const,
-            verifiedAt: "2026-09-29",
-          },
-        ]
-      : undefined;
-  return resolvedToolSupport(providerId, modelId, "function_calling", catalogEvidence);
-}
-
-export function providerSupportsHostedBuildToolsFeature(
-  providerId: string,
-  modelId = ""
-): boolean {
-  if (providerId === "google") {
-    return resolvedToolSupport(providerId, modelId, "code_execution");
-  }
-  if (providerId === "openrouter") {
-    return resolvedToolSupport(providerId, modelId, "shell");
-  }
-  return false;
 }

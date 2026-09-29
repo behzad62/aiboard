@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import {
-  legacyChatParamsToToolRequest,
-} from "../lib/providers/legacy-tool-intents";
-import {
   preflightProviderChatParams,
   streamProviderWithPreflight,
 } from "../lib/client/engine";
@@ -11,6 +8,8 @@ import type {
   ChatParams,
   StreamChunk,
 } from "../lib/providers/base";
+import { buildProviderToolRequest } from "../lib/providers/tool-request";
+import { webSearchToolIntent } from "../lib/providers/web-search";
 
 const baseParams: ChatParams = {
   apiKey: "test-key",
@@ -18,10 +17,15 @@ const baseParams: ChatParams = {
   messages: [{ role: "user", content: "hello" }],
 };
 
-const mapped = legacyChatParamsToToolRequest({
-  ...baseParams,
-  webSearch: true,
-  nativeTools: [
+const mapped = buildProviderToolRequest({
+  toolIntents: [
+    webSearchToolIntent({ allowWebSearch: true })!,
+    { id: "web_fetch", requirement: "optional" },
+    { id: "code_execution", requirement: "optional" },
+    { id: "shell", requirement: "optional" },
+    { id: "datetime", requirement: "optional" },
+  ],
+  functionTools: [
     {
       name: "repo.read",
       description: "Read repository files",
@@ -35,19 +39,16 @@ const mapped = legacyChatParamsToToolRequest({
     },
   ],
   toolChoice: "required",
-  hostedTools: [{ type: "tool_search" }, { type: "web_fetch" }],
-  hostedBuildTools: true,
 });
 assert.deepEqual(
   mapped.toolIntents.map((intent) => [intent.id, intent.requirement]),
   [
     ["web_search", "optional"],
-    ["function_calling", "required"],
-    ["tool_search", "optional"],
     ["web_fetch", "optional"],
     ["code_execution", "optional"],
     ["shell", "optional"],
     ["datetime", "optional"],
+    ["function_calling", "required"],
   ],
 );
 assert.deepEqual(
@@ -72,7 +73,7 @@ assert.deepEqual(
     },
   ],
 );
-console.log("PASS legacy tool fields map deterministically to normalized intent and inventory");
+console.log("PASS canonical tool request normalizes explicit intents and function inventory");
 
 let fakeNetworkCalls = 0;
 const fakeProvider: AIProvider = {
@@ -90,14 +91,10 @@ const fakeProvider: AIProvider = {
 
 assert.throws(
   () =>
-    streamProviderWithPreflight(
-      fakeProvider,
-      "openai",
-      {
-        ...baseParams,
-        toolIntents: [{ id: "maps", requirement: "required" }],
-      },
-    ),
+    streamProviderWithPreflight(fakeProvider, "openai", {
+      ...baseParams,
+      toolIntents: [{ id: "maps", requirement: "required" }],
+    }),
   /Required provider tools are unavailable/,
 );
 assert.equal(fakeNetworkCalls, 0);
@@ -105,46 +102,49 @@ console.log("PASS required unsupported capabilities fail before provider network
 
 const optionalPrepared = preflightProviderChatParams("openai", {
   ...baseParams,
-  toolIntents: [
-    { id: "maps", requirement: "optional" },
-    { id: "function_calling", requirement: "optional" },
-  ],
-  nativeTools: [
-    {
-      name: "read",
-      description: "Read",
-      parameters: { type: "object", properties: {} },
-    },
-  ],
+  ...buildProviderToolRequest({
+    toolIntents: [{ id: "maps", requirement: "optional" }],
+    functionTools: [
+      {
+        name: "read",
+        description: "Read",
+        parameters: { type: "object", properties: {} },
+      },
+    ],
+  }),
 });
 assert.equal(optionalPrepared.callPlan?.enabledTools.some((tool) => tool.intent.id === "maps"), false);
 assert.equal(optionalPrepared.callPlan?.omittedOptionalTools[0]?.code, "unsupported");
-assert.equal(optionalPrepared.nativeTools?.length, 1);
+assert.equal(optionalPrepared.functionTools?.length, 1);
 console.log("PASS optional unsupported capabilities are omitted while supported client tools remain");
 
 const buildPrepared = preflightProviderChatParams("openrouter", {
   ...baseParams,
   model: "qwen/qwen3.7-max",
-  nativeTools: [
-    {
-      name: "repo.apply_patch",
-      description: "Edit the local repository",
-      parameters: { type: "object", properties: {} },
-    },
-  ],
-  hostedBuildTools: true,
+  ...buildProviderToolRequest({
+    functionTools: [
+      {
+        name: "repo.apply_patch",
+        description: "Edit the local repository through AI Board",
+        parameters: { type: "object", properties: {} },
+      },
+    ],
+    toolIntents: [
+      { id: "web_fetch", requirement: "optional" },
+      { id: "datetime", requirement: "optional" },
+    ],
+  }),
 });
 const buildFunctions = buildPrepared.callPlan?.enabledTools.find(
   (tool) => tool.intent.id === "function_calling",
 );
-const hostedShell = buildPrepared.callPlan?.enabledTools.find(
-  (tool) => tool.intent.id === "shell",
-);
 assert.equal(buildFunctions?.descriptor.execution, "client");
-assert.equal(hostedShell?.descriptor.execution, "provider");
-assert.ok(buildPrepared.nativeTools?.length);
-assert.equal(buildPrepared.hostedBuildTools, true);
-console.log("PASS local Build functions remain client-executed and are not replaced by hosted shell");
+assert.ok(buildPrepared.functionTools?.length);
+assert.equal(
+  buildPrepared.callPlan?.enabledTools.some((tool) => tool.intent.id === "shell"),
+  false,
+);
+console.log("PASS local Build functions remain client-executed and no hosted shell is inferred");
 
 const structuredSearch = preflightProviderChatParams("openai", {
   ...baseParams,
@@ -152,9 +152,10 @@ const structuredSearch = preflightProviderChatParams("openai", {
     name: "answer",
     schema: { type: "object", properties: { ok: { type: "boolean" } } },
   },
-  webSearch: true,
+  ...buildProviderToolRequest({
+    toolIntents: [webSearchToolIntent({ allowWebSearch: true })!],
+  }),
 });
-assert.equal(structuredSearch.webSearch, true);
 assert.equal(
   structuredSearch.callPlan?.enabledTools.some((tool) => tool.intent.id === "web_search"),
   true,

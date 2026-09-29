@@ -123,6 +123,10 @@ function messageToGeminiContent(message: {
   };
 }
 
+function googlePlanEnables(params: ChatParams, id: string): boolean {
+  return params.callPlan?.enabledTools.some((tool) => tool.intent.id === id) === true;
+}
+
 export async function* streamGoogleGenerateContent(
   genAI: GoogleGenAI,
   params: ChatParams,
@@ -130,13 +134,13 @@ export async function* streamGoogleGenerateContent(
     try {
       const webSearchTools = googleWebSearchTools(
         params.model,
-        params.webSearch && !params.structuredOutput
+        googlePlanEnables(params, "web_search") && !params.structuredOutput
       );
       const nativeToolConfig = googleNativeToolConfig(
-        params.structuredOutput ? undefined : params.nativeTools
+        params.structuredOutput ? undefined : params.functionTools
       );
       const hostedBuildToolConfig = googleHostedBuildToolConfig(
-        params.hostedBuildTools && !params.structuredOutput
+        googlePlanEnables(params, "code_execution") && !params.structuredOutput
       );
       const tools = [
         ...(webSearchTools ?? []),

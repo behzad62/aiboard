@@ -241,7 +241,7 @@ try {
     maxTokens: 128,
     webSearch: true,
     messages: [{ role: "user", content: "Reply with exactly BUILD_RAW_LIVE_OK." }],
-    nativeTools: [],
+    functionTools: [],
     stream: true,
   });
   check("explicit Build-mode raw route returns HTTP 200", buildRaw.response.ok, buildRaw.json);

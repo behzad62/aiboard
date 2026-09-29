@@ -197,7 +197,7 @@ try {
         { role: "system", content: "Use tools when useful." },
         { role: "user", content: "Inspect the README." },
       ],
-      nativeTools: [readTool],
+      functionTools: [readTool],
       callPlan: responsesPlan,
       artifactSink,
       webSearch: false,

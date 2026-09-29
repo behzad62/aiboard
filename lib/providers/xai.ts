@@ -90,7 +90,7 @@ export function xAIResponsesToolField(params: ChatParams): {
   const include: string[] = [];
 
   if (enabledPlanTool(params, "function_calling")) {
-    for (const tool of params.nativeTools ?? []) {
+    for (const tool of params.functionTools ?? []) {
       tools.push({
         type: "function",
         name: tool.name,

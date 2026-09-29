@@ -22,7 +22,6 @@ import {
 } from "./provider-events";
 import type { ToolCapabilityId } from "./tool-capabilities";
 import {
-  DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS,
   openRouterFunctionToolsForResponses,
   openRouterHostedToolsForApi,
   openRouterResponsesToolField,
@@ -130,7 +129,7 @@ export function openAIResponsesToolField(params: ChatParams): {
   const tools: Array<Record<string, unknown>> = [];
 
   if (enabledPlanTool(params, "function_calling")) {
-    for (const tool of params.nativeTools ?? []) {
+    for (const tool of params.functionTools ?? []) {
       tools.push({
         type: "function",
         name: tool.name,
@@ -373,42 +372,9 @@ export async function* streamOpenAIResponses(
     params.structuredOutput
   );
   const combinedToolField =
-    providerId !== "openrouter"
-      ? openAIResponsesToolField(params)
-      : params.callPlan
-        ? openRouterResponsesToolField(params)
-        : (() => {
-          const webSearchField = openAIResponsesWebSearchField(
-            params.webSearch && !params.structuredOutput,
-            providerId
-          );
-          const nativeToolField = openAIResponsesNativeToolField(
-            params.structuredOutput ? undefined : params.nativeTools,
-            { providerId, toolChoice: params.toolChoice }
-          );
-          const requestedHostedTools = !params.structuredOutput
-            ? [
-                ...(params.hostedBuildTools ? DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS : []),
-                ...(params.hostedTools ?? []),
-              ]
-            : [];
-          const hostedToolField = openRouterHostedToolField(requestedHostedTools);
-          const combinedTools = dedupeResponseTools([
-            ...((webSearchField.tools as unknown[] | undefined) ?? []),
-            ...((nativeToolField.tools as unknown[] | undefined) ?? []),
-            ...((hostedToolField.tools as unknown[] | undefined) ?? []),
-          ]);
-          return combinedTools.length > 0
-            ? {
-                tools: combinedTools,
-                tool_choice:
-                  nativeToolField.tool_choice ?? toolChoiceForResponses(params.toolChoice),
-                ...(nativeToolField.parallel_tool_calls
-                  ? { parallel_tool_calls: nativeToolField.parallel_tool_calls }
-                  : {}),
-              }
-            : {};
-        })();
+    providerId === "openrouter"
+      ? openRouterResponsesToolField(params)
+      : openAIResponsesToolField(params);
 
   try {
     const pendingToolCalls = new Map<
@@ -689,28 +655,6 @@ export function openRouterHostedToolField(
   return mapped.length > 0 ? { tools: mapped } : {};
 }
 
-export function openAIResponsesHostedBuildToolsField(
-  enabled?: boolean,
-  providerId: "openai" | "openrouter" | "custom" = "openai"
-): Record<string, unknown> {
-  if (!enabled || providerId !== "openrouter") return {};
-  return openRouterHostedToolField(DEFAULT_OPENROUTER_BUILD_HOSTED_TOOLS);
-}
-
-function dedupeResponseTools(tools: unknown[]): unknown[] {
-  const seen = new Set<string>();
-  return tools.filter((tool, index) => {
-    if (!tool || typeof tool !== "object") return true;
-    const record = tool as Record<string, unknown>;
-    const type = String(record.type ?? "unknown");
-    const key = type.startsWith("openrouter:")
-      ? type
-      : `${type}:${String(record.name ?? index)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
 
 export const openaiProvider: AIProvider = {
   id: "openai",

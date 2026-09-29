@@ -12,7 +12,7 @@ import {
   type RunnerCapabilityValidationResult,
 } from "./runner-capabilities";
 
-export const ACCOUNT_RUNNER_CAPABILITY_MINIMUM_VERSION = 20;
+export const ACCOUNT_RUNNER_CAPABILITY_MINIMUM_VERSION = 21;
 
 export async function fetchAccountRunnerCapabilities(input: {
   baseURL: string;
@@ -195,8 +195,9 @@ function buildAccountRunnerRequestBody(
     temperature: params.temperature,
     reasoningEffort: params.reasoningEffort,
     structuredOutput: params.structuredOutput,
-    nativeTools: params.nativeTools,
-    webSearch: params.webSearch,
+    functionTools: params.functionTools,
+    toolIntents: params.callPlan?.enabledTools.map((tool) => tool.intent) ?? [],
+    toolChoice: params.callPlan?.toolChoice ?? params.toolChoice,
     attachments: params.attachments ?? [],
     runtimeMode: "discussion",
     stream: true,

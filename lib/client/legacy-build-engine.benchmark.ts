@@ -30,6 +30,9 @@ import type {
   StructuredOutputFormat,
 } from "@/lib/providers/base";
 import { parseModelId } from "@/lib/providers/base";
+import { buildProviderToolRequest } from "@/lib/providers/tool-request";
+import { webSearchToolIntent } from "@/lib/providers/web-search";
+import type { ToolIntent } from "@/lib/providers/tool-capabilities";
 import {
   resolveClientModelContextProfile,
   resolveModelCapabilities,
@@ -4167,7 +4170,7 @@ export async function runBuildDiscussion(
       label: string;
       stopWhen?: (content: string) => boolean;
       structuredOutput?: StructuredOutputFormat;
-      nativeTools?: NativeToolDefinition[];
+      functionTools?: NativeToolDefinition[];
       attachments?: AttachmentPayload[];
       validateStructuredOutput?: (content: string) => StructuredTraceValidation;
       /**
@@ -4182,8 +4185,21 @@ export async function runBuildDiscussion(
     round += 1;
     const messageId = uuidv4();
     const { providerId, model: rawModel } = parseModelId(model.modelId);
-    const nativeTools = opts.nativeTools?.length ? opts.nativeTools : undefined;
-    const hostedBuildTools = !!runner && allowAllCommands && !benchmark;
+    const functionTools = opts.functionTools?.length ? opts.functionTools : undefined;
+    const providerToolIntents: ToolIntent[] = [];
+    const searchIntent = webSearchToolIntent({ allowWebSearch: !benchmark });
+    if (searchIntent) providerToolIntents.push(searchIntent);
+    const allowProviderInfoTools = !!runner && allowAllCommands && !benchmark;
+    if (allowProviderInfoTools) {
+      providerToolIntents.push(
+        { id: "web_fetch", requirement: "optional" },
+        { id: "datetime", requirement: "optional" },
+      );
+    }
+    const toolRequest = buildProviderToolRequest({
+      toolIntents: providerToolIntents,
+      functionTools,
+    });
     const structuredOutput = opts.structuredOutput;
     const traceStartedAt = new Date().toISOString();
     const traceStartMs = Date.now();
@@ -4266,26 +4282,16 @@ export async function runBuildDiscussion(
                 message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
               }),
             modelContextProfile(model),
-            !benchmark,
-            nativeTools,
-            hostedBuildTools
+            toolRequest
           ),
       });
       content = resolved.content;
       reportedUsage = resolved.reportedUsage;
-      if (nativeTools) {
+      if (functionTools) {
         diagnostics.push({
           attempt: 1,
           type: "request",
           message: "Provider-native Build tools were offered for this call.",
-        });
-      }
-      if (hostedBuildTools) {
-        diagnostics.push({
-          attempt: 1,
-          type: "request",
-          message:
-            "Provider-hosted Build tools were permitted because runner full-access is active.",
         });
       }
       if (resolved.overrideUsed) {
@@ -4318,7 +4324,7 @@ export async function runBuildDiscussion(
           ...buildBenchmarkTraceContext(benchmark),
           participantId: opts.label,
           reasoningEffort,
-          schemaMode: opts.structuredOutput || nativeTools ? "structured" : "text",
+          schemaMode: opts.structuredOutput || functionTools ? "structured" : "text",
           promptText: tracePrompt,
           startedAt: traceStartedAt,
           completedAt: new Date().toISOString(),
@@ -4386,7 +4392,7 @@ export async function runBuildDiscussion(
         ...buildBenchmarkTraceContext(benchmark),
         participantId: opts.label,
         reasoningEffort,
-        schemaMode: opts.structuredOutput || nativeTools ? "structured" : "text",
+        schemaMode: opts.structuredOutput || functionTools ? "structured" : "text",
         promptText: tracePrompt,
         startedAt: traceStartedAt,
         completedAt: new Date().toISOString(),
@@ -5656,7 +5662,7 @@ export async function runBuildDiscussion(
         attachments: turn === 0 ? args.initialAttachments : undefined,
         stopWhen: forced ? undefined : hasCompleteBuildToolAction,
         structuredOutput: architectActionResponseFormat,
-        nativeTools: buildNativeBuildToolDefinitions(
+        functionTools: buildNativeBuildToolDefinitions(
           terminal === "review" ? "architect_review" : "architect_plan"
         ),
         validateStructuredOutput: (content) => {
@@ -7836,7 +7842,7 @@ export async function runBuildDiscussion(
                 ? `${worker.displayName} working on ${task.id}: ${task.title}`
                 : `${worker.displayName} continuing ${task.id}: ${task.title}`,
             stopWhen: hasCompleteBuildToolAction,
-            nativeTools: buildNativeBuildToolDefinitions("worker"),
+            functionTools: buildNativeBuildToolDefinitions("worker"),
             onUsage: attributeUsage,
           });
           workerMessages.push({ role: "assistant", content: output });

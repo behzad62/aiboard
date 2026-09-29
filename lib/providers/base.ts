@@ -104,17 +104,10 @@ export interface ChatParams {
   /** Provider-neutral logical inventory for schema-bearing/client tools. */
   toolInventory?: LogicalToolEntry[];
   /** Resolved preflight plan. Provider adapters consume this during migration. */
-  callPlan?: ProviderCallPlan;
-  /** Provider-native web search/grounding is available for this call. */
-  webSearch?: boolean;
-  /** Provider-native function/tool definitions available for this call. */
-  nativeTools?: NativeToolDefinition[];
+  callPlan?: ProviderCallPlan;  /** Concrete client function schemas for this call; capability truth lives in callPlan. */
+  functionTools?: NativeToolDefinition[];
   /** Controls whether local function tools may/must be called. Defaults to auto. */
   toolChoice?: NativeToolChoice;
-  /** Provider-hosted tools requested explicitly for this call. */
-  hostedTools?: HostedToolDefinition[];
-  /** Provider-hosted Build tools for providers that still support them. */
-  hostedBuildTools?: boolean;
   /** Explicit capabilities — used for custom models not in the static catalog. */
   capabilities?: ModelCapabilities;
   /** Endpoint override — used by gateway providers (e.g. Azure AI Foundry). */

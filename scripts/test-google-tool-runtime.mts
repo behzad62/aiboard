@@ -81,7 +81,7 @@ const params: ChatParams = {
   apiKey: "test",
   model: "gemini-3.8-flash",
   messages: [{ role: "user", content: "Use the tools." }],
-  nativeTools: [
+  functionTools: [
     {
       name: "lookup",
       description: "Look up application data",
@@ -233,7 +233,7 @@ for await (const chunk of streamGoogleByPlan(
   {
     ...params,
     callPlan: plan("gemini_generate_content", []),
-    nativeTools: undefined,
+    functionTools: undefined,
   },
 )) {
   fallbackChunks.push(chunk);

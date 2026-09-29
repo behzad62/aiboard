@@ -250,7 +250,7 @@ export function anthropicToolConfigForPlan(
   }
 
   if (planToolEnabled(params, "function_calling")) {
-    for (const tool of params.nativeTools ?? []) {
+    for (const tool of params.functionTools ?? []) {
       tools.push({
         name: tool.name,
         description: tool.description,

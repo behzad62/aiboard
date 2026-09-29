@@ -80,7 +80,7 @@ const params: ChatParams = {
   apiKey: "test",
   model: "gpt-5.6-sol",
   messages: [{ role: "user", content: "use tools" }],
-  nativeTools: [
+  functionTools: [
     {
       name: "lookup",
       description: "Lookup data",
