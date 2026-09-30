@@ -187,3 +187,71 @@ refusal pins, E1 upgrade pin) all passed in place.
   catch it the same way.
 - No commit/stage/stash/push performed; earlier `wip(...)` commits
   untouched.
+
+## Repair cycle 1 (review r1: B1 blocking, N1, N2)
+
+Fixes, all in tests + test helper; no product line touched, no assertion
+weakened or deleted:
+
+- B1: `runner-v2/test/support/windows-job-leftover-guard.ts` —
+  `checkNoWindowsJobProcessesLeft` now throws at registration on an empty
+  marker list (was: `[]` matched any supervisor from this worktree, so
+  `windows-job-supervisor-input.test.ts:45` failed on other runs' live
+  supervisors and killed them). `windows-job-supervisor-input.test.ts`
+  now scopes to a per-run unique marker
+  (`aiboard-px2e-sivin-<8 hex>-`, planted as its own temp root) instead
+  of `[]`.
+- N1: `findOwned` additionally requires the candidate's parent-PID chain
+  to reach the calling test process (`isInOwnProcessTree`). Same-prefix
+  supervisors from a concurrent or earlier run of the same file live in a
+  different process tree and are excluded. This is the reviewer's
+  suggested own-run filter; it subsumes the per-run-prefix alternative
+  with no `mkdtemp` churn, so no temp-root prefixes were renamed.
+- N2: `listNodeAndPowershell` fails closed — exec failure, empty output,
+  unparseable JSON, or a listing missing the calling test process itself
+  now throws "could not enumerate processes" instead of returning `[]`
+  (which passed vacuously).
+- Negative control (new test in `windows-job-supervisor-input.test.ts`):
+  a live supervisor under `aiboard-px2e-outside-*` (outside the file's
+  markers) is held while the file's own end check runs; the check passes
+  and the supervisor is verified alive afterwards (`process.kill(pid, 0)`)
+  before orderly `retireOwnedTreeForTests` cleanup.
+
+Prove-red (temp edits, restored byte-exact — sha256 after restore equals
+the pre-prove-red baseline: helper
+`1e05fe2b8b7761cf845517724143bc4808ed2101bba64355d5ea64cde97722d8`,
+test
+`f36d8b872c2cbdceef3f068b8d465d6d8eea09d39e67b435cf5fcca597e0cd26`;
+a mid-restore hash mismatch caught a duplicated comment, fixed and
+re-verified):
+
+- Positive control (new code, supervisor leaked under the file's OWN
+  marker): red as required —
+  `PX-2e leftover guard: 1 supervisor(s) and 1 Job host(s) ...`,
+  recorded, killed, "all leftovers confirmed dead". Confirms the
+  parent-PID filter does not blind detection (supervisor ppid chain
+  reached the test process).
+- B1 repro (helper temp-restored to the old `[]`-matches-worktree
+  behaviour, outside supervisor left alive at file end): red as in r1 —
+  the guard named the `aiboard-px2e-outside-*` supervisor it does not own
+  and killed it (own probe process, allowed). Confirms the old code was
+  at fault and the new code removes it.
+- Cross-process control (new code): file run 3/3 green while a foreign
+  supervisor (pid 18536, `aiboard-px2e-probe-*`, separate tsx process)
+  was held alive in the same worktree; verified alive after the run;
+  the probe self-retired (`retired`, temp dir gone). Scratch probe lived
+  under `%TEMP%` only, removed afterwards.
+
+Validation (impact-based policy): `windows-job-supervisor-input` green
+3/3 after restore; `task8-raw-launch-closure` 2/2; `tsc --noEmit` exit 0;
+`eslint` on both changed files exit 0; `git diff --check` exit 0. Other
+five PX-2e files not re-run (unchanged; their guards only gain a
+narrowing conjunction, and the spawn path was validated by the positive
+control above).
+
+Notes: `docs/plans/runner-v2-p6-6-EXECUTION.md` named by the controller
+does not exist in this worktree, so no entry was made there and no new
+ledger was created; the r1 review's two orphan supervisors (pids 61416,
+52028, started by the reviewer) were not touched — killing processes
+this run did not start is forbidden. Nothing committed, staged, stashed
+or pushed.

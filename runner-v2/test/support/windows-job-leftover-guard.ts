@@ -4,10 +4,15 @@
 // - checkNoWindowsJobProcessesLeft: an `after()` hook asserting that no
 //   supervisor (node running managed-process-supervisor.mjs) or Job host
 //   (powershell.exe under such a supervisor) started by the file is still
-//   alive. Attribution is by command line: the supervisor command line
-//   carries this worktree's runner-v2/src path plus the file's own temp
-//   roots, so the check never sees other worktrees, other files, or other
-//   runs. Leftovers are killed only after the failure is recorded.
+//   alive. Attribution is by command line plus process tree: the supervisor
+//   command line carries this worktree's runner-v2/src path plus the file's
+//   own temp roots, AND the process must descend from the calling test
+//   process (parent-PID chain). The tree check is what excludes concurrent
+//   or earlier runs of the same file (same prefix family, different process
+//   tree) and other runs' supervisors in this worktree, so the check never
+//   sees other worktrees, other files, or other runs. An empty marker list
+//   is rejected outright: it would degenerate to a worktree-wide match.
+//   Leftovers are killed only after the failure is recorded.
 // - retireOwnedTreeForTests: best-effort teardown for a raw-host call that
 //   follows the designed path (signal, drain retained output with exact
 //   ACKs, release). A plain signal+release is refused by design while
@@ -52,23 +57,42 @@ function listNodeAndPowershell(): ListedProcess[] {
     "| Select-Object ProcessId, ParentProcessId, Name, CommandLine",
     "| ConvertTo-Json -Compress",
   ].join(" ");
-  let stdout = "";
+  // Repair cycle 1 (N2): enumeration must fail closed. Every failure mode
+  // below throws, so the end check reports "could not enumerate" instead of
+  // passing vacuously over an empty list.
+  let stdout: string;
   try {
     stdout = execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 60_000,
     });
-  } catch {
-    return [];
+  } catch (error) {
+    throw new Error(
+      `PX-2e leftover guard: could not enumerate processes (${error instanceof Error ? error.message : String(error)}). ` +
+        "Failing closed: treating this as a leftover risk, not a pass.",
+    );
   }
   const trimmed = stdout.trim();
-  if (!trimmed) return [];
-  const parsed = JSON.parse(trimmed) as
-    | { ProcessId?: number; ParentProcessId?: number; Name?: string; CommandLine?: string | null }
-    | Array<{ ProcessId?: number; ParentProcessId?: number; Name?: string; CommandLine?: string | null }>;
-  const rows = Array.isArray(parsed) ? parsed : [parsed];
-  return rows
+  if (!trimmed) {
+    throw new Error(
+      "PX-2e leftover guard: could not enumerate processes (empty process list). " +
+        "Failing closed: treating this as a leftover risk, not a pass.",
+    );
+  }
+  let rows: Array<{ ProcessId?: number; ParentProcessId?: number; Name?: string; CommandLine?: string | null }>;
+  try {
+    const parsed = JSON.parse(trimmed) as
+      | { ProcessId?: number; ParentProcessId?: number; Name?: string; CommandLine?: string | null }
+      | Array<{ ProcessId?: number; ParentProcessId?: number; Name?: string; CommandLine?: string | null }>;
+    rows = Array.isArray(parsed) ? parsed : [parsed];
+  } catch (error) {
+    throw new Error(
+      `PX-2e leftover guard: could not enumerate processes (unparseable list: ${error instanceof Error ? error.message : String(error)}). ` +
+        "Failing closed: treating this as a leftover risk, not a pass.",
+    );
+  }
+  const listed = rows
     .filter((row) => Number.isSafeInteger(row.ProcessId))
     .map((row) => ({
       pid: Number(row.ProcessId),
@@ -76,28 +100,58 @@ function listNodeAndPowershell(): ListedProcess[] {
       name: String(row.Name ?? ""),
       commandLine: String(row.CommandLine ?? ""),
     }));
+  // The calling test process itself is a node.exe row in this listing. If it
+  // is missing, the enumeration is untrustworthy and a pass would be vacuous.
+  if (!listed.some((row) => row.pid === process.pid)) {
+    throw new Error(
+      "PX-2e leftover guard: could not enumerate processes (own test process missing from the list). " +
+        "Failing closed: treating this as a leftover risk, not a pass.",
+    );
+  }
+  return listed;
+}
+
+// Repair cycle 1 (B1, N1): a candidate only counts when its parent-PID chain
+// reaches the calling test process. Same-prefix supervisors from a
+// concurrent or earlier run of the same file live in a different process
+// tree, so markers alone would match them; the tree check excludes them.
+function isInOwnProcessTree(
+  proc: ListedProcess,
+  ownPid: number,
+  byPid: Map<number, ListedProcess>,
+): boolean {
+  let current: ListedProcess | undefined = proc;
+  const seen = new Set<number>();
+  while (current && !seen.has(current.pid)) {
+    if (current.ppid === ownPid) return true;
+    seen.add(current.pid);
+    current = byPid.get(current.ppid);
+  }
+  return false;
 }
 
 function findOwned(
   processes: ListedProcess[],
   srcMarker: string,
   fileMarkers: readonly string[],
+  ownPid: number,
 ): { supervisors: ListedProcess[]; jobHosts: ListedProcess[] } {
   const normalizedMarkers = fileMarkers.map((marker) => marker.toLowerCase());
+  const byPid = new Map(processes.map((proc) => [proc.pid, proc]));
   const supervisors = processes.filter((proc) => {
     if (proc.name.toLowerCase() !== "node.exe") return false;
     const command = normalizeCommandLine(proc.commandLine);
     if (!command.includes("managed-process-supervisor.mjs")) return false;
     if (!command.includes(srcMarker)) return false;
-    if (normalizedMarkers.length === 0) return true;
-    return normalizedMarkers.some((marker) => command.includes(marker));
+    if (!normalizedMarkers.some((marker) => command.includes(marker))) return false;
+    return isInOwnProcessTree(proc, ownPid, byPid);
   });
   const supervisorPids = new Set(supervisors.map((proc) => proc.pid));
-  const byPid = new Map(processes.map((proc) => [proc.pid, proc]));
   const jobHosts = processes.filter((proc) => {
     if (proc.name.toLowerCase() !== "powershell.exe") return false;
+    if (!isInOwnProcessTree(proc, ownPid, byPid)) return false;
     const command = normalizeCommandLine(proc.commandLine);
-    if (normalizedMarkers.length > 0 && normalizedMarkers.some((marker) => command.includes(marker))) return true;
+    if (normalizedMarkers.some((marker) => command.includes(marker))) return true;
     let current: ListedProcess | undefined = proc;
     const seen = new Set<number>();
     while (current && !seen.has(current.ppid)) {
@@ -141,14 +195,26 @@ export async function checkNoWindowsJobProcessesLeft(
   fileMarkers: readonly string[],
   options: { readonly graceMs?: number } = {},
 ): Promise<void> {
+  // Repair cycle 1 (B1): reject an empty marker list at registration. The old
+  // code treated `[]` as "any supervisor from this worktree", so a file with
+  // no markers of its own failed on other runs' live supervisors and killed
+  // them. Fixture-only files must scope to their own process tree or a
+  // marker that cannot match another run instead.
+  if (fileMarkers.length === 0) {
+    throw new Error(
+      "PX-2e leftover guard: checkNoWindowsJobProcessesLeft requires at least one file marker; " +
+        "an empty list would match every supervisor from this worktree, including other runs'.",
+    );
+  }
   if (process.platform !== "win32") return;
   const srcMarker = worktreeSrcMarker();
+  const ownPid = process.pid;
   const graceMs = options.graceMs ?? 10_000;
   const deadline = Date.now() + graceMs;
-  let owned = findOwned(listNodeAndPowershell(), srcMarker, fileMarkers);
+  let owned = findOwned(listNodeAndPowershell(), srcMarker, fileMarkers, ownPid);
   while ((owned.supervisors.length > 0 || owned.jobHosts.length > 0) && Date.now() < deadline) {
     await sleep(1000);
-    owned = findOwned(listNodeAndPowershell(), srcMarker, fileMarkers);
+    owned = findOwned(listNodeAndPowershell(), srcMarker, fileMarkers, ownPid);
   }
   if (owned.supervisors.length === 0 && owned.jobHosts.length === 0) return;
   const recorded = [...owned.jobHosts, ...owned.supervisors]
@@ -159,7 +225,7 @@ export async function checkNoWindowsJobProcessesLeft(
     (proc) => `pid=${proc.pid}:${killProcess(proc.pid)}`,
   );
   await sleep(2000);
-  const remaining = findOwned(listNodeAndPowershell(), srcMarker, fileMarkers);
+  const remaining = findOwned(listNodeAndPowershell(), srcMarker, fileMarkers, ownPid);
   const stillAlive = [...remaining.jobHosts, ...remaining.supervisors].map((proc) => proc.pid);
   throw new Error(
     `PX-2e leftover guard: ${owned.supervisors.length} supervisor(s) and ` +
