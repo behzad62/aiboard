@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { RemoteMcpServerSettings, ToolRuntimeSettings } from "@/lib/db/schema";
+import type { OpenAIFileSearchSettings, RemoteMcpServerSettings, ToolRuntimeSettings } from "@/lib/db/schema";
 import {
+  saveOpenAIFileSearch,
   saveRemoteMcpServer,
   saveToolRuntimeRunner,
 } from "@/lib/client/tool-runtime";
@@ -21,10 +22,13 @@ export function ToolRuntimeSettingsPanel({
 }) {
   const initialRunner = useMemo(() => settings?.runner ?? null, [settings?.runner]);
   const initialMcp = settings?.remoteMcpServer;
+  const initialFileSearch = settings?.openaiFileSearch;
   const [mcpName, setMcpName] = useState(initialMcp?.name ?? "");
   const [mcpUrl, setMcpUrl] = useState(initialMcp?.url ?? "");
   const [mcpToken, setMcpToken] = useState(initialMcp?.authorizationToken ?? "");
   const [mcpEnabled, setMcpEnabled] = useState(initialMcp?.enabled ?? false);
+  const [fileSearchEnabled, setFileSearchEnabled] = useState(initialFileSearch?.enabled ?? false);
+  const [vectorStoreIds, setVectorStoreIds] = useState((initialFileSearch?.vectorStoreIds ?? []).join(", "));
   const [saved, setSaved] = useState(false);
 
   const persistRunner = (selection: RunnerSelection | null) => {
@@ -32,6 +36,16 @@ export function ToolRuntimeSettingsPanel({
     onChanged?.();
   };
 
+  const saveFileSearch = () => {
+    const ids = [...new Set(vectorStoreIds.split(/[\s,]+/).map((id) => id.trim()).filter(Boolean))];
+    const config: OpenAIFileSearchSettings | null = ids.length > 0
+      ? { enabled: fileSearchEnabled, vectorStoreIds: ids }
+      : null;
+    saveOpenAIFileSearch(config);
+    setSaved(true);
+    onChanged?.();
+    setTimeout(() => setSaved(false), 1500);
+  };
   const saveMcp = () => {
     const name = mcpName.trim();
     const url = mcpUrl.trim();
@@ -63,6 +77,37 @@ export function ToolRuntimeSettingsPanel({
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle>OpenAI File Search</CardTitle>
+          <CardDescription>
+            Configure one or more existing OpenAI vector-store IDs. When enabled, AI Board offers File Search only to OpenAI Responses calls and passes these IDs as vector_store_ids.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={fileSearchEnabled}
+              onChange={(event) => setFileSearchEnabled(event.target.checked)}
+            />
+            Offer File Search to supported OpenAI models
+          </label>
+          <div className="space-y-1.5">
+            <Label htmlFor="tool-openai-vector-stores">Vector store IDs</Label>
+            <Input
+              id="tool-openai-vector-stores"
+              value={vectorStoreIds}
+              onChange={(event) => setVectorStoreIds(event.target.value)}
+              placeholder="vs_abc123, vs_def456"
+            />
+            <p className="text-xs text-muted-foreground">
+              Separate multiple IDs with commas or spaces. Create/upload content to the vector store in OpenAI first, then paste the resulting ID here.
+            </p>
+          </div>
+          <Button type="button" onClick={saveFileSearch}>{saved ? "Saved" : "Save File Search"}</Button>
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>Approved remote MCP server</CardTitle>

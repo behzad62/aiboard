@@ -108,7 +108,7 @@ assert.match(rendered, /Supported — setup required/);
 assert.match(rendered, /Missing: OpenAI vector store/);
 assert.doesNotMatch(rendered, /configuration: providers\.openai\.vectorStoreIds/);
 assert.match(rendered, /Configure tools/);
-assert.match(rendered, /Missing: OpenAI vector store<\/p>/, "resources without a real setup surface stay text-only");
+assert.match(rendered, /Missing: OpenAI vector store[\s\S]*href="\/settings\?tab=tools"/, "OpenAI vector store setup should link to the real Tools surface");
 console.log("PASS rendered capability table keeps discovery, evidence, and actionable setup guidance distinct");
 
 console.log("PASS");

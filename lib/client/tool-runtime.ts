@@ -1,4 +1,5 @@
 import type {
+  OpenAIFileSearchSettings,
   RemoteMcpServerSettings,
   ToolRuntimeRunnerSettings,
   ToolRuntimeSettings,
@@ -27,6 +28,7 @@ export interface ToolRuntimeSignal {
 export interface ToolRuntimeSignals {
   runner: ToolRuntimeSignal;
   remoteMcp: ToolRuntimeSignal;
+  openaiFileSearch: ToolRuntimeSignal;
   computerExecutor: ToolRuntimeSignal;
   browserExecutor: ToolRuntimeSignal;
 }
@@ -41,12 +43,25 @@ export function buildToolResourceState(signals: ToolRuntimeSignals): ToolResourc
       local_shell_executor: entry(signals.runner),
       local_editor_executor: entry(signals.runner),
       remote_mcp_server: entry(signals.remoteMcp),
+      openai_vector_store: entry(signals.openaiFileSearch),
       computer_executor: entry(signals.computerExecutor),
       browser_executor: entry(signals.browserExecutor),
     },
   };
 }
 
+export function configuredOpenAIFileSearchIntent(
+  settings: OpenAIFileSearchSettings | null | undefined,
+): ToolIntent | undefined {
+  if (!settings?.enabled) return undefined;
+  const vectorStoreIds = [...new Set((settings.vectorStoreIds ?? []).map((id) => id.trim()).filter(Boolean))];
+  if (vectorStoreIds.length === 0) return undefined;
+  return {
+    id: "file_search",
+    requirement: "optional",
+    parameters: { vectorStoreIds },
+  };
+}
 export function configuredRemoteMcpIntent(
   server: RemoteMcpServerSettings | null | undefined,
 ): ToolIntent | undefined {
@@ -72,12 +87,17 @@ export function configuredRemoteMcpIntent(
 export function applyToolRuntimeToRequest(
   request: ProviderToolRequest,
   settings: ToolRuntimeSettings = getToolRuntimeSettings(),
+  providerId?: string,
 ): ProviderToolRequest {
   const remoteMcpIntent = configuredRemoteMcpIntent(settings.remoteMcpServer);
+  const fileSearchIntent = providerId === "openai"
+    ? configuredOpenAIFileSearchIntent(settings.openaiFileSearch)
+    : undefined;
   return buildProviderToolRequest({
     toolIntents: [
       ...request.toolIntents,
       ...(remoteMcpIntent ? [remoteMcpIntent] : []),
+      ...(fileSearchIntent ? [fileSearchIntent] : []),
     ],
     toolInventory: request.toolInventory,
     functionTools: request.functionTools,
@@ -92,6 +112,7 @@ export function toolRuntimeSetupTarget(
     "local_shell_executor",
     "local_editor_executor",
     "remote_mcp_server",
+    "openai_vector_store",
   ].includes(prerequisiteId)
     ? "/settings?tab=tools"
     : undefined;
@@ -120,6 +141,11 @@ export function saveToolRuntimeRunner(runner: ToolRuntimeRunnerSettings | null):
   notifyToolRuntimeChanged();
 }
 
+export function saveOpenAIFileSearch(settings: OpenAIFileSearchSettings | null): void {
+  const current = getToolRuntimeSettings();
+  updateUserSettings({ toolRuntime: { ...current, openaiFileSearch: settings } });
+  notifyToolRuntimeChanged();
+}
 export function saveRemoteMcpServer(server: RemoteMcpServerSettings | null): void {
   const current = getToolRuntimeSettings();
   updateUserSettings({ toolRuntime: { ...current, remoteMcpServer: server } });
@@ -182,9 +208,23 @@ export async function resolveToolRuntimeResourceState(input: {
         detail: "Add and enable an approved http(s) remote MCP server in Tools settings.",
       };
 
+  const openaiFileSearchIntent = configuredOpenAIFileSearchIntent(settings.openaiFileSearch);
+  const openaiFileSearch: ToolRuntimeSignal = openaiFileSearchIntent
+    ? {
+        configured: true,
+        ready: true,
+        detail: `OpenAI File Search uses ${(openaiFileSearchIntent.parameters?.vectorStoreIds as string[]).length} configured vector store(s).`,
+      }
+    : {
+        configured: Boolean(settings.openaiFileSearch?.vectorStoreIds?.length),
+        ready: false,
+        detail: "Add and enable at least one OpenAI vector store ID in Tools settings.",
+      };
+
   return buildToolResourceState({
     runner: runnerSignal,
     remoteMcp,
+    openaiFileSearch,
     computerExecutor: {
       configured: false,
       ready: false,
@@ -204,6 +244,7 @@ function runtimeCacheKey(): string {
   return JSON.stringify({
     runner: settings.runner ?? null,
     remoteMcpServer: settings.remoteMcpServer ?? null,
+    openaiFileSearch: settings.openaiFileSearch ?? null,
   });
 }
 

@@ -359,7 +359,7 @@ export async function collectStreamWithUsage(
   artifactSink?: ProviderArtifactSink
 ): Promise<CollectedStreamResult> {
   if (signal?.aborted) throw abortError();
-  const effectiveToolRequest = applyToolRuntimeToRequest(toolRequest);
+  const effectiveToolRequest = applyToolRuntimeToRequest(toolRequest, undefined, providerId);
   const needsLocalRunner = effectiveToolRequest.toolIntents.some(
     (intent) => intent.id === "shell" || intent.id === "apply_patch",
   );

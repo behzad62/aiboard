@@ -292,9 +292,15 @@ export interface RemoteMcpServerSettings {
   authorizationToken?: string;
 }
 
+export interface OpenAIFileSearchSettings {
+  enabled: boolean;
+  vectorStoreIds: string[];
+}
+
 export interface ToolRuntimeSettings {
   runner?: ToolRuntimeRunnerSettings | null;
   remoteMcpServer?: RemoteMcpServerSettings | null;
+  openaiFileSearch?: OpenAIFileSearchSettings | null;
 }
 
 export interface UserSettings {
