@@ -8,8 +8,7 @@ planning standard installed 2026-09-30 (`C:\Users\b_a_s\.claude\plan-standard.md
 2026-09-30 this file replaces `progress.md`, lane state and `evidence/*.md` as the progress record.
 Nothing new is written to those old files. The one exception: the two Muse runs briefed before the
 migration (C2e repair 2, PX-2e) may append once to their own evidence file. The old files stay in git
-until the closing PR (D-11). Stage 1 status: **PREPARED; waiting for the decisions in section 8**
-(the one planned stop). Coverage review r1 (fresh read-only reviewer, 2026-09-30): GAPS — 17, all
+until the closing PR (D-11). Stage 1 status: **DECISIONS ANSWERED 2026-10-01** (owner: "all recommended"); Stage 2 running. Coverage review r1 (fresh read-only reviewer, 2026-09-30): GAPS — 17, all
 fixed in this revision.
 
 ## 0. Source, base, branches and entry check
@@ -50,8 +49,8 @@ The prompt's PROJECT BINDINGS name the DealFactory repo (ACS, host PHP, MariaDB,
   not exist here. `node_modules` is a directory junction to lane A's; a worktree holding the junction
   is removed only after the link itself is removed (`cmd /c rmdir <wt>\node_modules`).
 - **Writers:** at most two writing agents (Muse Code, model `muse-spark-1.3-contributor`, effort
-  medium), each in its own worktree, started detached so an app restart cannot stop them; Claude is
-  the controller and never writes in a worktree while a writer runs there.
+  medium), each in its own worktree, run as background tasks of the controller's shell (owner,
+  2026-10-01); Claude is the controller and never writes in a worktree while a writer runs there.
 - **Verification:** local runs are the evidence: `env -u NODE_TEST_CONTEXT
   "/c/Program Files/nodejs/node.exe" ./node_modules/tsx/dist/cli.mjs --test <files>`,
   `npm run typecheck:runner-v2`, eslint on changed files, `git diff --check`. Runner tests use real git
@@ -470,6 +469,8 @@ package files and lockfiles; `.gitignore`; `.github/workflows/*`; this file's sh
   consolidation D-5 allows).
 
 ## 8. Decisions (Stage 1 — answer once)
+
+**Owner answer 2026-10-01: "all recommended"** — every decision below takes its recommendation. Also (owner, 2026-10-01): Muse runs in the controller's own shell as a background task, not as a detached separate process.
 
 **Standing decisions (copied from the prompt; not asked):** GATE-SCHEDULE (four layers, mapped in
 section 1) and CERTIFY-ONCE (no per-PR registers, status or evidence records; progress lives only in this
