@@ -365,3 +365,22 @@ the fix both file hashes verified back byte-exact to the values above.
   runner can still race a runner's FIRST compile, and the `.ps1` in the
   source dir is same-user writable. The pin cannot fix either; Job
   containment remains lifecycle containment, not confinement.
+
+## Repair cycle 3 (controller, 2026-09-30)
+
+Input: `PX-2a-review-r3.md` REPAIR — 1 blocking (R3-B1). Owner rule: a third repair round is done by the controller. Commit 241d5f64.
+
+| Finding | Change | Test |
+|---|---|---|
+| R3-B1: a failed compile left no pin, and the next call recompiled into the same per-process directory, so a contained process alive during the retry could get its bytes pinned (reviewer probes D 3/3 and D2 2/2) | `windows-job-process-host.ts` `ensureJobHostHelperAssembly`: the result of the one compile attempt (assembly OR null) is kept for the runner's lifetime (`jobHostHelperReady !== undefined`); a throw also records null. After a failed compile every later call falls back to in-process Add-Type; only a new runner process compiles again. | T6 ("helper resolution never throws and falls back cleanly"): after the failed compile, with a good TEMP again, `ensureJobHostHelperAssembly()` stays null twice and a real call falls back with reason `no-helper-config`; after the test-only reset (a runner restart) the call runs precompiled. |
+| N-r2-2 (bracket TEMP) | Measured on this machine: Windows PowerShell 5.1 Add-Type resolves `-OutputAssembly` as a wildcard path (an unescaped `[1]` gives "did not resolve") and passes an escaped path on to csc ("Error generating Win32 resource" on the backtick-escaped path), so escaping cannot work. The runner now skips the compile when the per-process directory holds a wildcard character (`[`, `]`, `*`, `?` or a backtick) and falls back for that runner process (remembered). | New "a TEMP path with brackets skips the helper compile and falls back": null at once, no compile wrapper written, remembered. |
+
+Evidence correction: earlier notes called a failed compile "not attacker-triggerable" and a bracket TEMP "safe by construction (never loads)". Both were wrong in the way R3-B1 shows: a failed compile followed by an in-place retry was raceable. Both paths now fall back for the runner's lifetime and never retry in place.
+
+Validation (NODE_TEST_CONTEXT cleared; controller): windows-job-launch-speed 11/11; the same file with windows-job-supervisor-input and windows-job-output-replay at --test-concurrency=4 17/17; windows-job-real-host-guarantees 12/12; task8-raw-launch-closure 2/2 (fully green at HEAD after the PX-2c repair); tsc exit 0; eslint on both changed files exit 0.
+
+Prove-red (sha256 before/after, byte-exact restore of `windows-job-process-host.ts` d3bce3b4…74c1): (1) `if (jobHostHelperReady !== undefined)` changed to `if (jobHostHelperReady)` (failures not cached) → T6 red; restored. (2) the wildcard-path skip disabled → the bracket test red; restored.
+
+Changed-file sha256: `windows-job-process-host.ts` d3bce3b48fa723b8439a9a4d803fc6c7eb76cedf88b4500ccfe3d2c7180074c1; `windows-job-launch-speed.test.ts` 0e19e083495da79c9eaf4cda97fed4fa1cb185df695c6ce723b03ecb81ba224b.
+
+Limit: a machine whose TEMP holds wildcard characters runs every call on the in-process Add-Type path (no speed gain from PX-2a there). Logs: session scratchpad `px2ar3fix/`.
