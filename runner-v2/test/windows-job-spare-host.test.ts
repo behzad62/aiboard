@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { request } from "node:http";
 import {
   existsSync,
   mkdirSync,
@@ -31,7 +32,7 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding } from "../src/execution-host.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
-import { createWindowsJobProcessHost, type WindowsJobProcessHost } from "../src/windows-job-process-host.js";
+import { createWindowsJobProcessHost, type WindowsJobProcessHost, type WindowsJobSpareOptions } from "../src/windows-job-process-host.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tsxPath = fileURLToPath(new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url));
@@ -460,7 +461,7 @@ test("spare pin: a spare serves exactly one call and is never reused", { timeout
 });
 
 /** A private host+binding on its own root, for tests that close or kill it. */
-async function createPrivateSpareWorld(tag: string): Promise<{
+async function createPrivateSpareWorld(tag: string, spare?: WindowsJobSpareOptions): Promise<{
   service: WindowsJobProcessHost;
   host: ExecutionHost;
   binding: ExecutionHostRunBinding;
@@ -476,7 +477,7 @@ async function createPrivateSpareWorld(tag: string): Promise<{
   const stateDir = join(root, "state");
   mkdirSync(stateDir, { recursive: true });
   const jobHostDir = join(stateDir, "managed-processes-job-host");
-  const service = createWindowsJobProcessHost({ stateDirectory: jobHostDir });
+  const service = createWindowsJobProcessHost({ stateDirectory: jobHostDir, ...(spare ? { spare } : {}) });
   const host = createExecutionHost({
     projectRoot: project,
     stateDirectory: stateDir,
@@ -723,4 +724,316 @@ test("spare pin: another run's spare stays reserved for its owner", { timeout: 5
     await h.service.retireSpare?.().catch(() => undefined);
   }
   await assertNoLiveSupervisors(h.jobHostDir);
+});
+
+// S8 — an idle spare retires itself on its idle timeout: the supervisor dies
+// on its own timer having never owned a Job or a child.
+test("spare pin: an idle spare retires itself on its idle timeout", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const world = await createPrivateSpareWorld("idle", { idleTimeoutMs: 1000 });
+  try {
+    const spare = await prestartSpareOrFail(world.service, { runId: world.runId, sessionId: world.sessionId });
+    assert.ok(processAlive(spare.supervisorPid), "spare supervisor must be alive while waiting");
+    await waitForDeath([spare.supervisorPid], 15_000, "idle spare supervisor");
+    const statuses = readStatusLines(world.jobHostDir, spare.processId);
+    assert.ok(
+      statuses.some((line) => line["spareRetired"] === "idle-timeout"),
+      "idle spare must record its idle-timeout retirement",
+    );
+    assert.ok(
+      statuses.every((line) => line["childPid"] === 0),
+      "an idle spare must never have had a child",
+    );
+    await world.service.retireSpare?.().catch(() => undefined);
+    await assertNoLiveSupervisors(world.jobHostDir);
+  } finally {
+    try {
+      await world.service.retireSpare?.();
+    } catch {}
+    try {
+      await world.binding.close();
+    } catch {}
+    try {
+      await world.host.close();
+    } catch {}
+    rmSync(world.root, { recursive: true, force: true });
+  }
+});
+
+/** Authenticated spare HTTP call for the pre-claim refusal pin. */
+function spareHttp(port: number, token: string, path: string, method: "GET" | "POST", body?: unknown): Promise<{ status: number; text: string }> {
+  return new Promise((resolvePromise, reject) => {
+    const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+    const call = request({
+      hostname: "127.0.0.1",
+      port,
+      path,
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(payload ? { "content-type": "application/json", "content-length": String(payload.byteLength) } : {}),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.once("end", () => resolvePromise({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+    });
+    call.once("error", reject);
+    if (payload) call.write(payload);
+    call.end();
+  });
+}
+
+// S9 — HTTP control is refused before the claim on every route, while status
+// stays observable; the refused spare still serves the next call.
+test("spare pin: HTTP control is refused before the claim and the spare stays claimable", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const spare = await prestartSpareOrFail(h.service, spareOwner(h));
+  try {
+    const raw = JSON.parse(readFileSync(join(h.jobHostDir, `${spare.processId}.json`), "utf8")) as {
+      supervisor?: { token?: unknown };
+    };
+    assert.equal(typeof raw.supervisor?.token, "string", "spare record must carry its token");
+    const token = raw.supervisor!.token as string;
+    const port = readStatusLines(h.jobHostDir, spare.processId).at(-1)?.["port"];
+    assert.ok(typeof port === "number" && (port as number) > 0, "spare status must carry its port");
+    const observed = await spareHttp(port as number, token, "/status", "GET");
+    assert.equal(observed.status, 200, "status stays observable before the claim");
+    for (const route of ["/signal", "/write", "/close-input", "/ack-output", "/claim", "/spawn"]) {
+      const refused = await spareHttp(port as number, token, route, "POST", {});
+      assert.equal(refused.status, 409, `${route} must be refused before the claim`);
+      assert.match(refused.text, /spare_unclaimed/, `${route} refusal must name spare_unclaimed`);
+    }
+    const tokenCall = `s9-${randomUUID().slice(0, 8)}`;
+    const { processId } = await runTokenCall(h.binding, h, tokenCall);
+    assert.equal(processId, spare.processId, "the refused spare must still be claimable");
+    await assertNoLiveSupervisors(h.jobHostDir);
+  } finally {
+    await h.service.retireSpare?.().catch(() => undefined);
+  }
+});
+
+// S10 — two concurrent calls take one spare exactly once: one claims it, the
+// other launches fresh, and both succeed.
+test("spare pin: two concurrent calls take one spare exactly once", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const spare = await prestartSpareOrFail(h.service, spareOwner(h));
+  const claimsBefore = h.service.spareStats?.().claims ?? 0;
+  try {
+    const tokenA = `s10a-${randomUUID().slice(0, 8)}`;
+    const tokenB = `s10b-${randomUUID().slice(0, 8)}`;
+    const [callA, callB] = await Promise.all([
+      runTokenCall(h.binding, h, tokenA),
+      runTokenCall(h.binding, h, tokenB),
+    ]);
+    const onSpare = [callA.processId, callB.processId].filter((id) => id === spare.processId);
+    assert.equal(onSpare.length, 1, "exactly one concurrent call must claim the spare");
+    const stats = h.service.spareStats?.();
+    assert.equal((stats?.claims ?? 0) - claimsBefore, 1, "exactly one claim must be counted");
+    await assertNoLiveSupervisors(h.jobHostDir);
+  } finally {
+    await h.service.retireSpare?.().catch(() => undefined);
+  }
+});
+
+// S11 — autoRefresh provisions a replacement after a claim: the next call
+// finds a new waiting spare instead of falling back.
+test("spare pin: autoRefresh provisions a replacement after a claim", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const world = await createPrivateSpareWorld("refresh", { autoRefresh: true });
+  try {
+    const first = await prestartSpareOrFail(world.service, { runId: world.runId, sessionId: world.sessionId });
+    const token = `s11-${randomUUID().slice(0, 8)}`;
+    const { processId } = await runTokenCall(world.binding, {
+      project: join(world.root, "project"),
+      runId: world.runId,
+      sessionId: world.sessionId,
+      jobHostDir: world.jobHostDir,
+    }, token);
+    assert.equal(processId, first.processId, "the call must claim the first spare");
+    await waitFor(() => (world.service.spareStats?.().prestarts ?? 0) >= 2, 20_000, "autoRefresh replacement spare");
+    const waiting = readSpareRecords(world.jobHostDir).filter((entry) => entry.spare && !entry.spareClaimed);
+    assert.equal(waiting.length, 1, "exactly one replacement spare must wait");
+    assert.ok(processAlive(waiting[0]!.supervisorPid), "the replacement spare must be alive");
+    await world.service.retireSpare?.();
+    assert.ok(!existsSync(join(world.jobHostDir, `${waiting[0]!.processId}.json`)), "retired replacement record must be dropped");
+    await assertNoLiveSupervisors(world.jobHostDir);
+  } finally {
+    try {
+      await world.service.retireSpare?.();
+    } catch {}
+    try {
+      await world.binding.close();
+    } catch {}
+    try {
+      await world.host.close();
+    } catch {}
+    rmSync(world.root, { recursive: true, force: true });
+  }
+});
+
+/** Plant a spare-shaped durable record naming `supervisorPid` (need not be a
+ * supervisor at all). The protocol string mirrors the host's PROTOCOL. */
+function plantSpareRecord(jobHostDir: string, options: { supervisorPid: number; claimInFlight?: boolean; statusPort?: number }): { processId: string; recordPath: string; statusDir: string } {
+  const processId = `spare_planted_${randomUUID().replaceAll("-", "")}`;
+  const token = `${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+  const statusDir = join(jobHostDir, processId);
+  mkdirSync(statusDir, { recursive: true });
+  const record = {
+    processId,
+    pid: 0,
+    runId: "px2c-planted",
+    sessionId: "session-px2c-planted",
+    command: "",
+    args: [],
+    cwd: jobHostDir,
+    environmentKeys: [],
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    status: "running",
+    exitCode: null,
+    signal: null,
+    stdoutPath: join(statusDir, "stdout.log"),
+    stderrPath: join(statusDir, "stderr.log"),
+    supervisor: {
+      protocol: "aiboard-managed-process/v1",
+      token,
+      statusPath: join(statusDir, "supervisor.jsonl"),
+      supervisorPid: options.supervisorPid,
+      port: options.statusPort ?? 0,
+    },
+    interactive: true,
+    nextInputSequence: 1,
+    inputClosed: false,
+    outputOffsets: { stdout: 0, stderr: 0 },
+    outputSequences: { stdout: 0, stderr: 0 },
+    spare: true,
+    spareClaimed: false,
+    ...(options.claimInFlight === true ? { spareClaimInFlight: true } : {}),
+  };
+  const recordPath = join(jobHostDir, `${processId}.json`);
+  writeFileSync(recordPath, JSON.stringify(record, null, 2));
+  return { processId, recordPath, statusDir };
+}
+
+/** A live bystander this runner owns but never recorded: it must survive recovery. */
+function spawnBystander(): { pid: number; kill(): void } {
+  const child = spawn(process.execPath, ["-e", "setInterval(()=>{},250);setTimeout(()=>process.exit(0),90000);"], { stdio: "ignore", windowsHide: true });
+  child.unref();
+  assert.ok(child.pid !== undefined && child.pid > 0, "bystander must have a PID");
+  const pid: number = child.pid;
+  assert.ok(processAlive(pid), "bystander must be alive");
+  return { pid, kill: () => { try { child.kill("SIGKILL"); } catch {} } };
+}
+
+// B1-negative — crash recovery never kills an unrelated process named by a
+// planted spare-shaped record: starting a host drops the record, the
+// bystander lives (no status proof exists, so the audited kill stays idle,
+// including past its bounded proof window).
+test("spare pin: recovery never kills an unrelated process named by a planted record", { timeout: 55_000 }, async (t) => {
+  if (process.platform !== "win32") {
+    t.skip(WINDOWS_SKIP);
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-px2c-bystander-"));
+  try {
+    const jobHostDir = join(root, "job-host");
+    mkdirSync(jobHostDir, { recursive: true });
+    const bystander = spawnBystander();
+    try {
+      const planted = plantSpareRecord(jobHostDir, { supervisorPid: bystander.pid });
+      createWindowsJobProcessHost({ stateDirectory: jobHostDir });
+      await waitFor(() => !existsSync(planted.recordPath), 10_000, "planted spare record to drop");
+      assert.ok(processAlive(bystander.pid), "planted record must not kill the unrelated process");
+      await sleep(2500);
+      assert.ok(processAlive(bystander.pid), "no late kill may follow the async identity proof");
+    } finally {
+      bystander.kill();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// B1-reuse — a PID-reuse-shaped stale record (live PID, fully matching file,
+// dead port, silent token) is dropped without a kill: nothing answers with
+// the record's token, so the bystander survives.
+test("spare pin: a PID-reuse-shaped stale record never kills its live PID", { timeout: 55_000 }, async (t) => {
+  if (process.platform !== "win32") {
+    t.skip(WINDOWS_SKIP);
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-px2c-reuse-"));
+  try {
+    const jobHostDir = join(root, "job-host");
+    mkdirSync(jobHostDir, { recursive: true });
+    const bystander = spawnBystander();
+    try {
+      const planted = plantSpareRecord(jobHostDir, { supervisorPid: bystander.pid, statusPort: 1 });
+      writeFileSync(join(planted.statusDir, "supervisor.jsonl"), `${JSON.stringify({
+        protocol: "aiboard-managed-process/v1",
+        processId: planted.processId,
+        supervisorPid: bystander.pid,
+        childPid: 0,
+        port: 1,
+        status: "starting",
+        exitCode: null,
+        signal: null,
+        error: null,
+        ownershipReleased: false,
+        updatedAt: new Date().toISOString(),
+        retainedOutputChunks: 0,
+        retainedOutputBytes: 0,
+        spare: true,
+        claimed: false,
+        spareReady: true,
+      })}\n`);
+      createWindowsJobProcessHost({ stateDirectory: jobHostDir });
+      await waitFor(() => !existsSync(planted.recordPath), 10_000, "stale spare record to drop");
+      assert.ok(processAlive(bystander.pid), "stale record must not kill the reused PID");
+      await sleep(2500);
+      assert.ok(processAlive(bystander.pid), "no late kill may follow the async identity proof");
+    } finally {
+      bystander.kill();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// L3 — recovery inside the claim window keeps the call's durable record: a
+// claim-marked pair is retired on proof but its record stays as the audit
+// trail, and the unrelated PID is never killed.
+test("spare pin: recovery inside the claim window keeps the call record", { timeout: 55_000 }, async (t) => {
+  if (process.platform !== "win32") {
+    t.skip(WINDOWS_SKIP);
+    return;
+  }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-px2c-claimwindow-"));
+  try {
+    const jobHostDir = join(root, "job-host");
+    mkdirSync(jobHostDir, { recursive: true });
+    const bystander = spawnBystander();
+    try {
+      const planted = plantSpareRecord(jobHostDir, { supervisorPid: bystander.pid, claimInFlight: true });
+      createWindowsJobProcessHost({ stateDirectory: jobHostDir });
+      await sleep(500);
+      assert.ok(existsSync(planted.recordPath), "claim-window record must be kept as the audit trail");
+      const kept = JSON.parse(readFileSync(planted.recordPath, "utf8")) as { spareReapedAt?: unknown; spareClaimInFlight?: unknown };
+      assert.equal(typeof kept.spareReapedAt, "string", "kept record must note its claim-window reap");
+      assert.equal(kept.spareClaimInFlight, true, "kept record must stay claim-marked");
+      assert.ok(processAlive(bystander.pid), "claim-window recovery must not kill the unrelated PID");
+      await sleep(2500);
+      assert.ok(processAlive(bystander.pid), "no late kill may follow the async identity proof");
+      assert.ok(existsSync(planted.recordPath), "claim-window record must stay kept");
+    } finally {
+      bystander.kill();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

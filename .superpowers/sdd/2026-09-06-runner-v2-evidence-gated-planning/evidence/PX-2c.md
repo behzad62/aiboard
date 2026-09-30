@@ -216,3 +216,151 @@ it) — not a weaker fence, not Job reuse.
   `diff --check`, eslint, tsc clean; autocrlf notice only).
 - No commit/stage/stash/push performed; earlier `wip(...)` commits
   untouched; this work is uncommitted for independent review.
+
+## 8. Repair cycle 1 (answers PX-2c-review-r1: B1, B2 blocking; M1-M5; L1-L5; N4)
+
+Worked on HEAD (descendant of `6a581f66`, above `cd475d57`; PX-2a/PX-2b repairs on
+top, all their tests kept green). No commit/stage/stash/push; no amend,
+reset, revert or rewrite of any commit. Spare stays OPT-IN (no default-on).
+
+### B1 — no more blind PID kills (fixed)
+
+- `killVerifiedSpareSupervisor(record, durable, timeoutMs)` in
+  `windows-job-process-host.ts` is now the ONLY PID-kill site in the file
+  (one `process.kill`, one allowlist container). It kills only after BOTH
+  proofs: the durable status file already names this pair (protocol,
+  processId, supervisorPid, unclaimed spare) AND the live supervisor answers
+  authenticated `GET /status` with the record's token and the same identity
+  (processId, supervisorPid, port, spare, unclaimed). Anything else returns
+  `skipped` and the caller only drops the record. Never throws; bounded
+  2 s proof timeout (`SPARE_REAP_VERIFY_TIMEOUT_MS`).
+- Constructor reap and the run-end sweep both route through it. The record
+  is still dropped synchronously (S5/S6 pin that); the durable status is
+  snapshotted before the drop because the async proof still needs it (found
+  by debugging S6: deleting first starved the proof and the spare survived).
+- New tests (all in `windows-job-spare-host.test.ts`, win32-only, no backend
+  needed): a planted spare-shaped record naming a live bystander drops the
+  record and the bystander survives (incl. 2.5 s past the proof window); a
+  PID-reuse-shaped record (live PID, fully matching file, dead port, silent
+  token) is dropped without a kill.
+- Prove-red (sha256 before/after, byte-exact restore): fault = blind kill +
+  early `return "killed"` in the helper. `host 5599afe5…` → fault → negative
+  test RED (bystander dead) → restore → `5599afe5…` again; same fault →
+  reuse test RED → restore → `5599afe5…`. Repeated post-fix against the
+  final shape: `host 4defa319…` → fault → negative test RED → restore →
+  `4defa319…`, then the negative + claim-window tests re-run GREEN.
+
+### B2 — task8-raw-launch-closure fully green (fixed)
+
+- `managed-process-supervisor.mjs retireSpare`: `backend?.kill` deleted;
+  routes through the already-allowlisted `stopOwnedTree` (same owned-handle
+  kill, no new site). `+0` allowlist entries.
+- Host `retireSpare`: redundant `entry.launcher.kill` deleted
+  (`abortStartingSupervisor` already kills). `+0` entries.
+- Host spawns (`launchOwned` + `startSpare`): one shared
+  `spawnSupervisorProcess()` helper — one raw spawn site. The existing
+  allowlist entry was RENAMED `launchOwned` → `spawnSupervisorProcess`
+  (forced: the suite requires every entry to stay live/exact).
+- The two `process.kill` sites became the one audited helper: `+1`
+  allowlist entry with its reason (kill only after authenticated live-status
+  proof, otherwise only the record is dropped).
+- At HEAD: `task8-raw-launch-closure` 2/2 GREEN (was 8 violations at
+  `cd475d57`, 5 from PX-2c). Allowlist diff: 1 rename + 1 addition; the
+  supervisor needed none. Scope note: the brief allowed at most one
+  addition; the rename is exactness maintenance the suite itself demands.
+
+### M2 — no silent re-run after an acked claim (fixed)
+
+`tryClaimSpareCall`'s post-ack failure now falls back only on positive proof
+no child ever started (`childPid === 0` in the durable status); otherwise it
+aborts the launcher and throws `process_start_failed` exactly like the
+normal path, keeping the record. No existing test hits that path (all
+fallbacks in S7a/S7b happen pre-ack); S1/S2/S3/S10 green.
+
+### M3 — retire/sweep scoped to the closing run; claim window marked (fixed)
+
+- `retireSpare(closingRun?: { runId })`: the in-memory spare is retired only
+  when its owner matches the closing run; the disk sweep skips other runs'
+  records and skips `spareClaimInFlight` records (a concurrent claim).
+  No-arg calls (tests, fakes) keep today's behavior. `execution-host.ts`
+  passes `{ runId: input.runId }` (retire-scope-only edit).
+- The claim window is persisted (`spareClaimInFlight: true`) BEFORE the IPC
+  claim lands and cleared on the ack persist.
+
+### L3 — claim-window crash keeps the audit trail (fixed)
+
+Constructor reap keeps `spareClaimInFlight` records on disk (persisting
+`spareReapedAt`) while still retiring the tree on identity proof; unclaimed
+records are dropped as before. New test: claim-marked planted record is
+kept with its reap note, bystander survives. `spareClaimed` records were
+already (and still are) left alone — they are live calls.
+
+### M5/N4 — spare-aware leak gate + spare-on run (fixed, narrowest)
+
+`windows-job-real-host-guarantees.test.ts` only: `JobRecordView` carries
+`spare/spareClaimed`; `assertNoLiveSupervisors` additionally ignores exactly
+records with `spare:true, spareClaimed:false`. A claimed spare is a call and
+is still enforced. `PX2C_SPARE_ON=1` injects a host with
+`spare:{autoRefresh:true}` and prestarts AFTER the pre-existing baseline, so
+the spare is ignored only through its durable record. No other assertion
+changed.
+- Prove-red: gate fault (clause removed) + spare on → 3/3 RED with
+  `Job supervisors of this run did not settle within 20000ms`; restore →
+  hash `d1b0644d…` again. Gate discrimination probe (`/tmp`, kept out of
+  the repo): leaking call record fails the predicate, idle spare passes, a
+  claimed spare still fails.
+- Validation: guarantees 12/12 with the spare OFF and 12/12 with it ON.
+
+### M4 — lifecycle/authority pins (added: S8, S9, S10, S11)
+
+Idle-timeout retire (`spareRetired: idle-timeout`, never had a child);
+token-holding POST to all six routes → 409 `spare_unclaimed` while GET
+`/status` stays 200, then the refused spare still serves the call; two
+concurrent calls take one spare exactly once (claims +1, both succeed);
+`autoRefresh` provisions exactly one live replacement after a claim.
+Spare file now 16/16 (was 9/9).
+
+### M1 — not implemented (recorded)
+
+No bootstrap at `bindRun`, no re-provision after miss/expiry: that would
+start spare processes on every run even though the spare is deliberately
+opt-in with no production path enabling it (review §"Default-on
+recommendation" item 2 belongs to the enablement decision, with M2/M3/L3 now
+done, M1 still open). `autoRefresh` re-provision after a claim is pinned by
+S11. Revisit only together with default-on.
+
+### L1, L2, L4, L5
+
+- L1 fixed: the supervisor comment no longer claims the helper is
+  pre-compiled (it says node + PowerShell boot; helper load stays
+  post-claim).
+- L2: prove-red faults above are single-site with sha256 before/after and
+  byte-exact restores recorded here (fault sources are the two-line
+  insertions quoted above, not loose files under `%TEMP%`).
+- L4 (session mix): unmeasured — owner run is single-session; flag for the
+  enablement measurement.
+- L5 (memory): not re-measured; reviewer's ~140 MB per idle pair stands.
+
+### Validation (this repair, `NODE_TEST_CONTEXT` cleared where the repo clears it)
+
+- `windows-job-spare-host.test.ts` (conc 1): 16/16.
+- `windows-job-real-host-guarantees.test.ts` (conc 1): 12/12 off, 12/12 on.
+- 9-file batch (conc 4: backend, output-replay, supervisor-input,
+  one-shot-command-family-production-matrix, execution-host,
+  subprocess-runtime, durable-process-store, launch-speed, fence-effects):
+  273 tests: 272 pass, 0 fail, 1 skipped (pre-existing).
+- `task8-raw-launch-closure`: 2/2. `tsc` clean. `eslint` on all six touched
+  files clean. `git diff --check` clean.
+- Measure (`measure-git-launch.mts`, n=20, loaded machine): off quiet
+  1565.9/1875.3, large 2064.2/2271.2, rev-parse 1836.4/2030.9 (median/p90);
+  on: quiet 1322.2/1506.8, large 1556.4/1709.3, rev-parse 1446.8/1608.5;
+  spare stats 61 prestarts / 60 claims / 0 fallbacks. Gain holds
+  (~240-510 ms/call here; absolutes carry load noise, the 60/0 claim count
+  is the structural proof).
+
+Changed files: `runner-v2/src/windows-job-process-host.ts`,
+`managed-process-supervisor.mjs`, `execution-host.ts` (retire scope only);
+`runner-v2/test/windows-job-spare-host.test.ts` (+7 tests +2 helpers),
+`task8-raw-launch-closure.test.ts` (1 rename + 1 entry),
+`windows-job-real-host-guarantees.test.ts` (gate + spare-on switch only);
+`runner-v2/scripts/measure-git-launch.mts` untouched; this file.

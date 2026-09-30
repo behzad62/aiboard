@@ -48,7 +48,7 @@ import {
 } from "../src/process-backend.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
-import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
+import { createWindowsJobProcessHost, type WindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { createWindowsProcessBackend } from "../src/windows-process-backend.js";
 
 const WINDOWS_SKIP = "Windows Job real-host pin requires a Windows host.";
@@ -70,6 +70,11 @@ interface Px2tHarness {
 let harness: Px2tHarness | undefined;
 let jobBackendSelected = false;
 let callSeq = 0;
+// PX-2c repair 1 (N4): spare-on switch. `PX2C_SPARE_ON=1` runs this whole file
+// with one auto-refreshing spare waiting: the same 12 guarantees must hold on
+// the claimed path, and the spare-aware gate above must ignore the idle spare.
+const SPARE_ON = process.env["PX2C_SPARE_ON"] === "1";
+let spareService: WindowsJobProcessHost | undefined;
 
 async function sleep(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -112,6 +117,8 @@ interface JobRecordView {
   readonly supervisorPid: number;
   readonly startedAt: string;
   readonly args: readonly string[];
+  readonly spare: boolean;
+  readonly spareClaimed: boolean;
 }
 
 function readJobRecords(h: Px2tHarness): JobRecordView[] {
@@ -133,6 +140,8 @@ function readJobRecordDir(jobHostDir: string): JobRecordView[] {
         pid?: unknown;
         startedAt?: unknown;
         args?: unknown;
+        spare?: unknown;
+        spareClaimed?: unknown;
         supervisor?: { supervisorPid?: unknown };
       };
       if (typeof raw.processId !== "string" || typeof raw.startedAt !== "string") continue;
@@ -144,6 +153,8 @@ function readJobRecordDir(jobHostDir: string): JobRecordView[] {
           typeof raw.supervisor?.supervisorPid === "number" ? (raw.supervisor.supervisorPid as number) : 0,
         startedAt: raw.startedAt,
         args: Array.isArray(raw.args) ? raw.args.filter((entry): entry is string => typeof entry === "string") : [],
+        spare: raw.spare === true,
+        spareClaimed: raw.spareClaimed === true,
       });
     } catch {
       continue;
@@ -183,7 +194,11 @@ function recordCount(h: Px2tHarness): number {
 
 /** Zero-leftover gate: every supervisor THIS run started must be gone.
  * Supervisors already alive before the file started are excluded, so a PX-2c
- * pre-started spare does not need to edit this net. */
+ * pre-started spare does not need to edit this net. PX-2c repair 1 (N4): the
+ * gate is spare-aware in the narrowest way — it additionally ignores exactly
+ * the idle spare identified by its own durable spare record
+ * (`spare:true, spareClaimed:false`). A claimed spare is a call and is still
+ * enforced; any call supervisor that outlives its call still fails this gate. */
 async function assertNoLiveSupervisors(h: Px2tHarness, timeoutMs = 20_000): Promise<void> {
   await waitFor(
     () =>
@@ -191,6 +206,7 @@ async function assertNoLiveSupervisors(h: Px2tHarness, timeoutMs = 20_000): Prom
         (record) =>
           record.supervisorPid < 1 ||
           preExistingSupervisorPids.has(record.supervisorPid) ||
+          (record.spare && !record.spareClaimed) ||
           !processAlive(record.supervisorPid),
       ),
     timeoutMs,
@@ -374,11 +390,18 @@ before(async () => {
   mkdirSync(outside, { recursive: true });
   const stateDir = join(root, "state");
   mkdirSync(stateDir, { recursive: true });
+  if (SPARE_ON) {
+    spareService = createWindowsJobProcessHost({
+      stateDirectory: join(stateDir, "managed-processes-job-host"),
+      spare: { autoRefresh: true },
+    });
+  }
   const host = createExecutionHost({
     projectRoot: project,
     stateDirectory: stateDir,
     artifacts: new ArtifactStore(join(stateDir, "artifacts")),
     ambientEnvironment: { ...process.env },
+    ...(spareService ? { windowsJobHost: spareService } : {}),
   });
   const runId = `px2t-${randomUUID()}`;
   const binding = await host.bindRun({
@@ -412,12 +435,20 @@ before(async () => {
       .map((record) => record.supervisorPid)
       .filter((pid) => pid > 0 && processAlive(pid)),
   );
+  // PX-2c repair 1 (N4): prestart AFTER the baseline, so the idle spare is
+  // ignored only through its durable spare record (the gate change above),
+  // never through the pre-existing set.
+  if (spareService) {
+    assert.equal(typeof spareService.prestartSpare, "function", "host must offer prestartSpare");
+    await spareService.prestartSpare!({ runId, sessionId: `session-${runId}` });
+  }
 }, { timeout: 90_000 });
 
 after(async () => {
   if (!harness) return;
   const h = harness;
   harness = undefined;
+  spareService = undefined;
   try {
     await h.binding.close();
   } catch {

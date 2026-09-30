@@ -389,24 +389,28 @@ function armSpareIdleTimer() {
   spareIdleTimer.unref?.();
 }
 
-// PX-2c: retire an unclaimed spare without ever launching a call: kill the
-// waiting Job host, record why, and exit. Parent death, idle timeout, and
+// PX-2c: retire an unclaimed spare without ever launching a call: terminate
+// the waiting Job host, record why, and exit. Parent death, idle timeout, and
 // run-end/abort share this path; crash recovery never relaunches from it.
-function retireSpare(reason) {
+async function retireSpare(reason) {
   if (!isSpareConfig() || !spareUnclaimed) return;
   clearTimeout(spareIdleTimer);
   spareIdleTimer = undefined;
   spareUnclaimed = false;
+  // PX-2c repair 1 (B2): no direct backend kill here. stopOwnedTree owns the
+  // single backend-kill site (allowlisted once); retirement still records its
+  // reason and the supervisor still exits when the kill is refused or late.
   try {
-    backend?.kill("SIGKILL");
+    await stopOwnedTree("SIGKILL", config.stopDeadlineMs);
   } catch {}
-  if (!settled) {
-    status.status = "stopped";
-    status.error = `Spare retired without a call (${reason}).`;
-    status.ownershipReleased = true;
-    status.spareRetired = reason;
-    persistStatus();
-  }
+  // Unconditional: the backend-exit listener may have marked us stopped
+  // during the kill above. Either order must leave the retirement reason on
+  // the durable status (markStopped preserves a recorded spareRetired).
+  status.status = "stopped";
+  if (!status.spareRetired) status.error = `Spare retired without a call (${reason}).`;
+  status.ownershipReleased = true;
+  status.spareRetired = reason;
+  persistStatus();
   try {
     server.close(() => process.exit(0));
   } catch {}
@@ -512,8 +516,8 @@ function launchWindowsJob() {
     helperAssemblySha256: config.helperAssemblySha256,
   };
   if (config.spare === true) {
-    // PX-2c: the Job host has booted, parsed, and compiled its helper, and now
-    // blocks on its stdin with NO Job and NO child until the runner's IPC
+    // PX-2c: the supervisor (node) and the Job host (PowerShell) have booted
+    // and now block on stdin with NO Job and NO child until the runner's IPC
     // claim delivers the call. Holding the write keeps spawn authority on the
     // existing private channel; HTTP can only observe until the claim lands.
     spareUnclaimed = true;
