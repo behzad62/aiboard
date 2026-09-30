@@ -205,6 +205,16 @@ export interface ProjectDocEntryPointFacts {
    */
   agentsLinkTarget?: string;
   claudeLinkTarget?: string;
+  /**
+   * Docs policy v2 hardening (C2d repair cycle 1, escalation): the COMMIT
+   * tree tracks two spellings of the entry file (say `AGENTS.md` and
+   * `agents.md`), so the runner skips that entry file with a recorded
+   * reason instead of wedging on it, and the AR-R05 gate accepts the
+   * reason. Present only then (two or more distinct spellings, in commit
+   * tree order). Read from the commit, never the checkout.
+   */
+  agentsCollisionSpellings?: readonly string[];
+  claudeCollisionSpellings?: readonly string[];
 }
 
 export interface ProjectDocCommitResult {
@@ -422,6 +432,16 @@ export const HANDOFF_CLAUDE_SELF_IMPORT_OMISSION =
  * whose target blob holds no marked section or line. The single wording
  * source for every path that re-describes a skip from the tree.
  */
+/**
+ * C2d repair cycle 1 (escalation): the recorded skip for an entry file
+ * the commit tree tracks under two spellings. The single wording source
+ * for the stager and the tree re-description, so a fresh commit and a
+ * reused commit of the same layout record the same reason.
+ */
+export function handoffEntryCollisionSkipReason(entryPath: "AGENTS.md" | "CLAUDE.md", firstSpelling: string, secondSpelling: string): string {
+  return `${entryPath} is not written: the commit tree tracks both ${firstSpelling} and ${secondSpelling}; the handoff proceeds without it.`;
+}
+
 export function handoffEntryGenericSkipReason(entryPath: "AGENTS.md" | "CLAUDE.md", rawTarget: string): string {
   const line = entryPath === "AGENTS.md" ? "marked section" : "marked line";
   return `${entryPath} is a symbolic link to ${rawTarget}; the entry is skipped (the target holds no ${line}).`;
@@ -476,7 +496,11 @@ export function handoffLinkRawTargetsClaudeDotMd(rawTarget: string): boolean {
     if (segment === "..") return false;
     parts.push(segment);
   }
-  return parts.length === 1 && parts[0] === "CLAUDE.md";
+  // C2d repair cycle 1 (B3): the identity folds case -- a redirect into
+  // the index's own `claude.md` spelling counts the way `CLAUDE.md` does.
+  // The fold applies only to this comparison; the caller still requires
+  // the exact index entry (never a substituted spelling).
+  return parts.length === 1 && (parts[0] ?? "").toLowerCase() === "claude.md";
 }
 
 /** Inputs to the single snapshot-commit describer. */
@@ -514,9 +538,11 @@ export interface SnapshotCommitDescription {
  * replace it):
  * - STATE.md is recorded as written, or skipped with the canonical reason
  *   for the tree's first ancestor-or-self link (STATE.md itself counts).
- *   A stage-time reason alone -- an out-of-band junction the tree never
- *   held -- records nothing, so the caller pauses fail-closed (m-3); a
- *   committed STATE.md never carries a reason (m-1).
+ *   A case-colliding component (say `docs` with `Docs`, C2d repair cycle
+ *   1) reports the same way through the shared reason. A stage-time
+ *   reason alone -- an out-of-band junction the tree never held --
+ *   records nothing, so the caller pauses fail-closed (m-3); a committed
+ *   STATE.md never carries a reason (m-1).
  * - Each entry file keeps its stage-time reason only when the tree holds
  *   the link; otherwise the skip (and the M-6 omission, NB-1) is
  *   re-described from the tree in the single wording (m-4).
@@ -568,20 +594,35 @@ export function describeSnapshotCommitFacts(input: SnapshotCommitDescriptionInpu
       }
     }
   }
+  // C2d repair cycle 1 (escalation): a stage-time collision skip counts
+  // only when the commit tree corroborates the two spellings, exactly
+  // like a link skip counts only with its link. Without a stage-time
+  // record (a reuse describing an older commit) the same wording is
+  // re-derived from the tree, so fresh and reused commits agree.
+  const agentsCollision = input.entryPoint.agentsCollisionSpellings ?? [];
+  const agentsCollisionReason = agentsCollision.length > 1 && agentsCollision[0] !== undefined && agentsCollision[1] !== undefined
+    ? handoffEntryCollisionSkipReason("AGENTS.md", agentsCollision[0], agentsCollision[1])
+    : undefined;
   const agentsStageSkip = stageSkipFor("AGENTS.md");
-  const agentsSkip = agentsStageSkip !== undefined && agentsLink !== undefined
+  const agentsSkip = agentsStageSkip !== undefined && (agentsLink !== undefined || agentsCollisionReason !== undefined)
     ? agentsStageSkip
     : agentsLink !== undefined
       ? handoffEntryGenericSkipReason("AGENTS.md", agentsLink)
-      : undefined;
+      : agentsCollisionReason;
+  const claudeCollision = input.entryPoint.claudeCollisionSpellings ?? [];
+  const claudeCollisionReason = claudeCollision.length > 1 && claudeCollision[0] !== undefined && claudeCollision[1] !== undefined
+    ? handoffEntryCollisionSkipReason("CLAUDE.md", claudeCollision[0], claudeCollision[1])
+    : undefined;
   const claudeStageSkip = stageSkipFor("CLAUDE.md");
   let claudeSkip: string | undefined;
-  if (claudeStageSkip !== undefined && (claudeLink !== undefined || agentsIntoClaude)) {
+  if (claudeStageSkip !== undefined && (claudeLink !== undefined || agentsIntoClaude || claudeCollisionReason !== undefined)) {
     claudeSkip = claudeStageSkip;
   } else if (claudeLink !== undefined) {
     claudeSkip = handoffEntryGenericSkipReason("CLAUDE.md", claudeLink);
   } else if (agentsIntoClaude) {
     claudeSkip = HANDOFF_CLAUDE_SELF_IMPORT_OMISSION;
+  } else {
+    claudeSkip = claudeCollisionReason;
   }
   return {
     stateChanged,

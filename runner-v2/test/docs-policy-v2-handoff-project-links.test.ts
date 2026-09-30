@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -12,6 +13,7 @@ import {
   DEFAULT_STATE_TEMPLATE,
   V2_AGENTS_SECTION_BODY,
   V2_CLAUDE_POINTER_LINE,
+  describeSnapshotCommitFacts,
   handoffStateSkipReason,
   spliceMarkedArchitectSectionBytes,
 } from "../src/project-docs.js";
@@ -1158,5 +1160,138 @@ test("C2e/probe F-state-dir: a tracked directory at docs/project/STATE.md skips 
     assert.equal(after.stdout.trim(), before.stdout.trim(), "the refused batch commits nothing");
   } finally {
     await fixture.close();
+  }
+});
+
+/**
+ * C2d repair cycle 1 (B2): a valid snapshot body with its digest line,
+ * built directly so the manager-level probe controls both bodies.
+ */
+function probeSnapshotBody(bodyText: string): string {
+  const norm = bodyText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimEnd();
+  return `# AIBoard handoff snapshot — body_sha256: ${createHash("sha256").update(norm, "utf8").digest("hex")}\n${bodyText}`;
+}
+
+test("C2d repair cycle 1/probe FA-1: two STATE.md spellings read back fail-closed", async (t) => {
+  // The stale-exact collision needs a case-insensitive filesystem (the
+  // staged write aliases into the lowercase entry).
+  if (process.platform === "linux") { t.skip("The STATE.md spelling collision needs a case-insensitive checkout."); return; }
+  const RUN = "run-c2d-fa1";
+  const fixture = await openFactoryPort("c2dfa1", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  try {
+    const worktree = fixture.integration.path;
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    const OLD = probeSnapshotBody("OLD snapshot body (previous stop)\n");
+    const NEW = probeSnapshotBody("NEW snapshot body (this stop)\n");
+    assert.equal(verifyHandoffSnapshotDigest(OLD), true);
+    assert.equal(verifyHandoffSnapshotDigest(NEW), true);
+    // A valid snapshot at the exact spelling, plus a second tracked
+    // spelling built through the index alone (plumbing, no checkout),
+    // since both spellings cannot live on disk together.
+    mkdirSync(join(worktree, "docs", "project"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project", "STATE.md"), OLD);
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/project/STATE.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed the exact STATE.md spelling"] });
+    writeFileSync(join(worktree, "plumb-staging.txt"), "user lower-case file\n");
+    const blob = (await runGit({ cwd: worktree, args: ["hash-object", "-w", "plumb-staging.txt"] })).stdout.trim();
+    assert.match(blob, /^[a-f0-9]{40}$/);
+    rmSync(join(worktree, "plumb-staging.txt"), { force: true });
+    await runGit({ cwd: worktree, args: ["update-index", "--add", "--cacheinfo", `100644,${blob},docs/project/state.md`] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "track lowercase state.md as well (collision)"] });
+    const result = await fixture.integration.commitHandoffSnapshot({
+      writes: [
+        { path: "docs/project/STATE.md", content: NEW },
+        { path: "AGENTS.md", content: V2_AGENTS_SECTION_BODY },
+        { path: "CLAUDE.md", content: V2_CLAUDE_POINTER_LINE },
+      ],
+      summary: "FA-1 snapshot",
+      runId: RUN,
+      snapshotKey: "handoff:c2d-fa1",
+    });
+    const changed = (await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", result.commit] })).stdout
+      .split("\n").map((line) => line.trim()).filter(Boolean).sort();
+    assert.deepEqual(
+      changed,
+      ["AGENTS.md", "CLAUDE.md", "docs/project/state.md"],
+      "the commit changes the lowercase entry while the exact entry keeps the old body",
+    );
+    assert.equal(
+      (await runGit({ cwd: worktree, args: ["show", `${result.commit}:docs/project/STATE.md`] })).stdout,
+      OLD,
+      "the exact entry still holds the stale body",
+    );
+    const back = await fixture.integration.readHandoffSnapshotFile({ commit: result.commit, path: "docs/project/STATE.md" });
+    assert.equal(back.content, OLD, "the read-back content comes from the stale exact entry");
+    assert.equal(verifyHandoffSnapshotDigest(back.content ?? ""), true, "the stale bytes verify on their own");
+    assert.equal(
+      back.paths.includes("docs/project/STATE.md"),
+      false,
+      "fail closed: the changed lowercase spelling is not reported under the canonical name",
+    );
+    const described = describeSnapshotCommitFacts({ entryPoint: result.entryPoint, storedPaths: back.paths });
+    assert.equal(described.stateChanged, false, "the gate stays closed instead of accepting the old digest");
+    assert.equal(described.stateSkippedReason, undefined, "no skip reason is invented for the collision");
+    assert.equal(
+      readFileSync(join(worktree, "docs", "project", "STATE.md"), "utf8").includes("NEW snapshot body"),
+      true,
+      "the write landed in the committed spelling's physical file; only the canonical name stays closed",
+    );
+    assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2d repair cycle 1/escalation C-1: colliding docs/ and Docs/ directories skip STATE.md and still hand off", async (t) => {
+  // The collision lives in the index (both spellings cannot live on one
+  // case-insensitive disk); the wedge needs the write to alias.
+  if (process.platform === "linux") { t.skip("The colliding directories need a case-insensitive checkout."); return; }
+  const RUN = "run-c2d-collidedirs";
+  const fixture = await openFactoryPort("c2dcollidedirs", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const outside = join(fixture.root, "zz-outside-c2d-collidedirs");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "own.txt"), "outside\n");
+    await runGit({ cwd: worktree, args: ["config", "core.ignorecase", "true"] });
+    // A tree that tracks both `docs/` and `Docs/` as directories: the
+    // second spelling is built through the index alone (plumbing, no
+    // checkout). Every attempt used to wedge on the STATE.md pathspec
+    // because the write stages under the other spelling.
+    mkdirSync(join(worktree, "docs"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "keep.md"), "user keep\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/keep.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed docs"] });
+    writeFileSync(join(worktree, "plumb-staging.txt"), "other\n");
+    const blob = (await runGit({ cwd: worktree, args: ["hash-object", "-w", "plumb-staging.txt"] })).stdout.trim();
+    assert.match(blob, /^[a-f0-9]{40}$/);
+    rmSync(join(worktree, "plumb-staging.txt"), { force: true });
+    await runGit({ cwd: worktree, args: ["update-index", "--add", "--cacheinfo", `100644,${blob},Docs/other.md`] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "collide Docs directory"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the colliding layout hands off instead of wedging on the pathspec");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.stateSkippedReason, handoffStateSkipReason("docs"), "the skip reason is commit-tree-derived, as for a link");
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    assert.equal(payload.agentsSectionCommitted, true);
+    assert.equal(payload.claudeLineCommitted, true);
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "CLAUDE.md"],
+      "only the entry files commit; the colliding STATE.md is skipped",
+    );
+    assert.equal(existsSync(join(worktree, "Docs", "project", "STATE.md")), false, "the skipped write landed nowhere");
+    assert.equal(existsSync(join(worktree, "docs", "project", "STATE.md")), false, "the skipped write landed nowhere under either spelling");
+    assert.equal(readFileSync(join(outside, "own.txt"), "utf8"), "outside\n", "nothing is written outside the repository");
+    assert.equal(existsSync(join(fixture.project, "docs")), false, "the project is still untouched");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2d-collidedirs");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+  } finally {
+    await fixture.close();
+    rmSync(outside, { recursive: true, force: true });
   }
 });

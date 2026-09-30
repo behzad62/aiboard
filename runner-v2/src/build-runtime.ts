@@ -493,7 +493,12 @@ export function handoffEntryFileStatus(
     agentsSectionViaLink = undefined;
   }
   if (!agentsSectionCommitted) {
-    if (reasons.agentsSkip === undefined || entryPoint.agentsLinkTarget === undefined) return null;
+    // C2d repair cycle 1 (escalation): a colliding entry file carries no
+    // link, so the recorded skip counts with the commit tree's
+    // corroborating spellings instead (the describer only yields the skip
+    // then). Anything else still pauses fail-closed.
+    const agentsCollision = (entryPoint.agentsCollisionSpellings ?? []).length > 1;
+    if (reasons.agentsSkip === undefined || (entryPoint.agentsLinkTarget === undefined && !agentsCollision)) return null;
     agentsSectionViaLink = reasons.agentsSkip;
   }
   let claudeLineCommitted = entryPoint.claudePointerV2;
@@ -513,7 +518,11 @@ export function handoffEntryFileStatus(
     // entry lines when the commit tree proves the redirect into CLAUDE.md.
     if (
       reasons.claudeSkip !== undefined &&
-      reasons.agentsRedirectTarget === "CLAUDE.md" &&
+      // C2d repair cycle 1 (B3): the redirect-target identity folds case --
+      // `claude.md` (the index's own spelling) counts the way `CLAUDE.md`
+      // does. Only this comparison folds; the redirect itself still
+      // requires the exact index entry.
+      (reasons.agentsRedirectTarget ?? "").toLowerCase() === "claude.md" &&
       entryPoint.agentsLinkTarget !== undefined &&
       handoffLinkRawTargetsClaudeDotMd(entryPoint.agentsLinkTarget) &&
       entryPoint.agentsSectionV2ViaLink === true
@@ -521,7 +530,11 @@ export function handoffEntryFileStatus(
       claudeLineCommitted = true;
       claudeLineViaLink = reasons.claudeSkip;
     } else {
-      if (reasons.claudeSkip === undefined || entryPoint.claudeLinkTarget === undefined) return null;
+      // C2d repair cycle 1 (escalation): same collision rule as the
+      // AGENTS.md section above -- the recorded skip counts with the
+      // commit tree's corroborating spellings, never on a bare claim.
+      const claudeCollision = (entryPoint.claudeCollisionSpellings ?? []).length > 1;
+      if (reasons.claudeSkip === undefined || (entryPoint.claudeLinkTarget === undefined && !claudeCollision)) return null;
       claudeLineViaLink = reasons.claudeSkip;
     }
   }

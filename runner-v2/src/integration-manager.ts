@@ -25,6 +25,7 @@ import {
   agentsMarkedSectionSatisfiesV2,
   claudePointerSatisfies,
   claudePointerSatisfiesV2,
+  handoffEntryCollisionSkipReason,
   handoffEntryGenericSkipReason,
   handoffStateSkipReason,
   HANDOFF_STATE_LINK_COMPONENTS,
@@ -762,9 +763,17 @@ export class IntegrationManager {
         if (specAdd.exitCode !== 0) {
           const detail = `${specAdd.stdout} ${specAdd.stderr}`.replace(/\s+/g, " ").trim().slice(0, 160) || "unknown error";
           for (const path of specPaths) {
+            // C2d repair cycle 1 (m-2): the skip record keeps the
+            // canonical path (`specPaths` holds the index's own
+            // spelling, say `Docs/...`). The runtime matches
+            // `entry.path.startsWith("docs/project/specs/")` exactly,
+            // so a resolved spelling would detach the reason. Only
+            // case differs between the spellings, so the mapping is
+            // exact.
+            const canonical = canonicalHandoffSpelling(path);
             droppedSpec.push({
-              path,
-              reason: `spec copy skipped (write_failed): git add failed for ${path} (${detail}).`,
+              path: canonical,
+              reason: `spec copy skipped (write_failed): git add failed for ${canonical} (${detail}).`,
             });
           }
         }
@@ -904,6 +913,16 @@ export class IntegrationManager {
       // C2d (DOCS-dir, D-rd-lcagents): the blob is read through the commit's
       // own spelling when the canonical one matches nothing (git stores
       // `Docs/project/STATE.md` or `claude.md`).
+      // C2d repair cycle 1 (B2): remember which spelling the content came
+      // from. A tree that tracks two spellings of the same handoff file
+      // (say `docs/project/STATE.md` holding an old body alongside
+      // `docs/project/state.md` holding the new one) must read back
+      // fail-closed: the changed path maps to the canonical spelling only
+      // when it is the spelling the content was read from. Otherwise the
+      // gate would accept the stale exact-spelling bytes under the changed
+      // canonical name. No extra git call: the spelling is the one the
+      // read above already resolved to.
+      let contentPath = checked.path;
       let stored = await this.git(
         this.path,
         ["show", `${input.commit}:${checked.path}`],
@@ -913,6 +932,7 @@ export class IntegrationManager {
         const real = await this.resolveSpellingInTree(input.commit, checked.path);
         if (real !== checked.path) {
           stored = await this.git(this.path, ["show", `${input.commit}:${real}`], true);
+          contentPath = real;
         }
       }
       const names = await this.git(this.path, [
@@ -931,7 +951,12 @@ export class IntegrationManager {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean)
-        .map((path) => (insensitive ? canonicalHandoffSpelling(path) : path));
+        .map((path) => {
+          if (!insensitive) return path;
+          const canonical = canonicalHandoffSpelling(path);
+          if (canonical === "docs/project/STATE.md" && path !== contentPath) return path;
+          return canonical;
+        });
       return { content: stored.exitCode === 0 ? stored.stdout : null, paths };
     });
   }
@@ -1051,6 +1076,14 @@ export class IntegrationManager {
     // C2c (NF-2/CD-15): the kernel snapshot path never writes through a
     // link. Each entry write lands on a physical path: its own path, or the
     // link target when the entry file is a link to a regular tracked file.
+    // C2d repair cycle 1 (escalation): the HEAD tree's entry-file
+    // spellings, once per snapshot, so a colliding entry file (say
+    // `AGENTS.md` with `agents.md`) is skipped with a recorded reason
+    // instead of wedging the run. One git call on a case-insensitive
+    // checkout with entry writes, zero otherwise.
+    const entryCollisions = skipClaudeAgentsLink && staged.some((write) => write.path === "AGENTS.md" || write.path === "CLAUDE.md")
+      ? await this.commitEntryCollisionSpellings("HEAD")
+      : { agents: [], claude: [] };
     const planned: Array<{ writePath: string; physicalPath: string; content: string }> = [];
     for (const write of staged) {
       // C2d (DOCS-dir, D-walk-projdir, F-LC-agents, D-rd-lcagents): on a
@@ -1111,7 +1144,9 @@ export class IntegrationManager {
           throw new Error(
             blocker.kind === "file-not-dir"
               ? `Project document path ${write.path} is refused because ${blocker.component} is a regular file, not a directory.`
-              : `Project document path ${write.path} is refused because ${blocker.component} is a directory.`,
+              : blocker.kind === "case-collision"
+                ? `Project document path ${write.path} is refused because the commit tree tracks two spellings of ${blocker.component}.`
+                : `Project document path ${write.path} is refused because ${blocker.component} is a directory.`,
           );
         }
       }
@@ -1140,6 +1175,25 @@ export class IntegrationManager {
           }
           continue;
         }
+        // C2d repair cycle 1 (escalation): a non-link entry the tree
+        // tracks under two spellings (say `AGENTS.md` with `agents.md`)
+        // is skipped with a recorded, commit-tree-derived reason the
+        // AR-R05 gate accepts. On disk there is one file, so splicing
+        // the section would substitute one entry's bytes for the other's
+        // and pause every attempt at the gate. Link layouts keep the
+        // link machinery above; the v1 Architect path below is unchanged.
+        const spellings = write.path === "AGENTS.md" ? entryCollisions.agents : entryCollisions.claude;
+        if (spellings.length > 1 && spellings[0] !== undefined && spellings[1] !== undefined) {
+          skipped.push({
+            path: write.path,
+            reason: handoffEntryCollisionSkipReason(
+              write.path === "AGENTS.md" ? "AGENTS.md" : "CLAUDE.md",
+              spellings[0],
+              spellings[1],
+            ),
+          });
+          continue;
+        }
       }
       await this.refuseProjectDocLink(write.path);
       planned.push({ writePath: write.path, physicalPath: realPath, content: write.content });
@@ -1155,15 +1209,19 @@ export class IntegrationManager {
     // (a lowercase `agents.md` regular file) is the entry's own file, not a
     // redirect -- otherwise the M-6 omission below would drop the CLAUDE.md
     // pointer for a layout that holds two distinct entry files.
+    // C2d repair cycle 1 (m-1): the omission compares folded -- a CLAUDE.md
+    // write resolving to the index's own `claude.md` spelling is the same
+    // file as an AGENTS.md redirect into `CLAUDE.md` only when the
+    // spellings agree case-insensitively.
     const agentsRedirectTargets = new Set(
       planned
         .filter((op) => op.writePath === "AGENTS.md" && op.physicalPath.toLowerCase() !== "agents.md")
-        .map((op) => op.physicalPath),
+        .map((op) => op.physicalPath.toLowerCase()),
     );
     const merged = new Map<string, { entry: boolean; bodies: string[] }>();
     let claudePointerOmittedFor: string | null = null;
     for (const op of planned) {
-      if (op.writePath === "CLAUDE.md" && agentsRedirectTargets.has(op.physicalPath)) {
+      if (op.writePath === "CLAUDE.md" && agentsRedirectTargets.has(op.physicalPath.toLowerCase())) {
         claudePointerOmittedFor = op.physicalPath;
         continue;
       }
@@ -2472,6 +2530,15 @@ export class IntegrationManager {
     // AR-R05 gate accepts the recorded reason the way it accepts
     // export_only.
     const dirLinks = await this.commitStateLinkComponents(commit);
+    // C2d repair cycle 1 (escalation): the commit tree's entry-file
+    // spellings, so the shared describer can corroborate a colliding
+    // entry skip from the tree (fresh, reused and withdrawn commits
+    // alike). One git call on a case-insensitive checkout, zero
+    // otherwise. Absent means a single spelling -- the common path adds
+    // no fact.
+    const entryCollisions = await this.commitEntryCollisionSpellings(commit);
+    if (entryCollisions.agents.length > 1) entryPoint.agentsCollisionSpellings = entryCollisions.agents;
+    if (entryCollisions.claude.length > 1) entryPoint.claudeCollisionSpellings = entryCollisions.claude;
     return { commit, parent, head, entryPoint, ...(dirLinks.length > 0 ? { dirLinks } : {}) };
   }
 
@@ -2490,7 +2557,6 @@ export class IntegrationManager {
    * the run.
    */
   private async commitStateLinkComponents(commit: string): Promise<string[]> {
-    const insensitive = await this.checkoutIgnoresCase();
     const parts = ["docs", "project", "STATE.md"];
     const actual: string[] = [];
     for (let level = 0; level < parts.length; level += 1) {
@@ -2506,11 +2572,19 @@ export class IntegrationManager {
       // only the matching entries). The live worktree is never consulted --
       // a withdrawn stop describes an older commit, and the worktree may no
       // longer hold that spelling.
-      let entry = await this.commitTreeEntry(treeRef, want);
-      if (entry === undefined && insensitive) {
-        entry = await this.commitTreeEntryFolded(treeRef, want);
-      }
+      // C2d repair cycle 1 (escalation): a case collision at a
+      // directory level (say `docs` with `Docs`) reports the component
+      // the same way a link does, so the run skips STATE.md with the
+      // shared tree-derived reason instead of wedging every attempt on
+      // the commit pathspec. Two spellings of STATE.md itself (B2) keep
+      // the read-back fail-closed instead: the commit may record one
+      // spelling, and the canonical name never covers the other.
+      const resolved = await this.commitTreeEntryResolved(treeRef, want);
+      const entry = resolved.entry;
       if (entry === undefined) return [];
+      if (resolved.collision.length > 1 && level < parts.length - 1) {
+        return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
+      }
       const { mode, name } = entry;
       if (mode === "120000") {
         return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
@@ -2542,20 +2616,25 @@ export class IntegrationManager {
    */
   private async commitStateNonLinkBlocker(
     treeRef: string,
-  ): Promise<{ component: string; kind: "file-not-dir" | "dir-not-file" } | null> {
-    const insensitive = await this.checkoutIgnoresCase();
+  ): Promise<{ component: string; kind: "file-not-dir" | "dir-not-file" | "case-collision" } | null> {
     const parts = ["docs", "project", "STATE.md"];
     const actual: string[] = [];
     for (let level = 0; level < parts.length; level += 1) {
       const parentRef = actual.length === 0 ? treeRef : `${treeRef}:${actual.join("/")}`;
       const want = parts[level] ?? "";
-      let entry = await this.commitTreeEntry(parentRef, want);
-      if (entry === undefined && insensitive) {
-        entry = await this.commitTreeEntryFolded(parentRef, want);
-      }
+      const resolved = await this.commitTreeEntryResolved(parentRef, want);
+      const entry = resolved.entry;
       if (entry === undefined) return null;
       const component = HANDOFF_STATE_LINK_COMPONENTS[level] ?? "";
       if (!component) return null;
+      // C2d repair cycle 1 (escalation): two tracked spellings of one
+      // directory component (say `docs` with `Docs`) block STATE.md the
+      // way a non-directory does -- on disk there is one directory, so
+      // a write stages under the other spelling and every commit wedges
+      // on the pathspec. The kernel skips STATE.md with the shared
+      // tree-derived reason instead. Two spellings of STATE.md itself
+      // (B2) are not a blocker: the read-back stays fail-closed.
+      if (resolved.collision.length > 1 && level < parts.length - 1) return { component, kind: "case-collision" };
       if (entry.mode === "120000") return null;
       if (level < parts.length - 1) {
         if (entry.mode !== "040000") return { component, kind: "file-not-dir" };
@@ -2593,7 +2672,20 @@ export class IntegrationManager {
     const skipped: Array<{ path: string; reason: string }> = [];
     for (const entryPath of ["AGENTS.md", "CLAUDE.md"] as const) {
       const raw = entryPath === "AGENTS.md" ? entryPoint.agentsLinkTarget : entryPoint.claudeLinkTarget;
-      if (raw === undefined) continue;
+      if (raw === undefined) {
+        // C2d repair cycle 1 (escalation): a colliding entry file
+        // carries no link, so re-derive its fresh-worded skip from the
+        // commit tree's corroborating spellings (no git call: the facts
+        // above already hold them). A reused or withdrawn commit of the
+        // same layout then records exactly what a fresh commit records.
+        // A link layout keeps the link wording below even when a second
+        // spelling exists, matching the fresh stage-time choice.
+        const spellings = entryPath === "AGENTS.md" ? entryPoint.agentsCollisionSpellings : entryPoint.claudeCollisionSpellings;
+        if (spellings !== undefined && spellings.length > 1 && spellings[0] !== undefined && spellings[1] !== undefined) {
+          skipped.push({ path: entryPath, reason: handoffEntryCollisionSkipReason(entryPath, spellings[0], spellings[1]) });
+        }
+        continue;
+      }
       const viaLink = entryPath === "AGENTS.md"
         ? entryPoint.agentsSectionV2ViaLink === true
         : entryPoint.claudePointerV2ViaLink === true || entryPoint.claudePointerV2ViaAgentsLink === true;
@@ -2710,16 +2802,28 @@ export class IntegrationManager {
    * the live worktree.
    */
   private async commitTreeEntryFolded(treeRef: string, want: string): Promise<{ mode: string; name: string } | undefined> {
-    if (!want || want.includes("/")) return undefined;
-    const variants = caseVariants(want);
-    if (variants.length === 0) return undefined;
-    const wanted = new Set(variants);
-    const listing = await this.git(this.path, ["ls-tree", treeRef, "--", ...variants], true);
-    if (listing.exitCode !== 0) return undefined;
+    const matches = await this.commitTreeFoldedMatches(treeRef, want);
     // C2d (F-collide): when several case variants match (a colliding tree),
     // prefer the link entry (mode 120000), so the commit-tree walk agrees
     // with the stage-time check, which sees the link and skips.
-    let fallback: { mode: string; name: string } | undefined;
+    return matches.find((match) => match.mode === "120000") ?? matches[0];
+  }
+
+  /**
+   * Every commit-tree entry matching `want` ignoring case, in `ls-tree`
+   * output order (C2d repair cycle 1): the same bounded single `ls-tree`
+   * call as `commitTreeEntryFolded`, but with all matches kept so a
+   * caller can also see a case collision (two tracked spellings of one
+   * name). Empty when nothing matches or the tree reference is missing.
+   */
+  private async commitTreeFoldedMatches(treeRef: string, want: string): Promise<Array<{ mode: string; name: string }>> {
+    if (!want || want.includes("/")) return [];
+    const variants = caseVariants(want);
+    if (variants.length === 0) return [];
+    const wanted = new Set(variants);
+    const listing = await this.git(this.path, ["ls-tree", treeRef, "--", ...variants], true);
+    if (listing.exitCode !== 0) return [];
+    const matches: Array<{ mode: string; name: string }> = [];
     for (const record of listing.stdout.split("\n")) {
       const line = record.trim();
       const tab = line.lastIndexOf("\t");
@@ -2728,10 +2832,68 @@ export class IntegrationManager {
       if (!wanted.has(name)) continue;
       const mode = line.slice(0, tab).split(" ")[0];
       if (!mode) continue;
-      if (mode === "120000") return { mode, name };
-      fallback ??= { mode, name };
+      matches.push({ mode, name });
     }
-    return fallback;
+    return matches;
+  }
+
+  /**
+   * One level of a commit-tree walk with its case-collision sighting (C2d
+   * repair cycle 1, escalation): the selected entry plus every distinct
+   * tracked spelling that folds to `want`. On a case-sensitive checkout
+   * this is the single exact query, exactly as before. On a
+   * case-insensitive checkout it is one folded multi-name `ls-tree` (the
+   * same call the miss path already spent): the exact spelling wins when
+   * present, else the F-collide link preference applies, and a second
+   * distinct spelling is reported as a collision instead of being
+   * silently descended past. The common path spends no extra git call.
+   */
+  private async commitTreeEntryResolved(
+    treeRef: string,
+    want: string,
+  ): Promise<{ entry: { mode: string; name: string } | undefined; collision: string[] }> {
+    if (!(await this.checkoutIgnoresCase())) {
+      return { entry: await this.commitTreeEntry(treeRef, want), collision: [] };
+    }
+    const matches = await this.commitTreeFoldedMatches(treeRef, want);
+    const spellings = [...new Set(matches.map((match) => match.name))];
+    const exact = matches.find((match) => match.name === want);
+    const entry = exact ?? matches.find((match) => match.mode === "120000") ?? matches[0];
+    return { entry, collision: spellings.length > 1 ? spellings : [] };
+  }
+
+  /**
+   * The commit tree's distinct spellings of the two entry files (C2d
+   * repair cycle 1, escalation): every case variant of `AGENTS.md` and
+   * `CLAUDE.md` as exact pathspecs in one `ls-tree` call, grouped by
+   * file. A group with two spellings (say `AGENTS.md` with `agents.md`)
+   * collides: on a case-insensitive checkout the worktree holds one
+   * file, so writing the entry would substitute one entry's bytes for
+   * the other's and the commit would record a file the gate refuses.
+   * Zero git calls on a case-sensitive checkout (no aliasing there, so
+   * two spellings are two files and nothing wedges).
+   */
+  private async commitEntryCollisionSpellings(
+    treeRef: string,
+  ): Promise<{ agents: string[]; claude: string[] }> {
+    const empty = { agents: [], claude: [] };
+    if (!(await this.checkoutIgnoresCase())) return empty;
+    const variants = [...caseVariants("AGENTS.md"), ...caseVariants("CLAUDE.md")];
+    const listing = await this.git(this.path, ["ls-tree", treeRef, "--", ...variants], true);
+    if (listing.exitCode !== 0) return empty;
+    const wanted = new Set(variants);
+    const agents = new Set<string>();
+    const claude = new Set<string>();
+    for (const record of listing.stdout.split("\n")) {
+      const line = record.trim();
+      const tab = line.lastIndexOf("\t");
+      if (tab < 0) continue;
+      const name = line.slice(tab + 1);
+      if (!wanted.has(name)) continue;
+      if (name.toLowerCase() === "agents.md") agents.add(name);
+      else if (name.toLowerCase() === "claude.md") claude.add(name);
+    }
+    return { agents: [...agents], claude: [...claude] };
   }
 
   /**
@@ -2764,11 +2926,28 @@ export class IntegrationManager {
   }
 
   private async projectDocEntryPointFacts(revision: string): Promise<ProjectDocCommitResult["entryPoint"]> {
-    const readme = await this.git(
+    // C2d repair cycle 1 (B1): the README fact reads through the commit's
+    // own spelling, like the AGENTS.md/CLAUDE.md facts below. The exact
+    // spelling is still tried first, so exact-case repositories spend the
+    // same single `cat-file` as before; only a miss on a case-insensitive
+    // checkout pays the tree walk. Otherwise a v1 commit into `Docs/`
+    // lands while the completion gate reports "missing
+    // docs/project/README.md" forever.
+    let readme = await this.git(
       this.repositoryRoot,
       ["cat-file", "-e", `${revision}:docs/project/README.md`],
       true,
     );
+    if (readme.exitCode !== 0 && (await this.checkoutIgnoresCase())) {
+      const real = await this.resolveSpellingInTree(revision, "docs/project/README.md");
+      if (real !== "docs/project/README.md") {
+        readme = await this.git(
+          this.repositoryRoot,
+          ["cat-file", "-e", `${revision}:${real}`],
+          true,
+        );
+      }
+    }
     // C2d (D-rd-lcagents, F-LC-agents): entry facts fold case on a
     // case-insensitive checkout, so a section committed through the index's
     // own spelling (`agents.md`, `claude.md`) still satisfies the gate.
@@ -3542,7 +3721,12 @@ function linkTargetPointsAtAgentsDotMd(target: string): boolean {
     if (segment === "..") return false;
     parts.push(segment);
   }
-  return parts.length === 1 && parts[0] === "AGENTS.md";
+  // C2d repair cycle 1 (m-1): the identity folds case -- a link to the
+  // index's own `agents.md` spelling counts the way `AGENTS.md` does, so
+  // the pointer is satisfied through the link instead of merged into the
+  // file itself. Only this comparison folds; link detection itself still
+  // requires the exact index entry.
+  return parts.length === 1 && (parts[0] ?? "").toLowerCase() === "agents.md";
 }
 
 /** Bounded, message-only error detail for recorded skip reasons. */

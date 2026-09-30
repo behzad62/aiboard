@@ -1441,7 +1441,10 @@ test("v1 Architect documents refuse a link-mode CLAUDE.md checked out as a plain
   }
 });
 
-test("v1 Architect documents commit through the index's Docs spelling on a case-insensitive checkout (C2d DOCS-dir)", async () => {
+test("v1 Architect documents commit through the index's Docs spelling on a case-insensitive checkout (C2d DOCS-dir)", async (t) => {
+  // C2d repair cycle 1 (m-5): the index-spelling commit needs a
+  // case-insensitive filesystem (the write aliases into `Docs/`).
+  if (process.platform === "linux") { t.skip("The Docs-spelling v1 commit needs a case-insensitive checkout."); return; }
   const fixture = await openGitFixture("v1docsdir");
   try {
     const worktree = fixture.integration.path;
@@ -1455,7 +1458,7 @@ test("v1 Architect documents commit through the index's Docs spelling on a case-
     await gitText(worktree, ["commit", "-m", "seed a regular capital Docs directory"]);
     const before = await gitText(worktree, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
     const result = await fixture.integration.commitProjectDocuments({
-      writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+      writes: entryPointWrites(),
       summary: "Record documents",
       runId: fixture.runId,
       requestId: "project-doc:c2d-docsdir:docs/project/STATE.md",
@@ -1467,6 +1470,68 @@ test("v1 Architect documents commit through the index's Docs spelling on a case-
     const state = await gitText(worktree, ["show", `${result.commit}:Docs/project/STATE.md`]);
     assert.ok(state.includes(DEFAULT_STATE_TEMPLATE.trim()), "the committed STATE.md holds the written bytes");
     assert.equal(readFileSync(join(worktree, "Docs", "project", "keep.md"), "utf8"), "user keep\n", "the user's own file survives");
+    // C2d repair cycle 1 (B1): the entry-point facts read through the
+    // commit's own spelling too, so the v1 completion gate sees the
+    // README the commit just landed instead of wedging on "missing
+    // docs/project/README.md" forever.
+    assert.equal(result.entryPoint.readme, true, "the README fact follows the index spelling");
+    assert.equal(result.entryPoint.agentsMarkedSection, true);
+    assert.equal(result.entryPoint.claudePointer, true);
+    const root = mkdtempSync(join(tmpdir(), "aiboard-doc-v1docsdir-"));
+    const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    try {
+      seedPlanOnly(store, fixture.runId);
+      commitDoc(store, fixture.runId, "docs/project/STATE.md", "project-doc:c2d-docsdir:docs/project/STATE.md", {
+        readme: result.entryPoint.readme,
+        agentsMarkedSection: result.entryPoint.agentsMarkedSection,
+        claudePointer: result.entryPoint.claudePointer,
+        parent: result.parent,
+        commit: result.commit,
+      });
+      const readiness = buildCompletionReadiness(rebuildSchedulerProjection(store.readRun(fixture.runId)));
+      assert.equal(readiness.ready, true, `the v1 run can complete: ${readiness.issues.join(" | ")}`);
+      assert.deepEqual(readiness.issues, []);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  } finally {
+    fixture.close();
+  }
+});
+
+test("v1 Architect documents complete a plan-only run from an exact docs/ spelling (C2d DOCS-dir control)", async () => {
+  const fixture = await openGitFixture("v1docsdircontrol");
+  try {
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "docs", "project"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project", "keep.md"), "user keep\n");
+    await gitText(worktree, ["add", "--", "docs/project/keep.md"]);
+    await gitText(worktree, ["commit", "-m", "seed an exact docs directory"]);
+    const result = await fixture.integration.commitProjectDocuments({
+      writes: entryPointWrites(),
+      summary: "Record documents",
+      runId: fixture.runId,
+      requestId: "project-doc:c2d-docsdir-control:docs/project/STATE.md",
+    });
+    assert.equal(result.entryPoint.readme, true, "the README fact holds on the canonical spelling");
+    const root = mkdtempSync(join(tmpdir(), "aiboard-doc-v1docsdir-control-"));
+    const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    try {
+      seedPlanOnly(store, fixture.runId);
+      commitDoc(store, fixture.runId, "docs/project/STATE.md", "project-doc:c2d-docsdir-control:docs/project/STATE.md", {
+        readme: result.entryPoint.readme,
+        agentsMarkedSection: result.entryPoint.agentsMarkedSection,
+        claudePointer: result.entryPoint.claudePointer,
+        parent: result.parent,
+        commit: result.commit,
+      });
+      const readiness = buildCompletionReadiness(rebuildSchedulerProjection(store.readRun(fixture.runId)));
+      assert.equal(readiness.ready, true, `the control run can complete: ${readiness.issues.join(" | ")}`);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
   } finally {
     fixture.close();
   }
