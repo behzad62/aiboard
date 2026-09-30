@@ -569,6 +569,11 @@ PX-2c stays opt-in (a default-on change is beyond SOURCE; see F-4).
   reason. The worker and the r3 reviewer did not run F-collide; layer 2 caught it. Fixed in INT-1
   (`e9440349`, `fe5286d6`). Follow-up (minor): the stage-time `commitStateNonLinkBlocker` still checks
   collision before link; only its skip decision is used, so no recorded output differs.
+- F-10 Pre-existing red on origin/main (`9d697978`, push run of 2026-09-30 14:21): the benchmark-tests
+  workflow fails `scripts/test-account-provider-runner-chat.mts:392` ("capability-handshake
+  account-provider runner reports version 21"; the runner reports 22) on Ubuntu and Windows. P6.6
+  changes no `scripts/` or `lib/` file, so every P6.6 PR shows the same red; not fixed here (outside
+  SOURCE).
 
 ---
 
