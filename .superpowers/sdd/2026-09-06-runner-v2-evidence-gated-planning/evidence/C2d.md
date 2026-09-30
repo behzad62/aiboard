@@ -424,3 +424,13 @@ above). No commits, stages, stashes, or pushes.
   with `agents.md` regular) keeps the link machinery on both the
   fresh and reuse paths; the collision skip fires for non-link
   entries only, so no working redirect regresses.
+
+## Controller acceptance (2026-09-30)
+
+Independent re-review r2 (`C2d-review-r2.md`, Sonnet xhigh) on the repair commit 37433efd: **ACCEPT**, 0 blocking. B1, B2 and B3 resolved with the round-1 probes (v1 readiness true for `Docs/`; FA-1 fails closed; the 16-layout entry matrix 16/16; the 8 kernel variants 8/8). The colliding-directory and colliding-entry escalation is handled as the controller decided under CD-15, with commit-tree-derived reasons only. Controller test runs on the first C2d bytes: handoff 7 files 89/89, large-tree 3/3, native-delivery 20/20; the repair's own targeted suites green; the full group re-runs after the C2e repair (same driver).
+
+Accepted deviation: the escalation hunks in build-runtime.ts and project-docs.ts go beyond the B3-only scope waiver; they were needed for the controller's escalation decision and are disclosed in the evidence.
+
+Follow-ups (non-blocking): N-1 git calls per snapshot rose to 48/44 (from 43/39 at C2e) because the README fold also runs on the kernel path, where the fact is unused (fold it on the v1 path only); the collision skip reason says "symbolic link or junction" (C2e repair N-1 makes reason texts accurate); one orphaned JSDoc block in project-docs.ts; m-3 and m-4 unchanged; two STATE.md spellings still pause permanently (allowed by the brief, fail-closed).
+
+**C2d ACCEPTED 2026-09-30** (wip commits 88266a9a + 37433efd).
