@@ -2764,12 +2764,16 @@ export class IntegrationManager {
       if (entry === undefined) return [];
       const component = HANDOFF_STATE_LINK_COMPONENTS[level] ?? "";
       if (component === "") return [];
-      if (resolved.collision.length > 1 && level < parts.length - 1) {
-        return [{ component, kind: "case-collision" as const }];
-      }
       const { mode, name } = entry;
+      // C2d m-9 / INT-1 fix: a link among the folded spellings wins over the
+      // collision (the resolved entry prefers the 120000 match), so the walk
+      // agrees with the stage-time link check (probe F-collide); a collision
+      // with no link keeps its own "two spellings" reason.
       if (mode === "120000") {
         return [{ component, kind: "link" as const }];
+      }
+      if (resolved.collision.length > 1 && level < parts.length - 1) {
+        return [{ component, kind: "case-collision" as const }];
       }
       if (level < parts.length - 1) {
         // C2e (F-matrix): a tracked file where a directory is expected
