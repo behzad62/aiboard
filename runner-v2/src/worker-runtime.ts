@@ -28,6 +28,7 @@ import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
 import { evidenceFactArtifactHashes, type EvidenceStore } from "./evidence-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
+import { createOpenRouterApplyPatchTool } from "./openrouter-apply-patch-tool.js";
 import { createGitTools } from "./git-tools.js";
 import { createProcessTools } from "./process-tools.js";
 import { createResearchTools } from "./research-tools.js";
@@ -187,6 +188,11 @@ export async function runWorkerTask(
   })) {
     registerStaticWorkerTool(broker, tool);
   }
+  broker.register(
+    createOpenRouterApplyPatchTool({
+      ...(options.protectedPaths ? { protectedPaths: options.protectedPaths } : {}),
+    })
+  );
   for (const tool of createCodeIntelligenceTools({
     repository,
     language,

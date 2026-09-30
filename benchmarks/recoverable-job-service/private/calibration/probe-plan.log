@@ -1,0 +1,20 @@
+{
+  "path": "benchmarks/recoverable-job-service/private/calibration/probe-plan.json",
+  "sha256": "093a9d19c4f6d34a438453607ee9c3a31aadfcb6eea3ab362a2f2f157eb9c1f4",
+  "classes": 8,
+  "controls": [
+    {
+      "id": "representation",
+      "sha256": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445"
+    },
+    {
+      "id": "algorithm",
+      "sha256": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac"
+    },
+    {
+      "id": "truthful-outcome",
+      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf"
+    }
+  ],
+  "status": "finite witness mapping frozen; execution and independent acceptance pending"
+}

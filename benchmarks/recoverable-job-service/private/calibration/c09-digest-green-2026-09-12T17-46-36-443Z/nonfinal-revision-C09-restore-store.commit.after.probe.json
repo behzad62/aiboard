@@ -1,0 +1,416 @@
+{
+  "variantId": "C09/restore-store.commit.after",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "poll must progress",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "accepted capsule retains evidence and checkpoint",
+      "passed": true
+    },
+    {
+      "label": "unretired accepted identity retained in capsule",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "exportCapsule must progress",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful store.commit.after",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "restore must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "readEvidence must progress",
+      "passed": true
+    },
+    {
+      "label": "exact retained bytes after public read",
+      "passed": true
+    },
+    {
+      "label": "exact accepted total",
+      "passed": true
+    },
+    {
+      "label": "restored evidence preserves exact public finality",
+      "passed": true
+    },
+    {
+      "label": "restored evidence preserves exact public accounting",
+      "passed": true
+    },
+    {
+      "label": "restored evidence verifies its own manifest digest",
+      "passed": true
+    },
+    {
+      "label": "restore crash never duplicates accepted output",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "accepted capsule retains evidence and checkpoint",
+      "passed": true
+    },
+    {
+      "label": "unretired accepted identity retained in capsule",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "exportCapsule must progress",
+      "passed": true
+    },
+    {
+      "label": "probe retains both streams accounting",
+      "passed": true
+    },
+    {
+      "label": "probe retains public finality",
+      "passed": true
+    },
+    {
+      "label": "probe manifest independently verifies",
+      "passed": true
+    },
+    {
+      "label": "probe real nonfinal revision advances once",
+      "passed": true
+    },
+    {
+      "label": "probe publication changes only revision and digest",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "readEvidence must progress",
+      "passed": true
+    },
+    {
+      "label": "exact retained bytes after public read",
+      "passed": true
+    },
+    {
+      "label": "exact accepted total",
+      "passed": true
+    },
+    {
+      "label": "probe revised manifest survives fresh reopen",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "probe refuses older same-epoch evidence head",
+      "passed": true
+    },
+    {
+      "label": "probe one accepted audit after publication and reopen",
+      "passed": true
+    }
+  ],
+  "operations": 315,
+  "promiseJobs": 1393,
+  "effects": {
+    "store.commit": 44,
+    "driver.acquire": 4,
+    "artifact.create": 2,
+    "driver.start": 1,
+    "artifact.write": 1
+  },
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "blockers": [],
+      "error": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "blockers": [],
+      "error": null
+    },
+    {
+      "method": "poll",
+      "kind": "ok",
+      "blockers": [],
+      "error": null
+    },
+    {
+      "method": "exportCapsule",
+      "kind": "ok",
+      "blockers": [],
+      "error": null
+    },
+    {
+      "method": "restore",
+      "kind": null,
+      "blockers": [],
+      "error": "Error: guest terminated"
+    },
+    {
+      "method": "restore",
+      "kind": "ok",
+      "blockers": [],
+      "error": null
+    },
+    {
+      "method": "readEvidence",
+      "kind": "ok",
+      "blockers": [],
+      "error": null
+    },
+    {
+      "method": "exportCapsule",
+      "kind": "ok",
+      "blockers": [],
+      "error": null
+    },
+    {
+      "method": "readEvidence",
+      "kind": "ok",
+      "blockers": [],
+      "error": null
+    },
+    {
+      "method": "restore",
+      "kind": "blocked",
+      "blockers": [
+        {
+          "code": "busy"
+        }
+      ],
+      "error": null
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "store.commit.after",
+      "index": 300,
+      "during": [
+        "restore"
+      ]
+    }
+  ],
+  "physicalRemovals": 0,
+  "strategyObservations": {
+    "recordCount": 18,
+    "envelopedRecords": 0,
+    "keyPrefixes": [
+      "request/3ffb406c917d5dd215f0b32c1c330009",
+      "batch/7b5b01319f53ce2bebf6c9dcee0c605b",
+      "batch-request/3ffb406c917d5dd215f0b32c1c330009",
+      "request/38ed458815da647753aa6250a3cecc6d",
+      "job/4bc344d63d617cd2a3d1ddf5678e162f",
+      "start/38ed458815da647753aa6250a3cecc6d",
+      "effect/4bc344d63d617cd2a3d1ddf5678e162f",
+      "request/b004dc52580881eb8dbf5f2a3940d2a3",
+      "frame/4bc344d63d617cd2a3d1ddf5678e162f",
+      "request/f0fe5eacbd14e85acdd3899f5668795c",
+      "request/e19d08d14c701e1f094985e98507a300",
+      "request/e2eff928e5b64b232087592a86c8e7ec"
+    ],
+    "ownershipIndex": null,
+    "roots": [
+      {
+        "handle": {
+          "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+          "birth": "bfff6f513214da4c5f18ff587ec975c0",
+          "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+          "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "retained": true,
+          "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+        },
+        "absent": false,
+        "names": [
+          "ebe6ade5e9efeb3a32903cad69b670c5"
+        ]
+      },
+      {
+        "handle": {
+          "id": "4192672ac9e739eb274e4b09bee255e8",
+          "birth": "8befa1d804c81f9a81653a72a8557ea5",
+          "path": "scratch/4bc344d63d617cd2a3d1ddf5678e162f",
+          "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "retained": false,
+          "token": "a794cc51a291bf740d3379d417aa6bb4a44e8c2ba98849eec9ba6b8adaad93e8"
+        },
+        "absent": false,
+        "names": []
+      }
+    ],
+    "removedRootOrder": []
+  },
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0,
+  "facts": {
+    "staleResult": {
+      "kind": "blocked",
+      "blockers": [
+        {
+          "code": "busy"
+        }
+      ],
+      "failures": []
+    },
+    "previousEvidence": {
+      "version": 3,
+      "batchId": "7b5b01319f53ce2bebf6c9dcee0c605b",
+      "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+      "generation": "1f02a88f2d47888256f14d2443cbf52a",
+      "revision": 1,
+      "final": false,
+      "sourceProof": null,
+      "spans": [
+        {
+          "stream": "stdout",
+          "start": 0,
+          "end": 3,
+          "kind": "bytes",
+          "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+          "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5",
+          "root": {
+            "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+            "birth": "bfff6f513214da4c5f18ff587ec975c0",
+            "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+            "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+            "retained": true,
+            "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+          },
+          "name": "ebe6ade5e9efeb3a32903cad69b670c5"
+        }
+      ],
+      "totals": {
+        "stdout": {
+          "produced": 3,
+          "accepted": 3,
+          "consumed": 0,
+          "acked": 0,
+          "sourcePrefix": 0
+        },
+        "stderr": {
+          "produced": 0,
+          "accepted": 0,
+          "consumed": 0,
+          "acked": 0,
+          "sourcePrefix": 0
+        }
+      },
+      "manifestDigest": "9c9039ebfed4a7e04ed4d2e344f01223555c4ff1378f2d5cf316ac8a61e21fdb"
+    },
+    "currentEvidence": {
+      "version": 3,
+      "batchId": "7b5b01319f53ce2bebf6c9dcee0c605b",
+      "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+      "generation": "1f02a88f2d47888256f14d2443cbf52a",
+      "revision": 2,
+      "final": false,
+      "sourceProof": null,
+      "spans": [
+        {
+          "stream": "stdout",
+          "start": 0,
+          "end": 3,
+          "kind": "bytes",
+          "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+          "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5",
+          "root": {
+            "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+            "birth": "bfff6f513214da4c5f18ff587ec975c0",
+            "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+            "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+            "retained": true,
+            "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+          },
+          "name": "ebe6ade5e9efeb3a32903cad69b670c5"
+        }
+      ],
+      "totals": {
+        "stdout": {
+          "produced": 3,
+          "accepted": 3,
+          "consumed": 0,
+          "acked": 0,
+          "sourcePrefix": 0
+        },
+        "stderr": {
+          "produced": 0,
+          "accepted": 0,
+          "consumed": 0,
+          "acked": 0,
+          "sourcePrefix": 0
+        }
+      },
+      "manifestDigest": "d860389a5341b92c6e1df15c92e973f636695a08b2794d9e07bf09e06f8e2344"
+    },
+    "acceptedAudits": 1
+  }
+}

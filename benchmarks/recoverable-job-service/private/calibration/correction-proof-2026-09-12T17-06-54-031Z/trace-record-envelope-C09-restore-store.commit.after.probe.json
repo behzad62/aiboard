@@ -1,0 +1,190 @@
+{
+  "name": "trace-record-envelope-C09-restore-store.commit.after",
+  "variantId": "C09/restore-store.commit.after",
+  "sourceHash": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "poll must progress",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "accepted capsule retains evidence and checkpoint",
+      "passed": true
+    },
+    {
+      "label": "unretired accepted identity retained in capsule",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "exportCapsule must progress",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful store.commit.after",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "restore must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "readEvidence must progress",
+      "passed": true
+    },
+    {
+      "label": "exact retained bytes after public read",
+      "passed": true
+    },
+    {
+      "label": "exact accepted total",
+      "passed": true
+    },
+    {
+      "label": "restored evidence preserves exact public finality and manifest",
+      "passed": true
+    },
+    {
+      "label": "restore crash never duplicates accepted output",
+      "passed": true
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "store.commit.after",
+      "index": 300,
+      "during": [
+        "restore"
+      ]
+    }
+  ],
+  "operations": 280,
+  "promiseJobs": 1580,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "poll",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": "running"
+    },
+    {
+      "method": "exportCapsule",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "restore",
+      "kind": null,
+      "error": "Error: guest terminated",
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "restore",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": "running"
+    },
+    {
+      "method": "readEvidence",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 0,
+    "driver.detach": 0,
+    "driver.release": 0,
+    "artifact.create": 2,
+    "artifact.write": 1
+  },
+  "transportReturns": [
+    {
+      "key": {
+        "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+        "channelId": "c6556605b0231293a58627c49b8a6e69",
+        "stream": "stdout",
+        "seq": 0,
+        "offset": 0,
+        "length": 3,
+        "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+        "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5"
+      },
+      "bytesLength": 3
+    }
+  ],
+  "acceptedAudits": 1,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

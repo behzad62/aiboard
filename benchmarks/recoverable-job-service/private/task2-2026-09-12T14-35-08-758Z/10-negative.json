@@ -1,0 +1,293 @@
+{
+  "control": "reverse-resource-cleanup",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B02"
+    ],
+    "variantIds": [
+      "B02/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B02/primary",
+          "caseCommitment": "4f294e196f65a3fd57b9576099fab8c103418a5d9aa4970629b7e103353b0fd6",
+          "fixtureCommitment": "21da653a043f536c8a14080f83d375607921efe859408130cea1f5e613d1048e",
+          "fixtureAllocations": 8,
+          "authenticationCommitment": "3e48e68f4b4b89a175d194c345e76a1de7e31706aef66267511d47811dcb6baf"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "608dec93acbb857506240bef93c7153210fe30c090eb3404a3466ba3a80923bc",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B02/primary"
+      ],
+      "scheduleHash": "091da62ccd233fc96c8004c1b3ee1446fa730e253beb6e824ccf64c3b54e092a",
+      "configurationHash": "5ffac24ab237e98485a38fa8bcaf9f30c6c97f19ad801ec2bc17970d4f5499ab"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B02",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B02/5ffac24ab237e98485a38fa8bcaf9f30c6c97f19ad801ec2bc17970d4f5499ab",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B02/primary",
+              "caseCommitment": "4f294e196f65a3fd57b9576099fab8c103418a5d9aa4970629b7e103353b0fd6",
+              "fixtureCommitment": "21da653a043f536c8a14080f83d375607921efe859408130cea1f5e613d1048e",
+              "fixtureAllocations": 8,
+              "authenticationCommitment": "3e48e68f4b4b89a175d194c345e76a1de7e31706aef66267511d47811dcb6baf"
+            },
+            "id": "B02/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "all semantic cleanup facts durably published",
+                "passed": true
+              },
+              {
+                "label": "full conjunction published no later than durable release",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.; safety: release-predecessor",
+            "safetyFailures": [
+              {
+                "code": "release-predecessor",
+                "jobId": "af7c4bd0481c44303ecfd4282a8837a1",
+                "detail": "isolation released before process fact.",
+                "familyId": "B02",
+                "variantId": "B02/primary"
+              }
+            ],
+            "operations": 407,
+            "promiseJobs": 1896
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B02/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: all semantic cleanup facts durably published",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: full conjunction published no later than durable release",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "B02/primary: Observed public behavior and durable consequences.; safety: release-predecessor",
+        "operations": 407,
+        "promiseJobs": 1896
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "release-predecessor",
+        "jobId": "af7c4bd0481c44303ecfd4282a8837a1",
+        "detail": "isolation released before process fact.",
+        "familyId": "B02",
+        "variantId": "B02/primary"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "B02",
+      "variantId": "B02/primary",
+      "execution": {
+        "variant": {
+          "id": "B02/primary",
+          "family": "B02",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B02/qualification-v1",
+        "schedule": {
+          "partition": 3905,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

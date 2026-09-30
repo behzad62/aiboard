@@ -1,0 +1,255 @@
+{
+  "control": "allow-cross-type-reuse",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "E07"
+    ],
+    "variantIds": [
+      "E07/cross-type"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "E07/cross-type",
+          "caseCommitment": "df007ecee33fb13b8e398e2249dfd1acb17211d97b8e7a8d59303e7116888962",
+          "fixtureCommitment": "ac521e770616de38e76bdfe78271b0995724cce7de91ae5a3550ad02ed1f3365",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "eb37be2307eb1f23217af71575b5f543f2cdad870c158a70e62e4cffeef2e5d9"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "5f35a1b90a96054b6fc75a92e1a8d027b978efeff0f66f59f4ea8cdd2018cf9e",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "E07/cross-type"
+      ],
+      "scheduleHash": "a6384c487f05c2a6080dbb2a71059f3b4437e6fada838ad9d4af14f8370541ce",
+      "configurationHash": "3eefc9cc6d0d3eb9b6bdbb0e96f26d501804502f9460ecf07cdb1b0063cd07e8"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "E07",
+        "group": "E",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/E07/3eefc9cc6d0d3eb9b6bdbb0e96f26d501804502f9460ecf07cdb1b0063cd07e8",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "E07/cross-type",
+              "caseCommitment": "df007ecee33fb13b8e398e2249dfd1acb17211d97b8e7a8d59303e7116888962",
+              "fixtureCommitment": "ac521e770616de38e76bdfe78271b0995724cce7de91ae5a3550ad02ed1f3365",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "eb37be2307eb1f23217af71575b5f543f2cdad870c158a70e62e4cffeef2e5d9"
+            },
+            "id": "E07/cross-type",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "close must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "close must refuse",
+            "safetyFailures": [],
+            "operations": 456,
+            "promiseJobs": 2120
+          }
+        ],
+        "assertions": [
+          {
+            "label": "E07/cross-type: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/cross-type: close must refuse",
+            "passed": false
+          },
+          {
+            "label": "E07/cross-type: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "E07/cross-type: close must refuse",
+        "operations": 456,
+        "promiseJobs": 2120
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "E07",
+      "variantId": "E07/cross-type",
+      "execution": {
+        "variant": {
+          "id": "E07/cross-type",
+          "family": "E07",
+          "kind": "durability",
+          "args": {
+            "kind": "cross-type"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E07/qualification-v1",
+        "schedule": {
+          "partition": 2620,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

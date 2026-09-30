@@ -21,6 +21,7 @@ import { formatModelId } from "./base";
 import { geminiThinkingConfig } from "./reasoning";
 import { getCatalogModelsForProvider, getValidationModelId } from "./catalog";
 import { googleStructuredOutputConfig } from "./structured-output";
+import { streamGoogleInteractions } from "./google-interactions";
 
 function attachmentToPart(
   file: AttachmentPayload,
@@ -104,7 +105,7 @@ export function googleSamplingConfig(
   model: string,
   temperature: number | undefined
 ): Pick<GenerateContentConfig, "temperature"> {
-  if (model.trim().toLowerCase() === "gemini-3.6-flash") return {};
+  if (["gemini-3.6-flash", "gemini-3.8-flash"].includes(model.trim().toLowerCase())) return {};
   return { temperature: temperature ?? 0.7 };
 }
 
@@ -122,41 +123,24 @@ function messageToGeminiContent(message: {
   };
 }
 
-export const googleProvider: AIProvider = {
-  id: "google",
-  name: "Google Gemini",
+function googlePlanEnables(params: ChatParams, id: string): boolean {
+  return params.callPlan?.enabledTools.some((tool) => tool.intent.id === id) === true;
+}
 
-  listModels() {
-    return getCatalogModelsForProvider("google").map(
-      ({ validationCandidate, ...model }) => model
-    );
-  },
-
-  async validateApiKey(apiKey: string) {
+export async function* streamGoogleGenerateContent(
+  genAI: GoogleGenAI,
+  params: ChatParams,
+): AsyncIterable<StreamChunk> {
     try {
-      const genAI = new GoogleGenAI({ apiKey });
-      await genAI.models.generateContent({
-        model: getValidationModelId("google"),
-        contents: "Hi",
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  },
-
-  async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
-    try {
-      const genAI = new GoogleGenAI({ apiKey: params.apiKey });
       const webSearchTools = googleWebSearchTools(
         params.model,
-        params.webSearch && !params.structuredOutput
+        googlePlanEnables(params, "web_search") && !params.structuredOutput
       );
       const nativeToolConfig = googleNativeToolConfig(
-        params.structuredOutput ? undefined : params.nativeTools
+        params.structuredOutput ? undefined : params.functionTools
       );
       const hostedBuildToolConfig = googleHostedBuildToolConfig(
-        params.hostedBuildTools && !params.structuredOutput
+        googlePlanEnables(params, "code_execution") && !params.structuredOutput
       );
       const tools = [
         ...(webSearchTools ?? []),
@@ -325,5 +309,44 @@ export const googleProvider: AIProvider = {
         errorMetadata: safeProviderErrorMetadata(err),
       };
     }
+
+}
+
+export async function* streamGoogleByPlan(
+  genAI: GoogleGenAI,
+  params: ChatParams,
+): AsyncIterable<StreamChunk> {
+  if (params.callPlan?.transport === "gemini_interactions") {
+    yield* streamGoogleInteractions(genAI as never, params);
+    return;
+  }
+  yield* streamGoogleGenerateContent(genAI, params);
+}
+export const googleProvider: AIProvider = {
+  id: "google",
+  name: "Google Gemini",
+
+  listModels() {
+    return getCatalogModelsForProvider("google").map(
+      ({ validationCandidate, ...model }) => model
+    );
+  },
+
+  async validateApiKey(apiKey: string) {
+    try {
+      const genAI = new GoogleGenAI({ apiKey });
+      await genAI.models.generateContent({
+        model: getValidationModelId("google"),
+        contents: "Hi",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  async *streamChat(params: ChatParams): AsyncIterable<StreamChunk> {
+    const genAI = new GoogleGenAI({ apiKey: params.apiKey });
+    yield* streamGoogleByPlan(genAI, params);
   },
 };

@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {contractPaths,scoreInputHashes} from '../benchmarks/recoverable-job-service/private/identity.mjs';
+import {CONTRACT_VERSION,SUITE_VERSION} from '../benchmarks/recoverable-job-service/private/evaluator.mjs';
+import {RECOVERABLE_JOB_SERVICE_PUBLIC_FILES,RECOVERABLE_JOB_SERVICE_METADATA,RECOVERABLE_JOB_SERVICE_INPUT_HASHES} from '../lib/benchmark/workbench/recoverable-job-service/assets.generated';
+const base='benchmarks/recoverable-job-service';
+const names=contractPaths.map((p:string)=>p.slice('public/'.length)).sort();
+assert.equal(names.length,11);
+assert.deepEqual(Object.keys(RECOVERABLE_JOB_SERVICE_PUBLIC_FILES).filter(k=>k!=='verify.mjs').sort(),names,'exact published 11-file boundary excludes all calibration/control/replay artifacts');
+for(const name of names)assert.equal(RECOVERABLE_JOB_SERVICE_PUBLIC_FILES[name as keyof typeof RECOVERABLE_JOB_SERVICE_PUBLIC_FILES],await readFile(base+'/public/'+name,'utf8'));
+assert.deepEqual(await scoreInputHashes(),RECOVERABLE_JOB_SERVICE_INPUT_HASHES);
+assert.equal(CONTRACT_VERSION,'rjs-contract-2.0.1');assert.equal(SUITE_VERSION,'rjs-suite-2.0.1');
+assert.equal(RECOVERABLE_JOB_SERVICE_METADATA.contractVersion,CONTRACT_VERSION);assert.equal(RECOVERABLE_JOB_SERVICE_METADATA.suiteVersion,SUITE_VERSION);
+assert.equal(RECOVERABLE_JOB_SERVICE_METADATA.calibration.method,'rjs-simplification-audit-1');
+assert.equal(RECOVERABLE_JOB_SERVICE_METADATA.calibration.status,'pending');assert.equal(RECOVERABLE_JOB_SERVICE_METADATA.calibration.admission,'pending');
+assert.equal(RECOVERABLE_JOB_SERVICE_METADATA.calibration.evidenceManifest,null);
+for(const name of ['problem.md','acceptance-contract.md','runtime-contract.md','source-bootstrap.md'])assert.equal(await readFile(base+'/public/'+name,'utf8'),await readFile('docs/benchmarks/recoverable-job-service/'+name,'utf8'));
+console.log('Exact 11 public files, mirrored instructions, final 2.0.1 hashes and separate pending calibration metadata pass.');

@@ -18,6 +18,7 @@ import { FireworksBenchmarkSummary } from "@/components/benchmark/fireworks/Fire
 import { formatNormalizedScore } from "@/components/benchmark/format";
 import { VerifierAssertionTable } from "./VerifierAssertionTable";
 import { VariantRosterBadges } from "@/components/benchmark/results/VariantRosterBadges";
+import { RecoverableJobServiceSummary } from "./RecoverableJobServiceSummary";
 
 export function AttemptDetailPanel({
   summary,
@@ -140,6 +141,12 @@ export function AttemptDetailPanel({
         <Section title="Verifier assertions">
           <VerifierAssertionTable verifier={verifier} />
         </Section>
+
+        <RecoverableJobServiceSummary
+          attemptId={attempt.id}
+          verifier={verifier}
+          artifacts={detail.artifacts}
+        />
 
         {toolRel ? (
           <Section title="ToolReliability diagnosis">

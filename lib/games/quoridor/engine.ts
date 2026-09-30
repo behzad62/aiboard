@@ -145,6 +145,32 @@ export function isEdgeBlocked(
   );
 }
 
+export function wallCoversIntersection(
+  walls: QuoridorWall[],
+  wallRow: number,
+  wallCol: number
+): boolean {
+  let hEndLeft = false;
+  let hEndRight = false;
+  let vEndTop = false;
+  let vEndBottom = false;
+
+  for (const wall of walls) {
+    if (wall.row === wallRow && wall.col === wallCol) return true;
+    if (wall.orientation === "H" && wall.row === wallRow) {
+      if (wall.col === wallCol - 1) hEndRight = true;
+      if (wall.col === wallCol + 1) hEndLeft = true;
+    } else if (wall.orientation === "V" && wall.col === wallCol) {
+      if (wall.row === wallRow - 1) vEndBottom = true;
+      if (wall.row === wallRow + 1) vEndTop = true;
+    }
+  }
+
+  if (hEndLeft && hEndRight) return true;
+  if (vEndTop && vEndBottom) return true;
+  return (hEndLeft || hEndRight) && (vEndTop || vEndBottom);
+}
+
 function wallsOverlap(left: QuoridorWall, right: QuoridorWall): boolean {
   if (left.orientation === right.orientation) {
     if (left.orientation === "H") {

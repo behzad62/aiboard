@@ -1453,3 +1453,18 @@ function failingEvidenceTool(): NativeTool<Record<string, unknown>> {
     }),
   };
 }
+
+
+test("agent loop forwards hosted tools to provider requests", async () => {
+  const model = new ScriptedModel([
+    { blocks: [{ type: "text", text: "done" }], stopReason: "end_turn" },
+  ]);
+  await runAgentLoop({
+    model,
+    registry: new ToolRegistry(),
+    context: context(),
+    initialMessages,
+    hostedTools: [{ type: "apply_patch" }],
+  });
+  assert.deepEqual(model.requests[0]?.hostedTools, [{ type: "apply_patch" }]);
+});

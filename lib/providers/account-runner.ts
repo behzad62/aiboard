@@ -6,7 +6,108 @@ import type {
   StreamChunk,
 } from "./base";
 import { providerSupportsMaxTokensFeature } from "./provider-registry";
+import {
+  fetchRunnerCapabilityHandshake,
+  type RunnerCapabilityProviderId,
+  type RunnerCapabilityValidationResult,
+} from "./runner-capabilities";
 
+export const ACCOUNT_RUNNER_CAPABILITY_MINIMUM_VERSION = 21;
+
+export async function fetchAccountRunnerCapabilities(input: {
+  baseURL: string;
+  runnerToken: string;
+  providerId: RunnerCapabilityProviderId;
+  apiKey?: string;
+  signal?: AbortSignal;
+  minimumRunnerVersion?: number;
+}): Promise<RunnerCapabilityValidationResult> {
+  return fetchRunnerCapabilityHandshake(input);
+}
+interface CachedRunnerCapabilityEntry {
+  result: Extract<RunnerCapabilityValidationResult, { status: "valid" }>;
+  cachedAt: number;
+}
+
+const runnerCapabilityCache = new Map<string, CachedRunnerCapabilityEntry>();
+
+function runnerCapabilityCacheKey(input: {
+  baseURL: string;
+  runnerToken: string;
+  providerId: RunnerCapabilityProviderId;
+  apiKey?: string;
+  minimumRunnerVersion?: number;
+}): string {
+  return JSON.stringify([
+    input.providerId,
+    input.baseURL.trim().replace(/\/$/, ""),
+    input.runnerToken,
+    input.apiKey ?? "",
+    input.minimumRunnerVersion ?? 0,
+  ]);
+}
+
+async function fetchRunnerHealthVersion(input: {
+  baseURL: string;
+  runnerToken: string;
+  signal?: AbortSignal;
+}): Promise<number | undefined> {
+  try {
+    const response = await fetch(joinRunnerUrl(input.baseURL, "/health"), {
+      headers: { "x-runner-token": input.runnerToken.trim() },
+      signal: input.signal,
+    });
+    if (!response.ok) return undefined;
+    const payload = (await response.json()) as { version?: unknown };
+    return Number.isInteger(payload.version) ? Number(payload.version) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function clearAccountRunnerCapabilityCache(providerId?: RunnerCapabilityProviderId): void {
+  if (!providerId) {
+    runnerCapabilityCache.clear();
+    return;
+  }
+  for (const [key, entry] of runnerCapabilityCache) {
+    if (entry.result.handshake.providerId === providerId) runnerCapabilityCache.delete(key);
+  }
+}
+
+export async function getCachedAccountRunnerCapabilities(
+  input: {
+    baseURL: string;
+    runnerToken: string;
+    providerId: RunnerCapabilityProviderId;
+    apiKey?: string;
+    signal?: AbortSignal;
+    minimumRunnerVersion?: number;
+  },
+  options: { forceRefresh?: boolean; maxStaleMs?: number; nowMs?: number } = {},
+): Promise<RunnerCapabilityValidationResult> {
+  const key = runnerCapabilityCacheKey(input);
+  const cached = runnerCapabilityCache.get(key);
+  const nowMs = options.nowMs ?? Date.now();
+  if (cached && options.forceRefresh !== true) {
+    const healthVersion = await fetchRunnerHealthVersion(input);
+    if (healthVersion === cached.result.handshake.runnerVersion) return cached.result;
+    if (
+      healthVersion === undefined &&
+      nowMs - cached.cachedAt <= (options.maxStaleMs ?? 30_000)
+    ) {
+      return cached.result;
+    }
+  }
+
+  const result = await fetchAccountRunnerCapabilities(input);
+  if (result.status === "valid") {
+    runnerCapabilityCache.set(key, { result, cachedAt: nowMs });
+  } else {
+    runnerCapabilityCache.delete(key);
+  }
+  return result;
+}
 export const ACCOUNT_RUNNER_TEXT_ONLY = {
   image: false,
   document: false,
@@ -94,8 +195,9 @@ function buildAccountRunnerRequestBody(
     temperature: params.temperature,
     reasoningEffort: params.reasoningEffort,
     structuredOutput: params.structuredOutput,
-    nativeTools: params.nativeTools,
-    webSearch: params.webSearch,
+    functionTools: params.functionTools,
+    toolIntents: params.callPlan?.enabledTools.map((tool) => tool.intent) ?? [],
+    toolChoice: params.callPlan?.toolChoice ?? params.toolChoice,
     attachments: params.attachments ?? [],
     runtimeMode: "discussion",
     stream: true,

@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Final frozen full alternate positives and selected public recipes; controller admission pending",
+  "output": "benchmarks/recoverable-job-service/private/calibration/qualification-2026-09-21T05-14-21-756Z",
+  "identity": {
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
+  },
+  "freeze": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/final-source-freeze.json",
+    "sha256": "c677bbd88698ad4ec2c1f90f94376a397e847f162881b7e49b5f4fcdab9e3b0a"
+  },
+  "node": "24.18.0",
+  "quickjs": "0.32.0",
+  "replayCommitment": "1b311d4b72d604389e858db479aa4a529d997fd985c9eaf20cf5f6ddd9dcc38f",
+  "controls": [
+    {
+      "id": "representation",
+      "sha256": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445",
+      "sourceBytes": 56979,
+      "startedAt": "2026-09-21T05:14:21.759Z",
+      "endedAt": "2026-09-21T05:15:26.790Z",
+      "wallMs": 65031,
+      "status": "valid",
+      "resolved": true,
+      "families": 69,
+      "selected": 302,
+      "pass": 302,
+      "skip": 0,
+      "safetyFailures": [],
+      "failed": [],
+      "measured": {
+        "operations": 237260,
+        "promiseJobs": 1443116,
+        "maxOperations": 86172,
+        "maxPromiseJobs": 494109,
+        "diagnosticsBytes": 1525536,
+        "replayBytes": 3702491
+      },
+      "cleanup": "evaluateBounded returned after worker termination and validated temporary-root cleanup"
+    },
+    {
+      "id": "algorithm",
+      "sha256": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+      "sourceBytes": 58544,
+      "startedAt": "2026-09-21T05:15:26.806Z",
+      "endedAt": "2026-09-21T05:16:12.343Z",
+      "wallMs": 45537,
+      "status": "valid",
+      "resolved": true,
+      "families": 69,
+      "selected": 302,
+      "pass": 302,
+      "skip": 0,
+      "safetyFailures": [],
+      "failed": [],
+      "measured": {
+        "operations": 223961,
+        "promiseJobs": 1392470,
+        "maxOperations": 82603,
+        "maxPromiseJobs": 510474,
+        "diagnosticsBytes": 1519164,
+        "replayBytes": 3791781
+      },
+      "cleanup": "evaluateBounded returned after worker termination and validated temporary-root cleanup"
+    },
+    {
+      "id": "truthful-outcome",
+      "sha256": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf",
+      "sourceBytes": 56230,
+      "startedAt": "2026-09-21T05:16:12.359Z",
+      "endedAt": "2026-09-21T05:17:13.351Z",
+      "wallMs": 60992,
+      "status": "valid",
+      "resolved": false,
+      "families": 69,
+      "selected": 302,
+      "pass": 301,
+      "skip": 0,
+      "safetyFailures": [],
+      "failed": [
+        {
+          "id": "B14/primary",
+          "reason": "closeBatch must progress: {\"kind\":\"blocked\",\"blockers\":[],\"failures\":[{\"present\":true,\"phase\":\"cleanup\",\"value\":{\"message\":\"broker operation limit\"}},{\"present\":true,\"phase\":\"cleanup\",\"value\":{\"message\":\"broker operation limit\"}},{\"present\":true,\"phase\":\"cleanup\",\"value\":{\"message\":\"broker operation limit\"}},{\"present\":true,"
+        }
+      ],
+      "measured": {
+        "operations": 293290,
+        "promiseJobs": 1154770,
+        "maxOperations": 101553,
+        "maxPromiseJobs": 385658,
+        "diagnosticsBytes": 1526962,
+        "replayBytes": 3701802
+      },
+      "cleanup": "evaluateBounded returned after worker termination and validated temporary-root cleanup"
+    }
+  ],
+  "publicRecipes": {
+    "status": "valid",
+    "selected": 78,
+    "pass": 78,
+    "failed": [],
+    "scope": "Existing 78 published example recipes; no production pass is inferred from public mode."
+  },
+  "passed": false
+}

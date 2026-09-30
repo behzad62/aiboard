@@ -6,10 +6,7 @@ import type {
   GameAIConfigValue,
   GameAIModelOption,
 } from "@/components/games/GameAIConfigPanel";
-import {
-  QuoridorBoard,
-  type QuoridorActionMode,
-} from "@/components/games/quoridor/QuoridorBoard";
+import { QuoridorBoard } from "@/components/games/quoridor/QuoridorBoard";
 import { QuoridorControls } from "@/components/games/quoridor/QuoridorControls";
 import { QuoridorExportMenu } from "@/components/games/quoridor/QuoridorExportMenu";
 import { QuoridorImportMenu } from "@/components/games/quoridor/QuoridorImportMenu";
@@ -279,7 +276,6 @@ export function QuoridorGameClient({
     useState<QuoridorSessionSnapshot | null>(null);
   const [restoreCreatedAt, setRestoreCreatedAt] = useState<string | null>(null);
   const [replayIndex, setReplayIndex] = useState<number | null>(null);
-  const [actionMode, setActionMode] = useState<QuoridorActionMode>("move");
   const [wallOrientation, setWallOrientation] =
     useState<QuoridorWallOrientation>("H");
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -714,7 +710,6 @@ export function QuoridorGameClient({
       setAiDiagnosticsCopied(false);
       setAiThinking(false);
       setReplayIndex(null);
-      setActionMode("move");
       setClockNow(Date.now());
       setRestoreSnapshot(null);
       setRestoreCreatedAt(null);
@@ -736,7 +731,6 @@ export function QuoridorGameClient({
     setAiDiagnosticsCopied(false);
     setLastAiInteraction(null);
     setReplayIndex(null);
-    setActionMode("move");
     setClockNow(Date.now());
     setRestoreSnapshot(null);
     setRestoreCreatedAt(null);
@@ -993,9 +987,7 @@ export function QuoridorGameClient({
             <QuoridorBoard
               state={displayState}
               interactive={canBoardInteract}
-              actionMode={actionMode}
               wallOrientation={wallOrientation}
-              onActionModeChange={setActionMode}
               onWallOrientationChange={setWallOrientation}
               onMove={handleMove}
               onPlaceWall={handlePlaceWall}

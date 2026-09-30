@@ -523,10 +523,15 @@ check(
   certifiedRunPanelSource
 );
 check(
-  "WorkBench runner panel links the complete generated runner bundle",
-  runnerStatusSource.includes('href="/aiboard-workbench-runner.zip"') &&
-    runnerStatusSource.includes('download="aiboard-workbench-runner.zip"') &&
+  "WorkBench runner panel exposes generic and RJS generated runner bundles",
+  runnerStatusSource.includes('href: "/aiboard-workbench-runner.zip"') &&
+    runnerStatusSource.includes('filename: "aiboard-workbench-runner.zip"') &&
+    runnerStatusSource.includes('href: "/aiboard-rjs-workbench-runner.zip"') &&
+    runnerStatusSource.includes('filename: "aiboard-rjs-workbench-runner.zip"') &&
     runnerStatusSource.includes("Download WorkBench runner bundle") &&
+    runnerStatusSource.includes("Download Recoverable Job Service runner") &&
+    runnerStatusSource.includes("npm ci") &&
+    runnerStatusSource.includes("Node.js 24.18.0") &&
     runnerStatusSource.includes("npm run setup:browser"),
   runnerStatusSource
 );
@@ -539,7 +544,14 @@ check(
 );
 check(
   "certified WorkBench readiness requires the managed Runner V2 capability",
-  certifiedRunPanelSource.includes("workBenchRunnerHealth?.runnerV2?.ready"),
+  certifiedRunPanelSource.includes("getTrustedBenchRunnerReadiness") &&
+    certifiedRunPanelSource.includes("selectedWorkBenchReadiness.ready"),
+  certifiedRunPanelSource
+);
+check(
+  "pre-attempt check describes source and runtime availability without claiming a managed child is ready",
+  certifiedRunPanelSource.includes("Bench Runner source and benchmark runtime are available.") &&
+    !certifiedRunPanelSource.includes("Bench Runner and managed Runner V2 are ready."),
   certifiedRunPanelSource
 );
 check(

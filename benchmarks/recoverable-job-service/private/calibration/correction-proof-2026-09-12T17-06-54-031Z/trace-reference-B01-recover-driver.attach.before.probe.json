@@ -1,0 +1,125 @@
+{
+  "name": "trace-reference-B01-recover-driver.attach.before",
+  "variantId": "B01/recover-driver.attach.before",
+  "sourceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "actual public setup intent identifies lifecycle job",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "stop must refuse",
+      "passed": true
+    },
+    {
+      "label": "rejection has explicit failure presence",
+      "passed": true
+    },
+    {
+      "label": "actual attachment fault reached across setup or cleanup",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "stop must progress",
+      "passed": true
+    },
+    {
+      "label": "released public job",
+      "passed": true
+    },
+    {
+      "label": "witness released after settlement",
+      "passed": true
+    },
+    {
+      "label": "all six durable facts",
+      "passed": true
+    },
+    {
+      "label": "rejected release reconciles original effects exactly",
+      "passed": true
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "driver.attach.before",
+      "index": 281,
+      "during": [
+        "stop"
+      ]
+    }
+  ],
+  "operations": 453,
+  "promiseJobs": 2101,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "blocked",
+      "error": null,
+      "blockers": [
+        "backend"
+      ],
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": "released"
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 1,
+    "driver.detach": 1,
+    "driver.release": 2,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "transportReturns": [],
+  "acceptedAudits": 0,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

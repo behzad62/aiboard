@@ -1,0 +1,882 @@
+{
+  "control": "optimistic-final-authority",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A15",
+      "C19"
+    ],
+    "variantIds": [
+      "A15/final-read-epoch",
+      "A15/final-read-deadline",
+      "C19/final-reuse-epoch",
+      "C19/final-reuse-deadline"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "A15/final-read-epoch",
+          "caseCommitment": "62cd715cd7accc96752fcd257e84a80d2d4bde1c52d431885e149e1a02ed746e",
+          "fixtureCommitment": "b63c6ba6a653f16e51c330044cadccd5bad0a887fc9cad13ccddc4e3cde0305b",
+          "fixtureAllocations": 14,
+          "authenticationCommitment": "0ffc58934bc6a684469bd8ee6d00addbe2685caddbd5c837216b51c28b97adfd"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "A15/final-read-deadline",
+          "caseCommitment": "dcfc727c158195dd8d05adc9f96908e3de63719a923646869aea3bd2f38b79c3",
+          "fixtureCommitment": "3ad481f280792b1db61ec76dd509fadc8b6be29a6bdb121e6d9217f4a9365d8f",
+          "fixtureAllocations": 11,
+          "authenticationCommitment": "7013759f4dc5bb7b0743fcfb7473e2cb898c8b93f7c3fc6efd48359af19da078"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C19/final-reuse-epoch",
+          "caseCommitment": "230fa2f9e9d93e02e5152a31a90ae8877927529b21e99f8f82780f7d97bdfaab",
+          "fixtureCommitment": "74c48f866490fb118c98236d8e0f68c965656f22522e12c38100fb94f5ceb0f0",
+          "fixtureAllocations": 14,
+          "authenticationCommitment": "d9da9db7ba76bcdad2da3f50beccefaa5727ac9730f2bbc3840946ccb4295a30"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C19/final-reuse-deadline",
+          "caseCommitment": "69a61f56bdca483917ef9ec0f3270d5f418dbed4b022f6da4a9e494c88706bdb",
+          "fixtureCommitment": "305ca8f4f0f8a229e0b421b7344c3020c8fe0e55aa85a72749a9639722542dfe",
+          "fixtureAllocations": 11,
+          "authenticationCommitment": "5d189a2159bbb824b9204da360dc424931fe09c7daee04d8e97648b4016c6cb8"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A15/final-read-epoch",
+        "A15/final-read-deadline",
+        "C19/final-reuse-epoch",
+        "C19/final-reuse-deadline"
+      ],
+      "scheduleHash": "570073d6e7f29954af3482c8443bd1524a02eb5c943ade6c6cbc50eff94a8ee5",
+      "configurationHash": "922f394302d3decd4b9cdf4a94630f162b0d452a43648f0f4de357df0403531a"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A15",
+        "group": "A",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/A15/922f394302d3decd4b9cdf4a94630f162b0d452a43648f0f4de357df0403531a",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "A15/final-read-epoch",
+              "caseCommitment": "62cd715cd7accc96752fcd257e84a80d2d4bde1c52d431885e149e1a02ed746e",
+              "fixtureCommitment": "b63c6ba6a653f16e51c330044cadccd5bad0a887fc9cad13ccddc4e3cde0305b",
+              "fixtureAllocations": 14,
+              "authenticationCommitment": "0ffc58934bc6a684469bd8ee6d00addbe2685caddbd5c837216b51c28b97adfd"
+            },
+            "id": "A15/final-read-epoch",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 488,
+            "promiseJobs": 2231
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "A15/final-read-deadline",
+              "caseCommitment": "dcfc727c158195dd8d05adc9f96908e3de63719a923646869aea3bd2f38b79c3",
+              "fixtureCommitment": "3ad481f280792b1db61ec76dd509fadc8b6be29a6bdb121e6d9217f4a9365d8f",
+              "fixtureAllocations": 11,
+              "authenticationCommitment": "7013759f4dc5bb7b0743fcfb7473e2cb898c8b93f7c3fc6efd48359af19da078"
+            },
+            "id": "A15/final-read-deadline",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 488,
+            "promiseJobs": 2238
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A15/final-read-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-epoch: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "A15/final-read-deadline: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 976,
+        "promiseJobs": 4469
+      },
+      {
+        "id": "C19",
+        "group": "C",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C19/922f394302d3decd4b9cdf4a94630f162b0d452a43648f0f4de357df0403531a",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C19/final-reuse-epoch",
+              "caseCommitment": "230fa2f9e9d93e02e5152a31a90ae8877927529b21e99f8f82780f7d97bdfaab",
+              "fixtureCommitment": "74c48f866490fb118c98236d8e0f68c965656f22522e12c38100fb94f5ceb0f0",
+              "fixtureAllocations": 14,
+              "authenticationCommitment": "d9da9db7ba76bcdad2da3f50beccefaa5727ac9730f2bbc3840946ccb4295a30"
+            },
+            "id": "C19/final-reuse-epoch",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 488,
+            "promiseJobs": 2231
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C19/final-reuse-deadline",
+              "caseCommitment": "69a61f56bdca483917ef9ec0f3270d5f418dbed4b022f6da4a9e494c88706bdb",
+              "fixtureCommitment": "305ca8f4f0f8a229e0b421b7344c3020c8fe0e55aa85a72749a9639722542dfe",
+              "fixtureAllocations": 11,
+              "authenticationCommitment": "5d189a2159bbb824b9204da360dc424931fe09c7daee04d8e97648b4016c6cb8"
+            },
+            "id": "C19/final-reuse-deadline",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 488,
+            "promiseJobs": 2238
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C19/final-reuse-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-epoch: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-deadline: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 976,
+        "promiseJobs": 4469
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.4,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "A15",
+      "variantId": "A15/final-read-epoch",
+      "execution": {
+        "variant": {
+          "id": "A15/final-read-epoch",
+          "family": "A15",
+          "kind": "final-race",
+          "args": {
+            "change": "epoch"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A15/qualification-v1",
+        "schedule": {
+          "partition": 3681,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "A15",
+      "variantId": "A15/final-read-deadline",
+      "execution": {
+        "variant": {
+          "id": "A15/final-read-deadline",
+          "family": "A15",
+          "kind": "final-race",
+          "args": {
+            "change": "deadline"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A15/qualification-v1",
+        "schedule": {
+          "partition": 2094,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C19",
+      "variantId": "C19/final-reuse-epoch",
+      "execution": {
+        "variant": {
+          "id": "C19/final-reuse-epoch",
+          "family": "C19",
+          "kind": "final-race",
+          "args": {
+            "change": "epoch"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C19/qualification-v1",
+        "schedule": {
+          "partition": 3087,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C19",
+      "variantId": "C19/final-reuse-deadline",
+      "execution": {
+        "variant": {
+          "id": "C19/final-reuse-deadline",
+          "family": "C19",
+          "kind": "final-race",
+          "args": {
+            "change": "deadline"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C19/qualification-v1",
+        "schedule": {
+          "partition": 4031,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "purpose": "optional artifact creation and categorical-neighbor audit",
+  "referenceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "lazyRootsHash": "6721011cdaeaa9ce543c2cc51069d2a8dd7f736b89977ec226cf7b726410a29d",
+  "wrongCategoryHash": "169461088ead336c9300a0024c2659c6e2500e291a69ed23a9b605ed88251650",
+  "node": "24.18.0",
+  "results": {
+    "reference-lazy": {
+      "status": "valid",
+      "selected": 3,
+      "pass": 3,
+      "failed": [],
+      "safetyFailures": 0
+    },
+    "lazy-roots": {
+      "status": "valid",
+      "selected": 3,
+      "pass": 3,
+      "failed": [],
+      "safetyFailures": 0
+    },
+    "reference-category": {
+      "status": "valid",
+      "selected": 4,
+      "pass": 4,
+      "failed": [],
+      "safetyFailures": 0
+    },
+    "wrong-category": {
+      "status": "valid",
+      "selected": 4,
+      "pass": 0,
+      "failed": [
+        {
+          "id": "A07/invalid-stream",
+          "reason": "poll categorical blocker"
+        },
+        {
+          "id": "A07/invalid-digest",
+          "reason": "poll categorical blocker"
+        },
+        {
+          "id": "A07/invalid-artifactId",
+          "reason": "poll categorical blocker"
+        },
+        {
+          "id": "A07/invalid-channelId",
+          "reason": "poll categorical blocker"
+        }
+      ],
+      "safetyFailures": 0
+    }
+  }
+}

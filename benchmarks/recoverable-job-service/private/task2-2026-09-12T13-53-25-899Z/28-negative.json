@@ -1,0 +1,325 @@
+{
+  "control": "delete-retained-evidence",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C17"
+    ],
+    "variantIds": [
+      "C17/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "C17/primary",
+          "caseCommitment": "6be2b2631e2feb8740682d9819e2fde98654c7f5c563a9429687330f6b69c6e0",
+          "fixtureCommitment": "b18a481b1063abeeab75fb2a98457c507464f8a380ee3bec3c5109fc917665f9",
+          "fixtureAllocations": 12,
+          "authenticationCommitment": "7a4b89d6a0d6fa57046a3ab169b1e1b43b51f03942be2fece206a9b2a52c2385"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "3166d9542015175256740e4bff5ea6213feb2ea3280ba8b1f37623b6cefcc48e",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C17/primary"
+      ],
+      "scheduleHash": "33aafa5896031b3f962751515956db2a29a6dfb43551894b8ca732a4f90c29e6",
+      "configurationHash": "f866dcd103059d0494e69b2296617c9fcff8d186cda808930343f029f3049c12"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C17",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C17/f866dcd103059d0494e69b2296617c9fcff8d186cda808930343f029f3049c12",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "C17/primary",
+              "caseCommitment": "6be2b2631e2feb8740682d9819e2fde98654c7f5c563a9429687330f6b69c6e0",
+              "fixtureCommitment": "b18a481b1063abeeab75fb2a98457c507464f8a380ee3bec3c5109fc917665f9",
+              "fixtureAllocations": 12,
+              "authenticationCommitment": "7a4b89d6a0d6fa57046a3ab169b1e1b43b51f03942be2fece206a9b2a52c2385"
+            },
+            "id": "C17/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "reclaim must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "readEvidence must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 547,
+            "promiseJobs": 2500
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C17/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: reclaim must progress",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C17/primary: readEvidence must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "C17/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "C17/primary: readEvidence must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+        "operations": 547,
+        "promiseJobs": 2500
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C17",
+      "variantId": "C17/primary",
+      "execution": {
+        "variant": {
+          "id": "C17/primary",
+          "family": "C17",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C17/qualification-v1",
+        "schedule": {
+          "partition": 3992,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

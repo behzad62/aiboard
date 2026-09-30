@@ -1,0 +1,9 @@
+[
+  {
+    "variantId": "B07/resource-intent-force",
+    "control": "refuse-issued-control-recovery",
+    "passed": true,
+    "reason": "B07/resource-intent-force: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+    "status": "valid"
+  }
+]

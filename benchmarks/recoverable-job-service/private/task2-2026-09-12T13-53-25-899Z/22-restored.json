@@ -1,0 +1,381 @@
+{
+  "control": "stale-evidence-head",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C10"
+    ],
+    "variantIds": [
+      "C10/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "C10/primary",
+          "caseCommitment": "9d14332b8edfb4b9abad1620d74da243e08ed3c21f70e0ba8b4d65edced6f16b",
+          "fixtureCommitment": "3a8c020da7225a54a0a6f25f87bc7c0a153702da1f5a90924cfeb75d81c60b4a",
+          "fixtureAllocations": 18,
+          "authenticationCommitment": "4e13009862f270825b5df541906406b0a2f8e41d52652ef656d4da4c5d707b58"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C10/primary"
+      ],
+      "scheduleHash": "2b4bacc881933dee1597c02fa54701c96bd4ff7ed5ba39b24c6cd994e14a1d89",
+      "configurationHash": "28708090ffd3aa62c5f8963db36197a579da8a7962fab186cb62bd86ecdf1d73"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C10",
+        "group": "C",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C10/28708090ffd3aa62c5f8963db36197a579da8a7962fab186cb62bd86ecdf1d73",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "C10/primary",
+              "caseCommitment": "9d14332b8edfb4b9abad1620d74da243e08ed3c21f70e0ba8b4d65edced6f16b",
+              "fixtureCommitment": "3a8c020da7225a54a0a6f25f87bc7c0a153702da1f5a90924cfeb75d81c60b4a",
+              "fixtureAllocations": 18,
+              "authenticationCommitment": "4e13009862f270825b5df541906406b0a2f8e41d52652ef656d4da4c5d707b58"
+            },
+            "id": "C10/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "unretired accepted identity retained in capsule",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful artifact.read.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful artifact.read.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "acknowledge must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "read revalidates head changed during artifact read",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must refuse",
+                "passed": true
+              },
+              {
+                "label": "restore categorical blocker",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 373,
+            "promiseJobs": 1683
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: unretired accepted identity retained in capsule",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: candidate reached lawful artifact.read.before",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: candidate reached lawful artifact.read.after",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: acknowledge must progress",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: read revalidates head changed during artifact read",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: restore must refuse",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: restore categorical blocker",
+            "passed": true
+          },
+          {
+            "label": "C10/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 373,
+        "promiseJobs": 1683
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.2,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C10",
+      "variantId": "C10/primary",
+      "execution": {
+        "variant": {
+          "id": "C10/primary",
+          "family": "C10",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C10/qualification-v1",
+        "schedule": {
+          "partition": 3812,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

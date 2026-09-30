@@ -1,0 +1,48 @@
+ const stop=async(id,op)=>{
+  const lock='stop/'+id;if(inFlight.has(lock))return inFlight.get(lock);
+  const task=(async()=>{
+   let state=await job(id);await guard(op);
+   if(state.state==='released'){await validateEvidence(state,state.evidence);return view(state);}
+   if(state.successorJobId){const dest=await job(state.successorJobId);if(dest.batchId!==state.batchId||dest.state!=='released')fail('dependency',{jobId:id});}
+   const events=await all('effect/'+id+'/');
+   // An entirely unacquired setup has no external dependencies: publish all six facts atomically.
+   if(!Object.keys(state.acquired).length&&events.every(row=>row.value.state==='intent')){
+    const evidence=await sealEvidence({...await evidenceBlank(state),final:true,revision:1});const names=['quiescent','output','evidence','channel','process','isolation'];const current=await read(jk(id));state={...current.value,state:'released',ownerId:grant.ownerId,epoch:grant.epoch,evidence,checkpointEverCreated:true,facts:Object.fromEntries(names.map(n=>[n,[]]))};
+    await commit([{key:jk(id),expected:current.revision,value:state}],[{type:'checkpoint-created',jobId:id,data:{generation:evidence.generation}},{type:'evidence-final',jobId:id,manifest:evidence},...names.map(fact=>({type:'cleanup-fact',jobId:id,fact,data:{receipts:[]}})),{type:'terminal-transfer',jobId:id,manifest:evidence},{type:'released',jobId:id}],op);event(id,{type:'terminal',job:view(state)});return view(state);
+   }
+   state=await update(jk(id),old=>({...old,state:'recovering',ownerId:grant.ownerId,epoch:grant.epoch}),[],op);
+   for(const {value:e} of events){if(e.method!=='driver.acquire'||e.state==='intent'||state.acquired[e.args.resource])continue;const resource=e.args.resource,receipt=await effect(state,'acquire-'+resource,'driver.acquire',{resource},op);state=await update(jk(id),v=>({...v,acquired:{...v.acquired,[resource]:receipt}}),[],op);}
+   if(state.acquired.channel&&!state.retainedRoot){const root=await effect(state,'root-retained','artifact.create',{path:'retained/'+id,owner:id,retained:true},op);state=await update(jk(id),v=>({...v,retainedRoot:root}),[],op);}
+   // A durable dependency graph is re-evaluated after every completed node, not a fixed cleanup pass.
+   for(let step=0;step<12;step++){
+    state=await job(id);await guard(op);
+    if(!state.facts.quiescent){
+     if(state.acquired.channel){await effect(state,'reader','driver.attach',{privateReader:true},op);await privateDrain(state,op);}
+     if(state.acquired.process){let raw=await inspect(state,op);await guard(op);const {workload,witness}=state.acquired.process.payload;
+      if(!same(raw.workload,workload)||!same(raw.witness,witness)||raw.workloadState==='unknown'||raw.witnessState==='unknown')fail('identity',{jobId:id});
+      if(raw.workloadState==='running'){
+       if(raw.witnessState!=='alive')fail('identity',{jobId:id});await effect(state,'release-request','driver.publishRelease',{witness,requestId:await call('newId')},op);
+       const graceful=await effect(state,'graceful','driver.control',{target:workload,signal:'graceful'},op);raw=await inspect(state,op);
+       if(raw.workloadState==='running'){await call('waitUntil',{at:Math.min(op.deadline,graceful.appliedAt+100)});await guard(op);await effect(state,'force','driver.control',{target:workload,signal:'force'},op);raw=await inspect(state,op);}
+      }
+      if(!['exited','not-started'].includes(raw.workloadState))fail('cleanup',{jobId:id});
+      if(raw.exit?.natural){const request=(await read('effect/'+id+'/release-request')).value?.value;if(raw.exit.code!==0||!request||!raw.consumedRelease||!await call('verify',{receipt:raw.consumedRelease})||raw.consumedRelease.payload.requestId!==request.payload.requestId)fail('identity',{jobId:id});}
+     }
+     await fact(state,'quiescent',[],op);continue;
+    }
+    if(!state.facts.output){let receipts=[];if(state.acquired.channel){const barrier=await effect(state,'barrier','driver.barrier',{},op);if(!barrier.payload.terminalProduction||!barrier.payload.pipesClosed)fail('cleanup',{jobId:id});const channel=await privateDrain(state,op);if(!channel.terminalProduction||!channel.pipesDrained)fail('cleanup',{jobId:id});receipts=[barrier];}await fact(state,'output',receipts,op);continue;}
+    if(!state.facts.evidence){if(!state.evidence){const evidence=await sealEvidence(await evidenceBlank(state));state=await update(jk(id),v=>({...v,evidence,checkpointEverCreated:true}),[{type:'checkpoint-created',jobId:id,data:{generation:evidence.generation}}],op);}await validateEvidence(state,state.evidence);if(Object.values(state.evidence.totals).some(t=>t.accepted!==t.consumed||t.consumed!==t.acked))fail('consumer-unknown',{jobId:id});
+     const evidence=state.evidence.final?state.evidence:await sealEvidence({...state.evidence,final:true,revision:state.evidence.revision+1});const finalAudit=state.evidence.final?[]:[{type:'evidence-final',jobId:id,manifest:evidence}];
+     await update(jk(id),v=>({...v,evidence,facts:{...v.facts,evidence:[]}}),[...finalAudit,{type:'cleanup-fact',jobId:id,fact:'evidence',data:{receipts:[]}}],op);continue;
+    }
+    await validateEvidence(state,state.evidence);
+    if(!state.facts.channel){const reader=(await read('effect/'+id+'/reader')).value?.value;const receipts=reader?[await effect(state,'detach','driver.detach',{reader},op)]:[];await fact(state,'channel',receipts,op);continue;}
+    const resource=['process','isolation'].find(name=>!state.facts[name]);if(resource){const receipts=state.acquired[resource]?[await effect(state,'release-'+resource,'driver.release',{resource,acquired:state.acquired[resource]},op)]:[];if(resource==='process'){await fact(state,resource,receipts,op);continue;}
+     // Final physical release and its fact share the same atomic publication as the terminal destination.
+     const current=await read(jk(id));await validateEvidence(current.value,current.value.evidence);await guard(op);state={...current.value,state:'released',facts:{...current.value.facts,isolation:receipts},blockers:[]};await commit([{key:jk(id),expected:current.revision,value:state}],[{type:'cleanup-fact',jobId:id,fact:'isolation',data:{receipts}},{type:'terminal-transfer',jobId:id,manifest:state.evidence},{type:'released',jobId:id}],op);event(id,{type:'terminal',job:view(state)});return view(state);
+    }
+    const current=await read(jk(id));state={...current.value,state:'released',blockers:[]};await commit([{key:jk(id),expected:current.revision,value:state}],[{type:'terminal-transfer',jobId:id,manifest:state.evidence},{type:'released',jobId:id}],op);event(id,{type:'terminal',job:view(state)});return view(state);
+   }
+   fail('cleanup',{jobId:id});
+  })();inFlight.set(lock,task);try{return await task;}finally{inFlight.delete(lock);}
+ };

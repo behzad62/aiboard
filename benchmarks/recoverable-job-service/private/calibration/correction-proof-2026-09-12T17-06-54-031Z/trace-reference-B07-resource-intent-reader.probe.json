@@ -1,0 +1,123 @@
+{
+  "name": "trace-reference-B07-resource-intent-reader",
+  "variantId": "B07/resource-intent-reader",
+  "sourceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "actual public setup intent identifies lifecycle job",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful driver.attach.before",
+      "passed": true
+    },
+    {
+      "label": "actual public setup intent identifies lifecycle job",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "stop must progress",
+      "passed": true
+    },
+    {
+      "label": "released public job",
+      "passed": true
+    },
+    {
+      "label": "witness released after settlement",
+      "passed": true
+    },
+    {
+      "label": "all six durable facts",
+      "passed": true
+    },
+    {
+      "label": "crash keeps completed release effects exact",
+      "passed": true
+    },
+    {
+      "label": "crash keeps immutable final evidence",
+      "passed": true
+    },
+    {
+      "label": "recovered cleanup retires an actual authenticated attachment",
+      "passed": true
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "driver.attach.before",
+      "index": 281,
+      "during": [
+        "stop"
+      ]
+    }
+  ],
+  "operations": 427,
+  "promiseJobs": 1966,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": null,
+      "error": "Error: guest terminated",
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": "released"
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 1,
+    "driver.detach": 1,
+    "driver.release": 2,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "transportReturns": [],
+  "acceptedAudits": 0,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

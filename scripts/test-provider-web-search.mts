@@ -1,7 +1,7 @@
 /* Provider-native web search request shaping (run: npx tsx scripts/test-provider-web-search.mts) */
 import {
   WEB_SEARCH_CAPABILITY_NOTE,
-  shouldEnableProviderNativeWebSearch,
+  webSearchToolIntent,
   withWebSearchCapabilityNote,
 } from "../lib/providers/web-search";
 import { openAIResponsesWebSearchField } from "../lib/providers/openai";
@@ -28,50 +28,31 @@ const structuredOutput: StructuredOutputFormat = {
   },
 };
 
-const searchableModels: Array<{ providerId: string; model: string }> = [
-  { providerId: "openai", model: "gpt-5.5" },
-  { providerId: "anthropic", model: "claude-opus-4-8" },
-  { providerId: "google", model: "gemini-3.6-flash" },
-  { providerId: "openrouter", model: "qwen/qwen3.7-max" },
-  { providerId: "chatgpt", model: "gpt-5.4" },
-  { providerId: "github-copilot", model: "gemini-3.5-flash" },
-];
-
-for (const { providerId, model } of searchableModels) {
-  check(
-    `${providerId}:${model} discussion calls enable provider-native web search`,
-    shouldEnableProviderNativeWebSearch({
-      providerId,
-      model,
-    }),
-    { providerId, model }
-  );
-}
-
-const nonSearchableModels: Array<{ providerId: string; model: string }> = [
-  { providerId: "custom", model: "model" },
-  { providerId: "foundry", model: "claude-opus-4-8" },
-  { providerId: "openai", model: "gpt-5.3-codex" },
-  { providerId: "chatgpt", model: "gpt-5.3-codex-spark" },
-  { providerId: "openrouter", model: "nex-agi/nex-n2-pro:free" },
-];
-
-for (const { providerId, model } of nonSearchableModels) {
-  check(
-    `${providerId}:${model} does not claim provider-native web search`,
-    !shouldEnableProviderNativeWebSearch({ providerId, model }),
-    { providerId, model }
-  );
-}
-
+const requestedIntent = webSearchToolIntent({
+  providerId: "custom",
+  model: "unknown-model",
+  structuredOutput,
+  allowWebSearch: true,
+});
 check(
-  "structured-output calls keep provider-native web search disabled",
-  !shouldEnableProviderNativeWebSearch({
+  "web-search policy expresses caller intent without claiming provider support",
+  requestedIntent?.id === "web_search" && requestedIntent.requirement === "optional",
+  requestedIntent
+);
+check(
+  "structured output does not globally suppress web-search intent",
+  webSearchToolIntent({
     providerId: "google",
     model: "gemini-3.5-flash",
     structuredOutput,
-  }),
+    allowWebSearch: true,
+  })?.id === "web_search",
   structuredOutput
+);
+check(
+  "explicit user policy can disable web-search intent",
+  webSearchToolIntent({ allowWebSearch: false }) === undefined,
+  webSearchToolIntent({ allowWebSearch: false })
 );
 
 const notedMessages = withWebSearchCapabilityNote([
@@ -130,10 +111,24 @@ check(
   "OpenAI Responses web search field uses auto tool choice",
   JSON.stringify(openAIResponsesWebSearchField(true)) ===
     JSON.stringify({
-      tools: [{ type: "web_search_preview" }],
+      tools: [{ type: "web_search" }],
       tool_choice: "auto",
     }),
   openAIResponsesWebSearchField(true)
+);
+check(
+  "OpenRouter Responses web search field uses server tool",
+  JSON.stringify(openAIResponsesWebSearchField(true, "openrouter")) ===
+    JSON.stringify({
+      tools: [
+        {
+          type: "openrouter:web_search",
+          parameters: { search_context_size: "medium" },
+        },
+      ],
+      tool_choice: "auto",
+    }),
+  openAIResponsesWebSearchField(true, "openrouter")
 );
 
 check(

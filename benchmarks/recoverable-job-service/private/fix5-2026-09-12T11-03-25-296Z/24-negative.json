@@ -1,0 +1,269 @@
+{
+  "control": "ignore-ambiguous-handoff",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C12"
+    ],
+    "variantIds": [
+      "C12/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "cbdef9dfcfec168b7729e3e6969e86c0230b91cf58937b3079ff38c33e3a7b33",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C12/primary"
+      ],
+      "scheduleHash": "00ba4c6f4b00783f80beac1c0eef21482f32ee7e02919db98a9bf94dc1baeb4e",
+      "configurationHash": "af9a600fa5c94c93226beb7694cff4c833467582d57c7e11771b6d5bad81a1e9"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C12",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C12/af9a600fa5c94c93226beb7694cff4c833467582d57c7e11771b6d5bad81a1e9",
+        "variants": [
+          {
+            "id": "C12/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful consumer.consume.after",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "handoff must refuse",
+            "safetyFailures": [],
+            "operations": 462,
+            "promiseJobs": 2127
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C12/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: candidate reached lawful consumer.consume.after",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/primary: handoff must refuse",
+            "passed": false
+          },
+          {
+            "label": "C12/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "C12/primary: handoff must refuse",
+        "operations": 462,
+        "promiseJobs": 2127
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C12",
+      "variantId": "C12/primary",
+      "execution": {
+        "variant": {
+          "id": "C12/primary",
+          "family": "C12",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C12/qualification-v1",
+        "schedule": {
+          "partition": 2488,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "variantId": "A07/invalid-stream",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "poll must refuse",
+      "passed": true
+    },
+    {
+      "label": "poll categorical blocker",
+      "passed": true
+    },
+    {
+      "label": "invalid transport never accepted",
+      "passed": true
+    }
+  ],
+  "operations": 216,
+  "promiseJobs": 1016,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "poll",
+      "kind": "blocked",
+      "blockers": [
+        "gap"
+      ],
+      "state": null
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "acceptedAudits": 0,
+  "queuedFrame": {
+    "stream": "stdout",
+    "seq": 0,
+    "offset": 0,
+    "length": 3,
+    "bytes": 3
+  },
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

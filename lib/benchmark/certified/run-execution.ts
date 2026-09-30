@@ -35,6 +35,7 @@ import { runHarnessCertification } from "@/lib/benchmark/certified/certification
 import type { CertifiedRunSummary } from "@/lib/benchmark/certified/run-status";
 import {
   checkBenchRunner,
+  getTrustedBenchRunnerReadiness,
   type BenchRunnerConfig,
 } from "@/lib/client/bench-runner";
 import type { BenchmarkPreset, BenchmarkPresetLeg } from "./run-presets";
@@ -282,7 +283,8 @@ export async function runSelected(ctx: RunSelectedContext): Promise<void> {
         url: workBenchRunnerUrl,
         token: workBenchRunnerToken,
       },
-      signal
+      signal,
+      selectedWorkBenchPack?.cases[0]?.case
     );
     if (!health.ok) {
       setMessage(
@@ -1874,22 +1876,15 @@ export async function runPreset(
 
 async function checkBenchRunnerForLeg(
   config: BenchRunnerConfig,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  workBenchCase?: import("@/lib/benchmark/workbench/types").WorkBenchCase
 ): Promise<{ ok: boolean; error?: string }> {
   if (!config.url.trim() || !config.token.trim()) {
     return { ok: false, error: "Bench runner not configured." };
   }
   const health = await checkBenchRunner(config, signal);
-  if (!health.ok) return { ok: false, error: health.error };
-  if (!health.runnerV2?.ready) {
-    return {
-      ok: false,
-      error:
-        health.runnerV2?.error ??
-        "Managed Runner V2 is unavailable; configure --runner-v2-dir.",
-    };
-  }
-  return { ok: true };
+  const readiness = getTrustedBenchRunnerReadiness(health, workBenchCase);
+  return readiness.ready ? { ok: true } : { ok: false, error: readiness.error };
 }
 
 interface PresetLegResult {

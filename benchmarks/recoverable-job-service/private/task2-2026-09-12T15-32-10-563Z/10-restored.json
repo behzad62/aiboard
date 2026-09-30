@@ -1,0 +1,277 @@
+{
+  "control": "reverse-resource-cleanup",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B02"
+    ],
+    "variantIds": [
+      "B02/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "B02/primary",
+          "caseCommitment": "d134166023e2e4f2a0bf92d45201259a36fa63ea91a5c26f8ed465e7d06c708c",
+          "fixtureCommitment": "b38de5af72c2ba2451ac02bc9105d8856b4e5564cd8694b540fb6798f8751d87",
+          "fixtureAllocations": 8,
+          "authenticationCommitment": "4b8e474cdb79d157f44fb212e2d5003625c2c42b6b36a6654d5ab10c2e4ba2ed"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B02/primary"
+      ],
+      "scheduleHash": "091da62ccd233fc96c8004c1b3ee1446fa730e253beb6e824ccf64c3b54e092a",
+      "configurationHash": "5ffac24ab237e98485a38fa8bcaf9f30c6c97f19ad801ec2bc17970d4f5499ab"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B02",
+        "group": "B",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B02/5ffac24ab237e98485a38fa8bcaf9f30c6c97f19ad801ec2bc17970d4f5499ab",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "B02/primary",
+              "caseCommitment": "d134166023e2e4f2a0bf92d45201259a36fa63ea91a5c26f8ed465e7d06c708c",
+              "fixtureCommitment": "b38de5af72c2ba2451ac02bc9105d8856b4e5564cd8694b540fb6798f8751d87",
+              "fixtureAllocations": 8,
+              "authenticationCommitment": "4b8e474cdb79d157f44fb212e2d5003625c2c42b6b36a6654d5ab10c2e4ba2ed"
+            },
+            "id": "B02/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "all semantic cleanup facts durably published",
+                "passed": true
+              },
+              {
+                "label": "full conjunction published no later than durable release",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 407,
+            "promiseJobs": 1896
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B02/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: all semantic cleanup facts durably published",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: full conjunction published no later than durable release",
+            "passed": true
+          },
+          {
+            "label": "B02/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 407,
+        "promiseJobs": 1896
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.2,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B02",
+      "variantId": "B02/primary",
+      "execution": {
+        "variant": {
+          "id": "B02/primary",
+          "family": "B02",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B02/qualification-v1",
+        "schedule": {
+          "partition": 3905,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

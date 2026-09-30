@@ -25,20 +25,26 @@ import {
 import {
   CUSTOM_PROVIDER_ID,
   getCustomModelByFullId,
+  customModelPlanningContext,
   getDecryptedApiKey,
+  getPersistedProviderCapabilityEvidence,
   getProvider,
   getProviderBaseURL,
   getProviderRunnerToken,
+  getRunnerCapabilityPlanningContext,
   resolveClientModelContextProfile,
   resolveModelCapabilities,
   streamCustomChat,
 } from "./providers";
 import {
   parseModelId,
+  type AIProvider,
   type ChatMessage,
+  type ChatParams,
   type ModelContextProfile,
-  type NativeToolDefinition,
+  type NativeToolCall,
   type SelectedModel,
+  type StreamChunk,
   type StreamUsage,
   type StructuredOutputFormat,
 } from "@/lib/providers/base";
@@ -75,13 +81,29 @@ import {
   recordBenchmarkModelCallTrace,
 } from "@/lib/benchmark/model-call-traces";
 import {
-  shouldEnableProviderNativeWebSearch,
+  webSearchToolIntent,
   withWebSearchCapabilityNote,
 } from "@/lib/providers/web-search";
 import {
   mergeNativeToolActionContent,
   nativeToolCallsToActionText,
 } from "@/lib/orchestrator/build";
+import type { ProviderArtifactSink, ProviderToolEvent } from "@/lib/providers/provider-events";
+import { resolveProviderCallPlan } from "@/lib/providers/call-planner";
+import {
+  buildProviderToolRequest,
+  type ProviderToolRequest,
+} from "@/lib/providers/tool-request";
+import type {
+  CapabilityEvidence,
+  ProviderTransportId,
+  ToolCapabilityDescriptor,
+  ToolResourceState,
+} from "@/lib/providers/tool-capabilities";
+import {
+  applyToolRuntimeToRequest,
+  resolveToolRuntimeResourceStateCached,
+} from "./tool-runtime";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
@@ -93,6 +115,108 @@ export interface CollectedStreamResult {
   content: string;
   reportedUsage?: StreamUsage;
   finishReason?: string;
+  providerToolEvents?: ProviderToolEvent[];
+}
+
+export function clientToolCallFromChunk(chunk: StreamChunk): NativeToolCall | undefined {
+  return chunk.type === "tool_call" ? chunk.toolCall : undefined;
+}
+
+export function providerToolEventFromChunk(
+  chunk: StreamChunk
+): ProviderToolEvent | undefined {
+  return chunk.type === "provider_tool_event" ? chunk.providerToolEvent : undefined;
+}
+
+export interface ProviderPreflightOverrides {
+  evidence?: CapabilityEvidence[];
+  allowedTransports?: ProviderTransportId[];
+  customOverrides?: ToolCapabilityDescriptor[];
+  resourceState?: ToolResourceState;
+  mode?: "discussion" | "build" | "benchmark" | "test";
+}
+
+function normalizedToolChoice(params: ChatParams) {
+  const choice = params.toolChoice;
+  if (choice === undefined) return "auto" as const;
+  if (typeof choice === "string") return choice;
+  return { name: choice.name };
+}
+
+function inferredCallMode(
+  params: ChatParams,
+  explicit: ProviderPreflightOverrides["mode"],
+): NonNullable<ProviderPreflightOverrides["mode"]> {
+  if (explicit) return explicit;
+  return params.functionTools?.length ? "build" : "discussion";
+}
+
+function enabledCapabilitySet(params: ChatParams): Set<string> {
+  return new Set(params.callPlan?.enabledTools.map((tool) => tool.intent.id) ?? []);
+}
+
+function callPlanEnables(params: ChatParams, capabilityId: string): boolean {
+  return params.callPlan?.enabledTools.some((tool) => tool.intent.id === capabilityId) === true;
+}
+
+function optionalWebSearchRequest(allowWebSearch = true): ProviderToolRequest {
+  const intent = webSearchToolIntent({ allowWebSearch });
+  return buildProviderToolRequest({ toolIntents: intent ? [intent] : [] });
+}
+
+export function preflightProviderChatParams(
+  providerId: string,
+  params: ChatParams,
+  overrides: ProviderPreflightOverrides = {},
+): ChatParams {
+  const normalized = buildProviderToolRequest(params);
+  const callPlan = resolveProviderCallPlan({
+    context: {
+      providerId,
+      modelId: params.model,
+      evidence: overrides.evidence,
+      allowedTransports: overrides.allowedTransports,
+      customOverrides: overrides.customOverrides,
+      resourceState: overrides.resourceState,
+      features: {
+        structuredOutput: Boolean(params.structuredOutput),
+        reasoning:
+          params.reasoningEffort !== undefined &&
+          params.reasoningEffort !== "default" &&
+          params.reasoningEffort !== "none",
+        attachments: Boolean(params.attachments?.length),
+        parallelTools: false,
+        toolChoice: normalizedToolChoice(params),
+        mode: inferredCallMode(params, overrides.mode),
+      },
+    },
+    requestedTools: normalized.toolIntents,
+  });
+  const prepared: ChatParams = {
+    ...params,
+    toolIntents: normalized.toolIntents,
+    toolInventory: normalized.toolInventory,
+    callPlan,
+  };
+  const enabled = enabledCapabilitySet(prepared);
+  prepared.functionTools = enabled.has("function_calling") ? params.functionTools : undefined;
+  return prepared;
+}
+
+export function streamProviderWithPreflight(
+  provider: AIProvider,
+  providerId: string,
+  params: ChatParams,
+  overrides: ProviderPreflightOverrides = {},
+): AsyncIterable<StreamChunk> {
+  return provider.streamChat(preflightProviderChatParams(providerId, params, overrides));
+}
+
+function discoveredCapabilityEvidence(
+  providerId: string,
+  model: string,
+): CapabilityEvidence[] | undefined {
+  return getPersistedProviderCapabilityEvidence(providerId, model);
 }
 
 const runningDiscussions = new Set<string>();
@@ -188,9 +312,8 @@ export async function collectStream(
     message: string;
   }) => void,
   contextProfile?: ModelContextProfile,
-  allowWebSearch = true,
-  nativeTools?: NativeToolDefinition[],
-  hostedBuildTools = false
+  toolRequest: ProviderToolRequest = { toolIntents: [], toolInventory: [] },
+  artifactSink?: ProviderArtifactSink
 ): Promise<string> {
   const result = await collectStreamWithUsage(
     modelId,
@@ -207,9 +330,8 @@ export async function collectStream(
     structuredOutput,
     onProviderRetry,
     contextProfile,
-    allowWebSearch,
-    nativeTools,
-    hostedBuildTools
+    toolRequest,
+    artifactSink
   );
   return result.content;
 }
@@ -233,11 +355,17 @@ export async function collectStreamWithUsage(
     message: string;
   }) => void,
   contextProfile?: ModelContextProfile,
-  allowWebSearch = true,
-  nativeTools?: NativeToolDefinition[],
-  hostedBuildTools = false
+  toolRequest: ProviderToolRequest = { toolIntents: [], toolInventory: [] },
+  artifactSink?: ProviderArtifactSink
 ): Promise<CollectedStreamResult> {
   if (signal?.aborted) throw abortError();
+  const effectiveToolRequest = applyToolRuntimeToRequest(toolRequest, undefined, providerId);
+  const needsLocalRunner = effectiveToolRequest.toolIntents.some(
+    (intent) => intent.id === "shell" || intent.id === "apply_patch",
+  );
+  const runtimeResourceState = await resolveToolRuntimeResourceStateCached({
+    checkRunnerHealth: needsLocalRunner,
+  });
   if (providerId === CUSTOM_PROVIDER_ID) {
     const customModel = getCustomModelByFullId(modelId);
     if (!customModel) {
@@ -252,25 +380,34 @@ export async function collectStreamWithUsage(
     const customAttachments = attachments.filter(
       (a) => a.category !== "text_inline" && customCaps[a.category]
     );
+    const customParams = preflightProviderChatParams(
+      CUSTOM_PROVIDER_ID,
+      {
+        apiKey: "",
+        model: customModel.model,
+        messages,
+        attachments: customAttachments,
+        maxTokens,
+        temperature,
+        reasoningEffort,
+        structuredOutput,
+        contextProfile,
+        ...effectiveToolRequest,
+        artifactSink,
+      },
+      customModelPlanningContext(customModel),
+    );
+    customParams.messages = callPlanEnables(customParams, "web_search")
+      ? withWebSearchCapabilityNote(messages)
+      : messages;
     let customContent = "";
     let customNativeActionContent = "";
     let customReportedUsage: StreamUsage | undefined;
     let customFinishReason: string | undefined;
+    const customProviderToolEvents: ProviderToolEvent[] = [];
     return withTransientRetry(
       async () => {
-        for await (const chunk of streamCustomChat(customModel, {
-          apiKey: "",
-          model: customModel.model,
-          messages,
-          attachments: customAttachments,
-          maxTokens,
-          temperature,
-          reasoningEffort,
-          structuredOutput,
-          contextProfile,
-          nativeTools,
-          hostedBuildTools,
-        })) {
+        for await (const chunk of streamCustomChat(customModel, customParams)) {
           if (signal?.aborted) throw abortError();
           if (
             chunk.type === "token" &&
@@ -281,8 +418,9 @@ export async function collectStreamWithUsage(
             onToken?.(chunk.content);
             if (stopWhen?.(customContent)) break;
           }
-          if (chunk.type === "tool_call" && chunk.toolCall) {
-            const actionText = nativeToolCallsToActionText([chunk.toolCall]);
+          const clientToolCall = clientToolCallFromChunk(chunk);
+          if (clientToolCall) {
+            const actionText = nativeToolCallsToActionText([clientToolCall]);
             if (actionText) {
               const merged = mergeNativeToolActionContent({
                 content: customContent,
@@ -294,6 +432,8 @@ export async function collectStreamWithUsage(
               onToken?.(actionText);
             }
           }
+          const providerEvent = providerToolEventFromChunk(chunk);
+          if (providerEvent) customProviderToolEvents.push(providerEvent);
           if (chunk.type === "usage") {
             customReportedUsage = mergeStreamUsage(
               customReportedUsage,
@@ -311,6 +451,9 @@ export async function collectStreamWithUsage(
           content: customContent,
           ...(customReportedUsage ? { reportedUsage: customReportedUsage } : {}),
           ...(customFinishReason ? { finishReason: customFinishReason } : {}),
+          ...(customProviderToolEvents.length > 0
+            ? { providerToolEvents: [...customProviderToolEvents] }
+            : {}),
         };
       },
       () => customContent.length > 0,
@@ -335,13 +478,40 @@ export async function collectStreamWithUsage(
       ? resolvedCaps[a.category]
       : modelSupportsInputTypes(modelId, [a.category]);
   });
-  const webSearch = shouldEnableProviderNativeWebSearch({
+  const runnerContext = await getRunnerCapabilityPlanningContext(
     providerId,
     model,
-    structuredOutput,
-    allowWebSearch,
-  });
-  const providerMessages = webSearch
+    signal,
+  );
+  const evidence = [
+    ...(discoveredCapabilityEvidence(providerId, model) ?? []),
+    ...(runnerContext.evidence ?? []),
+  ];
+  const providerParams = preflightProviderChatParams(
+    providerId,
+    {
+      apiKey,
+      baseURL: getProviderBaseURL(providerId),
+      runnerToken: getProviderRunnerToken(providerId),
+      model,
+      messages,
+      attachments: modelAttachments,
+      maxTokens,
+      temperature,
+      reasoningEffort,
+      structuredOutput,
+      ...effectiveToolRequest,
+      artifactSink,
+      contextProfile,
+      ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
+    },
+    {
+      ...(evidence.length > 0 ? { evidence } : {}),
+      allowedTransports: runnerContext.allowedTransports,
+      resourceState: runtimeResourceState,
+    },
+  );
+  providerParams.messages = callPlanEnables(providerParams, "web_search")
     ? withWebSearchCapabilityNote(messages)
     : messages;
 
@@ -349,33 +519,19 @@ export async function collectStreamWithUsage(
   let nativeActionContent = "";
   let reportedUsage: StreamUsage | undefined;
   let finishReason: string | undefined;
+  const providerToolEvents: ProviderToolEvent[] = [];
   return withTransientRetry(
     async () => {
-      for await (const chunk of provider.streamChat({
-        apiKey,
-        baseURL: getProviderBaseURL(providerId),
-        runnerToken: getProviderRunnerToken(providerId),
-        model,
-        messages: providerMessages,
-        attachments: modelAttachments,
-        maxTokens,
-        temperature,
-        reasoningEffort,
-        structuredOutput,
-        webSearch,
-        nativeTools,
-        hostedBuildTools,
-        contextProfile,
-        ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
-      })) {
+      for await (const chunk of provider.streamChat(providerParams)) {
         if (signal?.aborted) throw abortError();
         if (chunk.type === "token" && chunk.content && !nativeActionContent) {
           content += chunk.content;
           onToken?.(chunk.content);
           if (stopWhen?.(content)) break;
         }
-        if (chunk.type === "tool_call" && chunk.toolCall) {
-          const actionText = nativeToolCallsToActionText([chunk.toolCall]);
+        const clientToolCall = clientToolCallFromChunk(chunk);
+        if (clientToolCall) {
+          const actionText = nativeToolCallsToActionText([clientToolCall]);
           if (actionText) {
             const merged = mergeNativeToolActionContent({
               content,
@@ -387,6 +543,8 @@ export async function collectStreamWithUsage(
             onToken?.(actionText);
           }
         }
+        const providerEvent = providerToolEventFromChunk(chunk);
+        if (providerEvent) providerToolEvents.push(providerEvent);
         if (chunk.type === "usage") {
           reportedUsage = mergeStreamUsage(reportedUsage, chunk.usage);
         }
@@ -401,6 +559,9 @@ export async function collectStreamWithUsage(
         content,
         ...(reportedUsage ? { reportedUsage } : {}),
         ...(finishReason ? { finishReason } : {}),
+        ...(providerToolEvents.length > 0
+          ? { providerToolEvents: [...providerToolEvents] }
+          : {}),
       };
     },
     () => content.length > 0,
@@ -580,7 +741,9 @@ export async function runDiscussion(
               attempt: retry.attempt,
               type: "request",
               message: `Transient provider error; retrying in ${retry.delayMs}ms: ${retry.message}`,
-            })
+            }),
+          undefined,
+          optionalWebSearchRequest(true)
         );
         const output = collected.content;
         const usage = resolveModelCallUsage({

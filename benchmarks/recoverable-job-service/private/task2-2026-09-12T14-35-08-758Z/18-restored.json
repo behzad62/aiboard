@@ -1,0 +1,652 @@
+{
+  "control": "ignore-payload-budget",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C04",
+      "E04"
+    ],
+    "variantIds": [
+      "C04/primary",
+      "E04/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "C04/primary",
+          "caseCommitment": "b4b06d000dc1e870137338aae7b35a210e451c6f102f03d7d846b40443906b92",
+          "fixtureCommitment": "9e284eedfa7fe37f6a56f8949a9f49b01e49175a7202e24f7eafa705e98bc403",
+          "fixtureAllocations": 175,
+          "authenticationCommitment": "662c8ed7a74641784b990248ac4cfc64873b8df606c853c350ce712b0cc34787"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "E04/primary",
+          "caseCommitment": "73563b7abd14ca737aaa842727469106865e0d6ef650d1e1240af63c1919bfcd",
+          "fixtureCommitment": "0ea47a68909c9247772591dc09ec98e7b664c1b00cbdfe116aa6a4784afeb14d",
+          "fixtureAllocations": 47,
+          "authenticationCommitment": "886273e8880f5c15c8b99fa23271c8b151391b52597b828e53277da3f19cd625"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C04/primary",
+        "E04/primary"
+      ],
+      "scheduleHash": "a90307901babcb840d3001fd37ff40975ccb261662ebdbd0e6a3d8f72b604f03",
+      "configurationHash": "db6cee77d764376fa0526599b0e4fdcb56da80fc20439739e209ab5599077cf0"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C04",
+        "group": "C",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C04/db6cee77d764376fa0526599b0e4fdcb56da80fc20439739e209ab5599077cf0",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "C04/primary",
+              "caseCommitment": "b4b06d000dc1e870137338aae7b35a210e451c6f102f03d7d846b40443906b92",
+              "fixtureCommitment": "9e284eedfa7fe37f6a56f8949a9f49b01e49175a7202e24f7eafa705e98bc403",
+              "fixtureAllocations": 175,
+              "authenticationCommitment": "662c8ed7a74641784b990248ac4cfc64873b8df606c853c350ce712b0cc34787"
+            },
+            "id": "C04/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "payload cap with exact logical positions",
+                "passed": true
+              },
+              {
+                "label": "payload overflow categorically retained as loss",
+                "passed": true
+              },
+              {
+                "label": "logical metadata stays bounded",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "independent tiny-frame metadata exhaustion preserves exact positions",
+                "passed": true
+              },
+              {
+                "label": "metadata loss representation remains bounded",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 16295,
+            "promiseJobs": 70175
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: payload cap with exact logical positions",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: payload overflow categorically retained as loss",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: logical metadata stays bounded",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: independent tiny-frame metadata exhaustion preserves exact positions",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: metadata loss representation remains bounded",
+            "passed": true
+          },
+          {
+            "label": "C04/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 16295,
+        "promiseJobs": 70175
+      },
+      {
+        "id": "E04",
+        "group": "E",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/E04/db6cee77d764376fa0526599b0e4fdcb56da80fc20439739e209ab5599077cf0",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "E04/primary",
+              "caseCommitment": "73563b7abd14ca737aaa842727469106865e0d6ef650d1e1240af63c1919bfcd",
+              "fixtureCommitment": "0ea47a68909c9247772591dc09ec98e7b664c1b00cbdfe116aa6a4784afeb14d",
+              "fixtureAllocations": 47,
+              "authenticationCommitment": "886273e8880f5c15c8b99fa23271c8b151391b52597b828e53277da3f19cd625"
+            },
+            "id": "E04/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "large output plus terminal tail settled exactly",
+                "passed": true
+              },
+              {
+                "label": "bounded diagnostic bytes plus loss conserve all produced output",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 4103,
+            "promiseJobs": 17697
+          }
+        ],
+        "assertions": [
+          {
+            "label": "E04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: large output plus terminal tail settled exactly",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: bounded diagnostic bytes plus loss conserve all produced output",
+            "passed": true
+          },
+          {
+            "label": "E04/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 4103,
+        "promiseJobs": 17697
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      }
+    },
+    "macroCoverage": 0.4,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C04",
+      "variantId": "C04/primary",
+      "execution": {
+        "variant": {
+          "id": "C04/primary",
+          "family": "C04",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C04/qualification-v1",
+        "schedule": {
+          "partition": 2243,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E04",
+      "variantId": "E04/primary",
+      "execution": {
+        "variant": {
+          "id": "E04/primary",
+          "family": "E04",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E04/qualification-v1",
+        "schedule": {
+          "partition": 2491,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

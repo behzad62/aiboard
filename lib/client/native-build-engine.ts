@@ -5,6 +5,11 @@ import { parseModelId } from "@/lib/providers/base";
 import { MODEL_CATALOG } from "@/lib/providers/catalog";
 import { getModelPricing, type ModelPricing } from "@/lib/providers/pricing";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
+import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
+import {
+  getDiscoveredModelMetadata,
+  getPersistedProviderCapabilityEvidence,
+} from "./providers";
 import {
   getMessagesForDiscussion,
   getCustomModelById,
@@ -513,12 +518,18 @@ export function createNativeProviderConfig(
   const catalogModel = MODEL_CATALOG.find(
     (candidate) => candidate.providerId === providerId && candidate.id === model
   );
-  const inputCapabilities = catalogModel?.capabilities ?? {
+  const discoveredMetadata = getDiscoveredModelMetadata(runtimeId);
+  const inputCapabilities = discoveredMetadata ?? catalogModel?.capabilities ?? {
     image: false,
     document: false,
     audio: false,
     video: false,
   };
+  const resolvedFunctionTools = resolveProviderCapabilityProfile({
+    providerId,
+    modelId: model,
+    catalogEvidence: getPersistedProviderCapabilityEvidence(providerId, model),
+  }).capabilities.function_calling;
   return {
     runtimeId,
     providerId,
@@ -540,6 +551,18 @@ export function createNativeProviderConfig(
     // the descriptive labels the Architect chooses for a task.
     capabilities: ["*"],
     inputCapabilities: nativeInputCapabilities(inputCapabilities),
+    ...(providerId === "openrouter"
+      ? {
+          supportsTools:
+            resolvedFunctionTools?.descriptor.support === "supported" &&
+            resolvedFunctionTools.readiness.status === "available",
+          hostedTools: [
+            { type: "web_search" as const },
+            { type: "web_fetch" as const },
+            { type: "datetime" as const },
+          ],
+        }
+      : {}),
     priority,
     ...pricing,
     ...(reasoningEffort && reasoningEffort !== "default"
@@ -594,12 +617,9 @@ function usdToMicros(usd: number): number {
 
 export function nativeProviderProtocol(
   providerId: string,
-  modelId: string
+  _modelId: string
 ): "chat-completions" | "responses" {
-  return providerId === "openai" &&
-    MODEL_CATALOG.some((model) =>
-      model.providerId === "openai" && model.id === modelId && model.api === "responses"
-    )
+  return providerId === "openai" || providerId === "openrouter"
     ? "responses"
     : "chat-completions";
 }

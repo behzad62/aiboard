@@ -4,6 +4,11 @@ import {
   normalizeVerifierAssertions,
   parseVerifierResult,
 } from "../lib/benchmark/workbench/verifier";
+import { RECOVERABLE_JOB_SERVICE_CASE_ID } from "../lib/benchmark/workbench/recoverable-job-service/fixture";
+import {
+  evaluateBounded,
+  toVerifierResult,
+} from "../benchmarks/recoverable-job-service/private/runtime.mjs";
 
 let failures = 0;
 
@@ -73,6 +78,55 @@ expectThrow(
   "malformed verifier JSON is rejected",
   () => parseVerifierResult("no json here"),
   /verifier json/i
+);
+
+const invalidReplayDiagnostics = await evaluateBounded("globalThis.createService = () => ({})", {
+  replayInput: { invalid: true },
+});
+const rjsOuter = toVerifierResult(invalidReplayDiagnostics);
+const parsedRjs = parseVerifierResult(
+  "preview only",
+  JSON.stringify(rjsOuter),
+  RECOVERABLE_JOB_SERVICE_CASE_ID
+);
+check(
+  "RJS parser preserves the complete normalized diagnostics",
+  parsedRjs.recoverableJobService?.families.length === 69 &&
+    JSON.parse(parsedRjs.rawJson).recoverableJobService.families.length === 69,
+  parsedRjs
+);
+check(
+  "RJS invalid trusted payload is excluded from scoring",
+  parsedRjs.failureClass === "invalid_harness" &&
+    classifyVerifierFailure(parsedRjs) === "invalid_harness",
+  parsedRjs
+);
+
+expectThrow(
+  "RJS outer score cannot contradict the diagnostics",
+  () =>
+    parseVerifierResult(
+      "",
+      JSON.stringify({ ...rjsOuter, score: 1 }),
+      RECOVERABLE_JOB_SERVICE_CASE_ID
+    ),
+  /outer score/i
+);
+expectThrow(
+  "RJS parser rejects a mismatched recorded suite identity",
+  () =>
+    parseVerifierResult(
+      "",
+      JSON.stringify({
+        ...rjsOuter,
+        recoverableJobService: {
+          ...invalidReplayDiagnostics,
+          suiteHash: "0".repeat(64),
+        },
+      }),
+      RECOVERABLE_JOB_SERVICE_CASE_ID
+    ),
+  /suite hash/i
 );
 expectThrow(
   "invalid score is rejected",

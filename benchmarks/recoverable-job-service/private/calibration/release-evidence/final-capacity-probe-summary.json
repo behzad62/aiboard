@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Real eight-class calibration probe evidence; full production acceptance remains separately gated",
+  "output": "benchmarks/recoverable-job-service/private/calibration/probes-2026-09-21T05-26-55-951Z",
+  "identity": {
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
+  },
+  "classes": [
+    "P07-owned-accounting"
+  ],
+  "capacityOnly": true,
+  "runs": [
+    {
+      "name": "algorithm-positive",
+      "sourceHash": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+      "status": "valid",
+      "selected": 1,
+      "pass": 1,
+      "skip": 0,
+      "material": false,
+      "failed": []
+    },
+    {
+      "name": "algorithm-material-truncate-scan",
+      "sourceHash": "b62d564db9de7c1febc1c690d899d21429be6909bc9ca312b0e279ee41e7f256",
+      "status": "valid",
+      "selected": 1,
+      "pass": 0,
+      "skip": 0,
+      "material": true,
+      "failed": [
+        {
+          "id": "B14/primary",
+          "reason": "closeBatch must refuse; safety: close-owned-records"
+        }
+      ]
+    },
+    {
+      "name": "algorithm-restored",
+      "sourceHash": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+      "status": "valid",
+      "selected": 1,
+      "pass": 1,
+      "skip": 0,
+      "material": false,
+      "failed": []
+    }
+  ],
+  "traces": [
+    {
+      "name": "P07-owned-accounting-algorithm-B14-primary",
+      "variantId": "B14/primary",
+      "failure": null,
+      "safety": [],
+      "boundedCapacityProof": true,
+      "evidence": [
+        "algorithm-positive.result.json",
+        "algorithm-material-truncate-scan.result.json",
+        "algorithm-restored.result.json"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "label": "algorithm-positive: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-positive: B14/primary positive progress/refusal",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-truncate-scan: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-material-truncate-scan: B14/primary intended material failure",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: complete valid predicates",
+      "passed": true
+    },
+    {
+      "label": "algorithm-restored: B14/primary positive progress/refusal",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

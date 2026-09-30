@@ -1,0 +1,609 @@
+{
+  "control": "repeat-finalization",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C13",
+      "C19"
+    ],
+    "variantIds": [
+      "C13/primary",
+      "C19/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "73c692bfaa1af58460fa62349a10cc4ea3d80c3d22a29ddb65f819c74bc93dd8",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C13/primary",
+        "C19/primary"
+      ],
+      "scheduleHash": "ebb86d90201367c45c5c123b22269c24bad5dc3de1236b5c7b4f276daee36d59",
+      "configurationHash": "cf6d2ac94ef75b30542cb88631629ed5fe454c5ca2e3bdafe6736c4c25692fb0"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C13",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C13/cf6d2ac94ef75b30542cb88631629ed5fe454c5ca2e3bdafe6736c4c25692fb0",
+        "variants": [
+          {
+            "id": "C13/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "finalization immutable and reused on fresh recovery",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "finalization immutable and reused on fresh recovery; safety: immutable-final",
+            "safetyFailures": [
+              {
+                "code": "immutable-final",
+                "jobId": "d1643e6a4daf0468025023a0f43f0272",
+                "detail": "Final manifest changed.",
+                "familyId": "C13",
+                "variantId": "C13/primary"
+              }
+            ],
+            "operations": 582,
+            "promiseJobs": 2635
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C13/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C13/primary: finalization immutable and reused on fresh recovery",
+            "passed": false
+          },
+          {
+            "label": "C13/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "C13/primary: finalization immutable and reused on fresh recovery; safety: immutable-final",
+        "operations": 582,
+        "promiseJobs": 2635
+      },
+      {
+        "id": "C19",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C19/cf6d2ac94ef75b30542cb88631629ed5fe454c5ca2e3bdafe6736c4c25692fb0",
+        "variants": [
+          {
+            "id": "C19/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "final evidence reused after later cleanup failure",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "final evidence reused after later cleanup failure; safety: immutable-final",
+            "safetyFailures": [
+              {
+                "code": "immutable-final",
+                "jobId": "6a3ce4eb36176b12880ebb728385270d",
+                "detail": "Final manifest changed.",
+                "familyId": "C19",
+                "variantId": "C19/primary"
+              }
+            ],
+            "operations": 590,
+            "promiseJobs": 2687
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C19/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/primary: final evidence reused after later cleanup failure",
+            "passed": false
+          },
+          {
+            "label": "C19/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "C19/primary: final evidence reused after later cleanup failure; safety: immutable-final",
+        "operations": 590,
+        "promiseJobs": 2687
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 2,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "immutable-final",
+        "jobId": "d1643e6a4daf0468025023a0f43f0272",
+        "detail": "Final manifest changed.",
+        "familyId": "C13",
+        "variantId": "C13/primary"
+      },
+      {
+        "code": "immutable-final",
+        "jobId": "6a3ce4eb36176b12880ebb728385270d",
+        "detail": "Final manifest changed.",
+        "familyId": "C19",
+        "variantId": "C19/primary"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "C13",
+      "variantId": "C13/primary",
+      "execution": {
+        "variant": {
+          "id": "C13/primary",
+          "family": "C13",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C13/qualification-v1",
+        "schedule": {
+          "partition": 2327,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C19",
+      "variantId": "C19/primary",
+      "execution": {
+        "variant": {
+          "id": "C19/primary",
+          "family": "C19",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C19/qualification-v1",
+        "schedule": {
+          "partition": 4054,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

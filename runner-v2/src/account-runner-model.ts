@@ -92,9 +92,12 @@ export class AccountRunnerModel implements AgentModel {
         : {}),
       model: this.options.modelId,
       messages: request.messages.map(toRunnerMessage),
-      nativeTools: request.tools.map((tool) =>
+      functionTools: request.tools.map((tool) =>
         toRunnerTool(tool, wireNames.get(tool.name)!)
       ),
+      toolIntents: request.tools.length > 0
+        ? [{ id: "function_calling", requirement: "required" }]
+        : [],
       reasoningEffort: this.options.reasoningEffort,
       attachments,
       sessionId: request.sessionId,

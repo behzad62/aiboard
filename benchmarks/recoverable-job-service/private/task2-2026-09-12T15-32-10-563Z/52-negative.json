@@ -1,0 +1,648 @@
+{
+  "control": "reject-allowed-extension",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B17",
+      "C05"
+    ],
+    "variantIds": [
+      "C05/allowed-extension",
+      "B17/source-format-allowed-extension"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "B17/source-format-allowed-extension",
+          "caseCommitment": "42b477b64d53fb73da8bc7b9fb8753f55d43211be1ae46c354419944dc6f6188",
+          "fixtureCommitment": "fa5dd59b38fc7dc8172c4528a8c276ff3a598a7959c35598238fca7790fd8c88",
+          "fixtureAllocations": 13,
+          "authenticationCommitment": "db1001ae49865b30c1098aa7ec16df525796e48996207f4776bdd755d53b71e2"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C05/allowed-extension",
+          "caseCommitment": "ea6e21a857210d4b06959049af062ea8495e4f32be82130ecbc839ee3ad552a0",
+          "fixtureCommitment": "924d4c87f6bc3d20c85495f348261f2226c305b7b88a574e264bc026014b2427",
+          "fixtureAllocations": 13,
+          "authenticationCommitment": "33d5403f663c57bb64112d90f1434629030db7d38c0daa7f926e512c749d1426"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "eaee3704542eb3eadbc45ef3c0d7aab783a48d3b4cdb29bfdb14d203d6a3d734",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C05/allowed-extension",
+        "B17/source-format-allowed-extension"
+      ],
+      "scheduleHash": "e620082bc055c0959c85dd9775bbeadacfd2debd874c61c7b4eeb1fe46ad3878",
+      "configurationHash": "c6fef605d24a0a7e66a4427dab5e69091e5e6944b0a0efcdba977e8a90cc4eea"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B17",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B17/c6fef605d24a0a7e66a4427dab5e69091e5e6944b0a0efcdba977e8a90cc4eea",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "B17/source-format-allowed-extension",
+              "caseCommitment": "42b477b64d53fb73da8bc7b9fb8753f55d43211be1ae46c354419944dc6f6188",
+              "fixtureCommitment": "fa5dd59b38fc7dc8172c4528a8c276ff3a598a7959c35598238fca7790fd8c88",
+              "fixtureAllocations": 13,
+              "authenticationCommitment": "db1001ae49865b30c1098aa7ec16df525796e48996207f4776bdd755d53b71e2"
+            },
+            "id": "B17/source-format-allowed-extension",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "source-initialization reached exact public job",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "source job reaches required released outcome",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "final source EvidenceV3",
+                "passed": true
+              },
+              {
+                "label": "source accounting stdout preserves exact prefix and actual suffix",
+                "passed": true
+              },
+              {
+                "label": "exact source loss range stdout",
+                "passed": true
+              },
+              {
+                "label": "actual retained suffix bytes at exact span positions stdout",
+                "passed": true
+              },
+              {
+                "label": "source accounting stderr preserves exact prefix and actual suffix",
+                "passed": true
+              },
+              {
+                "label": "exact source loss range stderr",
+                "passed": true
+              },
+              {
+                "label": "actual retained suffix bytes at exact span positions stderr",
+                "passed": true
+              },
+              {
+                "label": "source proof remains authentic and channel-bound",
+                "passed": true
+              },
+              {
+                "label": "one immutable source initialization",
+                "passed": true
+              },
+              {
+                "label": "one positive source adoption, no zero-prefix audit",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 430,
+            "promiseJobs": 1985
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B17/source-format-allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: source-initialization reached exact public job",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: released public job",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: source job reaches required released outcome",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: final source EvidenceV3",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: source accounting stdout preserves exact prefix and actual suffix",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: exact source loss range stdout",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: actual retained suffix bytes at exact span positions stdout",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: source accounting stderr preserves exact prefix and actual suffix",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: exact source loss range stderr",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: actual retained suffix bytes at exact span positions stderr",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: source proof remains authentic and channel-bound",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: one immutable source initialization",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: one positive source adoption, no zero-prefix audit",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B17/source-format-allowed-extension: restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "B17/source-format-allowed-extension: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B17/source-format-allowed-extension: restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+        "operations": 430,
+        "promiseJobs": 1985
+      },
+      {
+        "id": "C05",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C05/c6fef605d24a0a7e66a4427dab5e69091e5e6944b0a0efcdba977e8a90cc4eea",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C05/allowed-extension",
+              "caseCommitment": "ea6e21a857210d4b06959049af062ea8495e4f32be82130ecbc839ee3ad552a0",
+              "fixtureCommitment": "924d4c87f6bc3d20c85495f348261f2226c305b7b88a574e264bc026014b2427",
+              "fixtureAllocations": 13,
+              "authenticationCommitment": "33d5403f663c57bb64112d90f1434629030db7d38c0daa7f926e512c749d1426"
+            },
+            "id": "C05/allowed-extension",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "unretired accepted identity retained in capsule",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 275,
+            "promiseJobs": 1255
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: unretired accepted identity retained in capsule",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C05/allowed-extension: restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "C05/allowed-extension: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "C05/allowed-extension: restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\"}],\"failures\":[]}",
+        "operations": 275,
+        "promiseJobs": 1255
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B17",
+      "variantId": "B17/source-format-allowed-extension",
+      "execution": {
+        "variant": {
+          "id": "B17/source-format-allowed-extension",
+          "family": "B17",
+          "kind": "source-bootstrap",
+          "args": {
+            "change": "allowed-extension"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B17/qualification-v1",
+        "schedule": {
+          "partition": 2780,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C05",
+      "variantId": "C05/allowed-extension",
+      "execution": {
+        "variant": {
+          "id": "C05/allowed-extension",
+          "family": "C05",
+          "kind": "capsule",
+          "args": {
+            "change": "allowed-extension"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C05/qualification-v1",
+        "schedule": {
+          "partition": 2129,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

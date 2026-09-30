@@ -1,0 +1,111 @@
+{
+  "name": "trace-forbidden-reserve",
+  "variantId": "B06/primary",
+  "sourceHash": "22701367205176fd17f6553dddf406dfe9eadac8ab49208dd3c189bc69400539",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "stop must refuse",
+      "passed": true
+    },
+    {
+      "label": "stop categorical blocker",
+      "passed": true
+    },
+    {
+      "label": "expired entry issues no attach",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "stop must refuse",
+      "passed": true
+    },
+    {
+      "label": "stop categorical blocker",
+      "passed": true
+    },
+    {
+      "label": "insufficient reserve issues no work",
+      "passed": true
+    }
+  ],
+  "faults": [],
+  "operations": 212,
+  "promiseJobs": 983,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "blocked",
+      "error": null,
+      "blockers": [
+        "deadline"
+      ],
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "blocked",
+      "error": null,
+      "blockers": [
+        "lease"
+      ],
+      "state": null
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 0,
+    "driver.detach": 0,
+    "driver.release": 0,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "transportReturns": [],
+  "acceptedAudits": 0,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

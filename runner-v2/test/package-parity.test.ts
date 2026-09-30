@@ -45,6 +45,7 @@ test("published Runner archives are byte-for-byte reproducible", () => {
     const archives = readdirSync(first).filter((name) => name.endsWith(".zip")).sort();
     assert.deepEqual(archives, [
       "aiboard-account-provider-runner.zip",
+      "aiboard-rjs-workbench-runner.zip",
       "aiboard-runner-v2.zip",
       "aiboard-workbench-runner.zip",
     ]);

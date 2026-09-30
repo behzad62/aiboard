@@ -1,0 +1,83 @@
+{
+  "name": "trace-setup-reader-B06-deadline-driver.attach.before",
+  "variantId": "B06/deadline-driver.attach.before",
+  "sourceHash": "0f9af49f2f4679e1a0aee684b2820e3b63e7aace80319225bb5b76a1bbdf0963",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "actual public setup intent identifies lifecycle job",
+      "passed": true
+    },
+    {
+      "label": "start must refuse",
+      "passed": true
+    },
+    {
+      "label": "actual attachment request keeps original expired deadline",
+      "passed": true
+    },
+    {
+      "label": "expired attachment boundary issues no new reader effect",
+      "passed": true
+    },
+    {
+      "label": "expired nested/final step cannot publish release",
+      "passed": true
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "driver.attach.before",
+      "index": 252,
+      "during": [
+        "start"
+      ]
+    }
+  ],
+  "operations": 212,
+  "promiseJobs": 1069,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "blocked",
+      "error": null,
+      "blockers": [
+        "deadline"
+      ],
+      "state": null
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 0,
+    "driver.detach": 0,
+    "driver.release": 0,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "transportReturns": [],
+  "acceptedAudits": 0,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

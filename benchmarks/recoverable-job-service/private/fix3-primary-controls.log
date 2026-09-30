@@ -1,0 +1,69 @@
+A01 KILLED optimistic-reconciliation A01/primary: stop must refuse 
+A02 KILLED optimistic-reconciliation A02/primary: stop must refuse 
+A03 KILLED optimistic-reconciliation A03/primary: replaceRelease must refuse 
+A04 KILLED optimistic-reconciliation A04/primary: restore must refuse 
+A05 KILLED premature-ack-view A05/primary: in-flight retirement has coherent before or after checkpoint 
+A06 KILLED skip-retirement A06/primary: candidate reached lawful driver.retireAck.after; safety: ack-proof 
+A07 KILLED optimistic-reconciliation A07/primary: poll must refuse 
+A08 KILLED global-consumer-lock A08/primary: candidate wall timeout 
+A09 KILLED optimistic-reconciliation A09/primary: identity observation cannot certify after takeover 
+A10 KILLED duplicate-stop-observation A10/primary: shared waiters settle consistently 
+A11 KILLED dead-unsubscribe A11/primary: removed listener not called later in terminal dispatch 
+A12 KILLED reused-subscription-id A12/primary: new subscription gets fresh terminal state and survives old unsubscribe 
+A13 KILLED live-dispatch-iterator A13/primary: error resubscription never joins current dispatch 
+A14 KILLED skip-retirement A14/primary: candidate reached lawful driver.retireAck.after; safety: ack-proof 
+A15 KILLED optimistic-reconciliation A15/primary: acknowledge must refuse 
+B01 KILLED relaunch-on-recovery B01/primary: recovery never relaunches unfinished job 
+B02 KILLED reverse-resource-cleanup B02/primary: Observed public behavior and durable consequences.; safety: release-predecessor 
+B03 KILLED optimistic-reconciliation B03/primary: acknowledge must refuse 
+B04 KILLED optimistic-reconciliation B04/primary: duplicate joins original timeout 
+B05 KILLED optimistic-reconciliation B05/primary: old callback returns stale 
+B06 KILLED optimistic-reconciliation B06/primary: stop must refuse 
+B07 KILLED discard-reconciliation-receipts B07/primary: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]} 
+B08 KILLED discard-reconciliation-receipts B08/primary: stop must progress: {"kind":"unknown","operationId":"<opaque>","blockers":[{"code":"unknown-effect","jobId":"<opaque>","operationId":"<opaque>"}]} 
+B09 KILLED optimistic-reconciliation B09/primary: stop must refuse 
+B10 KILLED skip-barrier-tail B10/primary: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup","jobId":"<opaque>"}],"failures":[]} 
+B11 KILLED skip-private-intake B11/primary: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup","jobId":"<opaque>"}],"failures":[]} 
+B12 KILLED optimistic-reconciliation B12/primary: restore must refuse 
+B13 KILLED optimistic-reconciliation B13/primary: start must refuse 
+B14 KILLED truncate-scan B14/primary: snapshot reaches every owned setup beyond pages 
+B15 KILLED ignore-successor B15/primary: stop must refuse 
+B16 KILLED optimistic-reconciliation B16/primary: closeBatch must refuse 
+B17 KILLED optimistic-reconciliation B17/primary: restore must refuse 
+C01 KILLED omit-evidence-write C01/primary: consume must progress: {"kind":"blocked","blockers":[{"code":"integrity","jobId":"<opaque>"}],"failures":[]}; safety: evidence-before-acceptance 
+C02 KILLED omit-evidence-write C02/primary: candidate reached lawful artifact.write.after; safety: evidence-before-acceptance 
+C03 KILLED skip-evidence-validation C03/primary: readEvidence must refuse 
+C04 KILLED ignore-payload-budget C04/primary: payload cap with exact logical positions 
+C05 KILLED optimistic-reconciliation C05/primary: restore must refuse 
+C06 KILLED unawaited-evidence-write C06/primary: Observed public behavior and durable consequences.; safety: evidence-before-acceptance 
+C07 KILLED wrong-loss-category C07/primary: diagnostic I/O loss has exact category and range; safety: loss-permission 
+C08 KILLED repeat-consumption C08/primary: consumed replay across guest crash produces one external effect; safety: intent-before-consume 
+C09 KILLED omit-evidence-write C09/primary: restore must progress: {"kind":"blocked","blockers":[{"code":"integrity","jobId":"<opaque>"}],"failures":[]}; safety: evidence-before-acceptance 
+C10 KILLED stale-evidence-head C10/primary: read revalidates head changed during artifact read 
+C11 KILLED ignore-legacy-gap C11/primary: restore must progress: {"kind":"blocked","blockers":[{"code":"gap","jobId":"<opaque>"}],"failures":[]} 
+C12 KILLED ignore-ambiguous-handoff C12/primary: handoff must refuse 
+C13 KILLED repeat-finalization C13/primary: finalization immutable and reused on fresh recovery; safety: immutable-final 
+C14 KILLED omit-evidence-fact C14/primary: valid evidence partial success survives channel failure 
+C15 KILLED optimistic-reconciliation C15/primary: stop must refuse 
+C16 KILLED split-terminal-publication C16/primary: terminal reference and release publish atomically 
+C17 KILLED delete-retained-evidence C17/primary: readEvidence must progress: {"kind":"blocked","blockers":[{"code":"integrity","jobId":"<opaque>"}],"failures":[]} 
+C18 KILLED skip-reclamation C18/primary: existing aliased adopted root remains protected 
+C19 KILLED repeat-finalization C19/primary: final evidence reused after later cleanup failure; safety: immutable-final 
+D01 KILLED control-witness D01/primary: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup","jobId":"<opaque>"}],"failures":[]}; safety: workload-only-control 
+D02 KILLED optimistic-reconciliation D02/primary: stop must refuse 
+D03 KILLED optimistic-reconciliation D03/primary: replaceRelease must refuse 
+D04 KILLED optimistic-reconciliation D04/primary: stop must refuse 
+D05 KILLED skip-barrier-tail D05/primary: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup","jobId":"<opaque>"}],"failures":[]} 
+D06 KILLED skip-private-intake D06/primary: stop must progress: {"kind":"blocked","blockers":[{"code":"cleanup","jobId":"<opaque>"}],"failures":[]} 
+D07 KILLED steal-live-claim D07/primary: claim must refuse 
+D08 KILLED optimistic-reconciliation D08/primary: restore must refuse 
+D09 KILLED skip-private-intake D09/primary: candidate wall timeout 
+E01 KILLED close-other-batches E01/primary: closing batch leaves other workload and stream intact 
+E02 KILLED relaunch-on-recovery E02/primary: all acquired setup owners close without launching 
+E03 KILLED relaunch-on-recovery E03/primary: fresh guest recovery never duplicates launched workload 
+E04 KILLED ignore-payload-budget E04/primary: bounded diagnostic bytes plus loss conserve all produced output 
+E05 KILLED optimistic-reconciliation E05/primary: closeBatch must refuse 
+E06 KILLED optimistic-reconciliation E06/primary: stop must refuse 
+E07 KILLED nondurable-close E07/primary: fresh service sees durable closed batch 
+E08 KILLED ignore-removal-failure E08/primary: first removal committed, remaining exact, original failure retained 
+E09 KILLED reuse-start-identity E09/primary: concurrent starts have distinct ownership identities 

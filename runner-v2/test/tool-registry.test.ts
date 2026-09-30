@@ -116,3 +116,26 @@ test("duplicate tool names and call IDs are rejected before execution", () => {
       error instanceof AgentProtocolError && error.code === "duplicate_call_id"
   );
 });
+
+
+test("internal tools remain invokable without being advertised to the model", async () => {
+  const registry = new ToolRegistry();
+  registry.register({
+    definition: {
+      name: "internal.patch",
+      description: "Internal patch executor",
+      inputSchema: { type: "object" },
+      readOnly: false,
+      effect: "workspace",
+      modelVisible: false,
+    },
+    validate: () => ({ ok: true, value: {} }),
+    execute: async () => ({ content: [{ type: "text", text: "ok" }], isError: false }),
+  });
+  assert.equal(registry.definitions().some((tool) => tool.name === "internal.patch"), false);
+  const result = await registry.invoke(
+    { type: "tool_call", callId: "internal_1", name: "internal.patch", arguments: {} },
+    { runId: "run_1", sessionId: "session_1", actor: { role: "worker", id: "worker_1" } }
+  );
+  assert.equal(result.isError, false);
+});

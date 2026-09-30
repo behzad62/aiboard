@@ -1,0 +1,1614 @@
+{
+  "control": "handoff-without-validation",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B15",
+      "C12"
+    ],
+    "variantIds": [
+      "B15/missing",
+      "B15/foreign",
+      "C12/handoff-self",
+      "C12/handoff-cycle",
+      "C12/handoff-destination-reused",
+      "C12/handoff-final-source",
+      "C12/handoff-foreign",
+      "C12/handoff-missing"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "B15/missing",
+          "caseCommitment": "bf58994011899bbaa840060c441bef870e9852877728332812537d93615e33ae",
+          "fixtureCommitment": "c9c4fcd207f2cabbf63723f263537d1a9d1a61fed1338bef747116ad77755f7f",
+          "fixtureAllocations": 11,
+          "authenticationCommitment": "6b9b9a612ed23d5b03d4334525312efd2d10fe92b24ae9051022a6184131e20c"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "B15/foreign",
+          "caseCommitment": "86926c8daf521bc9e8006b0c67cbcbb4896640eef70aeef4de9dc76cb22797ae",
+          "fixtureCommitment": "4e0f16652cf3434b026c2aaee9618fde0fefc0e2bb43302243a9c2bff28ecb20",
+          "fixtureAllocations": 13,
+          "authenticationCommitment": "a3cb9e6223e991430dffda09f68dfa7ea16da656a3ac7adb3cf03611d7fcf347"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C12/handoff-self",
+          "caseCommitment": "22f11a32bd36c01a2c862568865e5720bc0d8daa50bd56f311b8d16375cb621a",
+          "fixtureCommitment": "64c9055ac8b13d855d10b88779369045639a7a8b46dfc5a27413f46a8b5ae823",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "5ade5c18010d7cb76592cb9f72bf370ff59e109219df85f144a045e83eef35a9"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C12/handoff-cycle",
+          "caseCommitment": "c5d4729b4da4e8a8475793d2ab8120bcaa923e5d1cb7aa8ef8b67284b980e08f",
+          "fixtureCommitment": "8541ca530302a259e9dcc79b3266656d7225f9ef04ea3ae14083d2682bac7c5f",
+          "fixtureAllocations": 11,
+          "authenticationCommitment": "20b202dd7d505668b1c6525b7709d156396a9cbcc538fca04e353ef1c56e77ac"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C12/handoff-destination-reused",
+          "caseCommitment": "274ea01dffa11608b5533d4e96e37aba6bb8614abf6215095009e387268f0677",
+          "fixtureCommitment": "9a5cb4cd016f985e5b0811cd6cd682423e8dffb8654d177fcfbe8a21361cb0ab",
+          "fixtureAllocations": 13,
+          "authenticationCommitment": "28d8037dd5bb3cefe7bae3b4270e62cc9389c4f5d7bf41bab1a6fd8fd63ead11"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C12/handoff-final-source",
+          "caseCommitment": "6922af8d9c416b5fefb2496d9811ff79f8f69b6d75d64ba714dd1a3f0597bdf5",
+          "fixtureCommitment": "d4ec51b9a2de0c4e9f5d97b77331a491638558908e98aaacba37c51dcfbf24e5",
+          "fixtureAllocations": 11,
+          "authenticationCommitment": "e140b16856df940e33134081b363959dbf18c642959b43d2afc2fe344e24fe50"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C12/handoff-foreign",
+          "caseCommitment": "7367343300fae123219ec913b44d87fc74f9cf9caf71bdb55a214f189022b515",
+          "fixtureCommitment": "95a973c2ad3bcf8cd2333702ea4844802484096d944c7386abf7c58c77533c5a",
+          "fixtureAllocations": 13,
+          "authenticationCommitment": "4970d8b705823141f67a8610459a276ad2677af66796ca6afa7c175f5ff2b366"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "C12/handoff-missing",
+          "caseCommitment": "66216bf02a45c2dfbb1286dd4d7b46bddfa434f65900277e0745179ec7dd8f48",
+          "fixtureCommitment": "866b00f1492eca07fcd50ca54cbd6c793c329891fa110b9429028b5fe3353bcc",
+          "fixtureAllocations": 11,
+          "authenticationCommitment": "7c44deea9acd579d0b221c1ff1b6cf59d04d86d8a3b9ac1f4e77e073c3a837ef"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B15/missing",
+        "B15/foreign",
+        "C12/handoff-self",
+        "C12/handoff-cycle",
+        "C12/handoff-destination-reused",
+        "C12/handoff-final-source",
+        "C12/handoff-foreign",
+        "C12/handoff-missing"
+      ],
+      "scheduleHash": "04c2e80eca8ea92f5fe4d1b48162c0d974ce446b889e0e12e85612359310ccd6",
+      "configurationHash": "b87355f4fa5bd878d46109f3e3151e5deacc2cca4f2be5dea4fca600c43d01f8"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B15",
+        "group": "B",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B15/b87355f4fa5bd878d46109f3e3151e5deacc2cca4f2be5dea4fca600c43d01f8",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "B15/missing",
+              "caseCommitment": "bf58994011899bbaa840060c441bef870e9852877728332812537d93615e33ae",
+              "fixtureCommitment": "c9c4fcd207f2cabbf63723f263537d1a9d1a61fed1338bef747116ad77755f7f",
+              "fixtureAllocations": 11,
+              "authenticationCommitment": "6b9b9a612ed23d5b03d4334525312efd2d10fe92b24ae9051022a6184131e20c"
+            },
+            "id": "B15/missing",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid handoff introduces no control effect",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 394,
+            "promiseJobs": 1857
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "B15/foreign",
+              "caseCommitment": "86926c8daf521bc9e8006b0c67cbcbb4896640eef70aeef4de9dc76cb22797ae",
+              "fixtureCommitment": "4e0f16652cf3434b026c2aaee9618fde0fefc0e2bb43302243a9c2bff28ecb20",
+              "fixtureAllocations": 13,
+              "authenticationCommitment": "a3cb9e6223e991430dffda09f68dfa7ea16da656a3ac7adb3cf03611d7fcf347"
+            },
+            "id": "B15/foreign",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid handoff introduces no control effect",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 593,
+            "promiseJobs": 2796
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B15/missing: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: handoff must refuse",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: invalid handoff introduces no control effect",
+            "passed": true
+          },
+          {
+            "label": "B15/missing: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: handoff must refuse",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: invalid handoff introduces no control effect",
+            "passed": true
+          },
+          {
+            "label": "B15/foreign: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 987,
+        "promiseJobs": 4653
+      },
+      {
+        "id": "C12",
+        "group": "C",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C12/b87355f4fa5bd878d46109f3e3151e5deacc2cca4f2be5dea4fca600c43d01f8",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C12/handoff-self",
+              "caseCommitment": "22f11a32bd36c01a2c862568865e5720bc0d8daa50bd56f311b8d16375cb621a",
+              "fixtureCommitment": "64c9055ac8b13d855d10b88779369045639a7a8b46dfc5a27413f46a8b5ae823",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "5ade5c18010d7cb76592cb9f72bf370ff59e109219df85f144a045e83eef35a9"
+            },
+            "id": "C12/handoff-self",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid handoff introduces no control effect",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 394,
+            "promiseJobs": 1857
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C12/handoff-cycle",
+              "caseCommitment": "c5d4729b4da4e8a8475793d2ab8120bcaa923e5d1cb7aa8ef8b67284b980e08f",
+              "fixtureCommitment": "8541ca530302a259e9dcc79b3266656d7225f9ef04ea3ae14083d2682bac7c5f",
+              "fixtureAllocations": 11,
+              "authenticationCommitment": "20b202dd7d505668b1c6525b7709d156396a9cbcc538fca04e353ef1c56e77ac"
+            },
+            "id": "C12/handoff-cycle",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid handoff introduces no control effect",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 421,
+            "promiseJobs": 1972
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C12/handoff-destination-reused",
+              "caseCommitment": "274ea01dffa11608b5533d4e96e37aba6bb8614abf6215095009e387268f0677",
+              "fixtureCommitment": "9a5cb4cd016f985e5b0811cd6cd682423e8dffb8654d177fcfbe8a21361cb0ab",
+              "fixtureAllocations": 13,
+              "authenticationCommitment": "28d8037dd5bb3cefe7bae3b4270e62cc9389c4f5d7bf41bab1a6fd8fd63ead11"
+            },
+            "id": "C12/handoff-destination-reused",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid handoff introduces no control effect",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 600,
+            "promiseJobs": 2823
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C12/handoff-final-source",
+              "caseCommitment": "6922af8d9c416b5fefb2496d9811ff79f8f69b6d75d64ba714dd1a3f0597bdf5",
+              "fixtureCommitment": "d4ec51b9a2de0c4e9f5d97b77331a491638558908e98aaacba37c51dcfbf24e5",
+              "fixtureAllocations": 11,
+              "authenticationCommitment": "e140b16856df940e33134081b363959dbf18c642959b43d2afc2fe344e24fe50"
+            },
+            "id": "C12/handoff-final-source",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid handoff introduces no control effect",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 600,
+            "promiseJobs": 2811
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C12/handoff-foreign",
+              "caseCommitment": "7367343300fae123219ec913b44d87fc74f9cf9caf71bdb55a214f189022b515",
+              "fixtureCommitment": "95a973c2ad3bcf8cd2333702ea4844802484096d944c7386abf7c58c77533c5a",
+              "fixtureAllocations": 13,
+              "authenticationCommitment": "4970d8b705823141f67a8610459a276ad2677af66796ca6afa7c175f5ff2b366"
+            },
+            "id": "C12/handoff-foreign",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid handoff introduces no control effect",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 593,
+            "promiseJobs": 2796
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "C12/handoff-missing",
+              "caseCommitment": "66216bf02a45c2dfbb1286dd4d7b46bddfa434f65900277e0745179ec7dd8f48",
+              "fixtureCommitment": "866b00f1492eca07fcd50ca54cbd6c793c329891fa110b9429028b5fe3353bcc",
+              "fixtureAllocations": 11,
+              "authenticationCommitment": "7c44deea9acd579d0b221c1ff1b6cf59d04d86d8a3b9ac1f4e77e073c3a837ef"
+            },
+            "id": "C12/handoff-missing",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid handoff introduces no control effect",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 394,
+            "promiseJobs": 1857
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C12/handoff-self: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: handoff must refuse",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: invalid handoff introduces no control effect",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-self: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: handoff must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: handoff must refuse",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: invalid handoff introduces no control effect",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-cycle: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: handoff must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: handoff must refuse",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: invalid handoff introduces no control effect",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-destination-reused: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: released public job",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: handoff must refuse",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: invalid handoff introduces no control effect",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-final-source: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: handoff must refuse",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: invalid handoff introduces no control effect",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-foreign: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: handoff must refuse",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: invalid handoff introduces no control effect",
+            "passed": true
+          },
+          {
+            "label": "C12/handoff-missing: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 3002,
+        "promiseJobs": 14116
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "C": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.4,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B15",
+      "variantId": "B15/missing",
+      "execution": {
+        "variant": {
+          "id": "B15/missing",
+          "family": "B15",
+          "kind": "handoff",
+          "args": {
+            "change": "missing"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B15/qualification-v1",
+        "schedule": {
+          "partition": 3783,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B15",
+      "variantId": "B15/foreign",
+      "execution": {
+        "variant": {
+          "id": "B15/foreign",
+          "family": "B15",
+          "kind": "handoff",
+          "args": {
+            "change": "foreign"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B15/qualification-v1",
+        "schedule": {
+          "partition": 3895,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C12",
+      "variantId": "C12/handoff-self",
+      "execution": {
+        "variant": {
+          "id": "C12/handoff-self",
+          "family": "C12",
+          "kind": "handoff",
+          "args": {
+            "change": "self"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C12/qualification-v1",
+        "schedule": {
+          "partition": 2869,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C12",
+      "variantId": "C12/handoff-cycle",
+      "execution": {
+        "variant": {
+          "id": "C12/handoff-cycle",
+          "family": "C12",
+          "kind": "handoff",
+          "args": {
+            "change": "cycle"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C12/qualification-v1",
+        "schedule": {
+          "partition": 3236,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C12",
+      "variantId": "C12/handoff-destination-reused",
+      "execution": {
+        "variant": {
+          "id": "C12/handoff-destination-reused",
+          "family": "C12",
+          "kind": "handoff",
+          "args": {
+            "change": "destination-reused"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C12/qualification-v1",
+        "schedule": {
+          "partition": 3690,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C12",
+      "variantId": "C12/handoff-final-source",
+      "execution": {
+        "variant": {
+          "id": "C12/handoff-final-source",
+          "family": "C12",
+          "kind": "handoff",
+          "args": {
+            "change": "final-source"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C12/qualification-v1",
+        "schedule": {
+          "partition": 3923,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C12",
+      "variantId": "C12/handoff-foreign",
+      "execution": {
+        "variant": {
+          "id": "C12/handoff-foreign",
+          "family": "C12",
+          "kind": "handoff",
+          "args": {
+            "change": "foreign"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C12/qualification-v1",
+        "schedule": {
+          "partition": 3860,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C12",
+      "variantId": "C12/handoff-missing",
+      "execution": {
+        "variant": {
+          "id": "C12/handoff-missing",
+          "family": "C12",
+          "kind": "handoff",
+          "args": {
+            "change": "missing"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C12/qualification-v1",
+        "schedule": {
+          "partition": 3217,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

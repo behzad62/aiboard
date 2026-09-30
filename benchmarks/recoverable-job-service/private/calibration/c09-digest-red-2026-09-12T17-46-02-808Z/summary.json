@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "purpose": "same C09 correction history; narrow nonfinal digest red/green evidence, not full qualification",
+  "output": "benchmarks\\recoverable-job-service\\private\\calibration\\c09-digest-red-2026-09-12T17-46-02-808Z",
+  "red": true,
+  "node": "24.18.0",
+  "identity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f8f1f824577efab1719a750b22df833daf62c13fb9bf29b28bf9363cf94fa7f8"
+  },
+  "variantsSha256": "dbe306367582186342041e3928ea86d2118e81c057247acfd521c4acd27ae916",
+  "replayInput": {
+    "path": "benchmarks\\recoverable-job-service\\private\\calibration\\correction-proof-2026-09-12T17-06-54-031Z\\replay-input.private.json",
+    "sha256": "e317d91d11b0b9eb7ea07b206362d9db3e94e172ef17b719411d20f0e1065156",
+    "commitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a"
+  },
+  "sourceHashes": {
+    "reference": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "record-envelope": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+    "nonfinal-revision": "5934b229e3122ff738a059c0828ae3f42c346f014f85b4894e682dd53f415e87"
+  },
+  "runs": [
+    {
+      "name": "nonfinal-revision-red",
+      "sourceHash": "5934b229e3122ff738a059c0828ae3f42c346f014f85b4894e682dd53f415e87",
+      "expectation": "red",
+      "selected": 2,
+      "passed": 0,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": false,
+          "reason": "restored evidence preserves exact public finality and manifest",
+          "operations": 281,
+          "promiseJobs": 1260
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": false,
+          "reason": "restored evidence preserves exact public finality and manifest",
+          "operations": 281,
+          "promiseJobs": 1260
+        }
+      ]
+    }
+  ],
+  "probes": [],
+  "checks": [
+    {
+      "label": "nonfinal-revision-red: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-red: C09/restore-store.commit.before fails solely reviewed nonfinal constraint",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-red: C09/restore-store.commit.after fails solely reviewed nonfinal constraint",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

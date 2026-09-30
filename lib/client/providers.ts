@@ -12,24 +12,39 @@ import type {
   ModelInfo,
   StreamChunk,
 } from "@/lib/providers/base";
-import { parseModelId } from "@/lib/providers/base";
+import { formatModelId, parseModelId } from "@/lib/providers/base";
 import {
   resolveModelContextProfile,
   type ModelContextOverrides,
 } from "@/lib/providers/model-context";
-import { openaiProvider } from "@/lib/providers/openai";
+import { openaiProvider, streamOpenAIResponses } from "@/lib/providers/openai";
 import { anthropicProvider } from "@/lib/providers/anthropic";
 import { foundryProvider } from "@/lib/providers/foundry";
 import { googleProvider } from "@/lib/providers/google";
 import { openrouterProvider } from "@/lib/providers/openrouter";
 import { xaiProvider } from "@/lib/providers/xai";
+import { metaProvider } from "@/lib/providers/meta";
 import { chatgptProvider } from "@/lib/providers/chatgpt";
 import { githubCopilotProvider } from "@/lib/providers/github-copilot";
 import { nvidiaProvider } from "@/lib/providers/nvidia";
 import { getModelDisplayName } from "@/lib/providers/catalog";
 import { PROVIDER_IDS, type ProviderId } from "@/lib/providers/constants";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
+import { customCompatibleTransports } from "@/lib/providers/custom-capabilities";
 import type { CustomModel } from "@/lib/db/schema";
+import type {
+  CapabilityEvidence,
+  ProviderTransportId,
+} from "@/lib/providers/tool-capabilities";
+import {
+  ACCOUNT_RUNNER_CAPABILITY_MINIMUM_VERSION,
+  getCachedAccountRunnerCapabilities,
+} from "@/lib/providers/account-runner";
+import {
+  runnerCapabilityEvidence,
+  type RunnerCapabilityProviderId,
+  type RunnerCapabilityValidationResult,
+} from "@/lib/providers/runner-capabilities";
 import {
   getCustomModelById,
   getCustomModels,
@@ -42,6 +57,64 @@ export const FOUNDRY_PROVIDER_ID = "foundry";
 export const CHATGPT_PROVIDER_ID = "chatgpt";
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 export const NVIDIA_PROVIDER_ID = "nvidia";
+export const OPENROUTER_PROVIDER_ID = "openrouter";
+
+const RUNNER_CAPABILITY_PROVIDER_IDS = new Set<RunnerCapabilityProviderId>([
+  "chatgpt",
+  "github-copilot",
+  "nvidia",
+]);
+
+export interface RunnerCapabilityPlanningContext {
+  evidence?: CapabilityEvidence[];
+  allowedTransports?: ProviderTransportId[];
+  validation?: RunnerCapabilityValidationResult;
+}
+
+export function isRunnerCapabilityProvider(
+  providerId: string,
+): providerId is RunnerCapabilityProviderId {
+  return RUNNER_CAPABILITY_PROVIDER_IDS.has(providerId as RunnerCapabilityProviderId);
+}
+
+export async function getRunnerCapabilityPlanningContext(
+  providerId: string,
+  modelId: string,
+  signal?: AbortSignal,
+  connectionOverride?: {
+    baseURL?: string;
+    runnerToken?: string;
+    apiKey?: string;
+  },
+): Promise<RunnerCapabilityPlanningContext> {
+  if (!isRunnerCapabilityProvider(providerId)) return {};
+  const needsStoredConnection =
+    !connectionOverride?.baseURL ||
+    !connectionOverride?.runnerToken ||
+    (providerId === "nvidia" && !connectionOverride?.apiKey);
+  const row = needsStoredConnection ? getProviderKey(providerId) : undefined;
+  const baseURL = connectionOverride?.baseURL ?? row?.baseURL ?? undefined;
+  const providerApiKey = connectionOverride?.apiKey ?? row?.apiKey ?? undefined;
+  const runnerToken =
+    connectionOverride?.runnerToken ??
+    (providerId === "nvidia" ? row?.runnerToken ?? undefined : providerApiKey);
+  if (!baseURL?.trim() || !runnerToken?.trim()) return {};
+
+  const validation = await getCachedAccountRunnerCapabilities({
+    baseURL,
+    runnerToken,
+    providerId,
+    ...(providerId === "nvidia" && providerApiKey ? { apiKey: providerApiKey } : {}),
+    signal,
+    minimumRunnerVersion: ACCOUNT_RUNNER_CAPABILITY_MINIMUM_VERSION,
+  });
+  if (validation.status !== "valid") return { validation, evidence: [] };
+  return {
+    validation,
+    evidence: runnerCapabilityEvidence(validation, modelId),
+    allowedTransports: [...validation.handshake.transports],
+  };
+}
 
 const TEXT_ONLY = {
   image: false,
@@ -49,6 +122,54 @@ const TEXT_ONLY = {
   audio: false,
   video: false,
 } as const;
+
+function getDiscoveredCapabilities(fullModelId: string): ModelCapabilities | null {
+  const metadata = getUserSettings().discoveredModelMetadata?.[fullModelId];
+  if (!metadata) return null;
+  return {
+    image: metadata.image,
+    document: metadata.document,
+    audio: metadata.audio,
+    video: metadata.video,
+  };
+}
+
+export function getDiscoveredModelMetadata(fullModelId: string) {
+  return getUserSettings().discoveredModelMetadata?.[fullModelId] ?? null;
+}
+
+export function getPersistedProviderCapabilityEvidence(
+  providerId: string,
+  modelId: string,
+  nowMs = Date.now(),
+): CapabilityEvidence[] | undefined {
+  const evidence = (getUserSettings().providerToolCapabilityEvidence ?? []).filter((item) => {
+    if (item.providerId !== providerId) return false;
+    if (item.modelId !== undefined && item.modelId !== modelId) return false;
+    if (item.expiresAt) {
+      const expiresAt = Date.parse(item.expiresAt);
+      if (Number.isFinite(expiresAt) && expiresAt <= nowMs) return false;
+    }
+    return true;
+  });
+  return evidence.length > 0 ? evidence : undefined;
+}
+
+/** Compatibility alias for callers/tests that still use the OpenRouter-specific name. */
+export function getDiscoveredOpenRouterApiCapabilities(modelId: string) {
+  return getDiscoveredModelMetadata(
+    formatModelId(OPENROUTER_PROVIDER_ID, normalizeOpenRouterModelId(modelId)),
+  );
+}
+
+export function getDiscoveredOpenRouterCapabilityEvidence(
+  modelId: string,
+): CapabilityEvidence[] | undefined {
+  return getPersistedProviderCapabilityEvidence(
+    OPENROUTER_PROVIDER_ID,
+    normalizeOpenRouterModelId(modelId),
+  );
+}
 
 // Foundry serves Claude models, which accept image + document inputs.
 const FOUNDRY_CAPABILITIES = {
@@ -74,6 +195,7 @@ const providers: Record<ProviderId, AIProvider> = {
   google: googleProvider,
   openrouter: openrouterProvider,
   xai: xaiProvider,
+  meta: metaProvider,
   chatgpt: chatgptProvider,
   "github-copilot": githubCopilotProvider,
   nvidia: nvidiaProvider,
@@ -108,6 +230,15 @@ function withContextProfiles(
   return models.map((model) => withContextProfile(model, overrides));
 }
 
+export function customModelPlanningContext(model: CustomModel): {
+  customOverrides: CustomModel["toolCapabilityOverrides"];
+  allowedTransports: ProviderTransportId[];
+} {
+  return {
+    customOverrides: model.toolCapabilityOverrides ?? [],
+    allowedTransports: customCompatibleTransports(model.compatibleTransports),
+  };
+}
 function customModelToInfo(model: CustomModel): ModelInfo {
   return {
     id: model.id,
@@ -143,40 +274,60 @@ export function listFoundryModelInfos(): ModelInfo[] {
     }));
 }
 
-/** User-defined NVIDIA NIM model ids (from the provider key). */
-export function normalizeNvidiaModelId(id: string): string {
+export function normalizeProviderModelId(providerId: string, id: string): string {
   const trimmed = id.trim();
   const parsed = parseModelId(trimmed);
-  return parsed.providerId === NVIDIA_PROVIDER_ID ? parsed.model : trimmed;
+  return parsed.providerId === providerId ? parsed.model : trimmed;
 }
 
-function nvidiaCapabilitiesForModel(modelId: string) {
-  return {
-    ...(NVIDIA_MODEL_CAPABILITIES[modelId] ?? TEXT_ONLY),
-  };
+export function normalizeOpenRouterModelId(id: string): string {
+  return normalizeProviderModelId(OPENROUTER_PROVIDER_ID, id);
 }
 
-export function listNvidiaModelInfos(): ModelInfo[] {
-  const ids = getProviderKey(NVIDIA_PROVIDER_ID)?.models ?? [];
-  return ids
-    .map(normalizeNvidiaModelId)
-    .filter((id) => id.length > 0)
+/** Built-in models plus user-added live-catalog ids for one provider. */
+export function listProviderModelInfos(providerId: ProviderId): ModelInfo[] {
+  if (providerId === FOUNDRY_PROVIDER_ID) return listFoundryModelInfos();
+
+  const provider = getProvider(providerId);
+  const catalogModels = provider?.listModels() ?? [];
+  const knownIds = new Set(catalogModels.map((model) => model.id));
+  const additions = (getProviderKey(providerId)?.models ?? [])
+    .map((id) => normalizeProviderModelId(providerId, id))
+    .filter((id) => id.length > 0 && !knownIds.has(id))
     .map((id) => ({
       id,
       name: id,
-      providerId: NVIDIA_PROVIDER_ID,
-      description: "NVIDIA NIM model",
-      capabilities: nvidiaCapabilitiesForModel(id),
+      providerId,
+      description: `User-added ${provider?.name ?? providerId} model`,
+      capabilities:
+        getDiscoveredCapabilities(formatModelId(providerId, id)) ??
+        (providerId === NVIDIA_PROVIDER_ID
+          ? { ...(NVIDIA_MODEL_CAPABILITIES[id] ?? TEXT_ONLY) }
+          : { ...TEXT_ONLY }),
     }));
+  return [...catalogModels, ...additions];
+}
+
+export function listOpenRouterModelInfos(): ModelInfo[] {
+  return listProviderModelInfos(OPENROUTER_PROVIDER_ID);
+}
+
+export function normalizeNvidiaModelId(id: string): string {
+  return normalizeProviderModelId(NVIDIA_PROVIDER_ID, id);
+}
+
+
+export function listNvidiaModelInfos(): ModelInfo[] {
+  return listProviderModelInfos(NVIDIA_PROVIDER_ID);
 }
 
 export function getAllModels(): ModelInfo[] {
   const overrides = getUserSettings().modelContextOverrides;
   return withContextProfiles(
     [
-      ...getAllProviders().flatMap((p) => p.listModels()),
-      ...listFoundryModelInfos(),
-      ...listNvidiaModelInfos(),
+      ...getAllProviders().flatMap((provider) =>
+        listProviderModelInfos(provider.id as ProviderId)
+      ),
       ...listCustomModelInfos(),
     ],
     overrides
@@ -203,19 +354,13 @@ export function getProviderRunnerToken(providerId: string): string | undefined {
 export function getEnabledModels(): ModelInfo[] {
   const overrides = getUserSettings().modelContextOverrides;
   const keyed = getAllProviders()
-    .map((p) => p.id)
+    .map((p) => p.id as ProviderId)
     .filter((id) => getDecryptedApiKey(id) !== null);
-  const builtin = getAllProviders()
-    .flatMap((p) => p.listModels())
-    .filter((m) => keyed.includes(m.providerId));
-  const foundry = keyed.includes(FOUNDRY_PROVIDER_ID)
-    ? listFoundryModelInfos()
-    : [];
-  const nvidia = keyed.includes(NVIDIA_PROVIDER_ID)
-    ? listNvidiaModelInfos()
-    : [];
   return withContextProfiles(
-    [...builtin, ...foundry, ...nvidia, ...listCustomModelInfos()],
+    [
+      ...keyed.flatMap((providerId) => listProviderModelInfos(providerId)),
+      ...listCustomModelInfos(),
+    ],
     overrides
   );
 }
@@ -234,13 +379,12 @@ export function resolveModelName(fullId: string): string {
   if (providerId === CUSTOM_PROVIDER_ID) {
     return getCustomModelById(model)?.label ?? model;
   }
-  // Foundry model ids are user-defined (not in the catalog) — show the id.
-  if (providerId === FOUNDRY_PROVIDER_ID) return model;
-  if (providerId === NVIDIA_PROVIDER_ID) return model;
-  const providerModel = getProvider(providerId)
-    ?.listModels()
-    .find((m) => m.id === model);
-  if (providerModel) return providerModel.name;
+  if (PROVIDER_IDS.includes(providerId as ProviderId)) {
+    return (
+      listProviderModelInfos(providerId as ProviderId).find((entry) => entry.id === model)
+        ?.name ?? model
+    );
+  }
   return getModelDisplayName(fullId);
 }
 
@@ -250,15 +394,14 @@ export function resolveModelName(fullId: string): string {
  */
 export function resolveModelCapabilities(fullId: string) {
   const { providerId, model } = parseModelId(fullId);
-  if (providerId === FOUNDRY_PROVIDER_ID) return { ...FOUNDRY_CAPABILITIES };
-  if (providerId === NVIDIA_PROVIDER_ID) return nvidiaCapabilitiesForModel(model);
   if (providerId === CUSTOM_PROVIDER_ID) {
     return getCustomModelById(model)?.capabilities ?? { ...TEXT_ONLY };
   }
-  const providerModel = getProvider(providerId)
-    ?.listModels()
-    .find((m) => m.id === model);
-  return providerModel?.capabilities ?? null; // otherwise use the catalog registry
+  if (!PROVIDER_IDS.includes(providerId as ProviderId)) return null;
+  return (
+    listProviderModelInfos(providerId as ProviderId).find((entry) => entry.id === model)
+      ?.capabilities ?? null
+  );
 }
 
 export function getCustomModelByFullId(fullId: string): CustomModel | null {
@@ -277,13 +420,18 @@ export async function* streamCustomChat(
     dangerouslyAllowBrowser: true,
     ...(params.disableAutomaticRetries ? { maxRetries: 0 } : {}),
   });
+  const prepared = {
+    ...params,
+    model: model.model,
+    capabilities: model.capabilities ?? { ...TEXT_ONLY },
+  };
+  if (params.callPlan?.transport === "responses") {
+    yield* streamOpenAIResponses(client, prepared, "custom");
+    return;
+  }
   yield* streamOpenAICompatibleChat(
     client,
-    {
-      ...params,
-      model: model.model,
-      capabilities: model.capabilities ?? { ...TEXT_ONLY },
-    },
+    prepared,
     CUSTOM_PROVIDER_ID,
     model.label,
     "max_tokens"

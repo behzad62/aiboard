@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';
+import {Scenario} from '../benchmarks/recoverable-job-service/private/scenarios.mjs';
+import {inspectSafety} from '../benchmarks/recoverable-job-service/private/oracle.mjs';
+const s=new Scenario(await readFile('benchmarks/recoverable-job-service/private/reference.js','utf8'),'B17');
+await s.open();const input=s.b.sourcePrelude({streams:{stdout:[[1,2,3]],stderr:[[4]]}});
+s.batchId=(await s.ok('createBatch')).batchId;const j=await s.ok('start',{batchId:s.batchId,workloadId:input.workloadId});s.jobId=j.jobId;
+await s.finish();await s.dispose();
+assert.deepEqual(inspectSafety(s.b),[],'source prefix with zero consumer/ACK history satisfies causal oracle');
+const event=s.b.trace.find(e=>e.type==='audit'&&e.auditType==='source-bootstrap');assert.ok(event,'adoption was actually audited');
+event.receipt.payload.source.streams.stdout.unavailablePrefix.offset++;
+assert.ok(inspectSafety(s.b).some(e=>e.code==='source-bootstrap-proof'),'tampered adopted proof fails intended source provenance assertion');
+console.log('Source causal accounting and tampered-proof rejection passed.');

@@ -17,6 +17,13 @@
 # style live probes (model prompts/responses, never meant to be committed)
 /probe-runs/
 
+# Recoverable Job Service raw qualification/probe traces. Release evidence is
+# promoted separately under private/fixtures and private/calibration/release-evidence.
+/benchmarks/recoverable-job-service/private/task2-20*/
+/benchmarks/recoverable-job-service/private/task2-20*-replay/
+/benchmarks/recoverable-job-service/private/calibration/qualification-20*/
+/benchmarks/recoverable-job-service/private/calibration/probes-20*/
+
 # next.js
 /.next/
 /out/

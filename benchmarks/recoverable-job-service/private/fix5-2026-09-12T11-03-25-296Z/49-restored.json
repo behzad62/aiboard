@@ -1,0 +1,1920 @@
+{
+  "control": "optimistic-restore",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B12",
+      "C03",
+      "C15",
+      "C19"
+    ],
+    "variantIds": [
+      "B12/changed-checkpoint",
+      "B12/blocked-barrier",
+      "C03/artifact-foreign",
+      "C03/evidence-gap",
+      "C15/unfinalized",
+      "C15/pending-consumption",
+      "C15/foreign-evidence",
+      "C19/final-reuse-head"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "3858ad3aa139b373fe1df3ef960c57b9a95e60347402b052076bf45b2c2ffbdf",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B12/changed-checkpoint",
+        "B12/blocked-barrier",
+        "C03/artifact-foreign",
+        "C03/evidence-gap",
+        "C15/unfinalized",
+        "C15/pending-consumption",
+        "C15/foreign-evidence",
+        "C19/final-reuse-head"
+      ],
+      "scheduleHash": "be600a59d2e6585b0c6541c8583e894e91531ff22f0773348a2788ebeadfc4f8",
+      "configurationHash": "d7a706ed41c1ed38b5a236fb5ede1df0960b9d7e715230f98d216b43fe8d2ec1"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B12",
+        "group": "B",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/B12/d7a706ed41c1ed38b5a236fb5ede1df0960b9d7e715230f98d216b43fe8d2ec1",
+        "variants": [
+          {
+            "id": "B12/changed-checkpoint",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 477,
+            "promiseJobs": 2183
+          },
+          {
+            "id": "B12/blocked-barrier",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 478,
+            "promiseJobs": 2184
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B12/changed-checkpoint: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: restore must refuse",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "B12/changed-checkpoint: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: restore must refuse",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "B12/blocked-barrier: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 955,
+        "promiseJobs": 4367
+      },
+      {
+        "id": "C03",
+        "group": "C",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C03/d7a706ed41c1ed38b5a236fb5ede1df0960b9d7e715230f98d216b43fe8d2ec1",
+        "variants": [
+          {
+            "id": "C03/artifact-foreign",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "unretired accepted identity retained in capsule",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted evidence span required",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "unretired accepted identity retained in capsule",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid evidence never certifies release",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 469,
+            "promiseJobs": 2169
+          },
+          {
+            "id": "C03/evidence-gap",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "unretired accepted identity retained in capsule",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "accepted evidence span required",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid evidence never certifies release",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 256,
+            "promiseJobs": 1171
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C03/artifact-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: unretired accepted identity retained in capsule",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: accepted evidence span required",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: unretired accepted identity retained in capsule",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: restore must refuse",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: invalid evidence never certifies release",
+            "passed": true
+          },
+          {
+            "label": "C03/artifact-foreign: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: unretired accepted identity retained in capsule",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: accepted evidence span required",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: restore must refuse",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: invalid evidence never certifies release",
+            "passed": true
+          },
+          {
+            "label": "C03/evidence-gap: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 725,
+        "promiseJobs": 3340
+      },
+      {
+        "id": "C15",
+        "group": "C",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C15/d7a706ed41c1ed38b5a236fb5ede1df0960b9d7e715230f98d216b43fe8d2ec1",
+        "variants": [
+          {
+            "id": "C15/unfinalized",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 477,
+            "promiseJobs": 2183
+          },
+          {
+            "id": "C15/pending-consumption",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 477,
+            "promiseJobs": 2183
+          },
+          {
+            "id": "C15/foreign-evidence",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "restore must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 476,
+            "promiseJobs": 2181
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C15/unfinalized: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: restore must refuse",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "C15/unfinalized: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: restore must refuse",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "C15/pending-consumption: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: restore must refuse",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "C15/foreign-evidence: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 1430,
+        "promiseJobs": 6547
+      },
+      {
+        "id": "C19",
+        "group": "C",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C19/d7a706ed41c1ed38b5a236fb5ede1df0960b9d7e715230f98d216b43fe8d2ec1",
+        "variants": [
+          {
+            "id": "C19/final-reuse-head",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "immutable final head change is refused",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 596,
+            "promiseJobs": 2712
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C19/final-reuse-head: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: released public job",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: immutable final head change is refused",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "C19/final-reuse-head: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 596,
+        "promiseJobs": 2712
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "C": {
+        "passed": 3,
+        "total": 3,
+        "coverage": 1
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.4,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B12",
+      "variantId": "B12/changed-checkpoint",
+      "execution": {
+        "variant": {
+          "id": "B12/changed-checkpoint",
+          "family": "B12",
+          "kind": "final-replay",
+          "args": {
+            "change": "changed-checkpoint"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B12/qualification-v1",
+        "schedule": {
+          "partition": 2980,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B12",
+      "variantId": "B12/blocked-barrier",
+      "execution": {
+        "variant": {
+          "id": "B12/blocked-barrier",
+          "family": "B12",
+          "kind": "final-replay",
+          "args": {
+            "change": "blocked-barrier"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B12/qualification-v1",
+        "schedule": {
+          "partition": 3122,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C03",
+      "variantId": "C03/artifact-foreign",
+      "execution": {
+        "variant": {
+          "id": "C03/artifact-foreign",
+          "family": "C03",
+          "kind": "evidence-invalid",
+          "args": {
+            "change": "artifact-foreign"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C03/qualification-v1",
+        "schedule": {
+          "partition": 3192,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C03",
+      "variantId": "C03/evidence-gap",
+      "execution": {
+        "variant": {
+          "id": "C03/evidence-gap",
+          "family": "C03",
+          "kind": "evidence-invalid",
+          "args": {
+            "change": "evidence-gap"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C03/qualification-v1",
+        "schedule": {
+          "partition": 3608,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C15",
+      "variantId": "C15/unfinalized",
+      "execution": {
+        "variant": {
+          "id": "C15/unfinalized",
+          "family": "C15",
+          "kind": "partial-evidence",
+          "args": {
+            "change": "unfinalized"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C15/qualification-v1",
+        "schedule": {
+          "partition": 3941,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C15",
+      "variantId": "C15/pending-consumption",
+      "execution": {
+        "variant": {
+          "id": "C15/pending-consumption",
+          "family": "C15",
+          "kind": "partial-evidence",
+          "args": {
+            "change": "pending-consumption"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C15/qualification-v1",
+        "schedule": {
+          "partition": 2178,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C15",
+      "variantId": "C15/foreign-evidence",
+      "execution": {
+        "variant": {
+          "id": "C15/foreign-evidence",
+          "family": "C15",
+          "kind": "partial-evidence",
+          "args": {
+            "change": "foreign-evidence"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C15/qualification-v1",
+        "schedule": {
+          "partition": 2079,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C19",
+      "variantId": "C19/final-reuse-head",
+      "execution": {
+        "variant": {
+          "id": "C19/final-reuse-head",
+          "family": "C19",
+          "kind": "final-race",
+          "args": {
+            "change": "head"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C19/qualification-v1",
+        "schedule": {
+          "partition": 3719,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

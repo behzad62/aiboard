@@ -1,3 +1,4 @@
+
 export const PROVIDER_IDS = [
   "openai",
   "anthropic",
@@ -5,6 +6,7 @@ export const PROVIDER_IDS = [
   "google",
   "openrouter",
   "xai",
+  "meta",
   "chatgpt",
   "github-copilot",
   "nvidia",
@@ -56,20 +58,15 @@ export interface ProviderDefinition {
   runnerTokenField?: ProviderSetupField;
   runnerTokenRequiredMessage?: string;
   modelIdsField?: ProviderSetupField;
+  modelDiscovery?: {
+    source: "provider-api" | "public-api" | "runner";
+  };
   accountRunner?: AccountRunnerProviderSetup;
   runnerDownload?: ProviderRunnerDownload;
-  nativeWebSearch: boolean | ((modelId: string) => boolean);
   reasoningEffort: boolean | ((modelId: string) => boolean);
   maxTokens: boolean | ((modelId: string) => boolean);
   runtimeBehavior: ModelRuntimeBehavior;
 }
-
-type ModelToolFeature =
-  | "nativeWebSearch"
-  | "nativeBuildTools"
-  | "hostedBuildTools";
-
-type ModelToolRule = boolean | readonly string[] | ((modelId: string) => boolean);
 
 const ACCOUNT_RUNNER_DOWNLOAD_HREF = "/account-provider-runner.mjs";
 const COPILOT_ACCOUNT_RUNNER_DOWNLOAD_HREF = "/aiboard-account-provider-runner.zip";
@@ -78,155 +75,21 @@ function normalizedModelId(modelId = ""): string {
   return modelId.trim().toLowerCase();
 }
 
-function gptFamilyVersion(modelId: string): { major: number; minor: number } | null {
-  const match = /^gpt-(\d+)(?:\.(\d+))?/i.exec(modelId.trim());
-  if (!match) return null;
-  return {
-    major: Number(match[1]),
-    minor: match[2] ? Number(match[2]) : 0,
-  };
-}
-
-function gptAtLeast(modelId: string, major: number, minor = 0): boolean {
-  const version = gptFamilyVersion(modelId);
-  if (!version) return false;
-  return (
-    version.major > major ||
-    (version.major === major && version.minor >= minor)
-  );
-}
-
-function isCodexLine(modelId: string): boolean {
-  return /\bcodex\b/i.test(modelId);
-}
-
-function isClaudeLike(modelId: string): boolean {
-  return /^claude-/i.test(modelId.trim());
-}
-
 function isXAINonReasoningModel(modelId: string): boolean {
   return normalizedModelId(modelId).includes("non-reasoning");
 }
-
-function isGrokLike(modelId: string): boolean {
-  return /^grok-/i.test(modelId.trim());
-}
-
-function isGemini25OrNewer(modelId: string): boolean {
-  const match = /^gemini-(\d+)(?:\.(\d+))?/i.exec(modelId.trim());
-  if (!match) return false;
-  const major = Number(match[1]);
-  const minor = match[2] ? Number(match[2]) : 0;
-  return major > 2 || (major === 2 && minor >= 5);
-}
-
-// Verified 2026-07-06 from OpenRouter's Models API `supported_parameters`.
-// Models missing from that API are fail-closed until we can verify them.
-const OPENROUTER_MODELS_WITH_FUNCTION_TOOLS = [
-  "qwen/qwen3.7-max",
-  "qwen/qwen3.7-plus",
-  "deepseek/deepseek-v4-pro",
-  "deepseek/deepseek-v4-flash",
-  "minimax/minimax-m3",
-  "z-ai/glm-5.2",
-  "moonshotai/kimi-k2.7-code",
-  "moonshotai/kimi-k3",
-] as const;
-
-// NVIDIA model ids are user-defined in Settings, so fail closed for unknown ids
-// instead of assuming every NIM chat endpoint accepts tools.
-const NVIDIA_MODELS_WITH_FUNCTION_TOOLS = [
-  "z-ai/glm-5.2",
-  "minimaxai/minimax-m3",
-  "deepseek-ai/deepseek-v4-pro",
-  "nvidia/nemotron-3-ultra-550b-a55b",
-] as const;
-
-function listedModel(list: readonly string[]): (modelId: string) => boolean {
-  const set = new Set(list.map(normalizedModelId));
-  return (modelId: string) => set.has(normalizedModelId(modelId));
-}
-
-/**
- * Model-level tool support, intentionally separate from the provider transport
- * metadata below. Provider-wide support only means "the SDK path knows how to
- * send the tool"; these rules decide whether this specific model should receive
- * that tool at all.
- */
-const MODEL_TOOL_SUPPORT: Partial<
-  Record<ProviderId | "custom", Partial<Record<ModelToolFeature, ModelToolRule>>>
-> = {
-  openai: {
-    // OpenAI docs show hosted web search on current GPT-5.4+ / GPT-5.6 models.
-    // Codex 5.3 is kept off: the account-backed Spark sibling rejected
-    // web_search_preview in the stopped build, and Codex-specific docs do not
-    // advertise web search for that line.
-    nativeWebSearch: (modelId) => gptAtLeast(modelId, 5, 4) && !isCodexLine(modelId),
-    nativeBuildTools: (modelId) => gptAtLeast(modelId, 5, 1),
-  },
-  anthropic: {
-    // Claude docs describe client tools broadly for current Claude models, and
-    // the basic web_search_20250305 server tool remains the one this app sends.
-    nativeWebSearch: isClaudeLike,
-    nativeBuildTools: isClaudeLike,
-  },
-  foundry: {
-    // Foundry model ids are user-defined Anthropic deployments. Client tools
-    // work on current Claude deployments; hosted web search remains disabled
-    // because Foundry availability varies by deployment/provider.
-    nativeBuildTools: isClaudeLike,
-    nativeWebSearch: false,
-  },
-  google: {
-    nativeWebSearch: isGemini25OrNewer,
-    nativeBuildTools: isGemini25OrNewer,
-    hostedBuildTools: isGemini25OrNewer,
-  },
-  openrouter: {
-    nativeWebSearch: listedModel(OPENROUTER_MODELS_WITH_FUNCTION_TOOLS),
-    nativeBuildTools: listedModel(OPENROUTER_MODELS_WITH_FUNCTION_TOOLS),
-  },
-  xai: {
-    // xAI docs list function calling and the web_search server tool on current Grok models.
-    nativeWebSearch: isGrokLike,
-    nativeBuildTools: isGrokLike,
-  },
-  chatgpt: {
-    // The ChatGPT/Codex account backend accepts the current Responses hosted
-    // web_search tool on GPT-5.4+ account models (including GPT-5.6 family);
-    // Codex Spark remains off.
-    nativeWebSearch: (modelId) => gptAtLeast(modelId, 5, 4) && !isCodexLine(modelId),
-    nativeBuildTools: false,
-    hostedBuildTools: false,
-  },
-  "github-copilot": {
-    nativeWebSearch: (modelId: string) =>
-      normalizedModelId(modelId) === "auto" ||
-      /^gpt-\d+/i.test(modelId) ||
-      normalizedModelId(modelId) === "gemini-3.5-flash",
-    nativeBuildTools: false,
-    hostedBuildTools: false,
-  },
-  nvidia: {
-    nativeWebSearch: false,
-    nativeBuildTools: listedModel(NVIDIA_MODELS_WITH_FUNCTION_TOOLS),
-    hostedBuildTools: false,
-  },
-  custom: {
-    // User-defined OpenAI-compatible models keep the previous behavior; the
-    // model owner controls whether their endpoint accepts function tools.
-    nativeBuildTools: true,
-    nativeWebSearch: false,
-    hostedBuildTools: false,
-  },
-};
 
 export const PROVIDER_DEFINITIONS = {
   openai: {
     id: "openai",
     name: "OpenAI",
     modelSource: "catalog",
-    nativeWebSearch: true,
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "gpt-5.7",
+      hint: "Browse the live provider catalog or add a model id manually when the built-in catalog has not caught up yet.",
+    },
     reasoningEffort: true,
     maxTokens: true,
     runtimeBehavior: {
@@ -242,7 +105,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "anthropic",
     name: "Anthropic",
     modelSource: "catalog",
-    nativeWebSearch: true,
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "claude-opus-5",
+      hint: "Browse the live Anthropic model catalog or add a model id manually.",
+    },
     reasoningEffort: (modelId: string) =>
       modelId !== "claude-haiku-4-5-20251001",
     maxTokens: true,
@@ -270,7 +138,6 @@ export const PROVIDER_DEFINITIONS = {
       placeholder: "claude-opus-4-5",
       hint: "The Anthropic model ids your Foundry deployment exposes - enter exactly what your resource calls them.",
     },
-    nativeWebSearch: false,
     reasoningEffort: true,
     maxTokens: true,
     runtimeBehavior: {
@@ -286,13 +153,18 @@ export const PROVIDER_DEFINITIONS = {
     id: "google",
     name: "Google Gemini",
     modelSource: "catalog",
-    nativeWebSearch: true,
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "gemini-3.8-flash",
+      hint: "Browse the live Gemini model catalog or add a model id manually.",
+    },
     reasoningEffort: true,
     maxTokens: true,
     runtimeBehavior: {
       temperatureLabel: "Model-dependent",
       temperatureNote:
-        "Gemini 3.6 Flash omits deprecated sampling parameters; older Gemini models receive the effort-level temperature in generationConfig.",
+        "Gemini 3.6/3.8 Flash omit deprecated sampling parameters; older Gemini models receive the effort-level temperature in generationConfig.",
       promptCachingLabel: "Implicit prompt caching enabled",
       promptCachingNote:
         "Gemini 2.5 and newer models cache repeated prefixes automatically. Cache hits still depend on matching large shared prefixes and model-specific minimum token thresholds.",
@@ -302,7 +174,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "openrouter",
     name: "OpenRouter",
     modelSource: "catalog",
-    nativeWebSearch: true,
+    modelDiscovery: { source: "public-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "qwen/qwen3-coder",
+      hint: "Built-in OpenRouter models stay available automatically. Add any newer OpenRouter model ids here, one per line, when the catalog has not caught up yet.",
+    },
     reasoningEffort: true,
     maxTokens: true,
     runtimeBehavior: {
@@ -320,7 +197,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "xai",
     name: "xAI",
     modelSource: "catalog",
-    nativeWebSearch: true,
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "grok-4.7",
+      hint: "Browse the live xAI language-model catalog or add a model id manually.",
+    },
     reasoningEffort: (modelId: string) => !isXAINonReasoningModel(modelId),
     maxTokens: true,
     runtimeBehavior: {
@@ -332,10 +214,35 @@ export const PROVIDER_DEFINITIONS = {
         "xAI's Responses API automatically caches repeated prefixes; usage reports cached input tokens when a cache hit occurs.",
     },
   },
+  meta: {
+    id: "meta",
+    name: "Meta Model API",
+    modelSource: "catalog",
+    modelDiscovery: { source: "provider-api" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "muse-spark-1.3",
+      hint: "Browse Meta's live Model API catalog or add a model id manually.",
+    },
+    reasoningEffort: (modelId: string) => /^muse-spark-/i.test(modelId.trim()),
+    maxTokens: true,
+    runtimeBehavior: {
+      temperatureLabel: "Temperature is sent",
+      temperatureNote: "Temperature and supported reasoning effort are forwarded through Meta's OpenAI-compatible Model API.",
+      promptCachingLabel: "Provider-dependent",
+      promptCachingNote: "Caching and rate limits are controlled by Meta Model API.",
+    },
+  },
   chatgpt: {
     id: "chatgpt",
     name: "ChatGPT Plus/Pro",
     modelSource: "catalog",
+    modelDiscovery: { source: "runner" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "gpt-5.7",
+      hint: "Browse the models currently exposed to the signed-in ChatGPT account or add a model id manually.",
+    },
     credentialLabel: "Runner session token",
     credentialPlaceholder: "Paste the current token printed by the account runner",
     savedCredentialPlaceholder: "Leave blank to keep existing runner token",
@@ -359,7 +266,6 @@ export const PROVIDER_DEFINITIONS = {
       setupHint:
         "Download the standalone runner file, run it with Node, then paste its printed local URL and session token above. Authorize ChatGPT if it is not already connected.",
     },
-    nativeWebSearch: true,
     reasoningEffort: true,
     maxTokens: false,
     runtimeBehavior: {
@@ -377,6 +283,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "github-copilot",
     name: "GitHub Copilot",
     modelSource: "catalog",
+    modelDiscovery: { source: "runner" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "gemini-3.8-flash",
+      hint: "Browse the models available to the signed-in Copilot account or add a model id manually.",
+    },
     credentialLabel: "Runner session token",
     credentialPlaceholder: "Paste the current token printed by the account runner",
     savedCredentialPlaceholder: "Leave blank to keep existing runner token",
@@ -400,7 +312,6 @@ export const PROVIDER_DEFINITIONS = {
       setupHint:
         "Download and extract the SDK runner ZIP, run npm install and npm start, then paste its printed local URL and session token above. Authorize GitHub if it is not already connected.",
     },
-    nativeWebSearch: true,
     reasoningEffort: (modelId: string) =>
       normalizedModelId(modelId) === "auto" ||
       /^gpt-\d+/i.test(modelId) ||
@@ -421,6 +332,7 @@ export const PROVIDER_DEFINITIONS = {
     id: "nvidia",
     name: "NVIDIA NIM",
     modelSource: "user-defined",
+    modelDiscovery: { source: "runner" },
     credentialLabel: "NVIDIA API key",
     credentialPlaceholder: "nvapi-...",
     savedCredentialPlaceholder: "Leave blank to keep existing NVIDIA API key",
@@ -450,7 +362,6 @@ export const PROVIDER_DEFINITIONS = {
         "z-ai/glm-5.2\nminimaxai/minimax-m3\ndeepseek-ai/deepseek-v4-flash\ndeepseek-ai/deepseek-v4-pro\nnvidia/nemotron-3-ultra-550b-a55b",
       hint: "Enter OpenAI-compatible NVIDIA NIM model ids from build.nvidia.com/models. Mistral models are intentionally omitted from this preset.",
     },
-    nativeWebSearch: false,
     reasoningEffort: false,
     maxTokens: true,
     runtimeBehavior: {
@@ -476,32 +387,6 @@ export function providerUsesCatalogModels(providerId: string): boolean {
   return getProviderDefinition(providerId)?.modelSource === "catalog";
 }
 
-function evaluateModelToolRule(rule: ModelToolRule | undefined, modelId: string): boolean {
-  if (typeof rule === "function") return rule(modelId);
-  if (Array.isArray(rule)) {
-    const model = normalizedModelId(modelId);
-    return rule.some((candidate) => normalizedModelId(candidate) === model);
-  }
-  return rule === true;
-}
-
-function modelSupportsToolFeature(
-  providerId: string,
-  modelId: string,
-  feature: ModelToolFeature
-): boolean {
-  const support =
-    MODEL_TOOL_SUPPORT[providerId as ProviderId | "custom"]?.[feature];
-  return evaluateModelToolRule(support, modelId);
-}
-
-export function providerSupportsNativeWebSearchFeature(
-  providerId: string,
-  modelId = ""
-): boolean {
-  return modelSupportsToolFeature(providerId, modelId, "nativeWebSearch");
-}
-
 export function providerSupportsReasoningEffortFeature(
   providerId: string,
   modelId = ""
@@ -516,18 +401,4 @@ export function providerSupportsMaxTokensFeature(
 ): boolean {
   const support = getProviderDefinition(providerId)?.maxTokens;
   return typeof support === "function" ? support(modelId) : support === true;
-}
-
-export function providerSupportsNativeBuildToolsFeature(
-  providerId: string,
-  modelId = ""
-): boolean {
-  return modelSupportsToolFeature(providerId, modelId, "nativeBuildTools");
-}
-
-export function providerSupportsHostedBuildToolsFeature(
-  providerId: string,
-  modelId = ""
-): boolean {
-  return modelSupportsToolFeature(providerId, modelId, "hostedBuildTools");
 }

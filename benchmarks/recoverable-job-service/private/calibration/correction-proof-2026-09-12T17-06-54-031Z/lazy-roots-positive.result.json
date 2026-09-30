@@ -1,0 +1,1695 @@
+{
+  "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+  "suiteHash": "f8f1f824577efab1719a750b22df833daf62c13fb9bf29b28bf9363cf94fa7f8",
+  "inputIdentity": {
+    "version": "rjs-input-hmac-sha256-v1",
+    "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+    "cases": [
+      {
+        "version": "rjs-input-hmac-sha256-v1",
+        "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+        "variantId": "B13/primary",
+        "caseCommitment": "f56a1aec766fda48209e2a9b2f719a8049a1c396d54e6af039b0c810e98dc18e",
+        "fixtureCommitment": "8de3009155202d37c7478a29ee94ef55b2888fe237963a1fd80bc0c2d1843b09",
+        "fixtureAllocations": 10,
+        "authenticationCommitment": "e9c8c51896e68b1879214e0bcf011e141ee8664cecc45947221f68d18f325152"
+      },
+      {
+        "version": "rjs-input-hmac-sha256-v1",
+        "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+        "variantId": "C01/primary",
+        "caseCommitment": "39d1227b5b0ba948a17e8837216f2c96b03fe27e3a87df0aba92ce81908d3e7f",
+        "fixtureCommitment": "5f3669129353bdb1bc813e45fd8179520daef52c0b430f7f53fbb60e5e05ad96",
+        "fixtureAllocations": 15,
+        "authenticationCommitment": "b2fb765ec8e524f987d778ef04d6c7f5710f96bdde2c5bf4ff3d3c908c099d9e"
+      },
+      {
+        "version": "rjs-input-hmac-sha256-v1",
+        "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+        "variantId": "E02/primary",
+        "caseCommitment": "6685224b158c5c7876f9ececb5ee9d2b56c7349353587c2e49fb2f353f2e70e4",
+        "fixtureCommitment": "a02d3fe25835c51d7560c04e726497a93a8d06bab7b8c4d6f5f25ed05f50c804",
+        "fixtureAllocations": 8,
+        "authenticationCommitment": "2864e4281f0e59d54f1ae8965e1f599c2cb380fe672b5aaada30f08c15eaeeeb"
+      },
+      {
+        "version": "rjs-input-hmac-sha256-v1",
+        "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+        "variantId": "E03/primary",
+        "caseCommitment": "e3302bea06408a5bab0df7cbe92dad6b6b96e3399324de5032d3ffb1072efc92",
+        "fixtureCommitment": "633ab1933edde39aabb2a55614a324acc0be825a216923ed72e1444b665bf4f7",
+        "fixtureAllocations": 9,
+        "authenticationCommitment": "2460d4cd36e362910d04e8810e2ef4ad5a668036fb1281183afb76305fe94687"
+      },
+      {
+        "version": "rjs-input-hmac-sha256-v1",
+        "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+        "variantId": "E08/primary",
+        "caseCommitment": "a2dc91be9e1434975f2069c6bdd234a13920e27c3d68757fa5879482e4595552",
+        "fixtureCommitment": "b18fabf310c9570001a53cb3e437fcc0832e08f95fbd354ff113d9b87aa3083d",
+        "fixtureAllocations": 18,
+        "authenticationCommitment": "cc2d2ba5fcef1f5824bb9a2012fcc143906e7ec5af2890c32f80cccbb8d1477e"
+      }
+    ]
+  },
+  "schemaVersion": 2,
+  "benchmark": "recoverable-job-service",
+  "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+  "contractVersion": "rjs-contract-2.0.0",
+  "suiteVersion": "rjs-suite-2.0.0",
+  "candidateHash": "6721011cdaeaa9ce543c2cc51069d2a8dd7f736b89977ec226cf7b726410a29d",
+  "provenance": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "familyWallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025,
+    "operations": 100000,
+    "promiseJobs": 1000000,
+    "variantIds": [
+      "B13/primary",
+      "C01/primary",
+      "E02/primary",
+      "E03/primary",
+      "E08/primary"
+    ],
+    "scheduleHash": "9fafcb56959e23acbe702bd9782cf0c4c7591222168f3804b04880b62c12e5df",
+    "configurationHash": "5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184"
+  },
+  "status": "valid",
+  "resolved": false,
+  "families": [
+    {
+      "id": "A01",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A01/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A02",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A02/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A03",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A03/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A04",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A04/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A05",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A05/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A06",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A06/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A07",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A07/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A08",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A08/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A09",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A09/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A10",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A10/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A11",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A11/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A12",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A12/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A13",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A13/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A14",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A14/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "A15",
+      "group": "A",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/A15/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B01",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B01/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B02",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B02/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B03",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B03/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B04",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B04/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B05",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B05/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B06",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B06/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B07",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B07/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B08",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B08/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B09",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B09/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B10",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B10/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B11",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B11/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B12",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B12/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B13",
+      "group": "B",
+      "passed": true,
+      "safetyChecked": true,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B13/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [
+        {
+          "inputIdentity": {
+            "version": "rjs-input-hmac-sha256-v1",
+            "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+            "variantId": "B13/primary",
+            "caseCommitment": "f56a1aec766fda48209e2a9b2f719a8049a1c396d54e6af039b0c810e98dc18e",
+            "fixtureCommitment": "8de3009155202d37c7478a29ee94ef55b2888fe237963a1fd80bc0c2d1843b09",
+            "fixtureAllocations": 10,
+            "authenticationCommitment": "e9c8c51896e68b1879214e0bcf011e141ee8664cecc45947221f68d18f325152"
+          },
+          "id": "B13/primary",
+          "passed": true,
+          "safetyChecked": true,
+          "assertions": [
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "createBatch must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "start must refuse",
+              "passed": true
+            },
+            {
+              "label": "failed setup is addressable",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "closeBatch must refuse",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "inspectBatch must progress",
+              "passed": true
+            },
+            {
+              "label": "setup-only obligation remains inspectable",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "closeBatch must progress",
+              "passed": true
+            },
+            {
+              "label": "Trusted causal oracle checked observed trace",
+              "passed": true
+            }
+          ],
+          "reason": "Observed public behavior and durable consequences.",
+          "safetyFailures": [],
+          "operations": 403,
+          "promiseJobs": 1863
+        }
+      ],
+      "assertions": [
+        {
+          "label": "B13/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: start must refuse",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: failed setup is addressable",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: closeBatch must refuse",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: inspectBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: setup-only obligation remains inspectable",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: closeBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "B13/primary: Trusted causal oracle checked observed trace",
+          "passed": true
+        }
+      ],
+      "reason": "All mandatory variants passed.",
+      "operations": 403,
+      "promiseJobs": 1863
+    },
+    {
+      "id": "B14",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B14/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B15",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B15/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B16",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B16/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "B17",
+      "group": "B",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/B17/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C01",
+      "group": "C",
+      "passed": true,
+      "safetyChecked": true,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C01/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [
+        {
+          "inputIdentity": {
+            "version": "rjs-input-hmac-sha256-v1",
+            "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+            "variantId": "C01/primary",
+            "caseCommitment": "39d1227b5b0ba948a17e8837216f2c96b03fe27e3a87df0aba92ce81908d3e7f",
+            "fixtureCommitment": "5f3669129353bdb1bc813e45fd8179520daef52c0b430f7f53fbb60e5e05ad96",
+            "fixtureAllocations": 15,
+            "authenticationCommitment": "b2fb765ec8e524f987d778ef04d6c7f5710f96bdde2c5bf4ff3d3c908c099d9e"
+          },
+          "id": "C01/primary",
+          "passed": true,
+          "safetyChecked": true,
+          "assertions": [
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "createBatch must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "start must progress",
+              "passed": true
+            },
+            {
+              "label": "actual modeled workload acquired",
+              "passed": true
+            },
+            {
+              "label": "accepted job exposes coherent evidence",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "poll must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "consume must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "acknowledge must progress",
+              "passed": true
+            },
+            {
+              "label": "accepted job exposes coherent evidence",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "stop must progress",
+              "passed": true
+            },
+            {
+              "label": "released public job",
+              "passed": true
+            },
+            {
+              "label": "witness released after settlement",
+              "passed": true
+            },
+            {
+              "label": "all six durable facts",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "readEvidence must progress",
+              "passed": true
+            },
+            {
+              "label": "exact retained bytes after public read",
+              "passed": true
+            },
+            {
+              "label": "exact accepted total",
+              "passed": true
+            },
+            {
+              "label": "Trusted causal oracle checked observed trace",
+              "passed": true
+            }
+          ],
+          "reason": "Observed public behavior and durable consequences.",
+          "safetyFailures": [],
+          "operations": 621,
+          "promiseJobs": 2808
+        }
+      ],
+      "assertions": [
+        {
+          "label": "C01/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: start must progress",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: actual modeled workload acquired",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: poll must progress",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: consume must progress",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: acknowledge must progress",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: stop must progress",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: released public job",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: witness released after settlement",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: all six durable facts",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "C01/primary: Trusted causal oracle checked observed trace",
+          "passed": true
+        }
+      ],
+      "reason": "All mandatory variants passed.",
+      "operations": 621,
+      "promiseJobs": 2808
+    },
+    {
+      "id": "C02",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C02/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C03",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C03/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C04",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C04/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C05",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C05/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C06",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C06/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C07",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C07/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C08",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C08/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C09",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C09/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C10",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C10/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C11",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C11/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C12",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C12/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C13",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C13/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C14",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C14/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C15",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C15/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C16",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C16/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C17",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C17/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C18",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C18/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "C19",
+      "group": "C",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/C19/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D01",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D01/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D02",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D02/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D03",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D03/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D04",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D04/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D05",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D05/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D06",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D06/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D07",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D07/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D08",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D08/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "D09",
+      "group": "D",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/D09/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "E01",
+      "group": "E",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E01/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "E02",
+      "group": "E",
+      "passed": true,
+      "safetyChecked": true,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E02/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [
+        {
+          "inputIdentity": {
+            "version": "rjs-input-hmac-sha256-v1",
+            "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+            "variantId": "E02/primary",
+            "caseCommitment": "6685224b158c5c7876f9ececb5ee9d2b56c7349353587c2e49fb2f353f2e70e4",
+            "fixtureCommitment": "a02d3fe25835c51d7560c04e726497a93a8d06bab7b8c4d6f5f25ed05f50c804",
+            "fixtureAllocations": 8,
+            "authenticationCommitment": "2864e4281f0e59d54f1ae8965e1f599c2cb380fe672b5aaada30f08c15eaeeeb"
+          },
+          "id": "E02/primary",
+          "passed": true,
+          "safetyChecked": true,
+          "assertions": [
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "createBatch must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "start must refuse",
+              "passed": true
+            },
+            {
+              "label": "construction failure presence retained",
+              "passed": true
+            },
+            {
+              "label": "mandatory pre-launch fault follows actual prescribed acquisitions",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "recover must progress",
+              "passed": true
+            },
+            {
+              "label": "all acquired setup owners close without launching",
+              "passed": true
+            },
+            {
+              "label": "Trusted causal oracle checked observed trace",
+              "passed": true
+            }
+          ],
+          "reason": "Observed public behavior and durable consequences.",
+          "safetyFailures": [],
+          "operations": 352,
+          "promiseJobs": 1631
+        }
+      ],
+      "assertions": [
+        {
+          "label": "E02/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: start must refuse",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: construction failure presence retained",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: mandatory pre-launch fault follows actual prescribed acquisitions",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: recover must progress",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: all acquired setup owners close without launching",
+          "passed": true
+        },
+        {
+          "label": "E02/primary: Trusted causal oracle checked observed trace",
+          "passed": true
+        }
+      ],
+      "reason": "All mandatory variants passed.",
+      "operations": 352,
+      "promiseJobs": 1631
+    },
+    {
+      "id": "E03",
+      "group": "E",
+      "passed": true,
+      "safetyChecked": true,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E03/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [
+        {
+          "inputIdentity": {
+            "version": "rjs-input-hmac-sha256-v1",
+            "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+            "variantId": "E03/primary",
+            "caseCommitment": "e3302bea06408a5bab0df7cbe92dad6b6b96e3399324de5032d3ffb1072efc92",
+            "fixtureCommitment": "633ab1933edde39aabb2a55614a324acc0be825a216923ed72e1444b665bf4f7",
+            "fixtureAllocations": 9,
+            "authenticationCommitment": "2460d4cd36e362910d04e8810e2ef4ad5a668036fb1281183afb76305fe94687"
+          },
+          "id": "E03/primary",
+          "passed": true,
+          "safetyChecked": true,
+          "assertions": [
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "createBatch must progress",
+              "passed": true
+            },
+            {
+              "label": "candidate reached lawful driver.start.after",
+              "passed": true
+            },
+            {
+              "label": "actual setup-to-running effect reached before crash",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "recover must progress",
+              "passed": true
+            },
+            {
+              "label": "fresh guest recovery never duplicates launched workload",
+              "passed": true
+            },
+            {
+              "label": "Trusted causal oracle checked observed trace",
+              "passed": true
+            }
+          ],
+          "reason": "Observed public behavior and durable consequences.",
+          "safetyFailures": [],
+          "operations": 380,
+          "promiseJobs": 1743
+        }
+      ],
+      "assertions": [
+        {
+          "label": "E03/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E03/primary: createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "E03/primary: candidate reached lawful driver.start.after",
+          "passed": true
+        },
+        {
+          "label": "E03/primary: actual setup-to-running effect reached before crash",
+          "passed": true
+        },
+        {
+          "label": "E03/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E03/primary: recover must progress",
+          "passed": true
+        },
+        {
+          "label": "E03/primary: fresh guest recovery never duplicates launched workload",
+          "passed": true
+        },
+        {
+          "label": "E03/primary: Trusted causal oracle checked observed trace",
+          "passed": true
+        }
+      ],
+      "reason": "All mandatory variants passed.",
+      "operations": 380,
+      "promiseJobs": 1743
+    },
+    {
+      "id": "E04",
+      "group": "E",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E04/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "E05",
+      "group": "E",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E05/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "E06",
+      "group": "E",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E06/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "E07",
+      "group": "E",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E07/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    },
+    {
+      "id": "E08",
+      "group": "E",
+      "passed": true,
+      "safetyChecked": true,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E08/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [
+        {
+          "inputIdentity": {
+            "version": "rjs-input-hmac-sha256-v1",
+            "rootCommitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a",
+            "variantId": "E08/primary",
+            "caseCommitment": "a2dc91be9e1434975f2069c6bdd234a13920e27c3d68757fa5879482e4595552",
+            "fixtureCommitment": "b18fabf310c9570001a53cb3e437fcc0832e08f95fbd354ff113d9b87aa3083d",
+            "fixtureAllocations": 18,
+            "authenticationCommitment": "cc2d2ba5fcef1f5824bb9a2012fcc143906e7ec5af2890c32f80cccbb8d1477e"
+          },
+          "id": "E08/primary",
+          "passed": true,
+          "safetyChecked": true,
+          "assertions": [
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "createBatch must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "start must progress",
+              "passed": true
+            },
+            {
+              "label": "actual modeled workload acquired",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "ownScratch must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "ownScratch must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "ownScratch must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "closeBatch must progress",
+              "passed": true
+            },
+            {
+              "label": "public result schema",
+              "passed": true
+            },
+            {
+              "label": "reclaim must progress",
+              "passed": true
+            },
+            {
+              "label": "first removal committed, remaining exact, original failure retained",
+              "passed": true
+            },
+            {
+              "label": "no third deletion after second fails",
+              "passed": true
+            },
+            {
+              "label": "Trusted causal oracle checked observed trace",
+              "passed": true
+            }
+          ],
+          "reason": "Observed public behavior and durable consequences.",
+          "safetyFailures": [],
+          "operations": 486,
+          "promiseJobs": 2233
+        }
+      ],
+      "assertions": [
+        {
+          "label": "E08/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: start must progress",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: actual modeled workload acquired",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: ownScratch must progress",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: ownScratch must progress",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: ownScratch must progress",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: closeBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: public result schema",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: reclaim must progress",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: first removal committed, remaining exact, original failure retained",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: no third deletion after second fails",
+          "passed": true
+        },
+        {
+          "label": "E08/primary: Trusted causal oracle checked observed trace",
+          "passed": true
+        }
+      ],
+      "reason": "All mandatory variants passed.",
+      "operations": 486,
+      "promiseJobs": 2233
+    },
+    {
+      "id": "E09",
+      "group": "E",
+      "passed": false,
+      "safetyChecked": false,
+      "mandatory": true,
+      "scheduleId": "rjs-suite-2.0.0/E09/5a006577abd2f0994327e2c9b631c04dd6f70577d6d4ba133e85b2b06387a184",
+      "variants": [],
+      "assertions": [],
+      "reason": "All mandatory variants passed.",
+      "operations": 0,
+      "promiseJobs": 0
+    }
+  ],
+  "groups": {
+    "A": {
+      "passed": 0,
+      "total": 15,
+      "coverage": 0
+    },
+    "B": {
+      "passed": 1,
+      "total": 17,
+      "coverage": 0.058823529411764705
+    },
+    "C": {
+      "passed": 1,
+      "total": 19,
+      "coverage": 0.05263157894736842
+    },
+    "D": {
+      "passed": 0,
+      "total": 9,
+      "coverage": 0
+    },
+    "E": {
+      "passed": 3,
+      "total": 9,
+      "coverage": 0.3333333333333333
+    }
+  },
+  "macroCoverage": 0.0889576883384933,
+  "safetyFailures": []
+}

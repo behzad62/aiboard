@@ -1,0 +1,60 @@
+[
+  {
+    "id": "B07/resource-intent-force",
+    "passed": true,
+    "assertions": [
+      {
+        "label": "public result schema",
+        "passed": true
+      },
+      {
+        "label": "createBatch must progress",
+        "passed": true
+      },
+      {
+        "label": "public result schema",
+        "passed": true
+      },
+      {
+        "label": "start must progress",
+        "passed": true
+      },
+      {
+        "label": "actual modeled workload acquired",
+        "passed": true
+      },
+      {
+        "label": "candidate reached lawful driver.control.before",
+        "passed": true
+      },
+      {
+        "label": "public result schema",
+        "passed": true
+      },
+      {
+        "label": "stop must progress",
+        "passed": true
+      },
+      {
+        "label": "released public job",
+        "passed": true
+      },
+      {
+        "label": "witness released after settlement",
+        "passed": true
+      },
+      {
+        "label": "all six durable facts",
+        "passed": true
+      },
+      {
+        "label": "crash keeps completed release effects exact",
+        "passed": true
+      },
+      {
+        "label": "crash keeps immutable final evidence",
+        "passed": true
+      }
+    ]
+  }
+]

@@ -1,0 +1,554 @@
+[
+  {
+    "id": "A01",
+    "group": "A",
+    "requirement": "A1",
+    "expectation": "Move ownership before, inside and after the protected effect boundary. The old owner performs zero new effects; the current owner progresses. Supervisor remains available.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a01"
+  },
+  {
+    "id": "A02",
+    "group": "A",
+    "requirement": "A1",
+    "expectation": "When the coordinator reports temporary unavailability, follow its published retry/readiness contract without unauthorized effects. Distinguish foreign authority from an issued effect whose result is unknown; retain the latter for safe reconciliation.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a02"
+  },
+  {
+    "id": "A03",
+    "group": "A",
+    "requirement": "A1",
+    "expectation": "Replace a control request while an older apply/stale-retire operation waits. Only the exact request observed inside the protected boundary may be changed.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a03"
+  },
+  {
+    "id": "A04",
+    "group": "A",
+    "requirement": "A1–A2",
+    "expectation": "Validate safe integral next sequence and epoch provenance. Lower former-epoch retirement may resume with current authority; future epoch and same-epoch foreign owner are refused.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a04"
+  },
+  {
+    "id": "A05",
+    "group": "A",
+    "requirement": "A2",
+    "expectation": "Pause an ACK transaction between retained-file/checkpoint/ACK changes and read concurrently. Observe coherent before/after state or explicit retry, never a torn mix.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a05"
+  },
+  {
+    "id": "A06",
+    "group": "A",
+    "requirement": "A2",
+    "expectation": "Crash after intent publication, payload retirement, cursor commit and ACK update. Restart is exact and idempotent; unfinished intent remains accounted.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a06"
+  },
+  {
+    "id": "A07",
+    "group": "A",
+    "requirement": "A2",
+    "expectation": "Change actual payload bytes or fields defined by the published record format: stream, sequence, offset, length, digest or artifact identity. Reject invalid acceptance/retirement; do not enforce an unpublished filename convention.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a07"
+  },
+  {
+    "id": "A08",
+    "group": "A",
+    "requirement": "A3",
+    "expectation": "A slow consumer is awaiting while independent output/authority work must advance. Both make permitted progress without synchronization being held across the consumer wait or deadlocking a nested operation. No particular lock design is required.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a08"
+  },
+  {
+    "id": "A09",
+    "group": "A",
+    "requirement": "A3",
+    "expectation": "Delay process-identity inspection while output and timers must advance. Observation remains asynchronous and bounded, and rereads authority/output after the wait.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a09"
+  },
+  {
+    "id": "A10",
+    "group": "A",
+    "requirement": "A3",
+    "expectation": "For an adapter operation declared exclusive, concurrent terminal observers of the same exact job/epoch share its outstanding inspection. Cancel/detach/replace while cancellation is pending; retain and join the issued work before an incompatible replacement.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a10"
+  },
+  {
+    "id": "A11",
+    "group": "A",
+    "requirement": "A4",
+    "expectation": "First terminal callback unsubscribes a later listener or detaches the channel. Later callback is not delivered; shared waiters settle consistently.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a11"
+  },
+  {
+    "id": "A12",
+    "group": "A",
+    "requirement": "A4",
+    "expectation": "Callback adds/replaces a subscription and changes durable terminal state. The new registration sees a fresh result; old unsubscribe cannot remove it.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a12"
+  },
+  {
+    "id": "A13",
+    "group": "A",
+    "requirement": "A4",
+    "expectation": "Enter output-error handling and re-subscribe once from its terminal callback. Exactly one notification occurs in that dispatch and the event loop can unwind.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a13"
+  },
+  {
+    "id": "A14",
+    "group": "A",
+    "requirement": "A2–A3",
+    "expectation": "Queue appears empty while ACK publication, ACK retirement or consumer completion remains in flight. Settlement waits for all required current-epoch facts.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a14"
+  },
+  {
+    "id": "A15",
+    "group": "A",
+    "requirement": "A1–A3",
+    "expectation": "Deadline or epoch changes during the final snapshot/attestation or inside an issued ACK callback. No stale/expired success is published.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#a15"
+  },
+  {
+    "id": "B01",
+    "group": "B",
+    "requirement": "B1",
+    "expectation": "Reopen after running, stopping, input-unavailable, backend-unavailable, unknown, cleanup-pending and cleanup-blocked situations. Every owned unfinished job receives an explicit disposition without relaunch. Internal enum spelling is unrestricted except for published API types.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b01"
+  },
+  {
+    "id": "B02",
+    "group": "B",
+    "requirement": "B2",
+    "expectation": "Exercise pending, issued and verified resource outcomes through the supplied storage contract and fresh reopen. Predecessor requirements hold at committed transitions; final release refuses every incomplete conjunction and permits the complete one. No particular number of store implementations is required.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b02"
+  },
+  {
+    "id": "B03",
+    "group": "B",
+    "requirement": "B2",
+    "expectation": "Retry cleanup with an old attempt ID, foreign epoch or invalid chronology; also take over a job with legitimate earlier verified facts. Reject forgery while preserving earlier proof under its own owner/time.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b03"
+  },
+  {
+    "id": "B04",
+    "group": "B",
+    "requirement": "B3",
+    "expectation": "A held stop/release is requested twice. Join one issued effect and its original deadline. After timeout keep exact ownership until its late result is reconciled.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b04"
+  },
+  {
+    "id": "B05",
+    "group": "B",
+    "requirement": "B3",
+    "expectation": "New owner takes over while old callbacks or deadline watchers return. Old completion cannot change successor revision, borrow its epoch or install a channel; new owner uses current authority.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b05"
+  },
+  {
+    "id": "B06",
+    "group": "B",
+    "requirement": "B3",
+    "expectation": "Exhaust budget before entry, between resources, during reattachment and at final settlement. Apply the same absolute deadline, including nested reserve/lease rules declared by the interface.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b06"
+  },
+  {
+    "id": "B07",
+    "group": "B",
+    "requirement": "B2–B3",
+    "expectation": "Crash after each resource intent and after each verified fact. Preserve completed facts; reconcile only with supported receipts/observations and retain exact unknown attempts otherwise.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b07"
+  },
+  {
+    "id": "B08",
+    "group": "B",
+    "requirement": "B2",
+    "expectation": "Backend release occurs before the service records its result, then restart without an exact receipt. Preserve unknown outcome; with an exact supported receipt, safely reconcile.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b08"
+  },
+  {
+    "id": "B09",
+    "group": "B",
+    "requirement": "B2",
+    "expectation": "A cleanup call resolves but the durable owned record remains blocked. Reinspect authority before replacement/start/close.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b09"
+  },
+  {
+    "id": "B10",
+    "group": "B",
+    "requirement": "B4",
+    "expectation": "Produce a final frame only during the terminal output barrier. Keep intake alive until the barrier and subsequent intake settle, then finalize and detach.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b10"
+  },
+  {
+    "id": "B11",
+    "group": "B",
+    "requirement": "B4",
+    "expectation": "Stop the client pump with an accepted, undelivered frame; workload quiescence is gated on its ACK. Install private evidence intake first and complete without client redelivery.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b11"
+  },
+  {
+    "id": "B12",
+    "group": "B",
+    "requirement": "B4",
+    "expectation": "After evidence was finalized, reattach with exact consumed replay, new suffix, corrupt bytes, changed checkpoint or missing/blocked terminal barrier. Only admissible authenticated replay settles.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b12"
+  },
+  {
+    "id": "B13",
+    "group": "B",
+    "requirement": "B5",
+    "expectation": "No running job exists but setup still owns unresolved resources. Close reports failure; the client can inspect and legitimately retry through the public API. Once exact obligations and recovery failures are settled, retry succeeds.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b13"
+  },
+  {
+    "id": "B14",
+    "group": "B",
+    "requirement": "B1–B5",
+    "expectation": "Within published job capacity, place an unfinished record beyond one declared recovery batch, preceded by terminal records. Close accounts for every owned record. A fixed batch size or a particular scan algorithm is not required.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b14"
+  },
+  {
+    "id": "B15",
+    "group": "B",
+    "requirement": "B1–B5",
+    "expectation": "A setup record is handed off to a released successor; compare missing, foreign and unfinished successor variants. Accept only its exact released pair.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b15"
+  },
+  {
+    "id": "B16",
+    "group": "B",
+    "requirement": "B5",
+    "expectation": "A settlement fails or late-cleanup failure is reported after other jobs become terminal. All recovery work used by close contributes to its outcome, and inspection/retry remains possible. No specific number of recovery passes is required.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b16"
+  },
+  {
+    "id": "B17",
+    "group": "B",
+    "requirement": "B2–B4, C1–C3, C5",
+    "expectation": "After setup-channel intent but before initial checkpoint creation, prove current exact authority, no earlier accepted/consumed/retired output and a reconstructible retained stream. Bootstrap one atomic private continuation and progress. A previously created but missing checkpoint, ambiguous retirement or corrupt bytes must block. Authenticated nonzero source-prefix continuation and exact progress/refusal are specified in source-bootstrap.md; absent old checkpoints never become never-created state.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#b17"
+  },
+  {
+    "id": "C01",
+    "group": "C",
+    "requirement": "C1–C2",
+    "expectation": "Accept old bytes, dispose the service, reopen fresh storage/controller objects and append new bytes. Final content is exactly old+new with conserved stream totals.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c01"
+  },
+  {
+    "id": "C02",
+    "group": "C",
+    "requirement": "C2",
+    "expectation": "Interrupt between durable evidence publication and its accepted-state commit using documented storage boundaries. Only committed evidence counts; partial/orphaned data is not accepted. A transactional design that avoids separate segment/page states is equally valid.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c02"
+  },
+  {
+    "id": "C03",
+    "group": "C",
+    "requirement": "C1–C2",
+    "expectation": "Corrupt/miss an artifact; swap a valid-hash page or segment from another identity; omit an earlier committed segment. Reject the chain.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c03"
+  },
+  {
+    "id": "C04",
+    "group": "C",
+    "requirement": "C1–C2",
+    "expectation": "Independently exhaust the published payload and metadata capacities, including many tiny chunks. Keep data/metadata growth bounded and positions/loss accounting exact. Legacy-reference limits apply only when that format/profile was publicly supplied.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c04"
+  },
+  {
+    "id": "C05",
+    "group": "C",
+    "requirement": "C2",
+    "expectation": "Supply records invalid under the published schemas: unsupported versions, malformed positions, foreign authority or inconsistent loss. Reject extra fields only for explicitly closed formats; accept documented extensions. A valid integrity signature alone does not make an invalid state admissible.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c05"
+  },
+  {
+    "id": "C06",
+    "group": "C",
+    "requirement": "C1",
+    "expectation": "Delay evidence persistence while consumption is requested. Delivery/consumption and ACK wait for their published durable prerequisites. Failed authority commit permits neither invented evidence success nor ACK.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c06"
+  },
+  {
+    "id": "C07",
+    "group": "C",
+    "requirement": "C1",
+    "expectation": "Fail artifact writes or privacy permission; separately corrupt protocol bytes or fail checkpoint CAS. Only allowed diagnostic failures produce committed categorized loss.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c07"
+  },
+  {
+    "id": "C08",
+    "group": "C",
+    "requirement": "C3",
+    "expectation": "Replay at accepted, consuming-intent, consumed and ACKed boundaries. Exact accepted replay shares the committed bytes; consumed replay causes no repeat effect; uncertain intent stays unknown.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c08"
+  },
+  {
+    "id": "C09",
+    "group": "C",
+    "requirement": "C2",
+    "expectation": "Restore is interrupted after some earlier evidence has been reconstructed, or a downstream write has an unknown result. Retry does not duplicate bytes or certify an ambiguous view; safer atomic restoration is permitted.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c09"
+  },
+  {
+    "id": "C10",
+    "group": "C",
+    "requirement": "C2",
+    "expectation": "Change evidence head/revision during artifact reads and during restore side effects, including same-epoch stale views. Revalidate before accepting the result.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c10"
+  },
+  {
+    "id": "C11",
+    "group": "C",
+    "requirement": "C2",
+    "expectation": "Conditional on a supplied supported legacy format: its prefix cannot be reconstructed, but later bytes and earlier valid evidence remain available. Preserve all provable data with the declared gap; do not claim lossless continuity.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c11"
+  },
+  {
+    "id": "C12",
+    "group": "C",
+    "requirement": "C2–C4",
+    "expectation": "Request active handoff with wrong ownership, a finalized checkpoint, ambiguous consumption or another state forbidden by the public transition table. Refuse with no unauthorized effect; a valid active handoff succeeds. Terminal evidence transfer is a different permitted operation.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c12"
+  },
+  {
+    "id": "C13",
+    "group": "C",
+    "requirement": "C4",
+    "expectation": "Finalize twice or recover an already finalized exact manifest. Reuse immutable evidence; changed references are rejected; no extra finalization attempt is invented.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c13"
+  },
+  {
+    "id": "C14",
+    "group": "C",
+    "requirement": "C4",
+    "expectation": "Valid output/evidence succeeds while channel cleanup fails or stays pending. Persist exact partial success and retain the checkpoint; later channel success permits retirement.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c14"
+  },
+  {
+    "id": "C15",
+    "group": "C",
+    "requirement": "C4",
+    "expectation": "Output is claimed successful while another cleanup resource is blocked, but the evidence is unfinalized, contains pending consumption or has mismatched identity/loss. Reject invalid partial success on every storage profile the task actually requires.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c15"
+  },
+  {
+    "id": "C16",
+    "group": "C",
+    "requirement": "C4",
+    "expectation": "Interrupt the source-checkpoint retirement and terminal ownership transfer at documented commit boundaries. Committed state retains either the valid source obligation or its authenticated terminal destination. An exact retry is idempotent; a foreign destination rejects. Do not assume reference-specific SQL or physical file deletion.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c16"
+  },
+  {
+    "id": "C17",
+    "group": "C",
+    "requirement": "C4",
+    "expectation": "Reopen a released job and read its retained evidence through published APIs; run any declared reclamation operation. All required earlier and final evidence remains reachable. Alternative content/index representations are accepted.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c17"
+  },
+  {
+    "id": "C18",
+    "group": "C",
+    "requirement": "C4, E4",
+    "expectation": "Exercise repeated cleanup through public ownership handles where an owned artifact root is already absent. No deletion is needed. An existing root with missing/replaced identity, alias or foreign entry remains protected. The test must not require the candidate to instantiate a particular spool class.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c18"
+  },
+  {
+    "id": "C19",
+    "group": "C",
+    "requirement": "C4–C5",
+    "expectation": "Final evidence commits, a later cleanup step fails, then the service restarts. Reuse the exact immutable evidence through effect-free verification and a current-authority atomic observation. Changed revision, accepted bytes, ownership or deadline during the wait refuses stale success; no duplicate finalization is needed.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#c19"
+  },
+  {
+    "id": "D01",
+    "group": "D",
+    "requirement": "D1",
+    "expectation": "Launch child/descendant group while a separate witness observes output; capture identity before workload release. Force stop targets workload only and preserves terminal observation.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d01"
+  },
+  {
+    "id": "D02",
+    "group": "D",
+    "requirement": "D1",
+    "expectation": "Lose/recycle anchor, process birth or group between inspection and effect. Validate exact identity again inside the control boundary; no numeric fallback.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d02"
+  },
+  {
+    "id": "D03",
+    "group": "D",
+    "requirement": "D2",
+    "expectation": "At startup or stop, present an authenticated release request with wrong owner, epoch, witness identity or replaced request identity. Only the exact currently authorized request may be consumed. Its on-disk marker representation is not prescribed.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d03"
+  },
+  {
+    "id": "D04",
+    "group": "D",
+    "requirement": "D2",
+    "expectation": "Publish release request, then kill/disappear the anchor before consumption; compare exact consumed record with a compatible clean exit. Only the latter is causal natural retirement.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d04"
+  },
+  {
+    "id": "D05",
+    "group": "D",
+    "requirement": "D3",
+    "expectation": "Workload exits before stdout/stderr close; tail bytes arrive later. Do not publish terminal stopped/output-settled proof until closure and complete drain.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d05"
+  },
+  {
+    "id": "D06",
+    "group": "D",
+    "requirement": "D3",
+    "expectation": "Pipes are closed but unread bytes remain behind retained-output backpressure. Admit/drain and retire ACKs before final settlement; witness stays available.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d06"
+  },
+  {
+    "id": "D07",
+    "group": "D",
+    "requirement": "D5",
+    "expectation": "Conditional on the public responsibility manifest assigning holder tracking to the candidate: interrupt a process while it holds a coordination claim. Record its actual birth/holder identity so a proven dead holder can be reclaimed; live, foreign or indeterminate holders block. If an adapter wholly supplies this behavior, it is unscored infrastructure.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d07"
+  },
+  {
+    "id": "D08",
+    "group": "D",
+    "requirement": "D1, D4",
+    "expectation": "Conditional on declared identity/legacy formats: current binding and identity must agree; unsupported active control without proof blocks, while documented proven terminal legacy release remains possible. No knowledge of an earlier application format is assumed.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d08"
+  },
+  {
+    "id": "D09",
+    "group": "D",
+    "requirement": "D3, B3",
+    "expectation": "ACK or output settlement is held during graceful-to-force stop and timeout. Exact control count, retained witness and late ownership remain correct.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#d09"
+  },
+  {
+    "id": "E01",
+    "group": "E",
+    "requirement": "E1–E2",
+    "expectation": "Run two batches concurrently with distinct grants, streams, evidence and ownership. Stop/close one while the other progresses.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e01"
+  },
+  {
+    "id": "E02",
+    "group": "E",
+    "requirement": "B1, E1–E2",
+    "expectation": "Fail setup after each successfully constructed owner and before a running job is returned. Attempt every owned close in dependency order and retain unresolved obligations.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e02"
+  },
+  {
+    "id": "E03",
+    "group": "E",
+    "requirement": "B1, C3, E1",
+    "expectation": "Interrupt the actual service at a documented setup-to-running handoff and later consumption/cleanup boundary. Recovery neither invents a running successor nor launches a duplicate workload; it either progresses from sufficient proof or preserves the required blocker. The evaluator must actually reach the named crash boundary.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e03"
+  },
+  {
+    "id": "E04",
+    "group": "E",
+    "requirement": "B4, D3, E1",
+    "expectation": "Produce persistent output larger than retention/spill thresholds; stop with final bytes/ACKs pending. Verify exact bytes or permitted loss plus all release facts.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e04"
+  },
+  {
+    "id": "E05",
+    "group": "E",
+    "requirement": "E2",
+    "expectation": "Issue an asynchronous operation that can reject before any subsequent marker wait. Observe it immediately, preserve its error, close owners and join the pending result.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e05"
+  },
+  {
+    "id": "E06",
+    "group": "E",
+    "requirement": "E2–E3",
+    "expectation": "Throw at construction, primary work, pre-close, close and proof, including `0`, `false`, `null` and `undefined`. Attempt all required closes/proofs and retain diagnostics on failure.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e06"
+  },
+  {
+    "id": "E07",
+    "group": "E",
+    "requirement": "E1–E3",
+    "expectation": "After successful close, a fresh instance using the published reopen/inspection API observes the required durable terminal facts. Failed close preserves inspectability and diagnostics. Disposal occurs only after proof; no specific read-only database handle or reference helper is required.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e07"
+  },
+  {
+    "id": "E08",
+    "group": "E",
+    "requirement": "E3",
+    "expectation": "All pre-disposal proofs pass, first removal succeeds and next removal fails. Stop further removals and report exact remaining artifacts plus original failure.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e08"
+  },
+  {
+    "id": "E09",
+    "group": "E",
+    "requirement": "E4",
+    "expectation": "Create concurrent identities and nested storage paths within the published capacity, uniqueness and platform path constraints. Actual permitted I/O succeeds without weakening identity. No specific UUID length, directory scheme or SQLite backend is required unless publicly supplied.",
+    "mandatory": true,
+    "contract": "acceptance-contract.md#e09"
+  }
+]

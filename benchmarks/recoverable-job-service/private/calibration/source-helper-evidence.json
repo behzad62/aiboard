@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Reuse actual accepted reader runtime; one fresh delayed-ACK run because prior captured log was not readily located",
+  "sourceClosure": [
+    {
+      "path": "scripts/test-recoverable-job-service-reader-attachment.mts",
+      "sha256": "5230599e82740a534b72bf34e0a5162f12e0f4dd797c2ad0bb02964585813bbd",
+      "producerRecorded": true
+    },
+    {
+      "path": "scripts/test-recoverable-job-service-delayed-source-ack.mts",
+      "sha256": "a9694863823c05b9bc105db2ace9c9648d038cb6435fc96fa36a545149f21f5d",
+      "producerRecorded": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/broker.mjs",
+      "sha256": "f412795e89c10e1b116f72ba3b5e9b2538fe8c60dd2978d9f8439299d57c27bd",
+      "producerRecorded": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/source-adapter.mjs",
+      "sha256": "26bd81c6aa5c69995ecf02cb7f7a9c0283e7cb933153107ccbd43a82417ac32d",
+      "producerRecorded": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/replay.mjs",
+      "sha256": "a45063d57238b859981e1be42bf2459b474922a7c40818c1bdc488a127bcfddd",
+      "producerRecorded": true
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/wire-schema.mjs",
+      "sha256": "a75c9ce389572834e0138be1e3a955ff5dc882a993358a63dff27d6631f088b8",
+      "producerRecorded": true
+    }
+  ],
+  "reader": {
+    "command": {
+      "command": "node --import tsx scripts/test-recoverable-job-service-reader-attachment.mts",
+      "startedAt": "2026-09-12T14:30:27.6886685Z",
+      "endedAt": "2026-09-12T14:30:28.3200925Z",
+      "exitCode": 0,
+      "log": ".superpowers\\sdd\\2026-09-08-recoverable-job-service-integration\\task-2-reader-wave5-private-logs\\reader-attachment-20260912T143027688Z.log"
+    },
+    "commands": {
+      "path": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-reader-wave5-focused-command-results.json",
+      "sha256": "5cce62e38f7b5d8e08f82599739d8a6190288bc026635919a6f319939efec26f"
+    },
+    "log": {
+      "path": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-reader-wave5-private-logs/reader-attachment-20260912T143027688Z.log",
+      "sha256": "e4b099fbd9efb6b4acce81e2fc4fbaa0edf944a77ad03206f899e230a0cd0f16"
+    },
+    "sourceReview": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-reader-wave5-source-review.md",
+    "rerun": false
+  },
+  "delayed": {
+    "command": {
+      "command": "node --import tsx scripts/test-recoverable-job-service-delayed-source-ack.mts",
+      "startedAt": "2026-09-12T17:50:46.1480294Z",
+      "endedAt": "2026-09-12T17:50:46.6221637Z",
+      "exitCode": 0,
+      "log": "benchmarks/recoverable-job-service/private/calibration/delayed-source-ack-20260912.log"
+    },
+    "commandFile": {
+      "path": "benchmarks/recoverable-job-service/private/calibration/delayed-source-ack-command-result.json",
+      "sha256": "56781712346929ff1ee813c6cd1d8cdeb358c7cc84ae1f14f4f88c21706293c4"
+    },
+    "log": {
+      "path": "benchmarks/recoverable-job-service/private/calibration/delayed-source-ack-20260912.log",
+      "sha256": "cc10b9958db2b32ba886de5c32cdde5f52e88fb6f57778c38ec23d19b7b7fb54"
+    },
+    "rerun": true
+  },
+  "scope": "These raw broker/source helpers do not use the changed C09 predicate or public version strings. This receipt preserves their own runtime identity; it is not final full-suite qualification."
+}

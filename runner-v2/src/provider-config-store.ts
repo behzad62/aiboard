@@ -1,3 +1,5 @@
+import type { AgentHostedToolDefinition } from "./agent-contracts.js";
+
 export type ProviderTransport =
   | "account-runner"
   | "openai-compatible"
@@ -26,6 +28,8 @@ export interface RunnerProviderConfig {
     audio: boolean;
     video: boolean;
   };
+  supportsTools?: boolean;
+  hostedTools?: AgentHostedToolDefinition[];
   priority: number;
   reasoningEffort?: string;
   protocol?: "chat-completions" | "responses";
@@ -127,6 +131,16 @@ export function validateProviderConfigs(
     if (!Array.isArray(config.capabilities) || config.capabilities.some((item) => !item)) {
       throw new Error(`Provider runtime ${config.runtimeId} has invalid capabilities.`);
     }
+    if (config.supportsTools !== undefined && typeof config.supportsTools !== "boolean") {
+      throw new Error(`Provider runtime ${config.runtimeId} has invalid tool support.`);
+    }
+    if (
+      config.hostedTools !== undefined &&
+      (!Array.isArray(config.hostedTools) ||
+        config.hostedTools.some((tool) => !tool || typeof tool.type !== "string"))
+    ) {
+      throw new Error(`Provider runtime ${config.runtimeId} has invalid hosted tools.`);
+    }
     if (
       config.inputCapabilities !== undefined &&
       ["image", "document", "audio", "video"].some(
@@ -204,6 +218,9 @@ export function cloneProviderConfigs(
     capabilities: [...config.capabilities],
     ...(config.inputCapabilities
       ? { inputCapabilities: { ...config.inputCapabilities } }
+      : {}),
+    ...(config.hostedTools
+      ? { hostedTools: config.hostedTools.map((tool) => ({ ...tool, ...(tool.parameters ? { parameters: { ...tool.parameters } } : {}) })) }
       : {}),
   }));
 }

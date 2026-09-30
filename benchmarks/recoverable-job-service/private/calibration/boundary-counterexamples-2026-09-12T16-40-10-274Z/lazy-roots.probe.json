@@ -1,0 +1,49 @@
+{
+  "variantId": "E02/primary",
+  "failure": "start must refuse",
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must refuse",
+      "passed": false
+    }
+  ],
+  "operations": 159,
+  "promiseJobs": 740,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "blockers": [],
+      "state": null
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "artifact.create": 0,
+    "artifact.write": 0
+  },
+  "acceptedAudits": 0,
+  "queuedFrame": null,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

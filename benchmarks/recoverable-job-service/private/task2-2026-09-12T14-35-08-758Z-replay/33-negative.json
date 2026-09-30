@@ -1,0 +1,259 @@
+{
+  "schemaVersion": 1,
+  "derivationVersion": "rjs-input-hmac-sha256-v1",
+  "root": "36406495ba1dceba7270b08687414f4cfa1fc7f874ed349b5dad4e03e9a14cc0",
+  "commitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+  "cases": [
+    {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "variantId": "E01/primary",
+      "caseCommitment": "2ee88efd7df251dee8a749a0f2d28483776189b4611f8eaeb628d420f9388de5",
+      "fixtureCommitment": "e29ee3e2f3ec6cf70c9dfd7ed4e66a47592503c335b38aa717b22c02965a5949",
+      "fixtureAllocations": 12,
+      "authenticationCommitment": "e602df187d0d51bd3ceb887b3c5f9ee462a060525871d2cb5bc7e3870c7e4eda"
+    }
+  ],
+  "executedInputs": [
+    {
+      "variantId": "E01/primary",
+      "events": [
+        {
+          "type": "id",
+          "ordinal": 0,
+          "id": "3eec9c0dd19d570fb8f8933608425866"
+        },
+        {
+          "type": "id",
+          "ordinal": 1,
+          "id": "670b4e68f7ace9fec0769ad17f1c6b1a"
+        },
+        {
+          "type": "id",
+          "ordinal": 2,
+          "id": "6f676b96caa9ef1e57f50078d7dbd5d5"
+        },
+        {
+          "type": "id",
+          "ordinal": 3,
+          "id": "6fb735caf310a1ecc89fa2f7bba9bdec"
+        },
+        {
+          "type": "binding",
+          "binding": {
+            "id": "6f676b96caa9ef1e57f50078d7dbd5d5",
+            "birth": "6fb735caf310a1ecc89fa2f7bba9bdec",
+            "kind": "agent",
+            "token": "86c770563b99d823f7e4affc70094bd0fe6ae41eeda96af8d3cb3de7b1e6d99d"
+          }
+        },
+        {
+          "type": "grant",
+          "grant": {
+            "scopeId": "3eec9c0dd19d570fb8f8933608425866",
+            "ownerId": "670b4e68f7ace9fec0769ad17f1c6b1a",
+            "epoch": 1,
+            "expiresAt": 20000,
+            "holder": {
+              "id": "6f676b96caa9ef1e57f50078d7dbd5d5",
+              "birth": "6fb735caf310a1ecc89fa2f7bba9bdec",
+              "kind": "agent",
+              "token": "86c770563b99d823f7e4affc70094bd0fe6ae41eeda96af8d3cb3de7b1e6d99d"
+            },
+            "token": "04be9829a3001e01f2f307dbf6e9627bc152ad1294dd5830226066e4b37e9303"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 4,
+          "id": "3400e479dc4e6e11e820de4bdd315cfb"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "createBatch",
+            "requestId": "3400e479dc4e6e11e820de4bdd315cfb",
+            "deadline": 1003
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 5,
+          "id": "2ade90e3078515c5adec5906c6aafedd"
+        },
+        {
+          "type": "id",
+          "ordinal": 6,
+          "id": "307cb29e14ae6e55978d65786eb6937f"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "start",
+            "requestId": "307cb29e14ae6e55978d65786eb6937f",
+            "deadline": 1003,
+            "batchId": "4e0076d274196eae29e9998b5bbad8c7",
+            "workloadId": "2ade90e3078515c5adec5906c6aafedd"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 7,
+          "id": "6e3b21a8256cf093341b2485c2314d90"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "createBatch",
+            "requestId": "6e3b21a8256cf093341b2485c2314d90",
+            "deadline": 1003
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 8,
+          "id": "599c8f0d949b903c8fb807f3084ae6e0"
+        },
+        {
+          "type": "id",
+          "ordinal": 9,
+          "id": "84b46bcdd56d55135e467b23b27bfd2c"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "start",
+            "requestId": "84b46bcdd56d55135e467b23b27bfd2c",
+            "deadline": 1003,
+            "batchId": "b8b3ec2967b95988470fd11a3916614d",
+            "workloadId": "599c8f0d949b903c8fb807f3084ae6e0"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 10,
+          "id": "fa22bb6872fd87f8c111048da1938b93"
+        },
+        {
+          "type": "output",
+          "jobId": "e24323bfd7e9b445197346d7f4408345",
+          "stream": "stdout",
+          "bytes": [
+            7,
+            8
+          ]
+        },
+        {
+          "type": "id",
+          "ordinal": 11,
+          "id": "5272be1ba83a75e8581ea3da0be57348"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "closeBatch",
+            "requestId": "5272be1ba83a75e8581ea3da0be57348",
+            "deadline": 1003,
+            "batchId": "4e0076d274196eae29e9998b5bbad8c7"
+          }
+        },
+        {
+          "type": "source-observation",
+          "method": "driver.attach",
+          "receipt": {
+            "id": "39ec80e2039d3a5c5f8986db546bc801",
+            "operationId": "d607921a91dd8cc1667f1b24504662d9",
+            "effect": "driver.attach",
+            "resourceId": "ecee349c78cb6e6724254f36599a615c",
+            "ownerId": "670b4e68f7ace9fec0769ad17f1c6b1a",
+            "epoch": 1,
+            "appliedAt": 3,
+            "payload": {
+              "privateReader": true,
+              "observationDeadline": 1003,
+              "source": {
+                "version": 1,
+                "scopeId": "3eec9c0dd19d570fb8f8933608425866",
+                "channelId": "1564ad185c38a74c75adaa818a9e9647",
+                "attachmentOperationId": "d607921a91dd8cc1667f1b24504662d9",
+                "sourceRevision": 0,
+                "streams": {
+                  "stdout": {
+                    "advanced": {
+                      "seq": 0,
+                      "offset": 0
+                    },
+                    "produced": 0,
+                    "retainedBytes": 0,
+                    "bufferedBytes": 0,
+                    "unavailablePrefix": null
+                  },
+                  "stderr": {
+                    "advanced": {
+                      "seq": 0,
+                      "offset": 0
+                    },
+                    "produced": 0,
+                    "retainedBytes": 0,
+                    "bufferedBytes": 0,
+                    "unavailablePrefix": null
+                  }
+                },
+                "pendingAcks": []
+              }
+            },
+            "token": "c65bb6297a1d09c4da9e95828bde29307736843095f2f886c090f9577320cad6"
+          }
+        },
+        {
+          "type": "source-observation",
+          "method": "driver.attach",
+          "receipt": {
+            "id": "8d4329e08e877a3880cf78a659f1367c",
+            "operationId": "981589bd297d7c1e0787cca806844204",
+            "effect": "driver.attach",
+            "resourceId": "e24323bfd7e9b445197346d7f4408345",
+            "ownerId": "670b4e68f7ace9fec0769ad17f1c6b1a",
+            "epoch": 1,
+            "appliedAt": 3,
+            "payload": {
+              "privateReader": true,
+              "observationDeadline": 1003,
+              "source": {
+                "version": 1,
+                "scopeId": "3eec9c0dd19d570fb8f8933608425866",
+                "channelId": "9a77ae8c0265d1eedccfdb55fe2fa400",
+                "attachmentOperationId": "981589bd297d7c1e0787cca806844204",
+                "sourceRevision": 0,
+                "streams": {
+                  "stdout": {
+                    "advanced": {
+                      "seq": 0,
+                      "offset": 0
+                    },
+                    "produced": 2,
+                    "retainedBytes": 2,
+                    "bufferedBytes": 0,
+                    "unavailablePrefix": null
+                  },
+                  "stderr": {
+                    "advanced": {
+                      "seq": 0,
+                      "offset": 0
+                    },
+                    "produced": 0,
+                    "retainedBytes": 0,
+                    "bufferedBytes": 0,
+                    "unavailablePrefix": null
+                  }
+                },
+                "pendingAcks": []
+              }
+            },
+            "token": "688e36bfe18c31f992d54c6625177c29ba90e635dd1f0e0d7acabdd37a203555"
+          }
+        }
+      ]
+    }
+  ]
+}

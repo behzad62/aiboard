@@ -1,0 +1,16 @@
+import {readFile,writeFile} from 'node:fs/promises';
+let p='benchmarks/recoverable-job-service/private/broker.mjs',s=await readFile(p,'utf8');
+s=s.replace('this.storageBytes=0;','this.storageBytes=0;this.physicalRemovals=0;');
+s=s.replace('token(x){return jsonDigest({x,secret:this.secret});}','token(x,domain="internal"){return jsonDigest({x,domain,secret:this.secret});}');
+s=s.replace('b.token=this.token(b);','b.token=this.token(b,"binding");').replace('g.token=this.token(g);','g.token=this.token(g,"grant");').replace('r.token=this.token(r);','r.token=this.token(r,"receipt");').replace('r.token===this.token(x)','r.token===this.token(x,"receipt")').replace('handle.token=this.token(handle);','handle.token=this.token(handle,"root");');
+s=s.replace("value=this.token(c);","value=this.token(c,'capsule');").replace("args.capsule.seal===this.token(c)","args.capsule.seal===this.token(c,'capsule')");
+s=s.replace('await rm(r.dir,{recursive:true});r.absent=true;','await rm(r.dir,{recursive:true});this.physicalRemovals++;r.absent=true;');
+await writeFile(p,s);
+p='benchmarks/recoverable-job-service/private/scenarios.mjs';s=await readFile(p,'utf8');
+s=s.replace('s.b.grant.token=s.b.token(g);','s.b.grant.token=s.b.token(g,"grant");');
+s=s.replace('async hold(boundary,fn){','async hold(boundary,fn,options={}){').replace("this.b.fault(boundary,'hold',{onHold:notify});","this.b.fault(boundary,'hold',{...options,onHold:notify});");
+s=s.replace("B17:async s=>{s.batchId=(await s.ok('createBatch')).batchId;const h=await s.hold('driver.acquire.after',()=>s.run('start',{batchId:s.batchId,workloadId:s.b.id()}));","B17:async s=>{s.batchId=(await s.ok('createBatch')).batchId;const h=await s.hold('driver.acquire.after',()=>s.run('start',{batchId:s.batchId,workloadId:s.b.id()}),{occurrence:3});");
+s=s.replace("s.check(s.b.trace.filter(t=>t.method==='store.scan.before'&&t.args.cursor).length>0,'actual continuation page consumed');","s.check(s.b.trace.filter(t=>t.method==='store.scan.before'&&t.args.cursor).length>0,'actual continuation page consumed');await s.ok('closeBatch',{batchId:s.batchId});");
+s=s.replace("C18:async s=>{await s.setup();await s.finish();await s.ok('reclaim');await s.ok('reclaim');s.check(s.count('artifact.remove')===1,'already absent scratch root needs no duplicate deletion');}","C18:async s=>{await s.setup();const root=(await s.b.call('artifact.create',{path:'adopted/'+s.b.id(),owner:s.jobId,retained:false,operationId:s.b.id(),fence:{grant:s.b.grant,deadline:1000}})).value;await s.ok('ownScratch',{jobId:s.jobId,root});await s.finish();s.b.roots.get(root.id).aliases=true;const blocked=await s.ok('reclaim');s.check(!!blocked.failure&&blocked.remaining.includes(root.id),'existing aliased adopted root remains protected');s.b.roots.get(root.id).aliases=false;await s.ok('reclaim');const count=s.b.physicalRemovals;await s.ok('reclaim');s.check(count>=1&&s.b.physicalRemovals===count,'already absent scratch root causes no further physical deletion');}");
+await writeFile(p,s);
+p='benchmarks/recoverable-job-service/private/controls.mjs';s=await readFile(p,'utf8');s=s.replace("mutate:s=>replace(s,\"if((await read(jk(id))).revision!==before.revision)fail('busy',{jobId:id});\",'')","mutate:s=>s.replaceAll(\"if((await read(jk(id))).revision!==before.revision)fail('busy',{jobId:id});\",'')");await writeFile(p,s);

@@ -89,7 +89,7 @@ function isKimiK3Model(model = ""): boolean {
   return normalized === "moonshotai/kimi-k3" || normalized === "kimi-k3";
 }
 
-/** OpenRouter `reasoning_effort` string, or null to omit. */
+/** OpenRouter reasoning effort value, sent as `reasoning.effort`. */
 export function openRouterReasoningEffort(
   effort: ReasoningEffort,
   model = ""

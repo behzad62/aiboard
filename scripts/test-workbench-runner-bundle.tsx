@@ -380,6 +380,10 @@ const isolatedDirectory = await mkdtemp(join(tmpdir(), "aiboard-bench-runner-iso
 try {
   const isolatedScript = join(isolatedDirectory, "bench-runner.mjs");
   await copyFile(join(repoRoot, "scripts", "bench-runner.mjs"), isolatedScript);
+  await copyFile(
+    join(repoRoot, "scripts", "workbench-rjs-support.mjs"),
+    join(isolatedDirectory, "workbench-rjs-support.mjs")
+  );
   const unavailableOutput = await startupOutput(
     isolatedScript,
     join(testRoot, "unavailable-runs")

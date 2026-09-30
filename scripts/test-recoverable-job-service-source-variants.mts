@@ -1,0 +1,5 @@
+import {readFile,writeFile} from 'node:fs/promises';import {evaluateBounded} from '../benchmarks/recoverable-job-service/private/runtime.mjs';import {sourceVariants} from '../benchmarks/recoverable-job-service/private/source-cases.mjs';
+const selected=process.argv.slice(2),variantIds=sourceVariants.filter(v=>!selected.length||selected.includes(v.id)).map(v=>v.id),began=new Date().toISOString();
+const result=await evaluateBounded(await readFile('benchmarks/recoverable-job-service/private/reference.js','utf8'),{families:['B17'],variantIds,onVariant:v=>console.log(v.id,v.passed?'PASS':'FAIL',v.passed?'':v.reason)});
+const path='.superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-source-focused-'+began.replaceAll(':','-')+'.json';await writeFile(path,JSON.stringify({began,ended:new Date().toISOString(),result},null,2));
+console.log(result.status,variantIds.length,'selected;',result.families[0].variants.filter(v=>v.passed).length,'passed;',path);process.exitCode=result.status==='valid'&&result.families[0].passed?0:1;

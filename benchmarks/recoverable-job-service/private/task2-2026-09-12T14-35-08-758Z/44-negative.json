@@ -1,0 +1,738 @@
+{
+  "control": "omit-setup-recovery",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B07"
+    ],
+    "variantIds": [
+      "B07/acquire-intent-isolation",
+      "B07/acquire-intent-process",
+      "B07/acquire-intent-channel",
+      "B07/acquire-intent-workload"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B07/acquire-intent-isolation",
+          "caseCommitment": "ea140910df96a7bd6f0ae2cf8d70435cf9efff75eec7c48b282032d1b17d2edd",
+          "fixtureCommitment": "dd7fae4a78cc3e8b69cce539020e34e76b737f8bb17d6531a5bb5479066d76ac",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "45ddada634c5c9eede41f80b6e74675925b62ea8f19e4bd991adf0a8a7854e9c"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B07/acquire-intent-process",
+          "caseCommitment": "31b41e9bf698b0ca79a0e0b279997e6050d5dee2cebdf2fc388fb8e62e75919e",
+          "fixtureCommitment": "684e02aa83f054b452592fe42cf371bf96dd278c0d29eb28ff97408d83238a91",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "47f6f239ad2ff0594a0ca845656c19dffa6b27dcc7591db03e2a7ccc59586f04"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B07/acquire-intent-channel",
+          "caseCommitment": "0e909d8d1f4fde85253eb2f6f76e347cfc7c9d05cceb2645aa7235095a589fff",
+          "fixtureCommitment": "4772fe5ba46074b8ad5cb98bcefda0c2b4ea1c2be155bc909663a3edba7a6077",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "5c400f2bc0d4fde13641d3fac36289e193c8c2b330ae461d4e14614d7ea5b788"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B07/acquire-intent-workload",
+          "caseCommitment": "2418ae98749f58c5d6c4e5b58f338b84ce677fc7f8ff066a379fea899387de76",
+          "fixtureCommitment": "12c4383a5439a2a7f8d88b391e1f3b9f4a29e0814fdf2e07d76fe2e7aabe5c08",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "c1d33326fde88a9b52e1eca9e91b8d98186bcb8cb65fe811d5bcff6ad0b8e4a9"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "3e38a68774b6c8439616cd83a473a752bd1f68f258b4c360849cc6a50f42b36f",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B07/acquire-intent-isolation",
+        "B07/acquire-intent-process",
+        "B07/acquire-intent-channel",
+        "B07/acquire-intent-workload"
+      ],
+      "scheduleHash": "decde316f5a129524b62a511da5244ab4187605c0c7ed366bf29e77d2d5f63ad",
+      "configurationHash": "0be4288b0c0eec2532b1f3010b56eade9ba2fb8057e1743ca8ee4010b05e2ad2"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B07",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B07/0be4288b0c0eec2532b1f3010b56eade9ba2fb8057e1743ca8ee4010b05e2ad2",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B07/acquire-intent-isolation",
+              "caseCommitment": "ea140910df96a7bd6f0ae2cf8d70435cf9efff75eec7c48b282032d1b17d2edd",
+              "fixtureCommitment": "dd7fae4a78cc3e8b69cce539020e34e76b737f8bb17d6531a5bb5479066d76ac",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "45ddada634c5c9eede41f80b6e74675925b62ea8f19e4bd991adf0a8a7854e9c"
+            },
+            "id": "B07/acquire-intent-isolation",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.acquire.before",
+                "passed": true
+              },
+              {
+                "label": "durable setup exists",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "recover must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "setup crash recovery settles owned setup",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "setup crash recovery settles owned setup",
+            "safetyFailures": [],
+            "operations": 76,
+            "promiseJobs": 315
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B07/acquire-intent-process",
+              "caseCommitment": "31b41e9bf698b0ca79a0e0b279997e6050d5dee2cebdf2fc388fb8e62e75919e",
+              "fixtureCommitment": "684e02aa83f054b452592fe42cf371bf96dd278c0d29eb28ff97408d83238a91",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "47f6f239ad2ff0594a0ca845656c19dffa6b27dcc7591db03e2a7ccc59586f04"
+            },
+            "id": "B07/acquire-intent-process",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.acquire.before",
+                "passed": true
+              },
+              {
+                "label": "durable setup exists",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "recover must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "setup crash recovery settles owned setup",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "setup crash recovery settles owned setup",
+            "safetyFailures": [],
+            "operations": 98,
+            "promiseJobs": 421
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B07/acquire-intent-channel",
+              "caseCommitment": "0e909d8d1f4fde85253eb2f6f76e347cfc7c9d05cceb2645aa7235095a589fff",
+              "fixtureCommitment": "4772fe5ba46074b8ad5cb98bcefda0c2b4ea1c2be155bc909663a3edba7a6077",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "5c400f2bc0d4fde13641d3fac36289e193c8c2b330ae461d4e14614d7ea5b788"
+            },
+            "id": "B07/acquire-intent-channel",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.acquire.before",
+                "passed": true
+              },
+              {
+                "label": "durable setup exists",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "recover must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "setup crash recovery settles owned setup",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "setup crash recovery settles owned setup",
+            "safetyFailures": [],
+            "operations": 120,
+            "promiseJobs": 527
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B07/acquire-intent-workload",
+              "caseCommitment": "2418ae98749f58c5d6c4e5b58f338b84ce677fc7f8ff066a379fea899387de76",
+              "fixtureCommitment": "12c4383a5439a2a7f8d88b391e1f3b9f4a29e0814fdf2e07d76fe2e7aabe5c08",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "c1d33326fde88a9b52e1eca9e91b8d98186bcb8cb65fe811d5bcff6ad0b8e4a9"
+            },
+            "id": "B07/acquire-intent-workload",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.acquire.before",
+                "passed": true
+              },
+              {
+                "label": "durable setup exists",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "recover must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "setup crash recovery settles owned setup",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "setup crash recovery settles owned setup",
+            "safetyFailures": [],
+            "operations": 142,
+            "promiseJobs": 633
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B07/acquire-intent-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-isolation: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-isolation: candidate reached lawful driver.acquire.before",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-isolation: durable setup exists",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-isolation: recover must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-isolation: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-isolation: setup crash recovery settles owned setup",
+            "passed": false
+          },
+          {
+            "label": "B07/acquire-intent-isolation: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: candidate reached lawful driver.acquire.before",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: durable setup exists",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: recover must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-process: setup crash recovery settles owned setup",
+            "passed": false
+          },
+          {
+            "label": "B07/acquire-intent-process: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: candidate reached lawful driver.acquire.before",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: durable setup exists",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: recover must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-channel: setup crash recovery settles owned setup",
+            "passed": false
+          },
+          {
+            "label": "B07/acquire-intent-channel: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: candidate reached lawful driver.acquire.before",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: durable setup exists",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: recover must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/acquire-intent-workload: setup crash recovery settles owned setup",
+            "passed": false
+          },
+          {
+            "label": "B07/acquire-intent-workload: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B07/acquire-intent-isolation: setup crash recovery settles owned setup; B07/acquire-intent-process: setup crash recovery settles owned setup; B07/acquire-intent-channel: setup crash recovery settles owned setup; B07/acquire-intent-workload: setup crash recovery settles owned setup",
+        "operations": 436,
+        "promiseJobs": 1896
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B07",
+      "variantId": "B07/acquire-intent-isolation",
+      "execution": {
+        "variant": {
+          "id": "B07/acquire-intent-isolation",
+          "family": "B07",
+          "kind": "setup-intent-crash",
+          "args": {
+            "resource": "isolation"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3880,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/acquire-intent-process",
+      "execution": {
+        "variant": {
+          "id": "B07/acquire-intent-process",
+          "family": "B07",
+          "kind": "setup-intent-crash",
+          "args": {
+            "resource": "process"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3199,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/acquire-intent-channel",
+      "execution": {
+        "variant": {
+          "id": "B07/acquire-intent-channel",
+          "family": "B07",
+          "kind": "setup-intent-crash",
+          "args": {
+            "resource": "channel"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2366,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/acquire-intent-workload",
+      "execution": {
+        "variant": {
+          "id": "B07/acquire-intent-workload",
+          "family": "B07",
+          "kind": "setup-intent-crash",
+          "args": {
+            "resource": "workload"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3047,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

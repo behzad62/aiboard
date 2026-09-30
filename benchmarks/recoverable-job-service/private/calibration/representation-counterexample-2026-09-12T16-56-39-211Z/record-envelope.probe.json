@@ -1,0 +1,102 @@
+{
+  "variantId": "C09/restore-store.commit.after",
+  "failure": "candidate reached lawful store.commit.after",
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "poll must progress",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "accepted capsule retains evidence and checkpoint",
+      "passed": true
+    },
+    {
+      "label": "unretired accepted identity retained in capsule",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "exportCapsule must progress",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful store.commit.after",
+      "passed": false
+    }
+  ],
+  "operations": 267,
+  "promiseJobs": 1524,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok"
+    },
+    {
+      "method": "start",
+      "kind": "ok"
+    },
+    {
+      "method": "poll",
+      "kind": "ok"
+    },
+    {
+      "method": "exportCapsule",
+      "kind": "ok"
+    },
+    {
+      "method": "restore",
+      "kind": "ok"
+    }
+  ],
+  "successfulRestore": true,
+  "physicalWrites": 1,
+  "acceptedAudits": 1,
+  "commitCalls": 41,
+  "candidateRecordsEnveloped": true,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

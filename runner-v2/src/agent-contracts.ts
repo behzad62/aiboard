@@ -60,10 +60,35 @@ export interface ModelTurn {
   };
 }
 
+export type AgentToolChoice =
+  | "auto"
+  | "none"
+  | "required"
+  | { type: "function"; name: string };
+
+export type AgentHostedToolType =
+  | "web_search"
+  | "web_fetch"
+  | "shell"
+  | "apply_patch"
+  | "datetime"
+  | "image_generation"
+  | "advisor"
+  | "subagent"
+  | "fusion"
+  | "tool_search";
+
+export interface AgentHostedToolDefinition {
+  type: AgentHostedToolType;
+  parameters?: Readonly<Record<string, unknown>>;
+}
+
 export interface AgentModelRequest {
   sessionId: string;
   messages: readonly AgentMessage[];
   tools: readonly ToolDefinition[];
+  toolChoice?: AgentToolChoice;
+  hostedTools?: readonly AgentHostedToolDefinition[];
   signal?: AbortSignal;
 }
 
@@ -81,6 +106,11 @@ export interface ToolDefinition {
   readOnly: boolean;
   effect: ToolEffect;
   lifecycle?: boolean;
+  /** Internal tools can remain executable while being omitted from model schemas. */
+  modelVisible?: boolean;
+  strict?: boolean;
+  /** OpenRouter Responses extension used with the hosted Tool Search tool. */
+  deferLoading?: boolean;
 }
 
 export type AgentLifecycleSignal =

@@ -1,0 +1,5 @@
+# Frozen RJS inputs and calibration evidence are identified by exact bytes.
+# Preserve their qualified line endings on every checkout platform.
+benchmarks/recoverable-job-service/** -text
+docs/benchmarks/recoverable-job-service/** -text
+docs/superpowers/specs/2026-09-08-recoverable-job-service-benchmark-design.md -text

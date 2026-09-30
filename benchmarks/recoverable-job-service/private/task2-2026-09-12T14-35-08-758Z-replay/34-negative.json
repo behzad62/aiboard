@@ -1,0 +1,207 @@
+{
+  "schemaVersion": 1,
+  "derivationVersion": "rjs-input-hmac-sha256-v1",
+  "root": "36406495ba1dceba7270b08687414f4cfa1fc7f874ed349b5dad4e03e9a14cc0",
+  "commitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+  "cases": [
+    {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "variantId": "E07/primary",
+      "caseCommitment": "330083f9bb9437c74c017141d967469e46feab466303803a3443742818b22a5f",
+      "fixtureCommitment": "34b82c736b8b0bc807e61e04cd2aaec83d1e5835b34b79ab8c01484dc90de5ce",
+      "fixtureAllocations": 11,
+      "authenticationCommitment": "a24416ec231840f21a6b2f6bee83b9bd2a8f5931b7a56f711d8aac0077f846c6"
+    }
+  ],
+  "executedInputs": [
+    {
+      "variantId": "E07/primary",
+      "events": [
+        {
+          "type": "id",
+          "ordinal": 0,
+          "id": "03d81179b0cc3eddb45db7592285d165"
+        },
+        {
+          "type": "id",
+          "ordinal": 1,
+          "id": "6d286cc48d461a76a73de38c94b1dbac"
+        },
+        {
+          "type": "id",
+          "ordinal": 2,
+          "id": "21cef052da680c78aa5edd909bc1775f"
+        },
+        {
+          "type": "id",
+          "ordinal": 3,
+          "id": "c1a5af1de23d6a373047babfd6d2064b"
+        },
+        {
+          "type": "binding",
+          "binding": {
+            "id": "21cef052da680c78aa5edd909bc1775f",
+            "birth": "c1a5af1de23d6a373047babfd6d2064b",
+            "kind": "agent",
+            "token": "7853fe2da94c53ad0fa68b2b89ca31e81d0fbc03fd420f04e632f4c4f9b33b43"
+          }
+        },
+        {
+          "type": "grant",
+          "grant": {
+            "scopeId": "03d81179b0cc3eddb45db7592285d165",
+            "ownerId": "6d286cc48d461a76a73de38c94b1dbac",
+            "epoch": 1,
+            "expiresAt": 20000,
+            "holder": {
+              "id": "21cef052da680c78aa5edd909bc1775f",
+              "birth": "c1a5af1de23d6a373047babfd6d2064b",
+              "kind": "agent",
+              "token": "7853fe2da94c53ad0fa68b2b89ca31e81d0fbc03fd420f04e632f4c4f9b33b43"
+            },
+            "token": "03d0f3173f77d8b8934caa01920abc65138c5983fe96baa72f6c1f5772a7be82"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 4,
+          "id": "d6985f7464a40c4ef976b7a0f8314267"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "createBatch",
+            "requestId": "d6985f7464a40c4ef976b7a0f8314267",
+            "deadline": 1001
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 5,
+          "id": "f91703bafaba62262528da36f21866bf"
+        },
+        {
+          "type": "id",
+          "ordinal": 6,
+          "id": "2e9cc8a0b7b026f3f2dac2311dd4e56c"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "start",
+            "requestId": "2e9cc8a0b7b026f3f2dac2311dd4e56c",
+            "deadline": 1001,
+            "batchId": "8fc0f07a2d81b3b62b975a6071848611",
+            "workloadId": "f91703bafaba62262528da36f21866bf"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 7,
+          "id": "47784d358c4e00345b164698b047a2e2"
+        },
+        {
+          "type": "output",
+          "jobId": "a7de4648253226c060d39d6fa367348a",
+          "stream": "stdout",
+          "bytes": [
+            11,
+            29,
+            47
+          ]
+        },
+        {
+          "type": "id",
+          "ordinal": 8,
+          "id": "718bc26c3ddd19e275b06bd448fbba3a"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "poll",
+            "requestId": "718bc26c3ddd19e275b06bd448fbba3a",
+            "deadline": 1001,
+            "jobId": "a7de4648253226c060d39d6fa367348a"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 9,
+          "id": "b59ce7a41baec78cdad874f26a64a289"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "closeBatch",
+            "requestId": "b59ce7a41baec78cdad874f26a64a289",
+            "deadline": 1001,
+            "batchId": "8fc0f07a2d81b3b62b975a6071848611"
+          }
+        },
+        {
+          "type": "source-observation",
+          "method": "driver.attach",
+          "receipt": {
+            "id": "1abcab33e5d2241211ceb23ff4cfc08e",
+            "operationId": "97e9c2f79cfd8abbc9f823253dd12a53",
+            "effect": "driver.attach",
+            "resourceId": "a7de4648253226c060d39d6fa367348a",
+            "ownerId": "6d286cc48d461a76a73de38c94b1dbac",
+            "epoch": 1,
+            "appliedAt": 1,
+            "payload": {
+              "privateReader": true,
+              "observationDeadline": 1001,
+              "source": {
+                "version": 1,
+                "scopeId": "03d81179b0cc3eddb45db7592285d165",
+                "channelId": "5f7cf7fe680eb8a57e140bb9a72f96b6",
+                "attachmentOperationId": "97e9c2f79cfd8abbc9f823253dd12a53",
+                "sourceRevision": 0,
+                "streams": {
+                  "stdout": {
+                    "advanced": {
+                      "seq": 0,
+                      "offset": 0
+                    },
+                    "produced": 3,
+                    "retainedBytes": 3,
+                    "bufferedBytes": 0,
+                    "unavailablePrefix": null
+                  },
+                  "stderr": {
+                    "advanced": {
+                      "seq": 0,
+                      "offset": 0
+                    },
+                    "produced": 0,
+                    "retainedBytes": 0,
+                    "bufferedBytes": 0,
+                    "unavailablePrefix": null
+                  }
+                },
+                "pendingAcks": []
+              }
+            },
+            "token": "884c1843bf8e2645b0f987f7683718a9d38a1e65e22c39d9b05b0219a13871fd"
+          }
+        },
+        {
+          "type": "id",
+          "ordinal": 10,
+          "id": "4efba6a73a2abaf21608901c6ca24afb"
+        },
+        {
+          "type": "request",
+          "request": {
+            "type": "inspectBatch",
+            "requestId": "4efba6a73a2abaf21608901c6ca24afb",
+            "deadline": 1001,
+            "batchId": "8fc0f07a2d81b3b62b975a6071848611"
+          }
+        }
+      ]
+    }
+  ]
+}

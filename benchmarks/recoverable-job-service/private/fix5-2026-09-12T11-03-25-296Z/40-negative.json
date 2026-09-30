@@ -1,0 +1,4763 @@
+{
+  "control": "omit-failure-diagnostic",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B01",
+      "B04",
+      "E06"
+    ],
+    "variantIds": [
+      "B01/recover-driver.inspect.before",
+      "B01/recover-driver.readChannel.before",
+      "B01/recover-driver.detach.before",
+      "B01/recover-driver.release.after",
+      "B01/recover-driver.attach.before",
+      "B04/rejection-driver.release.before-false",
+      "B04/rejection-driver.release.before-0",
+      "B04/rejection-driver.release.before-null",
+      "B04/rejection-driver.release.before-undefined",
+      "B04/rejection-driver.release.after-false",
+      "B04/rejection-driver.release.after-0",
+      "B04/rejection-driver.release.after-null",
+      "B04/rejection-driver.release.after-undefined",
+      "E06/falsy-driver.acquire.before-0",
+      "E06/falsy-driver.acquire.before-false",
+      "E06/falsy-driver.acquire.before-null",
+      "E06/falsy-driver.acquire.before-undefined",
+      "E06/falsy-driver.inspect.before-0",
+      "E06/falsy-driver.inspect.before-false",
+      "E06/falsy-driver.inspect.before-null",
+      "E06/falsy-driver.inspect.before-undefined",
+      "E06/falsy-driver.detach.before-0",
+      "E06/falsy-driver.detach.before-false",
+      "E06/falsy-driver.detach.before-null",
+      "E06/falsy-driver.detach.before-undefined",
+      "E06/falsy-driver.release.after-0",
+      "E06/falsy-driver.release.after-false",
+      "E06/falsy-driver.release.after-null",
+      "E06/falsy-driver.release.after-undefined",
+      "E06/falsy-artifact.read.before-0",
+      "E06/falsy-artifact.read.before-false",
+      "E06/falsy-artifact.read.before-null",
+      "E06/falsy-artifact.read.before-undefined"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "f17f1d9f729ac86ed923a1e8773f698318a71c186fa3d5d7bee264201f5bfebb",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B01/recover-driver.inspect.before",
+        "B01/recover-driver.readChannel.before",
+        "B01/recover-driver.detach.before",
+        "B01/recover-driver.release.after",
+        "B01/recover-driver.attach.before",
+        "B04/rejection-driver.release.before-false",
+        "B04/rejection-driver.release.before-0",
+        "B04/rejection-driver.release.before-null",
+        "B04/rejection-driver.release.before-undefined",
+        "B04/rejection-driver.release.after-false",
+        "B04/rejection-driver.release.after-0",
+        "B04/rejection-driver.release.after-null",
+        "B04/rejection-driver.release.after-undefined",
+        "E06/falsy-driver.acquire.before-0",
+        "E06/falsy-driver.acquire.before-false",
+        "E06/falsy-driver.acquire.before-null",
+        "E06/falsy-driver.acquire.before-undefined",
+        "E06/falsy-driver.inspect.before-0",
+        "E06/falsy-driver.inspect.before-false",
+        "E06/falsy-driver.inspect.before-null",
+        "E06/falsy-driver.inspect.before-undefined",
+        "E06/falsy-driver.detach.before-0",
+        "E06/falsy-driver.detach.before-false",
+        "E06/falsy-driver.detach.before-null",
+        "E06/falsy-driver.detach.before-undefined",
+        "E06/falsy-driver.release.after-0",
+        "E06/falsy-driver.release.after-false",
+        "E06/falsy-driver.release.after-null",
+        "E06/falsy-driver.release.after-undefined",
+        "E06/falsy-artifact.read.before-0",
+        "E06/falsy-artifact.read.before-false",
+        "E06/falsy-artifact.read.before-null",
+        "E06/falsy-artifact.read.before-undefined"
+      ],
+      "scheduleHash": "4570711204ce463288292f9a60378588eb82da63ce85a2345db44584ae7d80f1",
+      "configurationHash": "df7e61094f2a3362e60bc6d63a00553634895d0bd29df2ed339aa19abfae042f"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B01",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/B01/df7e61094f2a3362e60bc6d63a00553634895d0bd29df2ed339aa19abfae042f",
+        "variants": [
+          {
+            "id": "B01/recover-driver.inspect.before",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 255,
+            "promiseJobs": 1193
+          },
+          {
+            "id": "B01/recover-driver.readChannel.before",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 252,
+            "promiseJobs": 1182
+          },
+          {
+            "id": "B01/recover-driver.detach.before",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 346,
+            "promiseJobs": 1625
+          },
+          {
+            "id": "B01/recover-driver.release.after",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "B01/recover-driver.attach.before",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 244,
+            "promiseJobs": 1146
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B01/recover-driver.inspect.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.inspect.before: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.inspect.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.inspect.before: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.inspect.before: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.inspect.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.inspect.before: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.inspect.before: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B01/recover-driver.inspect.before: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B01/recover-driver.readChannel.before: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.detach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.detach.before: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.detach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.detach.before: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.detach.before: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.detach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.detach.before: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.detach.before: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B01/recover-driver.detach.before: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.release.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.release.after: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.release.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.release.after: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.release.after: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.release.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.release.after: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.release.after: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B01/recover-driver.release.after: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.attach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.attach.before: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.attach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.attach.before: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.attach.before: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.attach.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.attach.before: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B01/recover-driver.attach.before: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B01/recover-driver.attach.before: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B01/recover-driver.inspect.before: rejection has explicit failure presence; B01/recover-driver.readChannel.before: rejection has explicit failure presence; B01/recover-driver.detach.before: rejection has explicit failure presence; B01/recover-driver.release.after: rejection has explicit failure presence; B01/recover-driver.attach.before: rejection has explicit failure presence",
+        "operations": 1465,
+        "promiseJobs": 6879
+      },
+      {
+        "id": "B04",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/B04/df7e61094f2a3362e60bc6d63a00553634895d0bd29df2ed339aa19abfae042f",
+        "variants": [
+          {
+            "id": "B04/rejection-driver.release.before-false",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "B04/rejection-driver.release.before-0",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "B04/rejection-driver.release.before-null",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "B04/rejection-driver.release.before-undefined",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "B04/rejection-driver.release.after-false",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "B04/rejection-driver.release.after-0",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "B04/rejection-driver.release.after-null",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "B04/rejection-driver.release.after-undefined",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B04/rejection-driver.release.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-false: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-false: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-false: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-false: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-false: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B04/rejection-driver.release.before-false: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B04/rejection-driver.release.before-0: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B04/rejection-driver.release.before-null: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B04/rejection-driver.release.before-undefined: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B04/rejection-driver.release.after-false: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B04/rejection-driver.release.after-0: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B04/rejection-driver.release.after-null: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "B04/rejection-driver.release.after-undefined: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B04/rejection-driver.release.before-false: rejection has explicit failure presence; B04/rejection-driver.release.before-0: rejection has explicit failure presence; B04/rejection-driver.release.before-null: rejection has explicit failure presence; B04/rejection-driver.release.before-undefined: rejection has explicit failure presence; B04/rejection-driver.release.after-false: rejection has explicit failure presence; B04/rejection-driver.release.after-0: rejection has explicit failure presence; B04/rejection-driver.release.after-null: rejection has explicit failure presence; B04/rejection-driver.release.after-undefined: rejection has explicit failure presence",
+        "operations": 2944,
+        "promiseJobs": 13864
+      },
+      {
+        "id": "E06",
+        "group": "E",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/E06/df7e61094f2a3362e60bc6d63a00553634895d0bd29df2ed339aa19abfae042f",
+        "variants": [
+          {
+            "id": "E06/falsy-driver.acquire.before-0",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 261,
+            "promiseJobs": 1218
+          },
+          {
+            "id": "E06/falsy-driver.acquire.before-false",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 261,
+            "promiseJobs": 1218
+          },
+          {
+            "id": "E06/falsy-driver.acquire.before-null",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 261,
+            "promiseJobs": 1218
+          },
+          {
+            "id": "E06/falsy-driver.acquire.before-undefined",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 261,
+            "promiseJobs": 1218
+          },
+          {
+            "id": "E06/falsy-driver.inspect.before-0",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 255,
+            "promiseJobs": 1193
+          },
+          {
+            "id": "E06/falsy-driver.inspect.before-false",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 255,
+            "promiseJobs": 1193
+          },
+          {
+            "id": "E06/falsy-driver.inspect.before-null",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 255,
+            "promiseJobs": 1193
+          },
+          {
+            "id": "E06/falsy-driver.inspect.before-undefined",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 255,
+            "promiseJobs": 1193
+          },
+          {
+            "id": "E06/falsy-driver.detach.before-0",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 346,
+            "promiseJobs": 1625
+          },
+          {
+            "id": "E06/falsy-driver.detach.before-false",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 346,
+            "promiseJobs": 1625
+          },
+          {
+            "id": "E06/falsy-driver.detach.before-null",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 346,
+            "promiseJobs": 1625
+          },
+          {
+            "id": "E06/falsy-driver.detach.before-undefined",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 346,
+            "promiseJobs": 1625
+          },
+          {
+            "id": "E06/falsy-driver.release.after-0",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "E06/falsy-driver.release.after-false",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "E06/falsy-driver.release.after-null",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "E06/falsy-driver.release.after-undefined",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 368,
+            "promiseJobs": 1733
+          },
+          {
+            "id": "E06/falsy-artifact.read.before-0",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 317,
+            "promiseJobs": 1457
+          },
+          {
+            "id": "E06/falsy-artifact.read.before-false",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 317,
+            "promiseJobs": 1457
+          },
+          {
+            "id": "E06/falsy-artifact.read.before-null",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 317,
+            "promiseJobs": 1457
+          },
+          {
+            "id": "E06/falsy-artifact.read.before-undefined",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "rejection has explicit failure presence",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "rejection has explicit failure presence",
+            "safetyFailures": [],
+            "operations": 317,
+            "promiseJobs": 1457
+          }
+        ],
+        "assertions": [
+          {
+            "label": "E06/falsy-driver.acquire.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: start must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-0: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: start must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-false: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: start must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-null: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: start must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.acquire.before-undefined: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-0: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-false: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-null: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.inspect.before-undefined: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-0: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-false: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-null: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.detach.before-undefined: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.release.after-0: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.release.after-false: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.release.after-null: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-driver.release.after-undefined: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-0: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-false: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-null: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: rejection has explicit failure presence",
+            "passed": false
+          },
+          {
+            "label": "E06/falsy-artifact.read.before-undefined: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "E06/falsy-driver.acquire.before-0: rejection has explicit failure presence; E06/falsy-driver.acquire.before-false: rejection has explicit failure presence; E06/falsy-driver.acquire.before-null: rejection has explicit failure presence; E06/falsy-driver.acquire.before-undefined: rejection has explicit failure presence; E06/falsy-driver.inspect.before-0: rejection has explicit failure presence; E06/falsy-driver.inspect.before-false: rejection has explicit failure presence; E06/falsy-driver.inspect.before-null: rejection has explicit failure presence; E06/falsy-driver.inspect.before-undefined: rejection has explicit failure presence; E06/falsy-driver.detach.before-0: rejection has explicit failure presence; E06/falsy-driver.detach.before-false: rejection has explicit failure presence; E06/falsy-driver.detach.before-null: rejection has explicit failure presence; E06/falsy-driver.detach.before-undefined: rejection has explicit failure presence; E06/falsy-driver.release.after-0: rejection has explicit failure presence; E06/falsy-driver.release.after-false: rejection has explicit failure presence; E06/falsy-driver.release.after-null: rejection has explicit failure presence; E06/falsy-driver.release.after-undefined: rejection has explicit failure presence; E06/falsy-artifact.read.before-0: rejection has explicit failure presence; E06/falsy-artifact.read.before-false: rejection has explicit failure presence; E06/falsy-artifact.read.before-null: rejection has explicit failure presence; E06/falsy-artifact.read.before-undefined: rejection has explicit failure presence",
+        "operations": 6188,
+        "promiseJobs": 28904
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 2,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B01",
+      "variantId": "B01/recover-driver.inspect.before",
+      "execution": {
+        "variant": {
+          "id": "B01/recover-driver.inspect.before",
+          "family": "B01",
+          "kind": "recover-state",
+          "args": {
+            "point": "driver.inspect.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B01/qualification-v1",
+        "schedule": {
+          "partition": 2964,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B01",
+      "variantId": "B01/recover-driver.readChannel.before",
+      "execution": {
+        "variant": {
+          "id": "B01/recover-driver.readChannel.before",
+          "family": "B01",
+          "kind": "recover-state",
+          "args": {
+            "point": "driver.readChannel.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B01/qualification-v1",
+        "schedule": {
+          "partition": 3541,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B01",
+      "variantId": "B01/recover-driver.detach.before",
+      "execution": {
+        "variant": {
+          "id": "B01/recover-driver.detach.before",
+          "family": "B01",
+          "kind": "recover-state",
+          "args": {
+            "point": "driver.detach.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B01/qualification-v1",
+        "schedule": {
+          "partition": 2672,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B01",
+      "variantId": "B01/recover-driver.release.after",
+      "execution": {
+        "variant": {
+          "id": "B01/recover-driver.release.after",
+          "family": "B01",
+          "kind": "recover-state",
+          "args": {
+            "point": "driver.release.after"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B01/qualification-v1",
+        "schedule": {
+          "partition": 3967,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B01",
+      "variantId": "B01/recover-driver.attach.before",
+      "execution": {
+        "variant": {
+          "id": "B01/recover-driver.attach.before",
+          "family": "B01",
+          "kind": "recover-state",
+          "args": {
+            "point": "driver.attach.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B01/qualification-v1",
+        "schedule": {
+          "partition": 3422,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B04",
+      "variantId": "B04/rejection-driver.release.before-false",
+      "execution": {
+        "variant": {
+          "id": "B04/rejection-driver.release.before-false",
+          "family": "B04",
+          "kind": "rejected-effect",
+          "args": {
+            "point": "driver.release.before",
+            "value": false
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B04/qualification-v1",
+        "schedule": {
+          "partition": 3566,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B04",
+      "variantId": "B04/rejection-driver.release.before-0",
+      "execution": {
+        "variant": {
+          "id": "B04/rejection-driver.release.before-0",
+          "family": "B04",
+          "kind": "rejected-effect",
+          "args": {
+            "point": "driver.release.before",
+            "value": 0
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B04/qualification-v1",
+        "schedule": {
+          "partition": 3982,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B04",
+      "variantId": "B04/rejection-driver.release.before-null",
+      "execution": {
+        "variant": {
+          "id": "B04/rejection-driver.release.before-null",
+          "family": "B04",
+          "kind": "rejected-effect",
+          "args": {
+            "point": "driver.release.before",
+            "value": null
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B04/qualification-v1",
+        "schedule": {
+          "partition": 3358,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B04",
+      "variantId": "B04/rejection-driver.release.before-undefined",
+      "execution": {
+        "variant": {
+          "id": "B04/rejection-driver.release.before-undefined",
+          "family": "B04",
+          "kind": "rejected-effect",
+          "args": {
+            "point": "driver.release.before",
+            "value": "undefined"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B04/qualification-v1",
+        "schedule": {
+          "partition": 2093,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B04",
+      "variantId": "B04/rejection-driver.release.after-false",
+      "execution": {
+        "variant": {
+          "id": "B04/rejection-driver.release.after-false",
+          "family": "B04",
+          "kind": "rejected-effect",
+          "args": {
+            "point": "driver.release.after",
+            "value": false
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B04/qualification-v1",
+        "schedule": {
+          "partition": 2701,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B04",
+      "variantId": "B04/rejection-driver.release.after-0",
+      "execution": {
+        "variant": {
+          "id": "B04/rejection-driver.release.after-0",
+          "family": "B04",
+          "kind": "rejected-effect",
+          "args": {
+            "point": "driver.release.after",
+            "value": 0
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B04/qualification-v1",
+        "schedule": {
+          "partition": 3151,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B04",
+      "variantId": "B04/rejection-driver.release.after-null",
+      "execution": {
+        "variant": {
+          "id": "B04/rejection-driver.release.after-null",
+          "family": "B04",
+          "kind": "rejected-effect",
+          "args": {
+            "point": "driver.release.after",
+            "value": null
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B04/qualification-v1",
+        "schedule": {
+          "partition": 2145,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B04",
+      "variantId": "B04/rejection-driver.release.after-undefined",
+      "execution": {
+        "variant": {
+          "id": "B04/rejection-driver.release.after-undefined",
+          "family": "B04",
+          "kind": "rejected-effect",
+          "args": {
+            "point": "driver.release.after",
+            "value": "undefined"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B04/qualification-v1",
+        "schedule": {
+          "partition": 2725,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.acquire.before-0",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.acquire.before-0",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.acquire.before",
+            "value": 0
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3503,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.acquire.before-false",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.acquire.before-false",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.acquire.before",
+            "value": false
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 2224,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.acquire.before-null",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.acquire.before-null",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.acquire.before",
+            "value": null
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 2366,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.acquire.before-undefined",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.acquire.before-undefined",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.acquire.before",
+            "value": "undefined"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3568,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.inspect.before-0",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.inspect.before-0",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.inspect.before",
+            "value": 0
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 2571,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.inspect.before-false",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.inspect.before-false",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.inspect.before",
+            "value": false
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3165,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.inspect.before-null",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.inspect.before-null",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.inspect.before",
+            "value": null
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3164,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.inspect.before-undefined",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.inspect.before-undefined",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.inspect.before",
+            "value": "undefined"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 2626,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.detach.before-0",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.detach.before-0",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.detach.before",
+            "value": 0
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 2243,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.detach.before-false",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.detach.before-false",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.detach.before",
+            "value": false
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 2186,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.detach.before-null",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.detach.before-null",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.detach.before",
+            "value": null
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3565,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.detach.before-undefined",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.detach.before-undefined",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.detach.before",
+            "value": "undefined"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3790,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.release.after-0",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.release.after-0",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.release.after",
+            "value": 0
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 2838,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.release.after-false",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.release.after-false",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.release.after",
+            "value": false
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3009,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.release.after-null",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.release.after-null",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.release.after",
+            "value": null
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3559,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-driver.release.after-undefined",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-driver.release.after-undefined",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "driver.release.after",
+            "value": "undefined"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3578,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-artifact.read.before-0",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-artifact.read.before-0",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "artifact.read.before",
+            "value": 0
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3020,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-artifact.read.before-false",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-artifact.read.before-false",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "artifact.read.before",
+            "value": false
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 4082,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-artifact.read.before-null",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-artifact.read.before-null",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "artifact.read.before",
+            "value": null
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 3505,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "E06",
+      "variantId": "E06/falsy-artifact.read.before-undefined",
+      "execution": {
+        "variant": {
+          "id": "E06/falsy-artifact.read.before-undefined",
+          "family": "E06",
+          "kind": "failure-phase",
+          "args": {
+            "point": "artifact.read.before",
+            "value": "undefined"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E06/qualification-v1",
+        "schedule": {
+          "partition": 2661,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

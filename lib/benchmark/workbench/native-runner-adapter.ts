@@ -206,6 +206,15 @@ export async function runNativeWorkBenchBuild(
     if (health.projectPath !== managed.projectPath) {
       throw new Error("Managed Runner V2 project path does not match the prepared attempt.");
     }
+    if (
+      input.case.trustedPolicy &&
+      (health.nodeVersion !== input.case.trustedPolicy.requiredNodeVersion ||
+        managed.nodeVersion !== input.case.trustedPolicy.requiredNodeVersion)
+    ) {
+      throw new Error(
+        `Recoverable Job Service requires managed Runner Node ${input.case.trustedPolicy.requiredNodeVersion}.`
+      );
+    }
     await dependencies.restoreManagedAttemptOracle(input.runner, {
       attemptId: input.attemptId,
     }, input.signal);
@@ -252,8 +261,17 @@ export async function runNativeWorkBenchBuild(
           benchmark: {
             attemptId: input.attemptId,
             allowedCommands: uniqueStrings([...input.allowedCommands, "git diff --check"]),
-            hiddenPaths: [...WORKBENCH_HIDDEN_PATHS],
-            protectedPaths: [...WORKBENCH_PROTECTED_PATHS],
+            hiddenPaths: uniqueStrings([
+              ...WORKBENCH_HIDDEN_PATHS,
+              ...(input.case.trustedPolicy?.hiddenPaths ?? []),
+            ]),
+            protectedPaths: uniqueStrings([
+              ...WORKBENCH_PROTECTED_PATHS,
+              ...(input.case.trustedPolicy?.protectedPaths ?? []),
+            ]),
+            ...(input.case.trustedPolicy
+              ? { editablePaths: [...input.case.trustedPolicy.editablePaths] }
+              : {}),
           },
         },
       },

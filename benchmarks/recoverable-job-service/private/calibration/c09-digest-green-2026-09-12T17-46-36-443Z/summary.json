@@ -1,0 +1,2631 @@
+{
+  "schemaVersion": 1,
+  "purpose": "same C09 correction history; narrow nonfinal digest red/green evidence, not full qualification",
+  "output": "benchmarks\\recoverable-job-service\\private\\calibration\\c09-digest-green-2026-09-12T17-46-36-443Z",
+  "red": false,
+  "node": "24.18.0",
+  "identity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "14b7d5028b6a2bb08b64f21171208c3266e67f3ef0d05b6f83991c8e5db2fcd5"
+  },
+  "variantsSha256": "d9fcbcc03a32b9c6ed1cb9fd46b38c8ebe814d0b5829fccb02ae16cee05c814e",
+  "replayInput": {
+    "path": "benchmarks\\recoverable-job-service\\private\\calibration\\correction-proof-2026-09-12T17-06-54-031Z\\replay-input.private.json",
+    "sha256": "e317d91d11b0b9eb7ea07b206362d9db3e94e172ef17b719411d20f0e1065156",
+    "commitment": "46d9590cf527dc0f399e5c102d47f9a63b00d329740680d546eacccceb951f2a"
+  },
+  "sourceHashes": {
+    "reference": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "record-envelope": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+    "nonfinal-revision": "5934b229e3122ff738a059c0828ae3f42c346f014f85b4894e682dd53f415e87"
+  },
+  "runs": [
+    {
+      "name": "reference-positive",
+      "sourceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+      "expectation": "positive",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 280,
+          "promiseJobs": 1257
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 280,
+          "promiseJobs": 1257
+        }
+      ]
+    },
+    {
+      "name": "reference-material",
+      "sourceHash": "59f39de74f488fb7f3186029ac1f254ea5f212c0ec83c78bf238ace10b44bf19",
+      "expectation": "material",
+      "selected": 2,
+      "passed": 0,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": false,
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "operations": 261,
+          "promiseJobs": 1182
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": false,
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "operations": 261,
+          "promiseJobs": 1182
+        }
+      ]
+    },
+    {
+      "name": "reference-restored",
+      "sourceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+      "expectation": "positive",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 280,
+          "promiseJobs": 1257
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 280,
+          "promiseJobs": 1257
+        }
+      ]
+    },
+    {
+      "name": "record-envelope-positive",
+      "sourceHash": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+      "expectation": "positive",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 280,
+          "promiseJobs": 1580
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 280,
+          "promiseJobs": 1580
+        }
+      ]
+    },
+    {
+      "name": "record-envelope-material",
+      "sourceHash": "af14a95efdbe822129427dba6e7f6e2bab44fe9c825c544dfdaa286d0dd64d54",
+      "expectation": "material",
+      "selected": 2,
+      "passed": 0,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": false,
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "operations": 261,
+          "promiseJobs": 1485
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": false,
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "operations": 261,
+          "promiseJobs": 1485
+        }
+      ]
+    },
+    {
+      "name": "record-envelope-restored",
+      "sourceHash": "a6d8411c20f253e4982cbc3ab35db4536b29941b7f6cdef05c4086efef3f3d7b",
+      "expectation": "positive",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 280,
+          "promiseJobs": 1580
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 280,
+          "promiseJobs": 1580
+        }
+      ]
+    },
+    {
+      "name": "nonfinal-revision-positive",
+      "sourceHash": "5934b229e3122ff738a059c0828ae3f42c346f014f85b4894e682dd53f415e87",
+      "expectation": "positive",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 281,
+          "promiseJobs": 1260
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 281,
+          "promiseJobs": 1260
+        }
+      ]
+    },
+    {
+      "name": "nonfinal-revision-material",
+      "sourceHash": "7e9e9e5e3badc1543f7dd56b3a28a03f89f5783f26cfb9382009475a2f2cea83",
+      "expectation": "material",
+      "selected": 2,
+      "passed": 0,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": false,
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "operations": 261,
+          "promiseJobs": 1182
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": false,
+          "reason": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}; safety: evidence-before-acceptance",
+          "operations": 261,
+          "promiseJobs": 1182
+        }
+      ]
+    },
+    {
+      "name": "nonfinal-revision-restored",
+      "sourceHash": "5934b229e3122ff738a059c0828ae3f42c346f014f85b4894e682dd53f415e87",
+      "expectation": "positive",
+      "selected": 2,
+      "passed": 2,
+      "skipped": 0,
+      "rows": [
+        {
+          "id": "C09/restore-store.commit.before",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 281,
+          "promiseJobs": 1260
+        },
+        {
+          "id": "C09/restore-store.commit.after",
+          "passed": true,
+          "reason": "Observed public behavior and durable consequences.",
+          "operations": 281,
+          "promiseJobs": 1260
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "name": "reference-C09-restore-store.commit.before",
+      "variantId": "C09/restore-store.commit.before",
+      "failure": null,
+      "safety": [],
+      "assertions": [
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "start must progress",
+          "passed": true
+        },
+        {
+          "label": "actual modeled workload acquired",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "poll must progress",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "candidate reached lawful store.commit.before",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "restore must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public finality",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public accounting",
+          "passed": true
+        },
+        {
+          "label": "restored evidence verifies its own manifest digest",
+          "passed": true
+        },
+        {
+          "label": "restore crash never duplicates accepted output",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "probe retains both streams accounting",
+          "passed": true
+        },
+        {
+          "label": "probe retains public finality",
+          "passed": true
+        },
+        {
+          "label": "probe manifest independently verifies",
+          "passed": true
+        },
+        {
+          "label": "probe one accepted audit after publication and reopen",
+          "passed": true
+        }
+      ],
+      "operations": 283,
+      "promiseJobs": 1273,
+      "effects": {
+        "store.commit": 42,
+        "driver.acquire": 4,
+        "artifact.create": 2,
+        "driver.start": 1,
+        "artifact.write": 1
+      },
+      "publicCalls": [
+        {
+          "method": "createBatch",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "start",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "poll",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "restore",
+          "kind": null,
+          "blockers": [],
+          "error": "Error: guest terminated"
+        },
+        {
+          "method": "restore",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "readEvidence",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        }
+      ],
+      "faults": [
+        {
+          "boundary": "store.commit.before",
+          "index": 298,
+          "during": [
+            "restore"
+          ]
+        }
+      ],
+      "physicalRemovals": 0,
+      "strategyObservations": {
+        "recordCount": 17,
+        "envelopedRecords": 0,
+        "keyPrefixes": [
+          "request/51545afb9ba8e9bd35ede042a1b2f12b",
+          "batch/552e00eebe2c88e3d24e1b0985826b06",
+          "batch-request/51545afb9ba8e9bd35ede042a1b2f12b",
+          "request/651bc5c47615eeac8afd65fa52483411",
+          "job/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "start/651bc5c47615eeac8afd65fa52483411",
+          "effect/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "request/042ae8631518299b609872fdf8daf33e",
+          "frame/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "request/e6b3b976ae41feb22aa82414e72651ac",
+          "request/5029b6709381e3cf12badb9ebd8b7d02"
+        ],
+        "ownershipIndex": null,
+        "roots": [
+          {
+            "handle": {
+              "id": "958b28a425fbb882c95c9d5cbaa64813",
+              "birth": "ec50a6a0061c7f0856a6900b94050df4",
+              "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "retained": true,
+              "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+            },
+            "absent": false,
+            "names": [
+              "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            ]
+          },
+          {
+            "handle": {
+              "id": "997e9c12bc04d9bc8af987063732dfa0",
+              "birth": "da14835c5297aaaef33c014976c33903",
+              "path": "scratch/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "retained": false,
+              "token": "16197e92fb1bfe760d73a6a8149219ed60ec7d514a3e200f17872f3b224da500"
+            },
+            "absent": false,
+            "names": []
+          }
+        ],
+        "removedRootOrder": []
+      },
+      "allGuestsDisposed": true,
+      "remainingTrackedCalls": 0,
+      "facts": {
+        "previousEvidence": {
+          "version": 3,
+          "batchId": "552e00eebe2c88e3d24e1b0985826b06",
+          "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "generation": "5de676f06647e4c9386a2b1b1207f9e0",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "d2df63e8a58e1bf6d5b3b9a6c0f909a6",
+              "root": {
+                "id": "958b28a425fbb882c95c9d5cbaa64813",
+                "birth": "ec50a6a0061c7f0856a6900b94050df4",
+                "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "retained": true,
+                "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+              },
+              "name": "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "32a1f0da06e434a7e5412cbbb43a09f959315acd3fd6c36f416f911a59f078d7"
+        },
+        "currentEvidence": {
+          "version": 3,
+          "batchId": "552e00eebe2c88e3d24e1b0985826b06",
+          "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "generation": "5de676f06647e4c9386a2b1b1207f9e0",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "d2df63e8a58e1bf6d5b3b9a6c0f909a6",
+              "root": {
+                "id": "958b28a425fbb882c95c9d5cbaa64813",
+                "birth": "ec50a6a0061c7f0856a6900b94050df4",
+                "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "retained": true,
+                "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+              },
+              "name": "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "32a1f0da06e434a7e5412cbbb43a09f959315acd3fd6c36f416f911a59f078d7"
+        },
+        "acceptedAudits": 1
+      }
+    },
+    {
+      "name": "reference-C09-restore-store.commit.after",
+      "variantId": "C09/restore-store.commit.after",
+      "failure": null,
+      "safety": [],
+      "assertions": [
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "start must progress",
+          "passed": true
+        },
+        {
+          "label": "actual modeled workload acquired",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "poll must progress",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "candidate reached lawful store.commit.after",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "restore must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public finality",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public accounting",
+          "passed": true
+        },
+        {
+          "label": "restored evidence verifies its own manifest digest",
+          "passed": true
+        },
+        {
+          "label": "restore crash never duplicates accepted output",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "probe retains both streams accounting",
+          "passed": true
+        },
+        {
+          "label": "probe retains public finality",
+          "passed": true
+        },
+        {
+          "label": "probe manifest independently verifies",
+          "passed": true
+        },
+        {
+          "label": "probe one accepted audit after publication and reopen",
+          "passed": true
+        }
+      ],
+      "operations": 283,
+      "promiseJobs": 1273,
+      "effects": {
+        "store.commit": 42,
+        "driver.acquire": 4,
+        "artifact.create": 2,
+        "driver.start": 1,
+        "artifact.write": 1
+      },
+      "publicCalls": [
+        {
+          "method": "createBatch",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "start",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "poll",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "restore",
+          "kind": null,
+          "blockers": [],
+          "error": "Error: guest terminated"
+        },
+        {
+          "method": "restore",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "readEvidence",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        }
+      ],
+      "faults": [
+        {
+          "boundary": "store.commit.after",
+          "index": 300,
+          "during": [
+            "restore"
+          ]
+        }
+      ],
+      "physicalRemovals": 0,
+      "strategyObservations": {
+        "recordCount": 17,
+        "envelopedRecords": 0,
+        "keyPrefixes": [
+          "request/3ffb406c917d5dd215f0b32c1c330009",
+          "batch/7b5b01319f53ce2bebf6c9dcee0c605b",
+          "batch-request/3ffb406c917d5dd215f0b32c1c330009",
+          "request/38ed458815da647753aa6250a3cecc6d",
+          "job/4bc344d63d617cd2a3d1ddf5678e162f",
+          "start/38ed458815da647753aa6250a3cecc6d",
+          "effect/4bc344d63d617cd2a3d1ddf5678e162f",
+          "request/b004dc52580881eb8dbf5f2a3940d2a3",
+          "frame/4bc344d63d617cd2a3d1ddf5678e162f",
+          "request/f0fe5eacbd14e85acdd3899f5668795c",
+          "request/e19d08d14c701e1f094985e98507a300"
+        ],
+        "ownershipIndex": null,
+        "roots": [
+          {
+            "handle": {
+              "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+              "birth": "bfff6f513214da4c5f18ff587ec975c0",
+              "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+              "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+              "retained": true,
+              "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+            },
+            "absent": false,
+            "names": [
+              "ebe6ade5e9efeb3a32903cad69b670c5"
+            ]
+          },
+          {
+            "handle": {
+              "id": "4192672ac9e739eb274e4b09bee255e8",
+              "birth": "8befa1d804c81f9a81653a72a8557ea5",
+              "path": "scratch/4bc344d63d617cd2a3d1ddf5678e162f",
+              "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+              "retained": false,
+              "token": "a794cc51a291bf740d3379d417aa6bb4a44e8c2ba98849eec9ba6b8adaad93e8"
+            },
+            "absent": false,
+            "names": []
+          }
+        ],
+        "removedRootOrder": []
+      },
+      "allGuestsDisposed": true,
+      "remainingTrackedCalls": 0,
+      "facts": {
+        "previousEvidence": {
+          "version": 3,
+          "batchId": "7b5b01319f53ce2bebf6c9dcee0c605b",
+          "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "generation": "1f02a88f2d47888256f14d2443cbf52a",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5",
+              "root": {
+                "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+                "birth": "bfff6f513214da4c5f18ff587ec975c0",
+                "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+                "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+                "retained": true,
+                "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+              },
+              "name": "ebe6ade5e9efeb3a32903cad69b670c5"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "9c9039ebfed4a7e04ed4d2e344f01223555c4ff1378f2d5cf316ac8a61e21fdb"
+        },
+        "currentEvidence": {
+          "version": 3,
+          "batchId": "7b5b01319f53ce2bebf6c9dcee0c605b",
+          "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "generation": "1f02a88f2d47888256f14d2443cbf52a",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5",
+              "root": {
+                "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+                "birth": "bfff6f513214da4c5f18ff587ec975c0",
+                "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+                "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+                "retained": true,
+                "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+              },
+              "name": "ebe6ade5e9efeb3a32903cad69b670c5"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "9c9039ebfed4a7e04ed4d2e344f01223555c4ff1378f2d5cf316ac8a61e21fdb"
+        },
+        "acceptedAudits": 1
+      }
+    },
+    {
+      "name": "record-envelope-C09-restore-store.commit.before",
+      "variantId": "C09/restore-store.commit.before",
+      "failure": null,
+      "safety": [],
+      "assertions": [
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "start must progress",
+          "passed": true
+        },
+        {
+          "label": "actual modeled workload acquired",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "poll must progress",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "candidate reached lawful store.commit.before",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "restore must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public finality",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public accounting",
+          "passed": true
+        },
+        {
+          "label": "restored evidence verifies its own manifest digest",
+          "passed": true
+        },
+        {
+          "label": "restore crash never duplicates accepted output",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "probe retains both streams accounting",
+          "passed": true
+        },
+        {
+          "label": "probe retains public finality",
+          "passed": true
+        },
+        {
+          "label": "probe manifest independently verifies",
+          "passed": true
+        },
+        {
+          "label": "probe one accepted audit after publication and reopen",
+          "passed": true
+        }
+      ],
+      "operations": 283,
+      "promiseJobs": 1599,
+      "effects": {
+        "store.commit": 42,
+        "driver.acquire": 4,
+        "artifact.create": 2,
+        "driver.start": 1,
+        "artifact.write": 1
+      },
+      "publicCalls": [
+        {
+          "method": "createBatch",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "start",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "poll",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "restore",
+          "kind": null,
+          "blockers": [],
+          "error": "Error: guest terminated"
+        },
+        {
+          "method": "restore",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "readEvidence",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        }
+      ],
+      "faults": [
+        {
+          "boundary": "store.commit.before",
+          "index": 298,
+          "during": [
+            "restore"
+          ]
+        }
+      ],
+      "physicalRemovals": 0,
+      "strategyObservations": {
+        "recordCount": 17,
+        "envelopedRecords": 17,
+        "keyPrefixes": [
+          "request/51545afb9ba8e9bd35ede042a1b2f12b",
+          "batch/552e00eebe2c88e3d24e1b0985826b06",
+          "batch-request/51545afb9ba8e9bd35ede042a1b2f12b",
+          "request/651bc5c47615eeac8afd65fa52483411",
+          "job/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "start/651bc5c47615eeac8afd65fa52483411",
+          "effect/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "request/042ae8631518299b609872fdf8daf33e",
+          "frame/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "request/e6b3b976ae41feb22aa82414e72651ac",
+          "request/5029b6709381e3cf12badb9ebd8b7d02"
+        ],
+        "ownershipIndex": null,
+        "roots": [
+          {
+            "handle": {
+              "id": "958b28a425fbb882c95c9d5cbaa64813",
+              "birth": "ec50a6a0061c7f0856a6900b94050df4",
+              "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "retained": true,
+              "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+            },
+            "absent": false,
+            "names": [
+              "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            ]
+          },
+          {
+            "handle": {
+              "id": "997e9c12bc04d9bc8af987063732dfa0",
+              "birth": "da14835c5297aaaef33c014976c33903",
+              "path": "scratch/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "retained": false,
+              "token": "16197e92fb1bfe760d73a6a8149219ed60ec7d514a3e200f17872f3b224da500"
+            },
+            "absent": false,
+            "names": []
+          }
+        ],
+        "removedRootOrder": []
+      },
+      "allGuestsDisposed": true,
+      "remainingTrackedCalls": 0,
+      "facts": {
+        "previousEvidence": {
+          "version": 3,
+          "batchId": "552e00eebe2c88e3d24e1b0985826b06",
+          "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "generation": "5de676f06647e4c9386a2b1b1207f9e0",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "d2df63e8a58e1bf6d5b3b9a6c0f909a6",
+              "root": {
+                "id": "958b28a425fbb882c95c9d5cbaa64813",
+                "birth": "ec50a6a0061c7f0856a6900b94050df4",
+                "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "retained": true,
+                "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+              },
+              "name": "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "32a1f0da06e434a7e5412cbbb43a09f959315acd3fd6c36f416f911a59f078d7"
+        },
+        "currentEvidence": {
+          "version": 3,
+          "batchId": "552e00eebe2c88e3d24e1b0985826b06",
+          "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "generation": "5de676f06647e4c9386a2b1b1207f9e0",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "d2df63e8a58e1bf6d5b3b9a6c0f909a6",
+              "root": {
+                "id": "958b28a425fbb882c95c9d5cbaa64813",
+                "birth": "ec50a6a0061c7f0856a6900b94050df4",
+                "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "retained": true,
+                "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+              },
+              "name": "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "32a1f0da06e434a7e5412cbbb43a09f959315acd3fd6c36f416f911a59f078d7"
+        },
+        "acceptedAudits": 1
+      }
+    },
+    {
+      "name": "record-envelope-C09-restore-store.commit.after",
+      "variantId": "C09/restore-store.commit.after",
+      "failure": null,
+      "safety": [],
+      "assertions": [
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "start must progress",
+          "passed": true
+        },
+        {
+          "label": "actual modeled workload acquired",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "poll must progress",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "candidate reached lawful store.commit.after",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "restore must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public finality",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public accounting",
+          "passed": true
+        },
+        {
+          "label": "restored evidence verifies its own manifest digest",
+          "passed": true
+        },
+        {
+          "label": "restore crash never duplicates accepted output",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "probe retains both streams accounting",
+          "passed": true
+        },
+        {
+          "label": "probe retains public finality",
+          "passed": true
+        },
+        {
+          "label": "probe manifest independently verifies",
+          "passed": true
+        },
+        {
+          "label": "probe one accepted audit after publication and reopen",
+          "passed": true
+        }
+      ],
+      "operations": 283,
+      "promiseJobs": 1599,
+      "effects": {
+        "store.commit": 42,
+        "driver.acquire": 4,
+        "artifact.create": 2,
+        "driver.start": 1,
+        "artifact.write": 1
+      },
+      "publicCalls": [
+        {
+          "method": "createBatch",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "start",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "poll",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "restore",
+          "kind": null,
+          "blockers": [],
+          "error": "Error: guest terminated"
+        },
+        {
+          "method": "restore",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "readEvidence",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        }
+      ],
+      "faults": [
+        {
+          "boundary": "store.commit.after",
+          "index": 300,
+          "during": [
+            "restore"
+          ]
+        }
+      ],
+      "physicalRemovals": 0,
+      "strategyObservations": {
+        "recordCount": 17,
+        "envelopedRecords": 17,
+        "keyPrefixes": [
+          "request/3ffb406c917d5dd215f0b32c1c330009",
+          "batch/7b5b01319f53ce2bebf6c9dcee0c605b",
+          "batch-request/3ffb406c917d5dd215f0b32c1c330009",
+          "request/38ed458815da647753aa6250a3cecc6d",
+          "job/4bc344d63d617cd2a3d1ddf5678e162f",
+          "start/38ed458815da647753aa6250a3cecc6d",
+          "effect/4bc344d63d617cd2a3d1ddf5678e162f",
+          "request/b004dc52580881eb8dbf5f2a3940d2a3",
+          "frame/4bc344d63d617cd2a3d1ddf5678e162f",
+          "request/f0fe5eacbd14e85acdd3899f5668795c",
+          "request/e19d08d14c701e1f094985e98507a300"
+        ],
+        "ownershipIndex": null,
+        "roots": [
+          {
+            "handle": {
+              "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+              "birth": "bfff6f513214da4c5f18ff587ec975c0",
+              "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+              "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+              "retained": true,
+              "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+            },
+            "absent": false,
+            "names": [
+              "ebe6ade5e9efeb3a32903cad69b670c5"
+            ]
+          },
+          {
+            "handle": {
+              "id": "4192672ac9e739eb274e4b09bee255e8",
+              "birth": "8befa1d804c81f9a81653a72a8557ea5",
+              "path": "scratch/4bc344d63d617cd2a3d1ddf5678e162f",
+              "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+              "retained": false,
+              "token": "a794cc51a291bf740d3379d417aa6bb4a44e8c2ba98849eec9ba6b8adaad93e8"
+            },
+            "absent": false,
+            "names": []
+          }
+        ],
+        "removedRootOrder": []
+      },
+      "allGuestsDisposed": true,
+      "remainingTrackedCalls": 0,
+      "facts": {
+        "previousEvidence": {
+          "version": 3,
+          "batchId": "7b5b01319f53ce2bebf6c9dcee0c605b",
+          "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "generation": "1f02a88f2d47888256f14d2443cbf52a",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5",
+              "root": {
+                "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+                "birth": "bfff6f513214da4c5f18ff587ec975c0",
+                "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+                "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+                "retained": true,
+                "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+              },
+              "name": "ebe6ade5e9efeb3a32903cad69b670c5"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "9c9039ebfed4a7e04ed4d2e344f01223555c4ff1378f2d5cf316ac8a61e21fdb"
+        },
+        "currentEvidence": {
+          "version": 3,
+          "batchId": "7b5b01319f53ce2bebf6c9dcee0c605b",
+          "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "generation": "1f02a88f2d47888256f14d2443cbf52a",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5",
+              "root": {
+                "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+                "birth": "bfff6f513214da4c5f18ff587ec975c0",
+                "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+                "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+                "retained": true,
+                "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+              },
+              "name": "ebe6ade5e9efeb3a32903cad69b670c5"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "9c9039ebfed4a7e04ed4d2e344f01223555c4ff1378f2d5cf316ac8a61e21fdb"
+        },
+        "acceptedAudits": 1
+      }
+    },
+    {
+      "name": "nonfinal-revision-C09-restore-store.commit.before",
+      "variantId": "C09/restore-store.commit.before",
+      "failure": null,
+      "safety": [],
+      "assertions": [
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "start must progress",
+          "passed": true
+        },
+        {
+          "label": "actual modeled workload acquired",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "poll must progress",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "candidate reached lawful store.commit.before",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "restore must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public finality",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public accounting",
+          "passed": true
+        },
+        {
+          "label": "restored evidence verifies its own manifest digest",
+          "passed": true
+        },
+        {
+          "label": "restore crash never duplicates accepted output",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "probe retains both streams accounting",
+          "passed": true
+        },
+        {
+          "label": "probe retains public finality",
+          "passed": true
+        },
+        {
+          "label": "probe manifest independently verifies",
+          "passed": true
+        },
+        {
+          "label": "probe real nonfinal revision advances once",
+          "passed": true
+        },
+        {
+          "label": "probe publication changes only revision and digest",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "probe revised manifest survives fresh reopen",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "probe refuses older same-epoch evidence head",
+          "passed": true
+        },
+        {
+          "label": "probe one accepted audit after publication and reopen",
+          "passed": true
+        }
+      ],
+      "operations": 315,
+      "promiseJobs": 1393,
+      "effects": {
+        "store.commit": 44,
+        "driver.acquire": 4,
+        "artifact.create": 2,
+        "driver.start": 1,
+        "artifact.write": 1
+      },
+      "publicCalls": [
+        {
+          "method": "createBatch",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "start",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "poll",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "restore",
+          "kind": null,
+          "blockers": [],
+          "error": "Error: guest terminated"
+        },
+        {
+          "method": "restore",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "readEvidence",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "readEvidence",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "restore",
+          "kind": "blocked",
+          "blockers": [
+            {
+              "code": "busy"
+            }
+          ],
+          "error": null
+        }
+      ],
+      "faults": [
+        {
+          "boundary": "store.commit.before",
+          "index": 298,
+          "during": [
+            "restore"
+          ]
+        }
+      ],
+      "physicalRemovals": 0,
+      "strategyObservations": {
+        "recordCount": 18,
+        "envelopedRecords": 0,
+        "keyPrefixes": [
+          "request/51545afb9ba8e9bd35ede042a1b2f12b",
+          "batch/552e00eebe2c88e3d24e1b0985826b06",
+          "batch-request/51545afb9ba8e9bd35ede042a1b2f12b",
+          "request/651bc5c47615eeac8afd65fa52483411",
+          "job/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "start/651bc5c47615eeac8afd65fa52483411",
+          "effect/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "request/042ae8631518299b609872fdf8daf33e",
+          "frame/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "request/e6b3b976ae41feb22aa82414e72651ac",
+          "request/5029b6709381e3cf12badb9ebd8b7d02",
+          "request/3e37c662111c7e174e745ddbc50f30eb"
+        ],
+        "ownershipIndex": null,
+        "roots": [
+          {
+            "handle": {
+              "id": "958b28a425fbb882c95c9d5cbaa64813",
+              "birth": "ec50a6a0061c7f0856a6900b94050df4",
+              "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "retained": true,
+              "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+            },
+            "absent": false,
+            "names": [
+              "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            ]
+          },
+          {
+            "handle": {
+              "id": "997e9c12bc04d9bc8af987063732dfa0",
+              "birth": "da14835c5297aaaef33c014976c33903",
+              "path": "scratch/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+              "retained": false,
+              "token": "16197e92fb1bfe760d73a6a8149219ed60ec7d514a3e200f17872f3b224da500"
+            },
+            "absent": false,
+            "names": []
+          }
+        ],
+        "removedRootOrder": []
+      },
+      "allGuestsDisposed": true,
+      "remainingTrackedCalls": 0,
+      "facts": {
+        "staleResult": {
+          "kind": "blocked",
+          "blockers": [
+            {
+              "code": "busy"
+            }
+          ],
+          "failures": []
+        },
+        "previousEvidence": {
+          "version": 3,
+          "batchId": "552e00eebe2c88e3d24e1b0985826b06",
+          "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "generation": "5de676f06647e4c9386a2b1b1207f9e0",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "d2df63e8a58e1bf6d5b3b9a6c0f909a6",
+              "root": {
+                "id": "958b28a425fbb882c95c9d5cbaa64813",
+                "birth": "ec50a6a0061c7f0856a6900b94050df4",
+                "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "retained": true,
+                "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+              },
+              "name": "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "32a1f0da06e434a7e5412cbbb43a09f959315acd3fd6c36f416f911a59f078d7"
+        },
+        "currentEvidence": {
+          "version": 3,
+          "batchId": "552e00eebe2c88e3d24e1b0985826b06",
+          "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+          "generation": "5de676f06647e4c9386a2b1b1207f9e0",
+          "revision": 2,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "d2df63e8a58e1bf6d5b3b9a6c0f909a6",
+              "root": {
+                "id": "958b28a425fbb882c95c9d5cbaa64813",
+                "birth": "ec50a6a0061c7f0856a6900b94050df4",
+                "path": "retained/39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "owner": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+                "retained": true,
+                "token": "6725354bc8f32dd1ade04180e5b88e2d3d69680316923b33273b8c6f2e128b09"
+              },
+              "name": "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "3379325468511c1bff289fe87eaf04abf04fb000325464ceecedcd5eda6035b7"
+        },
+        "acceptedAudits": 1
+      }
+    },
+    {
+      "name": "nonfinal-revision-C09-restore-store.commit.after",
+      "variantId": "C09/restore-store.commit.after",
+      "failure": null,
+      "safety": [],
+      "assertions": [
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "createBatch must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "start must progress",
+          "passed": true
+        },
+        {
+          "label": "actual modeled workload acquired",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "poll must progress",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "candidate reached lawful store.commit.after",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "restore must progress",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public finality",
+          "passed": true
+        },
+        {
+          "label": "restored evidence preserves exact public accounting",
+          "passed": true
+        },
+        {
+          "label": "restored evidence verifies its own manifest digest",
+          "passed": true
+        },
+        {
+          "label": "restore crash never duplicates accepted output",
+          "passed": true
+        },
+        {
+          "label": "accepted job exposes coherent evidence",
+          "passed": true
+        },
+        {
+          "label": "accepted capsule retains evidence and checkpoint",
+          "passed": true
+        },
+        {
+          "label": "unretired accepted identity retained in capsule",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "exportCapsule must progress",
+          "passed": true
+        },
+        {
+          "label": "probe retains both streams accounting",
+          "passed": true
+        },
+        {
+          "label": "probe retains public finality",
+          "passed": true
+        },
+        {
+          "label": "probe manifest independently verifies",
+          "passed": true
+        },
+        {
+          "label": "probe real nonfinal revision advances once",
+          "passed": true
+        },
+        {
+          "label": "probe publication changes only revision and digest",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "readEvidence must progress",
+          "passed": true
+        },
+        {
+          "label": "exact retained bytes after public read",
+          "passed": true
+        },
+        {
+          "label": "exact accepted total",
+          "passed": true
+        },
+        {
+          "label": "probe revised manifest survives fresh reopen",
+          "passed": true
+        },
+        {
+          "label": "public result schema",
+          "passed": true
+        },
+        {
+          "label": "probe refuses older same-epoch evidence head",
+          "passed": true
+        },
+        {
+          "label": "probe one accepted audit after publication and reopen",
+          "passed": true
+        }
+      ],
+      "operations": 315,
+      "promiseJobs": 1393,
+      "effects": {
+        "store.commit": 44,
+        "driver.acquire": 4,
+        "artifact.create": 2,
+        "driver.start": 1,
+        "artifact.write": 1
+      },
+      "publicCalls": [
+        {
+          "method": "createBatch",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "start",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "poll",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "restore",
+          "kind": null,
+          "blockers": [],
+          "error": "Error: guest terminated"
+        },
+        {
+          "method": "restore",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "readEvidence",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "exportCapsule",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "readEvidence",
+          "kind": "ok",
+          "blockers": [],
+          "error": null
+        },
+        {
+          "method": "restore",
+          "kind": "blocked",
+          "blockers": [
+            {
+              "code": "busy"
+            }
+          ],
+          "error": null
+        }
+      ],
+      "faults": [
+        {
+          "boundary": "store.commit.after",
+          "index": 300,
+          "during": [
+            "restore"
+          ]
+        }
+      ],
+      "physicalRemovals": 0,
+      "strategyObservations": {
+        "recordCount": 18,
+        "envelopedRecords": 0,
+        "keyPrefixes": [
+          "request/3ffb406c917d5dd215f0b32c1c330009",
+          "batch/7b5b01319f53ce2bebf6c9dcee0c605b",
+          "batch-request/3ffb406c917d5dd215f0b32c1c330009",
+          "request/38ed458815da647753aa6250a3cecc6d",
+          "job/4bc344d63d617cd2a3d1ddf5678e162f",
+          "start/38ed458815da647753aa6250a3cecc6d",
+          "effect/4bc344d63d617cd2a3d1ddf5678e162f",
+          "request/b004dc52580881eb8dbf5f2a3940d2a3",
+          "frame/4bc344d63d617cd2a3d1ddf5678e162f",
+          "request/f0fe5eacbd14e85acdd3899f5668795c",
+          "request/e19d08d14c701e1f094985e98507a300",
+          "request/e2eff928e5b64b232087592a86c8e7ec"
+        ],
+        "ownershipIndex": null,
+        "roots": [
+          {
+            "handle": {
+              "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+              "birth": "bfff6f513214da4c5f18ff587ec975c0",
+              "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+              "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+              "retained": true,
+              "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+            },
+            "absent": false,
+            "names": [
+              "ebe6ade5e9efeb3a32903cad69b670c5"
+            ]
+          },
+          {
+            "handle": {
+              "id": "4192672ac9e739eb274e4b09bee255e8",
+              "birth": "8befa1d804c81f9a81653a72a8557ea5",
+              "path": "scratch/4bc344d63d617cd2a3d1ddf5678e162f",
+              "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+              "retained": false,
+              "token": "a794cc51a291bf740d3379d417aa6bb4a44e8c2ba98849eec9ba6b8adaad93e8"
+            },
+            "absent": false,
+            "names": []
+          }
+        ],
+        "removedRootOrder": []
+      },
+      "allGuestsDisposed": true,
+      "remainingTrackedCalls": 0,
+      "facts": {
+        "staleResult": {
+          "kind": "blocked",
+          "blockers": [
+            {
+              "code": "busy"
+            }
+          ],
+          "failures": []
+        },
+        "previousEvidence": {
+          "version": 3,
+          "batchId": "7b5b01319f53ce2bebf6c9dcee0c605b",
+          "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "generation": "1f02a88f2d47888256f14d2443cbf52a",
+          "revision": 1,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5",
+              "root": {
+                "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+                "birth": "bfff6f513214da4c5f18ff587ec975c0",
+                "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+                "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+                "retained": true,
+                "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+              },
+              "name": "ebe6ade5e9efeb3a32903cad69b670c5"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "9c9039ebfed4a7e04ed4d2e344f01223555c4ff1378f2d5cf316ac8a61e21fdb"
+        },
+        "currentEvidence": {
+          "version": 3,
+          "batchId": "7b5b01319f53ce2bebf6c9dcee0c605b",
+          "jobId": "4bc344d63d617cd2a3d1ddf5678e162f",
+          "generation": "1f02a88f2d47888256f14d2443cbf52a",
+          "revision": 2,
+          "final": false,
+          "sourceProof": null,
+          "spans": [
+            {
+              "stream": "stdout",
+              "start": 0,
+              "end": 3,
+              "kind": "bytes",
+              "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+              "artifactId": "ebe6ade5e9efeb3a32903cad69b670c5",
+              "root": {
+                "id": "ceaa0cc0c67e09404ccc487c29533bbc",
+                "birth": "bfff6f513214da4c5f18ff587ec975c0",
+                "path": "retained/4bc344d63d617cd2a3d1ddf5678e162f",
+                "owner": "4bc344d63d617cd2a3d1ddf5678e162f",
+                "retained": true,
+                "token": "7a63302e5be5e320d912c3fcbe303c502716cfbfb19b73eabd8ee6f10e94d381"
+              },
+              "name": "ebe6ade5e9efeb3a32903cad69b670c5"
+            }
+          ],
+          "totals": {
+            "stdout": {
+              "produced": 3,
+              "accepted": 3,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            },
+            "stderr": {
+              "produced": 0,
+              "accepted": 0,
+              "consumed": 0,
+              "acked": 0,
+              "sourcePrefix": 0
+            }
+          },
+          "manifestDigest": "d860389a5341b92c6e1df15c92e973f636695a08b2794d9e07bf09e06f8e2344"
+        },
+        "acceptedAudits": 1
+      }
+    }
+  ],
+  "checks": [
+    {
+      "label": "reference-positive: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-positive: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "reference-material: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "reference-material: C09/restore-store.commit.before actual restore/evidence failure after reached hold",
+      "passed": true
+    },
+    {
+      "label": "reference-material: C09/restore-store.commit.after actual restore/evidence failure after reached hold",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "reference-restored: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "reference-C09-restore-store.commit.before: actual crash/restore/read/publication and complete disposal",
+      "passed": true
+    },
+    {
+      "label": "reference-C09-restore-store.commit.after: actual crash/restore/read/publication and complete disposal",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-positive: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material: C09/restore-store.commit.before actual restore/evidence failure after reached hold",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-material: C09/restore-store.commit.after actual restore/evidence failure after reached hold",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-restored: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-restored: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-restored: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-C09-restore-store.commit.before: actual crash/restore/read/publication and complete disposal",
+      "passed": true
+    },
+    {
+      "label": "record-envelope-C09-restore-store.commit.after: actual crash/restore/read/publication and complete disposal",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-positive: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-positive: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-positive: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-material: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-material: C09/restore-store.commit.before actual restore/evidence failure after reached hold",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-material: C09/restore-store.commit.after actual restore/evidence failure after reached hold",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-restored: both actual bounded predicates executed",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-restored: C09/restore-store.commit.before passes",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-restored: C09/restore-store.commit.after passes",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-C09-restore-store.commit.before: actual crash/restore/read/publication and complete disposal",
+      "passed": true
+    },
+    {
+      "label": "nonfinal-revision-C09-restore-store.commit.after: actual crash/restore/read/publication and complete disposal",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

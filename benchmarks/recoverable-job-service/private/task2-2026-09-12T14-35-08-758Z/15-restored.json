@@ -1,0 +1,598 @@
+{
+  "control": "ignore-successor",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B15"
+    ],
+    "variantIds": [
+      "B15/primary",
+      "B15/unfinished"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B15/primary",
+          "caseCommitment": "2b88065500f1c5f24eacbfd5761264092bb38bf5a65c4f640a85ebc1bda6fab5",
+          "fixtureCommitment": "a6372f7f434c772ce1bceb97286aed1b74f1c55768291d2c42823f13873fa5a7",
+          "fixtureAllocations": 14,
+          "authenticationCommitment": "45e1d6c964d459f010bc296385278629f83cd91c9cd9ca903565fb1a3aec8938"
+        },
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "B15/unfinished",
+          "caseCommitment": "ccaba9f7ae23ba9e1c1022063ea97cd817c4791e327011a11d1b9538a04c226c",
+          "fixtureCommitment": "9b5ac375da8ba938b00e0e2ec09be1e7be2bce20d88d6b6b50eaf97703645ac0",
+          "fixtureAllocations": 13,
+          "authenticationCommitment": "d13e66dbe3d896ced6cd0522acbde406512609f0e753b0d672673807adadfb2b"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B15/primary",
+        "B15/unfinished"
+      ],
+      "scheduleHash": "c6215e9137afff0e9812a9fcd1abcdef6ebb4ace90a966fc74309fe310285564",
+      "configurationHash": "34f9399f1101aaac20ea08c3e658af5898485a0b2f211cd76d1f5eeb7735d5e6"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B15",
+        "group": "B",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/B15/34f9399f1101aaac20ea08c3e658af5898485a0b2f211cd76d1f5eeb7735d5e6",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B15/primary",
+              "caseCommitment": "2b88065500f1c5f24eacbfd5761264092bb38bf5a65c4f640a85ebc1bda6fab5",
+              "fixtureCommitment": "a6372f7f434c772ce1bceb97286aed1b74f1c55768291d2c42823f13873fa5a7",
+              "fixtureAllocations": 14,
+              "authenticationCommitment": "45e1d6c964d459f010bc296385278629f83cd91c9cd9ca903565fb1a3aec8938"
+            },
+            "id": "B15/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "stop categorical blocker",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "only exact released successor pair settles setup",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 836,
+            "promiseJobs": 3902
+          },
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "B15/unfinished",
+              "caseCommitment": "ccaba9f7ae23ba9e1c1022063ea97cd817c4791e327011a11d1b9538a04c226c",
+              "fixtureCommitment": "9b5ac375da8ba938b00e0e2ec09be1e7be2bce20d88d6b6b50eaf97703645ac0",
+              "fixtureAllocations": 13,
+              "authenticationCommitment": "d13e66dbe3d896ced6cd0522acbde406512609f0e753b0d672673807adadfb2b"
+            },
+            "id": "B15/unfinished",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "handoff must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "stop categorical blocker",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 832,
+            "promiseJobs": 3884
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B15/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: handoff must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: stop categorical blocker",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: only exact released successor pair settles setup",
+            "passed": true
+          },
+          {
+            "label": "B15/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: handoff must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: stop categorical blocker",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: released public job",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "B15/unfinished: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 1668,
+        "promiseJobs": 7786
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.2,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B15",
+      "variantId": "B15/primary",
+      "execution": {
+        "variant": {
+          "id": "B15/primary",
+          "family": "B15",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B15/qualification-v1",
+        "schedule": {
+          "partition": 2803,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B15",
+      "variantId": "B15/unfinished",
+      "execution": {
+        "variant": {
+          "id": "B15/unfinished",
+          "family": "B15",
+          "kind": "handoff",
+          "args": {
+            "change": "unfinished"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B15/qualification-v1",
+        "schedule": {
+          "partition": 2517,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

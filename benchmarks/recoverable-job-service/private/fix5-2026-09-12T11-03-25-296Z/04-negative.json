@@ -1,0 +1,442 @@
+{
+  "control": "global-consumer-lock",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A08"
+    ],
+    "variantIds": [
+      "A08/primary",
+      "A08/nested-consumer-progress"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "4761c22ddf47d786949ac0c2190648e43b5a6ad0d2e457cff9bfab7a8eb807e8",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A08/primary",
+        "A08/nested-consumer-progress"
+      ],
+      "scheduleHash": "e08202e4b36b6777f6121130f76062bf2610b1dcb055903fb1e8b9f7f4f1ac50",
+      "configurationHash": "68e077cdd4510db60c014c2fc22acc0012f837d32c143affba71a88a17f4bfd5"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A08",
+        "group": "A",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/A08/68e077cdd4510db60c014c2fc22acc0012f837d32c143affba71a88a17f4bfd5",
+        "variants": [
+          {
+            "id": "A08/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful consumer.consume.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"busy\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "poll must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"busy\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 436,
+            "promiseJobs": 2027
+          },
+          {
+            "id": "A08/nested-consumer-progress",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"busy\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"backend\"}],\"failures\":[{\"present\":true,\"phase\":\"operation\",\"value\":{\"message\":\"poll must progress: {\\\"kind\\\":\\\"blocked\\\",\\\"blockers\\\":[{\\\"code\\\":\\\"busy\\\"}],\\\"failures\\\":[]}\"}}]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "consume must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"backend\"}],\"failures\":[{\"present\":true,\"phase\":\"operation\",\"value\":{\"message\":\"poll must progress: {\\\"kind\\\":\\\"blocked\\\",\\\"blockers\\\":[{\\\"code\\\":\\\"busy\\\"}],\\\"failures\\\":[]}\"}}]}",
+            "safetyFailures": [],
+            "operations": 445,
+            "promiseJobs": 2082
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: candidate reached lawful consumer.consume.before",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/primary: poll must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"busy\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "A08/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: poll must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"busy\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "A08/nested-consumer-progress: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A08/nested-consumer-progress: consume must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"backend\"}],\"failures\":[{\"present\":true,\"phase\":\"operation\",\"value\":{\"message\":\"poll must progress: {\\\"kind\\\":\\\"blocked\\\",\\\"blockers\\\":[{\\\"code\\\":\\\"busy\\\"}],\\\"failures\\\":[]}\"}}]}",
+            "passed": false
+          },
+          {
+            "label": "A08/nested-consumer-progress: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "A08/primary: poll must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"busy\"}],\"failures\":[]}; A08/nested-consumer-progress: consume must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"backend\"}],\"failures\":[{\"present\":true,\"phase\":\"operation\",\"value\":{\"message\":\"poll must progress: {\\\"kind\\\":\\\"blocked\\\",\\\"blockers\\\":[{\\\"code\\\":\\\"busy\\\"}],\\\"failures\\\":[]}\"}}]}",
+        "operations": 881,
+        "promiseJobs": 4109
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "A08",
+      "variantId": "A08/primary",
+      "execution": {
+        "variant": {
+          "id": "A08/primary",
+          "family": "A08",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A08/qualification-v1",
+        "schedule": {
+          "partition": 2130,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "A08",
+      "variantId": "A08/nested-consumer-progress",
+      "execution": {
+        "variant": {
+          "id": "A08/nested-consumer-progress",
+          "family": "A08",
+          "kind": "consumer-nested",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A08/qualification-v1",
+        "schedule": {
+          "partition": 2368,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

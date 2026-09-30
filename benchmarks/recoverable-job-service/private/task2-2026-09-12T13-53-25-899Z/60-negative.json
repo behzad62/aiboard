@@ -1,0 +1,263 @@
+{
+  "control": "omit-owned-obligations",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "E07"
+    ],
+    "variantIds": [
+      "E07/obligations"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "14fc3d3fecaef3cc6d1f5d904611a7a27b36404b33d4438b8ee46580c7753d67",
+    "suiteHash": "1e093bfe56213f85d188fd6a4fd4e9ff97c98e571d19e44b50ee9a86c52e98d4",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+          "variantId": "E07/obligations",
+          "caseCommitment": "70c67c6b9065c7824f539178b979a55d36bc70b7cf8698553b00009fefd1cd13",
+          "fixtureCommitment": "fb87eac74e65a7b72d20a97d7acd8110b7fe4378db4525ac20f382eab06f90e5",
+          "fixtureAllocations": 9,
+          "authenticationCommitment": "667fe86dc7a0b41ed12f48bb7c786aae38b644e902561236b177a6cd32103d48"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "15d9d1eeb4bb142dbd2b65d2bf9ba8f94a8ceb3e3103099e205c7e9a4ec6b142",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "E07/obligations"
+      ],
+      "scheduleHash": "965c7807881aa812f4f0d594cb863b7014ee2ccfeb79615f27dcbe46036eca76",
+      "configurationHash": "60f7bf4d620ea334da48955ae6864196edd88b684dc7c9381ce214b092d4e053"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "E07",
+        "group": "E",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/E07/60f7bf4d620ea334da48955ae6864196edd88b684dc7c9381ce214b092d4e053",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "57fb9e11407ba3de7da09062e79b8e1dd2dd7e87260394cabc35ddd5a22c94df",
+              "variantId": "E07/obligations",
+              "caseCommitment": "70c67c6b9065c7824f539178b979a55d36bc70b7cf8698553b00009fefd1cd13",
+              "fixtureCommitment": "fb87eac74e65a7b72d20a97d7acd8110b7fe4378db4525ac20f382eab06f90e5",
+              "fixtureAllocations": 9,
+              "authenticationCommitment": "667fe86dc7a0b41ed12f48bb7c786aae38b644e902561236b177a6cd32103d48"
+            },
+            "id": "E07/obligations",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "inspectJob must progress",
+                "passed": true
+              },
+              {
+                "label": "exact ambiguous effect remains inspectable",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "exact ambiguous effect remains inspectable",
+            "safetyFailures": [],
+            "operations": 375,
+            "promiseJobs": 1753
+          }
+        ],
+        "assertions": [
+          {
+            "label": "E07/obligations: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: start must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: public result schema",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: inspectJob must progress",
+            "passed": true
+          },
+          {
+            "label": "E07/obligations: exact ambiguous effect remains inspectable",
+            "passed": false
+          },
+          {
+            "label": "E07/obligations: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "E07/obligations: exact ambiguous effect remains inspectable",
+        "operations": 375,
+        "promiseJobs": 1753
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "E07",
+      "variantId": "E07/obligations",
+      "execution": {
+        "variant": {
+          "id": "E07/obligations",
+          "family": "E07",
+          "kind": "durability",
+          "args": {
+            "kind": "obligations"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/E07/qualification-v1",
+        "schedule": {
+          "partition": 3332,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

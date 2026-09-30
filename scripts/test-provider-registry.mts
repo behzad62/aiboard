@@ -4,9 +4,7 @@ import { MODEL_CATALOG } from "../lib/providers/catalog";
 import { PROVIDER_IDS } from "../lib/providers/constants";
 import {
   getProviderDefinition,
-  providerSupportsHostedBuildToolsFeature,
   providerSupportsMaxTokensFeature,
-  providerSupportsNativeBuildToolsFeature,
 } from "../lib/providers/provider-registry";
 import {
   openAIReasoningEffort,
@@ -14,7 +12,6 @@ import {
 } from "../lib/providers/reasoning";
 import type { ReasoningEffort } from "../lib/db/schema";
 import { getModelRuntimeBehavior } from "../lib/providers/runtime-behavior";
-import { shouldEnableProviderNativeWebSearch } from "../lib/providers/web-search";
 import { MODEL_CONTEXT_PROFILES } from "../lib/providers/model-context";
 
 let failures = 0;
@@ -133,38 +130,6 @@ check(
   openAIReasoningEffort("none" as ReasoningEffort)
 );
 check(
-  "ChatGPT account runner exposes provider-native web search",
-  shouldEnableProviderNativeWebSearch({
-    providerId: "chatgpt",
-    model: "gpt-5.4",
-  }),
-  null
-);
-check(
-  "ChatGPT Codex Spark does not claim provider-native web search",
-  !shouldEnableProviderNativeWebSearch({
-    providerId: "chatgpt",
-    model: "gpt-5.3-codex-spark",
-  }),
-  null
-);
-check(
-  "GitHub Copilot GPT uses the SDK-backed provider-native web search",
-  shouldEnableProviderNativeWebSearch({
-    providerId: "github-copilot",
-    model: "gpt-5.4",
-  }),
-  null
-);
-check(
-  "GitHub Copilot Gemini uses the SDK-backed provider-native web search",
-  shouldEnableProviderNativeWebSearch({
-    providerId: "github-copilot",
-    model: "gemini-3.5-flash",
-  }),
-  null
-);
-check(
   "ChatGPT account runner does not claim max-token request support",
   !providerSupportsMaxTokensFeature("chatgpt", "gpt-5.4"),
   null
@@ -198,68 +163,6 @@ check(
 check(
   "NVIDIA NIM provider supports max-token request caps",
   providerSupportsMaxTokensFeature("nvidia", "z-ai/glm-5.2"),
-  null
-);
-check(
-  "OpenAI Codex keeps native function-tool support",
-  providerSupportsNativeBuildToolsFeature("openai", "gpt-5.3-codex"),
-  null
-);
-check(
-  "ChatGPT account runner does not expose native Build tools",
-  !providerSupportsNativeBuildToolsFeature("chatgpt", "gpt-5.4"),
-  null
-);
-check(
-  "OpenRouter catalog models with verified tools expose native Build tools",
-  providerSupportsNativeBuildToolsFeature("openrouter", "qwen/qwen3.7-max"),
-  null
-);
-check(
-  "NVIDIA GLM NIM model exposes native Build tools",
-  providerSupportsNativeBuildToolsFeature("nvidia", "z-ai/glm-5.2"),
-  null
-);
-check(
-  "NVIDIA MiniMax and Nemotron NIM models expose verified native Build tools",
-  providerSupportsNativeBuildToolsFeature("nvidia", "minimaxai/minimax-m3") &&
-    providerSupportsNativeBuildToolsFeature(
-      "nvidia",
-      "nvidia/nemotron-3-ultra-550b-a55b"
-    ),
-  null
-);
-check(
-  "NVIDIA DeepSeek Pro exposes verified native Build tools",
-  providerSupportsNativeBuildToolsFeature(
-    "nvidia",
-    "deepseek-ai/deepseek-v4-pro"
-  ),
-  null
-);
-check(
-  "NVIDIA DeepSeek Flash fails closed for native Build tools until verified",
-  !providerSupportsNativeBuildToolsFeature("nvidia", "deepseek-ai/deepseek-v4-flash"),
-  null
-);
-check(
-  "Unverified NVIDIA NIM models fail closed for native Build tools",
-  !providerSupportsNativeBuildToolsFeature("nvidia", "unknown/model"),
-  null
-);
-check(
-  "Unverified OpenRouter catalog models fail closed for native Build tools",
-  !providerSupportsNativeBuildToolsFeature("openrouter", "nex-agi/nex-n2-pro:free"),
-  null
-);
-check(
-  "Gemini models expose provider-hosted Build tools",
-  providerSupportsHostedBuildToolsFeature("google", "gemini-3.6-flash"),
-  null
-);
-check(
-  "Non-Gemini models do not expose provider-hosted Build tools",
-  !providerSupportsHostedBuildToolsFeature("openai", "gpt-5.5"),
   null
 );
 

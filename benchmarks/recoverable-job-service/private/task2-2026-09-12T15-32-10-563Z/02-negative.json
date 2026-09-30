@@ -1,0 +1,293 @@
+{
+  "control": "premature-ack-view",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "A05"
+    ],
+    "variantIds": [
+      "A05/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "6a9afd173035f6ffb4071dfc397f3abd98ef8c489dd9bf83fa3b3ff81f8b9eb8",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+          "variantId": "A05/primary",
+          "caseCommitment": "72d3781626bdad86e0563251c6e419d83110e76055d88d0f4b8469bd0ce42ff9",
+          "fixtureCommitment": "4040b2f1a02a8d8295f3d23023a90f749482301e34f0fff8cbc6f8372b52b257",
+          "fixtureAllocations": 14,
+          "authenticationCommitment": "aa3a212d8c158755b98b7c57c5ebd1fe7abca425ed4ebf9da54f68608b80172a"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "5d79876b61d5cc9dfb22e470aaede0daa9ea0c5784a0941f115b9bde28fb7b22",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "A05/primary"
+      ],
+      "scheduleHash": "3644b3dde48d24585875ac9dac3a590ce1af86178c88c18c99a8f72d0145a86e",
+      "configurationHash": "e18240d25bd0783c4f31da2759e2f2cff5d84a6ad93b4dc4592d661c051a86f1"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "A05",
+        "group": "A",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/A05/e18240d25bd0783c4f31da2759e2f2cff5d84a6ad93b4dc4592d661c051a86f1",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "bb591147692fa45a8098ac9093e3b2cd068428a9f5a3d0b40ff4769f1babad7b",
+              "variantId": "A05/primary",
+              "caseCommitment": "72d3781626bdad86e0563251c6e419d83110e76055d88d0f4b8469bd0ce42ff9",
+              "fixtureCommitment": "4040b2f1a02a8d8295f3d23023a90f749482301e34f0fff8cbc6f8372b52b257",
+              "fixtureAllocations": 14,
+              "authenticationCommitment": "aa3a212d8c158755b98b7c57c5ebd1fe7abca425ed4ebf9da54f68608b80172a"
+            },
+            "id": "A05/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "consume must progress",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful driver.retireAck.after",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "in-flight retirement has coherent before or after checkpoint",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "in-flight retirement has coherent before or after checkpoint",
+            "safetyFailures": [],
+            "operations": 323,
+            "promiseJobs": 1462
+          }
+        ],
+        "assertions": [
+          {
+            "label": "A05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: consume must progress",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: candidate reached lawful driver.retireAck.after",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "A05/primary: in-flight retirement has coherent before or after checkpoint",
+            "passed": false
+          },
+          {
+            "label": "A05/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "A05/primary: in-flight retirement has coherent before or after checkpoint",
+        "operations": 323,
+        "promiseJobs": 1462
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "A05",
+      "variantId": "A05/primary",
+      "execution": {
+        "variant": {
+          "id": "A05/primary",
+          "family": "A05",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/A05/qualification-v1",
+        "schedule": {
+          "partition": 3846,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

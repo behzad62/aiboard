@@ -1,0 +1,163 @@
+{
+  "name": "trace-reference-missing-bytes-C09-restore-store.commit.before",
+  "variantId": "C09/restore-store.commit.before",
+  "sourceHash": "59f39de74f488fb7f3186029ac1f254ea5f212c0ec83c78bf238ace10b44bf19",
+  "failure": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+  "safety": [
+    {
+      "code": "evidence-before-acceptance",
+      "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+      "detail": "Acceptance has no matching persisted payload."
+    }
+  ],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "start must progress",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "poll must progress",
+      "passed": true
+    },
+    {
+      "label": "accepted job exposes coherent evidence",
+      "passed": true
+    },
+    {
+      "label": "accepted capsule retains evidence and checkpoint",
+      "passed": true
+    },
+    {
+      "label": "unretired accepted identity retained in capsule",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "exportCapsule must progress",
+      "passed": true
+    },
+    {
+      "label": "candidate reached lawful store.commit.before",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "restore must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"integrity\",\"jobId\":\"<opaque>\"}],\"failures\":[]}",
+      "passed": false
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "store.commit.before",
+      "index": 295,
+      "during": [
+        "restore"
+      ]
+    }
+  ],
+  "operations": 261,
+  "promiseJobs": 1182,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "poll",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": "running"
+    },
+    {
+      "method": "exportCapsule",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "restore",
+      "kind": null,
+      "error": "Error: guest terminated",
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "restore",
+      "kind": "blocked",
+      "error": null,
+      "blockers": [
+        "integrity"
+      ],
+      "state": null
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 0,
+    "driver.detach": 0,
+    "driver.release": 0,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "transportReturns": [
+    {
+      "key": {
+        "jobId": "39d1ecf4a6829fa5bb4c4bacb15bedf7",
+        "channelId": "699ada0b8095a6835c20b0e462175df8",
+        "stream": "stdout",
+        "seq": 0,
+        "offset": 0,
+        "length": 3,
+        "digest": "c546137ef5e209c06b9fbb43d47179a230120699cb4b37741490505409c586bd",
+        "artifactId": "d2df63e8a58e1bf6d5b3b9a6c0f909a6"
+      },
+      "bytesLength": 3
+    }
+  ],
+  "acceptedAudits": 1,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

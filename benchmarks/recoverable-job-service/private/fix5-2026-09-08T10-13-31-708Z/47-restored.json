@@ -1,0 +1,311 @@
+{
+  "control": "ignore-final-artifact-verification",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B12"
+    ],
+    "variantIds": [
+      "B12/corrupt-artifact"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "3858ad3aa139b373fe1df3ef960c57b9a95e60347402b052076bf45b2c2ffbdf",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B12/corrupt-artifact"
+      ],
+      "scheduleHash": "eb91eef272700b77a92005fe575d5e4e38e3958212895e880c14756067dfa728",
+      "configurationHash": "f2393fc701dfbf92414aa032114686115a5e993d36c797e213d04165e118f1b6"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B12",
+        "group": "B",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/B12/f2393fc701dfbf92414aa032114686115a5e993d36c797e213d04165e118f1b6",
+        "variants": [
+          {
+            "id": "B12/corrupt-artifact",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "accepted capsule retains evidence and checkpoint",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "exportCapsule must progress",
+                "passed": true
+              },
+              {
+                "label": "final retained span required",
+                "passed": true
+              },
+              {
+                "label": "final retained root required",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must refuse",
+                "passed": true
+              },
+              {
+                "label": "invalid final continuation never invents new finalization",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 481,
+            "promiseJobs": 2216
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B12/corrupt-artifact: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: accepted capsule retains evidence and checkpoint",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: exportCapsule must progress",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: final retained span required",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: final retained root required",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: stop must refuse",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: invalid final continuation never invents new finalization",
+            "passed": true
+          },
+          {
+            "label": "B12/corrupt-artifact: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 481,
+        "promiseJobs": 2216
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.2,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B12",
+      "variantId": "B12/corrupt-artifact",
+      "execution": {
+        "variant": {
+          "id": "B12/corrupt-artifact",
+          "family": "B12",
+          "kind": "final-replay",
+          "args": {
+            "change": "corrupt-artifact"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B12/qualification-v1",
+        "schedule": {
+          "partition": 2982,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

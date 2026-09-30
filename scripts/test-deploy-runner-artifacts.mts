@@ -46,12 +46,15 @@ const publicNativeRunner = "public/aiboard-runner-v2.zip";
 const exportedNativeRunner = "out/aiboard-runner-v2.zip";
 const publicWorkBenchRunner = "public/aiboard-workbench-runner.zip";
 const exportedWorkBenchRunner = "out/aiboard-workbench-runner.zip";
+const publicRjsWorkBenchRunner = "public/aiboard-rjs-workbench-runner.zip";
+const exportedRjsWorkBenchRunner = "out/aiboard-rjs-workbench-runner.zip";
 
-function publishRunnerHashes(): { native: string; workBench: string } {
+function publishRunnerHashes(): { native: string; workBench: string; rjsWorkBench: string } {
   execFileSync(process.execPath, ["scripts/publish-downloads.mjs"], { stdio: "pipe" });
   return {
     native: createHash("sha256").update(readFileSync(publicNativeRunner)).digest("hex"),
     workBench: createHash("sha256").update(readFileSync(publicWorkBenchRunner)).digest("hex"),
+    rjsWorkBench: createHash("sha256").update(readFileSync(publicRjsWorkBenchRunner)).digest("hex"),
   };
 }
 
@@ -66,6 +69,11 @@ check(
 check(
   "WorkBench runner ZIP publication is reproducible",
   firstPublishedRunnerHashes.workBench === secondPublishedRunnerHashes.workBench,
+  { firstPublishedRunnerHashes, secondPublishedRunnerHashes }
+);
+check(
+  "Recoverable Job Service runner ZIP publication is reproducible",
+  firstPublishedRunnerHashes.rjsWorkBench === secondPublishedRunnerHashes.rjsWorkBench,
   { firstPublishedRunnerHashes, secondPublishedRunnerHashes }
 );
 
@@ -165,11 +173,11 @@ async function checkNativeRunnerArchive(path: string): Promise<void> {
       const sourceFile = archive.file(archivePath);
       check(`${path} contains ${archivePath}`, sourceFile !== null);
       const archivedSource = sourceFile
-        ? await sourceFile.async("nodebuffer")
+        ? await sourceFile.async("string")
         : undefined;
       check(
-        `${path} ${archivePath} bytes match Runner V2 source`,
-        archivedSource?.equals(readFileSync(`runner-v2/src/${sourcePath}`)) === true
+        `${path} ${archivePath} matches normalized Runner V2 source`,
+        archivedSource === normalizeLf(read(`runner-v2/src/${sourcePath}`))
       );
     }
 
@@ -217,12 +225,17 @@ async function checkAccountRunnerArchive(path: string): Promise<void> {
         `${path} account runner matches source after normalized line endings`,
         normalizeLf(archivedRunner) === normalizeLf(read(sourceAccountRunner))
       );
-      check(`${path} account runner keeps protocol version 19`, /const VERSION = 19;/.test(archivedRunner));
+      check(`${path} account runner publishes protocol version 21`, /const VERSION = 21;/.test(archivedRunner));
+      check(`${path} account runner publishes capability schema v1`, /const RUNNER_CAPABILITY_SCHEMA_VERSION = 1;/.test(archivedRunner));
+      check(`${path} account runner exposes provider capability endpoint`, /action === "capabilities"/.test(archivedRunner));
+      check(`${path} account runner includes ChatGPT capability handler`, /chatGptRunnerCapabilities\(\)/.test(archivedRunner));
+      check(`${path} account runner includes NVIDIA capability handler`, /nvidiaRunnerCapabilities\(body\)/.test(archivedRunner));
+      check(`${path} account runner includes Copilot capability integration`, /buildCopilotSdkRunnerCapabilities/.test(archivedRunner));
     }
     if (sdkFile && existsSync(sourceAccountSdk)) {
       check(
-        `${path} SDK adapter bytes match source`,
-        await sdkFile.async("nodebuffer").then((content) => content.equals(readFileSync(sourceAccountSdk)))
+        `${path} SDK adapter matches source after normalized line endings`,
+        normalizeLf(await sdkFile.async("string")) === normalizeLf(read(sourceAccountSdk))
       );
       const tempPath = await writeTempFile(path, sdkFile);
       check(`${path} SDK adapter is valid JavaScript`, nodeCheck(tempPath), path);
@@ -253,8 +266,8 @@ async function checkWorkBenchRunnerArchive(path: string): Promise<void> {
     );
     if (benchRunner) {
       check(
-        `${path} benchmark runner matches source`,
-        await benchRunner.async("nodebuffer").then((content) => content.equals(readFileSync(sourceBenchRunner)))
+        `${path} benchmark runner matches source after normalized line endings`,
+        normalizeLf(await benchRunner.async("string")) === normalizeLf(read(sourceBenchRunner))
       );
     }
     for (const sourcePath of textFilePaths("runner-v2/src", ".ts")) {
@@ -316,6 +329,9 @@ for (const path of [publicWorkBenchRunner, exportedWorkBenchRunner]) {
   check(`${path} exists`, existsSync(path));
   await checkWorkBenchRunnerArchive(path);
 }
+for (const path of [publicRjsWorkBenchRunner, exportedRjsWorkBenchRunner]) {
+  check(`${path} exists`, existsSync(path));
+}
 if (existsSync(publicNativeRunner) && existsSync(exportedNativeRunner)) {
   check(
     "public and exported Runner V2 ZIPs are byte-identical",
@@ -326,6 +342,12 @@ if (existsSync(publicWorkBenchRunner) && existsSync(exportedWorkBenchRunner)) {
   check(
     "public and exported WorkBench runner ZIPs are byte-identical",
     readFileSync(publicWorkBenchRunner).equals(readFileSync(exportedWorkBenchRunner))
+  );
+}
+if (existsSync(publicRjsWorkBenchRunner) && existsSync(exportedRjsWorkBenchRunner)) {
+  check(
+    "public and exported Recoverable Job Service runner ZIPs are byte-identical",
+    readFileSync(publicRjsWorkBenchRunner).equals(readFileSync(exportedRjsWorkBenchRunner))
   );
 }
 

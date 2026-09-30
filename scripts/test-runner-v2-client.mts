@@ -103,7 +103,7 @@ assert.deepEqual(resolveNativeProviderTransport("openai"), {
 });
 assert.equal(nativeProviderProtocol("openai", "gpt-5.3-codex"), "responses");
 assert.equal(nativeProviderProtocol("openai", "gpt-5.6"), "chat-completions");
-assert.equal(nativeProviderProtocol("openrouter", "openai/gpt-5.3-codex"), "chat-completions");
+assert.equal(nativeProviderProtocol("openrouter", "openai/gpt-5.3-codex"), "responses");
 assert.deepEqual(resolveNativeProviderTransport("anthropic"), {
   transport: "anthropic",
 });

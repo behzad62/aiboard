@@ -1,6 +1,7 @@
 /* Certified bench runner contract checks (run: npx tsx scripts/test-bench-runner-contract.mts) */
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -191,7 +192,11 @@ try {
   });
   check(
     "prepare makes the attempt workspace an independent Git repository root",
-    attemptGitRoot.status === 0 && resolve(attemptGitRoot.stdout.trim()) === resolve(attemptRoot),
+    attemptGitRoot.status === 0 &&
+      (process.platform === "win32"
+        ? realpathSync.native(attemptGitRoot.stdout.trim()).toLowerCase() ===
+          realpathSync.native(attemptRoot).toLowerCase()
+        : realpathSync.native(attemptGitRoot.stdout.trim()) === realpathSync.native(attemptRoot)),
     { status: attemptGitRoot.status, stdout: attemptGitRoot.stdout, stderr: attemptGitRoot.stderr }
   );
   const oracleHidden = await access(join(attemptRoot, "case-meta.json")).then(

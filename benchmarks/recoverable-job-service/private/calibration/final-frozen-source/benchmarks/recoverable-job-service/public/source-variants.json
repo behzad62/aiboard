@@ -1,0 +1,1032 @@
+[
+  {
+    "id": "B17/source-zero",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "zero"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-stdout",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "stdout"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-stderr",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "stderr"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-both",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "both"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-tail",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "tail"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-pristine-early",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "pristine-early"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-fresh-restart",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "fresh-restart"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-replay",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "replay"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-partial-cleanup",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "partial-cleanup"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-capacity",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "shape": "capacity"
+    },
+    "outcomes": [
+      "released; exact EvidenceV3 prefix and suffix accounting"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-held-attach-before",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.before",
+    "args": {
+      "method": "driver.attach"
+    },
+    "outcomes": [
+      "no released while unresolved; after settlement before deadline released"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-held-attach-after",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "method": "driver.attach"
+    },
+    "outcomes": [
+      "no released while unresolved; after settlement before deadline released"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-held-observation-before",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.before",
+    "args": {
+      "method": "driver.observeSource"
+    },
+    "outcomes": [
+      "no released while unresolved; after settlement before deadline released"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-held-observation-after",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "method": "driver.observeSource"
+    },
+    "outcomes": [
+      "no released while unresolved; after settlement before deadline released"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-observation-effects-zero",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "shape": "zero"
+    },
+    "outcomes": [
+      "raw snapshot has zero read/client/private/ACK effects; exact candidate prefix decision"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-observation-effects-stdout",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "shape": "stdout"
+    },
+    "outcomes": [
+      "raw snapshot has zero read/client/private/ACK effects; exact candidate prefix decision"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-observation-effects-stderr",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "shape": "stderr"
+    },
+    "outcomes": [
+      "raw snapshot has zero read/client/private/ACK effects; exact candidate prefix decision"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-observation-effects-both",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "shape": "both"
+    },
+    "outcomes": [
+      "raw snapshot has zero read/client/private/ACK effects; exact candidate prefix decision"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-lost-receipt-known",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "driver.attach.after",
+    "args": {
+      "receiptVisibility": "available"
+    },
+    "outcomes": [
+      "released after exact receipt reconciliation; one attachment"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-observation-response-available",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "driver.observeSource.after",
+    "args": {
+      "receiptVisibility": "available"
+    },
+    "outcomes": [
+      "released after exact receipt reconciliation"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-lost-receipt-unknown",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "driver.attach.after",
+    "args": {
+      "receiptVisibility": "unknown"
+    },
+    "outcomes": [
+      "unknown/unknown-effect with exact attachment ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-observation-response-unknown",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "driver.observeSource.after",
+    "args": {
+      "receiptVisibility": "unknown"
+    },
+    "outcomes": [
+      "unknown/unknown-effect with exact observation ID; later fresh observation may progress"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-pending-ack-stdout",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "state": "pending",
+      "stream": "stdout"
+    },
+    "outcomes": [
+      "pending/dependency exact source operation ID",
+      "blocked/dependency exact source operation ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-pending-ack-stderr",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "state": "pending",
+      "stream": "stderr"
+    },
+    "outcomes": [
+      "pending/dependency exact source operation ID",
+      "blocked/dependency exact source operation ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-unknown-ack-stdout",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "state": "unknown",
+      "stream": "stdout"
+    },
+    "outcomes": [
+      "unknown/unknown-effect exact source operation ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-unknown-ack-stderr",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-initialization",
+    "args": {
+      "state": "unknown",
+      "stream": "stderr"
+    },
+    "outcomes": [
+      "unknown/unknown-effect exact source operation ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-consumer-unknown",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "consumer.consume.after",
+    "args": {},
+    "outcomes": [
+      "unknown/consumer-unknown exact delivery ID",
+      "blocked/consumer-unknown exact delivery ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-missing",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "missing"
+    },
+    "outcomes": [
+      "blocked/missing-receipt"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-invalid-token",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "invalid-token"
+    },
+    "outcomes": [
+      "blocked/integrity"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-foreign-job",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "foreign-job"
+    },
+    "outcomes": [
+      "blocked/identity",
+      "blocked/integrity"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-foreign-channel",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "foreign-channel"
+    },
+    "outcomes": [
+      "blocked/identity",
+      "blocked/integrity"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-foreign-reader",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "foreign-reader"
+    },
+    "outcomes": [
+      "blocked/identity",
+      "blocked/integrity"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-foreign-scope",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "foreign-scope"
+    },
+    "outcomes": [
+      "blocked/identity",
+      "blocked/integrity",
+      "blocked/authority"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-foreign-owner",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "foreign-owner"
+    },
+    "outcomes": [
+      "blocked/identity",
+      "blocked/integrity",
+      "blocked/authority"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-future-epoch",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "future-epoch"
+    },
+    "outcomes": [
+      "blocked/identity",
+      "blocked/integrity",
+      "blocked/authority"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-negative",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "negative"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-fractional",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "fractional"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-unsafe",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "unsafe"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-impossible",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "impossible"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-false-zero",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "false-zero"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-cross-stream",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "cross-stream"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-future-time",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "future-time"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/deadline"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-at-proof-deadline",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "at-proof-deadline"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/deadline"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-expired",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "expired"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/deadline"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-stale",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "stale"
+    },
+    "outcomes": [
+      "blocked/busy",
+      "fresh observation then progress"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-missing-prefix",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "missing-prefix"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-wrong-range",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "wrong-range"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-legacy-reason",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "legacy-reason"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-production",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "production"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-proof-window",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.claim",
+    "args": {
+      "claim": "window"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-before-deadline-observation",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "at": "before",
+      "phase": "observation"
+    },
+    "outcomes": [
+      "released before unchanged deadline with sufficient reserve"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-before-deadline-publication",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "store.commit.before",
+    "args": {
+      "at": "before",
+      "phase": "publication"
+    },
+    "outcomes": [
+      "released before unchanged deadline with sufficient reserve"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-at-deadline-observation",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "at": "at",
+      "phase": "observation"
+    },
+    "outcomes": [
+      "blocked/deadline",
+      "pending/deadline exact outstanding ID",
+      "unknown/deadline exact outstanding ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-at-deadline-publication",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "store.commit.before",
+    "args": {
+      "at": "at",
+      "phase": "publication"
+    },
+    "outcomes": [
+      "blocked/deadline",
+      "pending/deadline exact outstanding ID",
+      "unknown/deadline exact outstanding ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-after-deadline-observation",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.after",
+    "args": {
+      "at": "after",
+      "phase": "observation"
+    },
+    "outcomes": [
+      "blocked/deadline",
+      "pending/deadline exact outstanding ID",
+      "unknown/deadline exact outstanding ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-after-deadline-publication",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "store.commit.before",
+    "args": {
+      "at": "after",
+      "phase": "publication"
+    },
+    "outcomes": [
+      "blocked/deadline",
+      "pending/deadline exact outstanding ID",
+      "unknown/deadline exact outstanding ID"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-takeover-attachment",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.before",
+    "args": {
+      "phase": "attachment"
+    },
+    "outcomes": [
+      "stale with current owner/epoch",
+      "blocked/authority without current identity"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-takeover-observation",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "source-observation.before",
+    "args": {
+      "phase": "observation"
+    },
+    "outcomes": [
+      "stale with current owner/epoch",
+      "blocked/authority without current identity"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-takeover-publication",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "store.commit.before",
+    "args": {
+      "phase": "publication"
+    },
+    "outcomes": [
+      "stale with current owner/epoch",
+      "blocked/authority without current identity"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-changed-output",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "store.commit.before",
+    "args": {
+      "event": "output"
+    },
+    "outcomes": [
+      "busy then fresh observation and exact continuation",
+      "pending exact observation ID; no obsolete source publication"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-changed-ack",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "store.commit.before",
+    "args": {
+      "event": "ack",
+      "transition": "begin-then-complete"
+    },
+    "outcomes": [
+      "busy then fresh observation and exact continuation",
+      "pending exact observation ID; no obsolete source publication"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-missing-old",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {},
+    "outcomes": [
+      "blocked/missing-checkpoint"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-valid",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "valid"
+    },
+    "outcomes": [
+      "ok exact EvidenceV3 round trip"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-allowed-extension",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "allowed-extension"
+    },
+    "outcomes": [
+      "ok exact EvidenceV3 round trip"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-top-extra",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "top-extra"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-receipt-extra",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "receipt-extra"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-source-prefix-total",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "source-prefix-total"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-source-proof-missing",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "source-proof-missing"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-source-proof-range",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "source-proof-range"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-source-proof-pending",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "source-proof-pending"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-retired-baseline",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "retired-baseline"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-double-prefix",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "double-prefix"
+    },
+    "outcomes": [
+      "blocked/integrity",
+      "blocked/gap"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-format-format2",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "change": "format2"
+    },
+    "outcomes": [
+      "blocked/unsupported"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-legacy-evidence",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "kind": "evidence"
+    },
+    "outcomes": [
+      "existing format1 behavior; no invented source/client/ACK history"
+    ],
+    "contract": "source-bootstrap.md"
+  },
+  {
+    "id": "B17/source-legacy-terminal-identity",
+    "family": "B17",
+    "mandatory": true,
+    "boundary": "capsule.restore",
+    "args": {
+      "kind": "terminal-identity"
+    },
+    "outcomes": [
+      "existing format1 behavior; no invented source/client/ACK history"
+    ],
+    "contract": "source-bootstrap.md"
+  }
+]

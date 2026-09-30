@@ -7,10 +7,9 @@ import {
 } from "../lib/providers/catalog";
 import { resolveModelContextProfile } from "../lib/providers/model-context";
 import { getModelPricing } from "../lib/providers/pricing";
+import { resolveProviderCapabilityProfile } from "../lib/providers/capability-resolution";
 import {
   providerSupportsMaxTokensFeature,
-  providerSupportsNativeBuildToolsFeature,
-  providerSupportsNativeWebSearchFeature,
 } from "../lib/providers/provider-registry";
 import {
   openAIReasoningEffort,
@@ -64,7 +63,12 @@ for (const providerId of ["openai", "chatgpt"] as const) {
     ]);
 
     assert.equal(providerSupportsReasoning(`${providerId}:${id}`), true);
-    assert.equal(providerSupportsNativeWebSearchFeature(providerId, id), true);
+    const toolProfile = resolveProviderCapabilityProfile({ providerId, modelId: id });
+    assert.equal(
+      toolProfile.capabilities.web_search?.descriptor.support,
+      providerId === "openai" ? "supported" : "conditional",
+      "OpenAI API web-search is documented while ChatGPT account support waits for runner evidence"
+    );
 
     const pricing = getModelPricing(formatModelId(providerId, id));
     assert.equal(pricing?.inputUsdPer1M, prices[id][0]);
@@ -91,7 +95,11 @@ assert.equal(
 );
 for (const id of ids) {
   assert.equal(providerSupportsMaxTokensFeature("chatgpt", id), false);
-  assert.equal(providerSupportsNativeBuildToolsFeature("chatgpt", id), false);
+  assert.equal(
+    resolveProviderCapabilityProfile({ providerId: "chatgpt", modelId: id })
+      .capabilities.function_calling?.descriptor.support,
+    "conditional"
+  );
 }
 
 console.log("PASS");

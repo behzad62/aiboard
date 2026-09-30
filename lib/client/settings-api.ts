@@ -7,9 +7,12 @@
 
 import { v4 as uuidv4 } from "uuid";
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI, type Model as GoogleModel } from "@google/genai";
 import type { CustomModel, UserSettings } from "@/lib/db/schema";
 import type { ModelInfo, StreamChunk } from "@/lib/providers/base";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
+import { META_MODEL_API_BASE_URL } from "@/lib/providers/meta";
 import {
   resolveModelContextProfile,
   type ModelContextProfileOverride,
@@ -37,13 +40,31 @@ import {
   CUSTOM_PROVIDER_ID,
   FOUNDRY_PROVIDER_ID,
   NVIDIA_PROVIDER_ID,
+  OPENROUTER_PROVIDER_ID,
   getAllProviders,
   getProvider,
-  listFoundryModelInfos,
-  listNvidiaModelInfos,
+  getPersistedProviderCapabilityEvidence,
+  getRunnerCapabilityPlanningContext,
+  getCustomModelByFullId,
+  customModelPlanningContext,
+  listProviderModelInfos,
+  normalizeProviderModelId,
+  normalizeOpenRouterModelId,
   resolveModelCapabilities,
 } from "./providers";
 import { formatModelId } from "@/lib/providers/base";
+import type { ProviderId } from "@/lib/providers/provider-registry";
+import type {
+  CapabilityEvidence,
+  ProviderTransportId,
+  ToolCapabilityDescriptor,
+  ToolResourceState,
+} from "@/lib/providers/tool-capabilities";
+import { customCompatibleTransports } from "@/lib/providers/custom-capabilities";
+import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
+import { capabilityStatusRows, type ProviderCapabilityStatusRow } from "@/lib/providers/capability-status";
+import { mergeCapabilityEvidenceRecords } from "./provider-capability-migration";
+import { resolveToolRuntimeResourceStateCached } from "./tool-runtime";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
 
@@ -55,7 +76,7 @@ export interface ProviderConfig {
   keyHint?: string | null;
   baseURL?: string | null;
   runnerTokenHint?: string | null;
-  /** User-defined model ids (gateway providers like Foundry). */
+  /** Optional extra model ids saved for providers that support user additions. */
   modelIds?: string[];
   defaultModel?: string | null;
   enabled: boolean;
@@ -82,13 +103,7 @@ export function loadProviders(): {
     return {
       providerId: p.id,
       name: p.name,
-      // Gateway provider models are user-defined (deployment/account-specific).
-      models:
-        p.id === FOUNDRY_PROVIDER_ID
-          ? listFoundryModelInfos().map(withContext)
-          : p.id === NVIDIA_PROVIDER_ID
-            ? listNvidiaModelInfos().map(withContext)
-          : p.listModels().map(withContext),
+      models: listProviderModelInfos(p.id as ProviderId).map(withContext),
       hasKey: !!saved,
       keyHint: saved?.keyHint,
       baseURL: saved?.baseURL ?? null,
@@ -101,6 +116,40 @@ export function loadProviders(): {
     };
   });
   return { providers, settings };
+}
+
+export async function resolveProviderCapabilityStatus(input: {
+  providerId: string;
+  modelId: string;
+  resourceState?: ToolResourceState;
+}): Promise<ProviderCapabilityStatusRow[]> {
+  const persistedEvidence = getPersistedProviderCapabilityEvidence(
+    input.providerId,
+    input.modelId,
+  );
+  const runner = await getRunnerCapabilityPlanningContext(
+    input.providerId,
+    input.modelId,
+  );
+  const custom = input.providerId === CUSTOM_PROVIDER_ID
+    ? getCustomModelByFullId(formatModelId(CUSTOM_PROVIDER_ID, input.modelId))
+    : null;
+  const customContext = custom ? customModelPlanningContext(custom) : undefined;
+  const resourceState = input.resourceState ?? await resolveToolRuntimeResourceStateCached();
+  const profile = resolveProviderCapabilityProfile({
+    providerId: input.providerId,
+    modelId: input.modelId,
+    catalogEvidence: persistedEvidence,
+    runnerEvidence: runner.evidence,
+    resourceState,
+    customOverrides: customContext?.customOverrides,
+  });
+  return capabilityStatusRows(profile, {
+    allowedTransports: customContext?.allowedTransports ?? runner.allowedTransports,
+  });
+}
+export function saveOpenAIConnectionMode(mode: "api" | "subscription"): void {
+  updateUserSettings({ openAIConnectionMode: mode });
 }
 
 export function saveProviderKey(input: {
@@ -161,6 +210,485 @@ export function saveProviderKey(input: {
   } else {
     throw new Error("API key required");
   }
+}
+
+interface OpenRouterModelsResponse {
+  data?: Array<{
+    id?: string;
+    name?: string;
+    description?: string;
+    supported_parameters?: string[];
+    architecture?: {
+      input_modalities?: string[];
+    };
+  }>;
+}
+
+export interface OpenRouterCatalogModel {
+  id: string;
+  name: string;
+  description?: string;
+  inputModalities: string[];
+  supportedParameters: string[];
+  supportsImageInput: boolean;
+  supportsDocumentInput: boolean;
+  supportsAudioInput: boolean;
+  supportsVideoInput: boolean;
+  supportsTools: boolean;
+  supportsToolChoice: boolean;
+  supportsStructuredOutputs: boolean;
+  supportsReasoning: boolean;
+  supportsReasoningEffort: boolean;
+  supportsTemperature: boolean;
+  supportsMaxTokens: boolean;
+}
+
+export type ProviderCatalogModel = OpenRouterCatalogModel;
+export function openRouterCatalogCapabilityEvidence(
+  model: OpenRouterCatalogModel,
+  verifiedAt?: string,
+): CapabilityEvidence[] {
+  return [
+    {
+      providerId: "openrouter",
+      modelId: model.id,
+      capabilityId: "function_calling",
+      transport: "responses",
+      support: model.supportsTools ? "supported" : "unsupported",
+      execution: "client",
+      source: "provider-catalog",
+      ...(verifiedAt ? { verifiedAt } : {}),
+    },
+  ];
+}
+
+function normalizeOpenRouterSupportedParameters(
+  parameters?: string[]
+): Set<string> {
+  return new Set(
+    (parameters ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean)
+  );
+}
+
+function normalizeOpenRouterInputModalities(modalities?: string[]): Set<string> {
+  return new Set(
+    (modalities ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean)
+  );
+}
+
+export function buildOpenRouterCatalogModel(
+  entry: NonNullable<OpenRouterModelsResponse["data"]>[number] & { id: string }
+): OpenRouterCatalogModel {
+  const inputModalities = [...(entry.architecture?.input_modalities ?? [])];
+  const modalitySet = normalizeOpenRouterInputModalities(inputModalities);
+  const supportedParameters = [...(entry.supported_parameters ?? [])];
+  const parameterSet = normalizeOpenRouterSupportedParameters(supportedParameters);
+  return {
+    id: entry.id,
+    name: entry.name?.trim() || entry.id,
+    description: entry.description?.trim() || undefined,
+    inputModalities,
+    supportedParameters,
+    supportsImageInput: modalitySet.has("image"),
+    supportsDocumentInput: modalitySet.has("file"),
+    supportsAudioInput: modalitySet.has("audio"),
+    supportsVideoInput: modalitySet.has("video"),
+    supportsTools: parameterSet.has("tools"),
+    supportsToolChoice: parameterSet.has("tool_choice"),
+    supportsStructuredOutputs: parameterSet.has("structured_outputs"),
+    supportsReasoning: parameterSet.has("reasoning"),
+    supportsReasoningEffort: parameterSet.has("reasoning_effort"),
+    supportsTemperature: parameterSet.has("temperature"),
+    supportsMaxTokens: parameterSet.has("max_tokens"),
+  };
+}
+
+async function fetchOpenRouterModelsPayload(): Promise<OpenRouterModelsResponse> {
+  const response = await fetch("https://openrouter.ai/api/v1/models");
+  if (!response.ok) {
+    throw new Error(`OpenRouter model catalog request failed (${response.status})`);
+  }
+  return (await response.json()) as OpenRouterModelsResponse;
+}
+
+export async function fetchOpenRouterModelCatalog(): Promise<OpenRouterCatalogModel[]> {
+  const payload = await fetchOpenRouterModelsPayload();
+  return (payload.data ?? [])
+    .filter(
+      (
+        entry
+      ): entry is NonNullable<OpenRouterModelsResponse["data"]>[number] & { id: string } =>
+        typeof entry.id === "string" && entry.id.length > 0
+    )
+    .map(buildOpenRouterCatalogModel)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function basicCatalogModel(
+  id: string,
+  name = id,
+  options: {
+    description?: string;
+    image?: boolean;
+    reasoningEffort?: boolean;
+  } = {}
+): ProviderCatalogModel {
+  return {
+    id,
+    name,
+    description: options.description,
+    inputModalities: options.image ? ["text", "image"] : ["text"],
+    supportedParameters: [],
+    supportsImageInput: options.image === true,
+    supportsDocumentInput: false,
+    supportsAudioInput: false,
+    supportsVideoInput: false,
+    supportsTools: false,
+    supportsToolChoice: false,
+    supportsStructuredOutputs: false,
+    supportsReasoning: options.reasoningEffort === true,
+    supportsReasoningEffort: options.reasoningEffort === true,
+    supportsTemperature: false,
+    supportsMaxTokens: false,
+  };
+}
+
+type GoogleCatalogModelRecord = Pick<
+  GoogleModel,
+  "name" | "displayName" | "description" | "thinking" | "supportedActions"
+>;
+
+export async function collectGoogleModelCatalog(
+  models: AsyncIterable<GoogleCatalogModelRecord>
+): Promise<ProviderCatalogModel[]> {
+  const byId = new Map<string, ProviderCatalogModel>();
+  for await (const model of models) {
+    const resourceName = typeof model.name === "string" ? model.name.trim() : "";
+    const id = resourceName.replace(/^models\//, "");
+    if (!id) continue;
+    const actions = Array.isArray(model.supportedActions) ? model.supportedActions : [];
+    if (actions.length > 0 && !actions.includes("generateContent")) continue;
+    byId.set(
+      id,
+      basicCatalogModel(id, model.displayName?.trim() || id, {
+        description: model.description?.trim() || undefined,
+        reasoningEffort: model.thinking === true,
+      })
+    );
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+async function fetchGoogleModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
+  const pager = await new GoogleGenAI({ apiKey }).models.list({
+    config: { pageSize: 1000, queryBase: true },
+  });
+  return collectGoogleModelCatalog(pager);
+}
+async function fetchOpenAICompatibleModelCatalog(
+  apiKey: string,
+  baseURL?: string
+): Promise<ProviderCatalogModel[]> {
+  const page = await new OpenAI({
+    apiKey,
+    ...(baseURL ? { baseURL } : {}),
+    dangerouslyAllowBrowser: true,
+  }).models.list();
+  return page.data
+    .filter((model) => typeof model.id === "string" && model.id.length > 0)
+    .map((model) => basicCatalogModel(model.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+async function fetchAnthropicModelCatalog(
+  apiKey: string
+): Promise<ProviderCatalogModel[]> {
+  const page = await new Anthropic({ apiKey, dangerouslyAllowBrowser: true }).models.list({
+    limit: 1000,
+  });
+  return page.data
+    .filter((model) => typeof model.id === "string" && model.id.length > 0)
+    .map((model) => basicCatalogModel(model.id, model.display_name || model.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+async function fetchMetaModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
+  const response = await fetch(`${META_MODEL_API_BASE_URL}/models`, {
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: Array<{ id?: string; name?: string; display_name?: string }>;
+    error?: { message?: string } | string;
+  };
+  if (!response.ok) {
+    const error =
+      typeof payload.error === "string" ? payload.error : payload.error?.message;
+    throw new Error(error ?? `Meta Model API catalog request failed (${response.status})`);
+  }
+  return (payload.data ?? [])
+    .filter((model): model is { id: string; name?: string; display_name?: string } =>
+      typeof model.id === "string" && /^muse-spark-/i.test(model.id)
+    )
+    .map((model) =>
+      basicCatalogModel(
+        model.id,
+        model.display_name?.trim() || model.name?.trim() || model.id
+      )
+    )
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+async function fetchXaiLanguageModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
+  const response = await fetch("https://api.x.ai/v1/language-models", {
+    headers: { authorization: `Bearer ${apiKey}` },
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    models?: Array<{ id?: string; input_modalities?: string[] }>;
+    error?: { message?: string } | string;
+  };
+  if (!response.ok) {
+    const error =
+      typeof payload.error === "string" ? payload.error : payload.error?.message;
+    throw new Error(error ?? `xAI language-model catalog request failed (${response.status})`);
+  }
+  return (payload.models ?? [])
+    .filter((model): model is { id: string; input_modalities?: string[] } =>
+      typeof model.id === "string" && model.id.length > 0
+    )
+    .map((model) => ({
+      ...basicCatalogModel(model.id, model.id, {
+        image: model.input_modalities?.includes("image") === true,
+        reasoningEffort: !model.id.toLowerCase().includes("non-reasoning"),
+      }),
+      supportsTemperature: true,
+      supportsMaxTokens: true,
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+interface RunnerCatalogEntry {
+  id?: string;
+  name?: string;
+  capabilities?: {
+    supports?: {
+      vision?: boolean;
+      reasoningEffort?: boolean;
+    };
+  };
+}
+
+async function fetchRunnerModelCatalog(input: {
+  providerId: "chatgpt" | "github-copilot" | "nvidia";
+  apiKey: string;
+  baseURL: string;
+  runnerToken: string;
+}): Promise<ProviderCatalogModel[]> {
+  const response = await fetch(
+    `${input.baseURL.replace(/\/$/, "")}/providers/${input.providerId}/models`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-runner-token": input.runnerToken,
+      },
+      body: JSON.stringify(
+        input.providerId === "nvidia" ? { apiKey: input.apiKey } : {}
+      ),
+    }
+  );
+  const payload = (await response.json().catch(() => ({}))) as {
+    data?: RunnerCatalogEntry[];
+    error?: string;
+  };
+  if (!response.ok) {
+    if (
+      input.providerId === "chatgpt" &&
+      /does not expose a stable model catalog/i.test(payload.error ?? "")
+    ) {
+      throw new Error(
+        "This account runner is too old for ChatGPT live model discovery. Download and restart account runner v22 or newer.",
+      );
+    }
+    throw new Error(payload.error ?? `Provider model catalog request failed (${response.status})`);
+  }
+  return (payload.data ?? [])
+    .filter((model): model is RunnerCatalogEntry & { id: string } =>
+      typeof model.id === "string" && model.id.length > 0
+    )
+    .map((model) =>
+      basicCatalogModel(model.id, model.name?.trim() || model.id, {
+        image: model.capabilities?.supports?.vision === true,
+        reasoningEffort: model.capabilities?.supports?.reasoningEffort === true,
+      })
+    )
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export async function fetchProviderModelCatalog(input: {
+  providerId: string;
+  apiKey?: string;
+  baseURL?: string;
+  runnerToken?: string;
+}): Promise<ProviderCatalogModel[]> {
+  if (input.providerId === OPENROUTER_PROVIDER_ID) {
+    return fetchOpenRouterModelCatalog();
+  }
+  const explicitApiKey = input.apiKey?.trim() || "";
+  const explicitBaseURL = input.baseURL?.trim() || "";
+  const explicitRunnerToken = input.runnerToken?.trim() || "";
+  const isChatGPT = input.providerId === "chatgpt";
+  const isGitHubCopilot = input.providerId === "github-copilot";
+  const isNvidia = input.providerId === NVIDIA_PROVIDER_ID;
+  const needsSavedRunnerSettings =
+    ((isChatGPT || isGitHubCopilot) && !explicitBaseURL) ||
+    (isNvidia && (!explicitBaseURL || !explicitRunnerToken));
+  const saved = !explicitApiKey || needsSavedRunnerSettings
+    ? getProviderKey(input.providerId)
+    : undefined;
+  const apiKey = explicitApiKey || saved?.apiKey?.trim() || "";
+  if (!apiKey) throw new Error("Save or enter the provider credential first");
+
+  if (input.providerId === "anthropic") {
+    return fetchAnthropicModelCatalog(apiKey);
+  }
+  if (input.providerId === "meta") {
+    return fetchMetaModelCatalog(apiKey);
+  }
+  if (input.providerId === "xai") {
+    return fetchXaiLanguageModelCatalog(apiKey);
+  }
+  if (isChatGPT || isGitHubCopilot || input.providerId === NVIDIA_PROVIDER_ID) {
+    const baseURL = input.baseURL?.trim() || saved?.baseURL?.trim() || "";
+    const runnerToken =
+      isChatGPT || isGitHubCopilot
+        ? apiKey
+        : input.runnerToken?.trim() || saved?.runnerToken?.trim() || "";
+    if (!baseURL || !runnerToken) {
+      throw new Error("Save the local runner URL and token before browsing models");
+    }
+    const runnerProviderId = isChatGPT
+      ? "chatgpt"
+      : isGitHubCopilot
+        ? "github-copilot"
+        : NVIDIA_PROVIDER_ID;
+    return fetchRunnerModelCatalog({
+      providerId: runnerProviderId,
+      apiKey,
+      baseURL,
+      runnerToken,
+    });
+  }
+  if (input.providerId === "google") {
+    return fetchGoogleModelCatalog(apiKey);
+  }
+  if (input.providerId === "openai") {
+    return fetchOpenAICompatibleModelCatalog(apiKey);
+  }
+  throw new Error(`Live model discovery is not supported for ${input.providerId}`);
+}
+
+function discoveryMetadataFromCatalogModel(
+  model: ProviderCatalogModel,
+  source: "openrouter-models" | "provider-models",
+  updatedAt: string,
+) {
+  return {
+    image: model.supportsImageInput,
+    document: model.supportsDocumentInput,
+    audio: model.supportsAudioInput,
+    video: model.supportsVideoInput,
+    apiParameters: {
+      toolChoice: model.supportsToolChoice,
+      structuredOutputs: model.supportsStructuredOutputs,
+      reasoning: model.supportsReasoning,
+      reasoningEffort: model.supportsReasoningEffort,
+      temperature: model.supportsTemperature,
+      maxTokens: model.supportsMaxTokens,
+    },
+    updatedAt,
+    source,
+  };
+}
+
+export async function refreshOpenRouterModelCapabilities(
+  modelIds?: string[]
+): Promise<{ synced: number; missing: string[] }> {
+  const targets = (modelIds ?? getProviderKey(OPENROUTER_PROVIDER_ID)?.models ?? [])
+    .map(normalizeOpenRouterModelId)
+    .filter((id, index, all) => id.length > 0 && all.indexOf(id) === index);
+  if (targets.length === 0) return { synced: 0, missing: [] };
+
+  const payload = await fetchOpenRouterModelsPayload();
+  const modelIndex = new Map(
+    (payload.data ?? [])
+      .filter((entry): entry is NonNullable<OpenRouterModelsResponse["data"]>[number] & { id: string } =>
+        typeof entry.id === "string" && entry.id.length > 0
+      )
+      .map((entry) => [entry.id, entry])
+  );
+
+  const settings = getUserSettings();
+  const nextMetadata = { ...(settings.discoveredModelMetadata ?? {}) };
+  let nextEvidence = [...(settings.providerToolCapabilityEvidence ?? [])];
+  const missing: string[] = [];
+  let synced = 0;
+  const updatedAt = new Date().toISOString();
+  for (const id of targets) {
+    const entry = modelIndex.get(id);
+    if (!entry) {
+      missing.push(id);
+      continue;
+    }
+    const model = buildOpenRouterCatalogModel(entry);
+    nextMetadata[formatModelId(OPENROUTER_PROVIDER_ID, id)] =
+      discoveryMetadataFromCatalogModel(model, "openrouter-models", updatedAt);
+    nextEvidence = mergeCapabilityEvidenceRecords(
+      nextEvidence,
+      openRouterCatalogCapabilityEvidence(model, updatedAt),
+    );
+    synced += 1;
+  }
+  updateUserSettings({
+    discoveredModelMetadata: nextMetadata,
+    providerToolCapabilityEvidence: nextEvidence,
+  });
+  return { synced, missing };
+}
+
+export async function refreshProviderModelCapabilities(input: {
+  providerId: string;
+  modelIds?: string[];
+  apiKey?: string;
+  baseURL?: string;
+  runnerToken?: string;
+}): Promise<{ synced: number; missing: string[] }> {
+  if (input.providerId === OPENROUTER_PROVIDER_ID) {
+    return refreshOpenRouterModelCapabilities(input.modelIds);
+  }
+  const targets = (
+    input.modelIds ?? getProviderKey(input.providerId)?.models ?? []
+  )
+    .map((id) => normalizeProviderModelId(input.providerId, id))
+    .filter((id, index, all) => id.length > 0 && all.indexOf(id) === index);
+  if (targets.length === 0) return { synced: 0, missing: [] };
+
+  const catalog = await fetchProviderModelCatalog(input);
+  const modelIndex = new Map(catalog.map((model) => [model.id, model]));
+  const nextMetadata = { ...(getUserSettings().discoveredModelMetadata ?? {}) };
+  const missing: string[] = [];
+  let synced = 0;
+  const updatedAt = new Date().toISOString();
+  for (const id of targets) {
+    const model = modelIndex.get(id);
+    if (!model) {
+      missing.push(id);
+      continue;
+    }
+    nextMetadata[formatModelId(input.providerId, id)] =
+      discoveryMetadataFromCatalogModel(model, "provider-models", updatedAt);
+    synced += 1;
+  }
+  updateUserSettings({ discoveredModelMetadata: nextMetadata });
+  return { synced, missing };
 }
 
 const TEST_IMAGE: AttachmentPayload = {
@@ -346,12 +874,7 @@ export async function validateProvider(input: {
   const modelId =
     input.modelId ??
     saved?.defaultModel ??
-    provider.listModels()[0]?.id ??
-    (input.providerId === FOUNDRY_PROVIDER_ID
-      ? listFoundryModelInfos()[0]?.id
-      : input.providerId === NVIDIA_PROVIDER_ID
-        ? listNvidiaModelInfos()[0]?.id
-      : undefined);
+    listProviderModelInfos(input.providerId as ProviderId)[0]?.id;
   if (!modelId)
     return {
       valid: false,
@@ -359,6 +882,8 @@ export async function validateProvider(input: {
       error:
         input.providerId === FOUNDRY_PROVIDER_ID
           ? "Add at least one model id (e.g. claude-opus-4-5) and save first"
+          : input.providerId === OPENROUTER_PROVIDER_ID
+            ? "Add an OpenRouter model id (e.g. qwen/qwen3-coder) or pick a built-in OpenRouter model"
           : input.providerId === NVIDIA_PROVIDER_ID
             ? "Add at least one NVIDIA model id (e.g. z-ai/glm-5.2) and save first"
             : "No model available",
@@ -480,6 +1005,8 @@ export interface CustomModelView {
   model: string;
   hasKey: boolean;
   capabilities: { image: boolean; document: boolean; audio: boolean; video: boolean };
+  toolCapabilityOverrides: ToolCapabilityDescriptor[];
+  compatibleTransports: ProviderTransportId[];
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
 }
@@ -492,6 +1019,8 @@ function redactCustom(m: CustomModel): CustomModelView {
     model: m.model,
     hasKey: !!m.apiKey,
     capabilities: m.capabilities ?? { ...NO_CAPS },
+    toolCapabilityOverrides: m.toolCapabilityOverrides ?? [],
+    compatibleTransports: customCompatibleTransports(m.compatibleTransports),
     lastValidationSucceeded: m.lastValidationSucceeded ?? null,
     lastValidatedAt: m.lastValidatedAt ?? null,
   };
@@ -507,6 +1036,8 @@ export function addCustomModel(input: {
   model: string;
   apiKey?: string;
   capabilities?: CustomModelView["capabilities"];
+  toolCapabilityOverrides?: ToolCapabilityDescriptor[];
+  compatibleTransports?: ProviderTransportId[];
 }): CustomModelView {
   const record: CustomModel = {
     id: uuidv4(),
@@ -516,6 +1047,8 @@ export function addCustomModel(input: {
     apiKey: input.apiKey || undefined,
     hasKey: !!input.apiKey,
     capabilities: input.capabilities ?? { ...NO_CAPS },
+    toolCapabilityOverrides: input.toolCapabilityOverrides ?? [],
+    compatibleTransports: customCompatibleTransports(input.compatibleTransports),
     createdAt: new Date().toISOString(),
   };
   storeAddCustomModel(record);
@@ -529,6 +1062,18 @@ export function updateCustomModelCapabilities(
   storeUpdateCustomModel(id, { capabilities });
 }
 
+export function updateCustomModelToolConfiguration(
+  id: string,
+  input: {
+    toolCapabilityOverrides: ToolCapabilityDescriptor[];
+    compatibleTransports: ProviderTransportId[];
+  },
+): void {
+  storeUpdateCustomModel(id, {
+    toolCapabilityOverrides: input.toolCapabilityOverrides,
+    compatibleTransports: customCompatibleTransports(input.compatibleTransports),
+  });
+}
 export function deleteCustomModel(id: string): void {
   storeDeleteCustomModel(id);
 }

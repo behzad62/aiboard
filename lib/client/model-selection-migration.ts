@@ -1,4 +1,5 @@
 import type { ClientStore } from "./store";
+import { migrateProviderCapabilitySettings } from "./provider-capability-migration";
 import {
   migrateFullModelId,
   migrateModelIdKeyedRecord,
@@ -17,6 +18,12 @@ export function migrateClientStoreModelSelections(
 ): { store: ClientStore; changed: boolean } {
   const store = structuredClone(input);
   let changed = false;
+
+  const capabilityMigration = migrateProviderCapabilitySettings(store.userSettings);
+  if (capabilityMigration.changed) {
+    store.userSettings = capabilityMigration.settings;
+    changed = true;
+  }
 
   const migrateFull = (modelId: string | null | undefined) => {
     if (!modelId) return modelId;

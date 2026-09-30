@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Authorized qualification-method/version-only change; generator output is regenerated separately",
+  "changes": [
+    {
+      "path": "benchmarks/recoverable-job-service/public/acceptance-contract.md",
+      "beforeSha256": "ddff896f411e77fce4b011dcb7478cfa0471c4ff0945e65eec00575eef8593a6",
+      "afterSha256": "cc9d4cb31282bf37d299c6eaebe03b70ddcde1d9dbaf53152138e780bc8d37cd"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/runtime-contract.md",
+      "beforeSha256": "f3f7d967837d65261c6521695fce959e423ae68a7271dcd33f2e8667213f76f5",
+      "afterSha256": "960fa42fe7162bb531567522393bd6b873fd1407d3ef3000122b4d94e92fd6a8"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/public/source-bootstrap.md",
+      "beforeSha256": "f3e81dabd7de9c1ef7ed00f9c1aa48b9af91d74ac7daabfff7337176c8de271d",
+      "afterSha256": "57795b3960b17e1112b1cf24de5cd554a64e957cefc9d2b5699ebb79fc50e19b"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/evaluator.mjs",
+      "beforeSha256": "a77bb3336f818dd4cb7fec76b66d856785bef4b69075aacd8a1acc58df09da62",
+      "afterSha256": "7103e9fc2cc754270c6e358b6f5ddc5b94d4dc3b02b58462faf05e8c48d9457c"
+    },
+    {
+      "path": "benchmarks/recoverable-job-service/private/generate-assets.mjs",
+      "beforeSha256": "3f5dc968162cd3b5701256fea6c2c8a1bef321d579001344148dfa9f50012a44",
+      "afterSha256": "830d146b579c36218d36640b903f7482e5279566afde97e23c87ca2b1b33379e"
+    }
+  ],
+  "mirrors": [
+    "acceptance-contract.md",
+    "runtime-contract.md",
+    "source-bootstrap.md"
+  ],
+  "generatedBefore": {
+    "path": "lib/benchmark/workbench/recoverable-job-service/assets.generated.ts",
+    "sha256": "0a8a3750b32e631db5e7c82afd017869d1974156c20f1a95b7a58a4f145282b7"
+  }
+}

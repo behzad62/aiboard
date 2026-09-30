@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "status": "narrow supplement to frozen 302-row ledger; scoped independent review pending",
+  "issue": "CAL-C09-NONFINAL-DIGEST",
+  "history": "Existing C09 representation-independence correction history; no new allowance. Original private-record and nonexistent artifact-read-return failures remain preserved.",
+  "parentLedger": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/predicate-dependency-ledger-corrected.json",
+    "bytes": 5050465,
+    "sha256": "111f38f67c2f933cd35de9609544747a2a6b54175b522e8810eed6d195f38d7a"
+  },
+  "identity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "14b7d5028b6a2bb08b64f21171208c3266e67f3ef0d05b6f83991c8e5db2fcd5"
+  },
+  "previousIdentity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f8f1f824577efab1719a750b22df833daf62c13fb9bf29b28bf9363cf94fa7f8"
+  },
+  "variants": [
+    "C09/restore-store.commit.before",
+    "C09/restore-store.commit.after"
+  ],
+  "publicClauses": [
+    "runtime-contract.md:36 Evidence digest",
+    "runtime-contract.md:100 guarded atomic restore",
+    "runtime-contract.md:R5 revision and finalized evidence",
+    "acceptance-contract.md:C09 safer atomic restore",
+    "acceptance-contract.md:C10 newer same-epoch head protection"
+  ],
+  "sourceDelta": {
+    "path": "benchmarks/recoverable-job-service/private/variants.mjs",
+    "line": 74,
+    "before": "s.check(evidence.manifest.final===cap.evidence.final&&evidence.manifest.manifestDigest===cap.evidence.manifestDigest,'restored evidence preserves exact public finality and manifest');",
+    "after": "s.check(evidence.manifest.final===cap.evidence.final,'restored evidence preserves exact public finality');s.check(canonical(evidence.manifest.totals)===canonical(cap.evidence.totals),'restored evidence preserves exact public accounting');s.check(evidence.manifest.manifestDigest===jsonDigest({...evidence.manifest,manifestDigest:''}),'restored evidence verifies its own manifest digest');if(cap.evidence.final)s.check(canonical(evidence.manifest)===canonical(cap.evidence),'restored final evidence remains immutable');"
+  },
+  "dependencies": {
+    "unchanged": [
+      "Scenario.setup",
+      "Scenario.accepted",
+      "Scenario.hold",
+      "Scenario.reopen",
+      "Scenario.evidence",
+      "Scenario.dispose",
+      "canonical",
+      "public response validation",
+      "inspectSafety"
+    ],
+    "newlyInvoked": [
+      "existing broker.jsonDigest on the returned public Evidence"
+    ]
+  },
+  "requirement": "Keep exact retained bytes, both-stream accounting, finality and one accepted audit; independently verify the returned manifest digest. For finalized input preserve exact manifest equality; a nonfinal publication may advance revision.",
+  "witness": {
+    "sha256": "5934b229e3122ff738a059c0828ae3f42c346f014f85b4894e682dd53f415e87",
+    "source": "benchmarks/recoverable-job-service/private/calibration/c09-digest-green-2026-09-12T17-46-36-443Z/nonfinal-revision.js",
+    "construction": "One guarded restore-CAS value expression advances only nonfinal Evidence revision and reseals its digest; actual store publication, no evaluator-output substitution."
+  },
+  "red": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/c09-digest-red-2026-09-12T17-46-02-808Z/summary.json",
+    "bytes": 2412,
+    "sha256": "7bc0e575c74f98fbba071889267ffc2b90f89264d985cb7e51d4a2afdb6c0724"
+  },
+  "green": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/c09-digest-green-2026-09-12T17-46-36-443Z/summary.json",
+    "bytes": 77997,
+    "sha256": "bfb08065a4dc9ca25f71966a2bdf7fc7d22b3cfdbfdb9b568e08074d92356241"
+  },
+  "material": {
+    "selector": "omit-evidence-write",
+    "expectedPrefix": "restore must progress",
+    "safety": "evidence-before-acceptance",
+    "changed": false,
+    "rows": 6
+  },
+  "conditionalFinality": "These two production fixtures export nonfinal evidence. Exact finalized equality is retained conditionally; no newly exercised final fixture is claimed.",
+  "unrelatedAcceptedScope": "All other source bytes in the prior correction manifest stay fixed. Its accepted attachment, root-timing and category proofs are reused under that manifest; no new broad run is claimed."
+}

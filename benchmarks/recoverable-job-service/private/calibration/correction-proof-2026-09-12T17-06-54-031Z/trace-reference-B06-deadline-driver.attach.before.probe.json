@@ -1,0 +1,98 @@
+{
+  "name": "trace-reference-B06-deadline-driver.attach.before",
+  "variantId": "B06/deadline-driver.attach.before",
+  "sourceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "failure": null,
+  "safety": [],
+  "assertions": [
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "createBatch must progress",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "actual public setup intent identifies lifecycle job",
+      "passed": true
+    },
+    {
+      "label": "actual modeled workload acquired",
+      "passed": true
+    },
+    {
+      "label": "public result schema",
+      "passed": true
+    },
+    {
+      "label": "stop must refuse",
+      "passed": true
+    },
+    {
+      "label": "actual attachment request keeps original expired deadline",
+      "passed": true
+    },
+    {
+      "label": "expired attachment boundary issues no new reader effect",
+      "passed": true
+    },
+    {
+      "label": "expired nested/final step cannot publish release",
+      "passed": true
+    }
+  ],
+  "faults": [
+    {
+      "boundary": "driver.attach.before",
+      "index": 281,
+      "during": [
+        "stop"
+      ]
+    }
+  ],
+  "operations": 237,
+  "promiseJobs": 1194,
+  "publicCalls": [
+    {
+      "method": "createBatch",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "start",
+      "kind": "ok",
+      "error": null,
+      "blockers": [],
+      "state": null
+    },
+    {
+      "method": "stop",
+      "kind": "blocked",
+      "error": null,
+      "blockers": [
+        "deadline"
+      ],
+      "state": null
+    }
+  ],
+  "effects": {
+    "driver.acquire": 4,
+    "driver.start": 1,
+    "driver.attach": 0,
+    "driver.detach": 0,
+    "driver.release": 0,
+    "artifact.create": 2,
+    "artifact.write": 0
+  },
+  "transportReturns": [],
+  "acceptedAudits": 0,
+  "allGuestsDisposed": true,
+  "remainingTrackedCalls": 0
+}

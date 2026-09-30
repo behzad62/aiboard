@@ -1,0 +1,19 @@
+warning: in the working copy of 'benchmarks/recoverable-job-service/private/calibration/control-expectations-before-correction-2026-09-12T17-08.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'benchmarks/recoverable-job-service/private/control-expectations.json', LF will be replaced by CRLF the next time Git touches it
+diff --git a/benchmarks/recoverable-job-service/private/calibration/control-expectations-before-correction-2026-09-12T17-08.json b/benchmarks/recoverable-job-service/private/control-expectations.json
+index b7f8528e..536dfd35 100644
+--- a/benchmarks/recoverable-job-service/private/calibration/control-expectations-before-correction-2026-09-12T17-08.json
++++ b/benchmarks/recoverable-job-service/private/control-expectations.json
+@@ -575,10 +575,10 @@
+     "expectedReasonPrefix": "exact delivery replay has one external effect; safety: intent-before-consume"
+   },
+   "C09/restore-store.commit.before": {
+-    "expectedReasonPrefix": "candidate reached lawful store.commit.before; safety: evidence-before-acceptance"
++    "expectedReasonPrefix": "restore must progress"
+   },
+   "C09/restore-store.commit.after": {
+-    "expectedReasonPrefix": "candidate reached lawful store.commit.after; safety: evidence-before-acceptance"
++    "expectedReasonPrefix": "restore must progress"
+   },
+   "C10/restore-stale-head": {
+     "expectedReasonPrefix": "restore must refuse"

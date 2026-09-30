@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "purpose": "setup-reader scheduling counterexample; not full calibration",
+  "referenceHash": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+  "setupReaderHash": "0f9af49f2f4679e1a0aee684b2820e3b63e7aace80319225bb5b76a1bbdf0963",
+  "contractVersion": "rjs-contract-2.0.0",
+  "suiteVersion": "rjs-suite-2.0.0",
+  "replayCommitment": "286824affd683592a84e7ecd2f28582fe2ef3305fc07ccf84c5eacf5fb1c7020",
+  "node": "24.18.0",
+  "results": {
+    "reference": {
+      "status": "valid",
+      "selected": 6,
+      "pass": 6,
+      "fail": [],
+      "safetyFailures": 0
+    },
+    "setup-reader": {
+      "status": "valid",
+      "selected": 6,
+      "pass": 6,
+      "fail": [],
+      "safetyFailures": 0
+    }
+  }
+}

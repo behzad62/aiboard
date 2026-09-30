@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { ApiKeyForm } from "@/components/ApiKeyForm";
+import { OpenAIProviderSettings } from "@/components/OpenAIProviderSettings";
 import { PricingSettings } from "@/components/PricingSettings";
 import { CustomModelsManager } from "@/components/CustomModelsManager";
 import { CapabilityLab } from "@/components/CapabilityLab";
 import { StorageSettings } from "@/components/StorageSettings";
+import { ToolRuntimeSettingsPanel } from "@/components/ToolRuntimeSettingsPanel";
 import { ensureReady, saveSettings } from "@/lib/client/api";
 import { loadProviders } from "@/lib/client/settings-api";
 import { DetailControl } from "@/components/DetailControl";
@@ -33,6 +35,7 @@ import type {
   EffortLevel,
   ReasoningEffort,
   Verbosity,
+  ToolRuntimeSettings,
 } from "@/lib/db/schema";
 import { getModeInfo, getModeLabel } from "@/lib/orchestrator/config";
 import type { ModelInfo } from "@/lib/providers/base";
@@ -67,12 +70,14 @@ interface SettingsData {
     modelPricingOverrides?: Record<string, ModelPricingOverride>;
     modelContextOverrides?: ModelContextOverrides;
     modelCapabilityProfiles?: Record<string, ModelCapabilityProbeProfile>;
+    openAIConnectionMode?: "api" | "subscription";
+    toolRuntime?: ToolRuntimeSettings;
   };
 }
 
 const MODES: DiscussionMode[] = ["panel", "debate", "specialist", "build"];
 
-const TAB_VALUES = ["providers", "pricing", "defaults", "storage", "security"];
+const TAB_VALUES = ["providers", "tools", "capability-lab", "pricing", "defaults", "storage", "security"];
 
 export default function SettingsPage() {
   const [tab, setTab] = useState("providers");
@@ -124,6 +129,9 @@ export default function SettingsPage() {
     ...provider,
     enabled: draftEnabled[provider.providerId] ?? provider.enabled,
   }));
+  const providerTabs = effectiveProviders.filter((provider) => provider.providerId !== "chatgpt");
+  const openAIApiProvider = effectiveProviders.find((provider) => provider.providerId === "openai");
+  const chatgptProvider = effectiveProviders.find((provider) => provider.providerId === "chatgpt");
 
   const enabledModels = effectiveProviders
     .filter((p) => p.hasKey && p.enabled)
@@ -180,8 +188,10 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
           <TabsTrigger value="providers">Providers</TabsTrigger>
+          <TabsTrigger value="tools">Tools</TabsTrigger>
+          <TabsTrigger value="capability-lab">Capability Lab</TabsTrigger>
           <TabsTrigger value="pricing">Pricing</TabsTrigger>
           <TabsTrigger value="defaults">Defaults</TabsTrigger>
           <TabsTrigger value="storage">Storage</TabsTrigger>
@@ -274,24 +284,34 @@ export default function SettingsPage() {
               <h2 className="text-lg font-semibold">API keys</h2>
             </div>
             <Tabs
-              defaultValue={effectiveProviders[0]?.providerId ?? "custom"}
+              defaultValue={providerTabs[0]?.providerId ?? "custom"}
             >
               <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-                {effectiveProviders.map((provider) => (
+                {providerTabs.map((provider) => (
                   <TabsTrigger key={provider.providerId} value={provider.providerId}>
-                    {provider.name}
+                    {provider.providerId === "openai" ? "OpenAI" : provider.name}
                   </TabsTrigger>
                 ))}
                 <TabsTrigger value="custom">Custom</TabsTrigger>
               </TabsList>
 
-              {effectiveProviders.map((provider) => (
+              {providerTabs.map((provider) => (
                 <TabsContent key={provider.providerId} value={provider.providerId}>
-                  <ApiKeyForm
-                    provider={provider}
-                    onSaved={load}
-                    onDraftChange={handleDraftChange}
-                  />
+                  {provider.providerId === "openai" && openAIApiProvider && chatgptProvider ? (
+                    <OpenAIProviderSettings
+                      apiProvider={openAIApiProvider}
+                      chatgptProvider={chatgptProvider}
+                      onSaved={load}
+                      onDraftChange={handleDraftChange}
+                      preferredMode={data?.settings.openAIConnectionMode}
+                    />
+                  ) : (
+                    <ApiKeyForm
+                      provider={provider}
+                      onSaved={load}
+                      onDraftChange={handleDraftChange}
+                    />
+                  )}
                 </TabsContent>
               ))}
 
@@ -304,6 +324,18 @@ export default function SettingsPage() {
             </Tabs>
           </div>
 
+        </TabsContent>
+
+        {/* ── Tools ─────────────────────────────────────────────── */}
+        <TabsContent value="tools">
+          <ToolRuntimeSettingsPanel
+            settings={data?.settings.toolRuntime}
+            onChanged={load}
+          />
+        </TabsContent>
+
+        {/* ── Capability Lab ───────────────────────────────────── */}
+        <TabsContent value="capability-lab">
           <CapabilityLab
             providers={effectiveProviders}
             capabilityProfiles={data?.settings.modelCapabilityProfiles}

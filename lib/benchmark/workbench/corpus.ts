@@ -2,6 +2,14 @@ import type { BenchmarkCaseV2 } from "@/lib/benchmark/types";
 import { createWorkBenchCaseHash, toBenchmarkCaseV2 } from "./case-loader";
 import type { WorkBenchCase } from "./types";
 import {
+  RECOVERABLE_JOB_SERVICE_CASE_ID,
+  RECOVERABLE_JOB_SERVICE_PACK_ID,
+} from "./recoverable-job-service/fixture";
+import {
+  createRecoverableJobServiceCaseOption,
+  createRecoverableJobServiceCasePack,
+} from "./recoverable-job-service/case-pack";
+import {
   WORKBENCH_CHALLENGES,
   type WorkBenchBehavioralCheck,
   type WorkBenchChallenge,
@@ -76,6 +84,9 @@ export function listWorkBenchCaseOptions(): WorkBenchCaseOption[] {
 export function getWorkBenchCaseOption(
   id: string
 ): WorkBenchCaseOption | null {
+  if (id === RECOVERABLE_JOB_SERVICE_CASE_ID) {
+    return createRecoverableJobServiceCaseOption();
+  }
   return listWorkBenchCaseOptions().find((item) => item.id === id) ?? null;
 }
 
@@ -106,12 +117,16 @@ export function listWorkBenchCasePacks(): WorkBenchCasePackOption[] {
       descriptionForGroup: (kind) =>
         `Runs current WorkBench ${workBenchChallengeKindLabel(kind).toLowerCase()} cases.`,
     }),
+    createRecoverableJobServiceCasePack(),
   ];
 }
 
 export function getWorkBenchCasePack(
   id: string
 ): WorkBenchCasePackOption | null {
+  if (id === RECOVERABLE_JOB_SERVICE_PACK_ID) {
+    return createRecoverableJobServiceCasePack();
+  }
   return listWorkBenchCasePacks().find((pack) => pack.id === id) ?? null;
 }
 

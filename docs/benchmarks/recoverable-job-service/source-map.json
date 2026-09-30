@@ -1,0 +1,1453 @@
+{
+  "version": "qualification-provenance-2026-09-22",
+  "createdAt": "2026-09-08T05:17:40.406Z",
+  "purpose": "Private historical pattern provenance and qualification pointer; exclude from candidate export.",
+  "implementation": "Executable standalone evaluator integrated through AI Board WorkBench; candidate runtime remains independent of the source application.",
+  "coverageClaim": "69 scoring-admitted public families and 302 mandatory hidden variants under the frozen modeled profile.",
+  "sourceKeys": {
+    "S01": [
+      "task-1-report.md"
+    ],
+    "S02": [
+      "task-1-round4-report.md",
+      "task-1-round4-review.md"
+    ],
+    "S03": [
+      "task-1-round5-report.md",
+      "task-1-round5-review.md",
+      "task-1-cap-review.md"
+    ],
+    "S04": [
+      "task-2-report.md",
+      "task-2-review-round3.md",
+      "task-2-review-round4.md",
+      "task-2-review-round5.md"
+    ],
+    "S05": [
+      "task-2-round6-review.md",
+      "task-3-review-round1.md"
+    ],
+    "S06": [
+      "task-2-round7-report.md",
+      "task-2-round7-review.md"
+    ],
+    "S07": [
+      "task-2-close-conjunction-report.md",
+      "task-2-close-conjunction-review.md"
+    ],
+    "S08": [
+      "task-3-report.md"
+    ],
+    "S09": [
+      "task-3-review-round1.md",
+      "task-3-round1-review.md",
+      "task-3-round2-review.md"
+    ],
+    "S10": [
+      "task-3-round3-review.md"
+    ],
+    "S11": [
+      "task-3-round4-review.md"
+    ],
+    "S12": [
+      "task-4-report.md",
+      "task-4-review.md",
+      "task-4-rereview-round1.md",
+      "task-4-rereview-round2.md"
+    ],
+    "S13": [
+      "task-5-report.md"
+    ],
+    "S14": [
+      "task-5-round3-report.md",
+      "task-5-round3-review.md"
+    ],
+    "S15": [
+      "task-5-round4-report.md",
+      "task-5-round4-review.md",
+      "task-5-disposal-policy-ruling.md"
+    ],
+    "S16": [
+      "task-5-round5-report.md",
+      "task-5-round5-review.md",
+      "task-5-strict-path-diagnostic.md"
+    ],
+    "S17": [
+      "task-5-precheckpoint-recovery-assessment.md"
+    ],
+    "S18": [
+      "task-5-native-after-round4-summary.md",
+      "task-5-final-review-preparation.md"
+    ]
+  },
+  "documents": [
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-cap-review.md",
+      "sha256": "f810e4f349aa922cc923f55890b834880cf69e347af60027b89c91d296598b16",
+      "sourceKeys": [
+        "S03"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-report.md",
+      "sha256": "22115d2c529625a3023d9f1a1476e7ffb1ca297dff7adf862231890bd79aa8ff",
+      "sourceKeys": [
+        "S01"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-round4-report.md",
+      "sha256": "d12d4a676934c5ef37d8be3cf8c42d5f15560adf1d22495dc6140749da5c5d59",
+      "sourceKeys": [
+        "S02"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-round4-review.md",
+      "sha256": "3eb5959fe52a2d2c4b3262f390bfff05c76b15a0effc9fd57275064d9d3cadfc",
+      "sourceKeys": [
+        "S02"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-round5-report.md",
+      "sha256": "c19d1eb1f220e8ebaa19b67c266f79be102f902f087cee04b7b47691b7c5f63c",
+      "sourceKeys": [
+        "S03"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-round5-review.md",
+      "sha256": "2a9eb671845f0cccfef73bc6ea64ea63500960578938316d10bf74a449e84425",
+      "sourceKeys": [
+        "S03"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-close-conjunction-report.md",
+      "sha256": "090e756ba77f579fecd90c0501b34b756ecfd81498940caa5b60179243d7fb1a",
+      "sourceKeys": [
+        "S07"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-close-conjunction-review.md",
+      "sha256": "f2a40a00bc60a7551ea4c5eb7e3e1b48e690cc13670e525c00ac5a89f1818dfb",
+      "sourceKeys": [
+        "S07"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-report.md",
+      "sha256": "2d35472d3fb1716494c8c0dfe2b6a7cf7c72436b3bc81a90714b1272751780a6",
+      "sourceKeys": [
+        "S04"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round3.md",
+      "sha256": "0f0aa89fdbe0f34d70a9ed834f83c4f11a4ad130ee9802ce4c02e10ff77c8d01",
+      "sourceKeys": [
+        "S04"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round4.md",
+      "sha256": "5006e7946d9a9cbd4156427afdd3af9535d2f110ad77c637a1dd83e646ff227b",
+      "sourceKeys": [
+        "S04"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round5.md",
+      "sha256": "ca378a045dd1e016d274f27dc2e92ff4d0012a7ae15b722c224947e5eed9fcd8",
+      "sourceKeys": [
+        "S04"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-round6-review.md",
+      "sha256": "c1372a2fa1b0646fad756004b3b5e40cf0d6b5690546624abe994adf3764b88a",
+      "sourceKeys": [
+        "S05"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-round7-report.md",
+      "sha256": "ecb9fd91d80abfd1b392802bc7e531eda6d3a426c9af3b07f18bd8285449dd1a",
+      "sourceKeys": [
+        "S06"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-round7-review.md",
+      "sha256": "abead0bbc31ff2564bed10b99e225226cc2bbc475c2cf17041b7b11f0544351b",
+      "sourceKeys": [
+        "S06"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-report.md",
+      "sha256": "5296ee4ccf5c3524f4c69d51bdf653e68f478bcecd9f3ddede11579fbd718842",
+      "sourceKeys": [
+        "S08"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-review-round1.md",
+      "sha256": "6d28c3cededcb523ba4aac0bb5d2ca8ccae42f5a4f259c9e1f6158e900855062",
+      "sourceKeys": [
+        "S05",
+        "S09"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round1-review.md",
+      "sha256": "9f0c674fca6161a7237e9ec6eef5e7c819643d0f9797eed143227b63769684c1",
+      "sourceKeys": [
+        "S09"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round2-review.md",
+      "sha256": "bbe8278702d38825871a75c51d3a919139728ba77181f3d796b2f58284050fea",
+      "sourceKeys": [
+        "S09"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round3-review.md",
+      "sha256": "718da7e74dd07dc558e7ac5f0cf47dc065d7fdce015bf4918f85cc94bae8b357",
+      "sourceKeys": [
+        "S10"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round4-review.md",
+      "sha256": "32521c00ded31f51f7ef402c0b656523f9402adc7b3aaa6432ab6b95bf97f7bc",
+      "sourceKeys": [
+        "S11"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-report.md",
+      "sha256": "fb606955f6d509e030078a9cc2d37b1b78eddb8d776be035314dfda2c1cbf1b2",
+      "sourceKeys": [
+        "S12"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-rereview-round1.md",
+      "sha256": "0a85eb989e050ee71302b5ddfc9b444e4470515ae178b5a128e2891a185401ae",
+      "sourceKeys": [
+        "S12"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-rereview-round2.md",
+      "sha256": "45b9e9773cdd017bcd1ee10c3cee33a2ab812ae0f70da7039c3d8560bb3a9eda",
+      "sourceKeys": [
+        "S12"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-review.md",
+      "sha256": "6fbce7c926781e7b52a1f34e8e2960ba896ae8cf182044ddc3da95501b95d490",
+      "sourceKeys": [
+        "S12"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-disposal-policy-ruling.md",
+      "sha256": "a2b51e9059b59a2c65ba4c761f709e17c2e76d3bb3452369dc39cfabbe0f4001",
+      "sourceKeys": [
+        "S15"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-final-review-preparation.md",
+      "sha256": "a169d24291fb17e0eab306888027f47d9ee6f1bf81d77dc1fd859df943e2061a",
+      "sourceKeys": [
+        "S18"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-native-after-round4-summary.md",
+      "sha256": "b6cf588bf73540068dad0ee9a93bccf7f77e9c1908833382cb646d615a5fd2b4",
+      "sourceKeys": [
+        "S18"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-precheckpoint-recovery-assessment.md",
+      "sha256": "d585a64aea110588434626db03d8566e74fe8668b8e0acef094cde986f135e6d",
+      "sourceKeys": [
+        "S17"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-report.md",
+      "sha256": "2d18ef0e3bc42e54d0dd3149445255f6e41fc7c22aacc25bea75650866f59dd4",
+      "sourceKeys": [
+        "S13"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round3-report.md",
+      "sha256": "ead1f8728a12b33c766032387d223b9c891526a625dacbd868c07d45142d0a23",
+      "sourceKeys": [
+        "S14"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round3-review.md",
+      "sha256": "db260d5a5bba490782c100b583e9394488a639d656650ee2e1e8c9463d24c21a",
+      "sourceKeys": [
+        "S14"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round4-report.md",
+      "sha256": "53843394e524d7d7f4f9d58639f2fc5b3671927b4f3a17d91d8f0077b16ce0c9",
+      "sourceKeys": [
+        "S15"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round4-review.md",
+      "sha256": "71730e63b2f7f7006ace837974b3f5e7cc01dce28999b92217cc34a8c33eea8f",
+      "sourceKeys": [
+        "S15"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round5-report.md",
+      "sha256": "c5814dfd6b1c4f5c902a43bc133ee4a9052644283baacc74bdc242ee2a02f6dd",
+      "sourceKeys": [
+        "S16"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round5-review.md",
+      "sha256": "156129d4541d2ba41f57f37e79c8ebcfdd846a571a7516e86a5b043116040eac",
+      "sourceKeys": [
+        "S16"
+      ]
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-strict-path-diagnostic.md",
+      "sha256": "46f2bbda69afb7bfc570101b4ed0f45a98e6404786b0a916f9a9a242310a807a",
+      "sourceKeys": [
+        "S16"
+      ]
+    }
+  ],
+  "reviewCorpus": [
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-cap-review.md",
+      "sha256": "f810e4f349aa922cc923f55890b834880cf69e347af60027b89c91d296598b16",
+      "mappedSourceKeys": [
+        "S03"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-round4-review.md",
+      "sha256": "3eb5959fe52a2d2c4b3262f390bfff05c76b15a0effc9fd57275064d9d3cadfc",
+      "mappedSourceKeys": [
+        "S02"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-1-round5-review.md",
+      "sha256": "2a9eb671845f0cccfef73bc6ea64ea63500960578938316d10bf74a449e84425",
+      "mappedSourceKeys": [
+        "S03"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-close-conjunction-review.md",
+      "sha256": "f2a40a00bc60a7551ea4c5eb7e3e1b48e690cc13670e525c00ac5a89f1818dfb",
+      "mappedSourceKeys": [
+        "S07"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round3.md",
+      "sha256": "0f0aa89fdbe0f34d70a9ed834f83c4f11a4ad130ee9802ce4c02e10ff77c8d01",
+      "mappedSourceKeys": [
+        "S04"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round4.md",
+      "sha256": "5006e7946d9a9cbd4156427afdd3af9535d2f110ad77c637a1dd83e646ff227b",
+      "mappedSourceKeys": [
+        "S04"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-review-round5.md",
+      "sha256": "ca378a045dd1e016d274f27dc2e92ff4d0012a7ae15b722c224947e5eed9fcd8",
+      "mappedSourceKeys": [
+        "S04"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-round6-review.md",
+      "sha256": "c1372a2fa1b0646fad756004b3b5e40cf0d6b5690546624abe994adf3764b88a",
+      "mappedSourceKeys": [
+        "S05"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-2-round7-review.md",
+      "sha256": "abead0bbc31ff2564bed10b99e225226cc2bbc475c2cf17041b7b11f0544351b",
+      "mappedSourceKeys": [
+        "S06"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-review-round1.md",
+      "sha256": "6d28c3cededcb523ba4aac0bb5d2ca8ccae42f5a4f259c9e1f6158e900855062",
+      "mappedSourceKeys": [
+        "S05",
+        "S09"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round1-review.md",
+      "sha256": "9f0c674fca6161a7237e9ec6eef5e7c819643d0f9797eed143227b63769684c1",
+      "mappedSourceKeys": [
+        "S09"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round2-review.md",
+      "sha256": "bbe8278702d38825871a75c51d3a919139728ba77181f3d796b2f58284050fea",
+      "mappedSourceKeys": [
+        "S09"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round3-review.md",
+      "sha256": "718da7e74dd07dc558e7ac5f0cf47dc065d7fdce015bf4918f85cc94bae8b357",
+      "mappedSourceKeys": [
+        "S10"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-3-round4-review.md",
+      "sha256": "32521c00ded31f51f7ef402c0b656523f9402adc7b3aaa6432ab6b95bf97f7bc",
+      "mappedSourceKeys": [
+        "S11"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-rereview-round1.md",
+      "sha256": "0a85eb989e050ee71302b5ddfc9b444e4470515ae178b5a128e2891a185401ae",
+      "mappedSourceKeys": [
+        "S12"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-rereview-round2.md",
+      "sha256": "45b9e9773cdd017bcd1ee10c3cee33a2ab812ae0f70da7039c3d8560bb3a9eda",
+      "mappedSourceKeys": [
+        "S12"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-4-review.md",
+      "sha256": "6fbce7c926781e7b52a1f34e8e2960ba896ae8cf182044ddc3da95501b95d490",
+      "mappedSourceKeys": [
+        "S12"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round3-review.md",
+      "sha256": "db260d5a5bba490782c100b583e9394488a639d656650ee2e1e8c9463d24c21a",
+      "mappedSourceKeys": [
+        "S14"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round4-review.md",
+      "sha256": "71730e63b2f7f7006ace837974b3f5e7cc01dce28999b92217cc34a8c33eea8f",
+      "mappedSourceKeys": [
+        "S15"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    },
+    {
+      "path": ".superpowers/sdd/2026-09-05-runner-v2-cleanup-coordination/task-5-round5-review.md",
+      "sha256": "156129d4541d2ba41f57f37e79c8ebcfdd846a571a7516e86a5b043116040eac",
+      "mappedSourceKeys": [
+        "S16"
+      ],
+      "findingLevelReconciliation": "reconciled-in-final-302-row-predicate-ledger"
+    }
+  ],
+  "cases": [
+    {
+      "id": "A01",
+      "group": "A",
+      "publicClause": "A1",
+      "sourceKeys": [
+        "S01"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a01",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A02",
+      "group": "A",
+      "publicClause": "A1",
+      "sourceKeys": [
+        "S01"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a02",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A03",
+      "group": "A",
+      "publicClause": "A1",
+      "sourceKeys": [
+        "S01"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a03",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A04",
+      "group": "A",
+      "publicClause": "A1–A2",
+      "sourceKeys": [
+        "S01"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a04",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A05",
+      "group": "A",
+      "publicClause": "A2",
+      "sourceKeys": [
+        "S01"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a05",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A06",
+      "group": "A",
+      "publicClause": "A2",
+      "sourceKeys": [
+        "S01"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a06",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A07",
+      "group": "A",
+      "publicClause": "A2",
+      "sourceKeys": [
+        "S01",
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a07",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A08",
+      "group": "A",
+      "publicClause": "A3",
+      "sourceKeys": [
+        "S01"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a08",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A09",
+      "group": "A",
+      "publicClause": "A3",
+      "sourceKeys": [
+        "S02"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a09",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A10",
+      "group": "A",
+      "publicClause": "A3",
+      "sourceKeys": [
+        "S02"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a10",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A11",
+      "group": "A",
+      "publicClause": "A4",
+      "sourceKeys": [
+        "S02",
+        "S03"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a11",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A12",
+      "group": "A",
+      "publicClause": "A4",
+      "sourceKeys": [
+        "S03"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a12",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A13",
+      "group": "A",
+      "publicClause": "A4",
+      "sourceKeys": [
+        "S03"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a13",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A14",
+      "group": "A",
+      "publicClause": "A2–A3",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a14",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "A15",
+      "group": "A",
+      "publicClause": "A1–A3",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#a15",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B01",
+      "group": "B",
+      "publicClause": "B1",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b01",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B02",
+      "group": "B",
+      "publicClause": "B2",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b02",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B03",
+      "group": "B",
+      "publicClause": "B2",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b03",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B04",
+      "group": "B",
+      "publicClause": "B3",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b04",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B05",
+      "group": "B",
+      "publicClause": "B3",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b05",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B06",
+      "group": "B",
+      "publicClause": "B3",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b06",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B07",
+      "group": "B",
+      "publicClause": "B2–B3",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b07",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B08",
+      "group": "B",
+      "publicClause": "B2",
+      "sourceKeys": [
+        "S04"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b08",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B09",
+      "group": "B",
+      "publicClause": "B2",
+      "sourceKeys": [
+        "S04",
+        "S07"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b09",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B10",
+      "group": "B",
+      "publicClause": "B4",
+      "sourceKeys": [
+        "S05"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b10",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B11",
+      "group": "B",
+      "publicClause": "B4",
+      "sourceKeys": [
+        "S06"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b11",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B12",
+      "group": "B",
+      "publicClause": "B4",
+      "sourceKeys": [
+        "S04",
+        "S05"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b12",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B13",
+      "group": "B",
+      "publicClause": "B5",
+      "sourceKeys": [
+        "S07"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b13",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B14",
+      "group": "B",
+      "publicClause": "B1–B5",
+      "sourceKeys": [
+        "S07"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b14",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B15",
+      "group": "B",
+      "publicClause": "B1–B5",
+      "sourceKeys": [
+        "S07"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b15",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B16",
+      "group": "B",
+      "publicClause": "B5",
+      "sourceKeys": [
+        "S07"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b16",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "B17",
+      "group": "B",
+      "publicClause": "B2–B4, C5",
+      "sourceKeys": [
+        "S17"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#b17",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C01",
+      "group": "C",
+      "publicClause": "C1–C2",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c01",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C02",
+      "group": "C",
+      "publicClause": "C2",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c02",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C03",
+      "group": "C",
+      "publicClause": "C1–C2",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c03",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C04",
+      "group": "C",
+      "publicClause": "C1–C2",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c04",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C05",
+      "group": "C",
+      "publicClause": "C2",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c05",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C06",
+      "group": "C",
+      "publicClause": "C1",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c06",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C07",
+      "group": "C",
+      "publicClause": "C1",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c07",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C08",
+      "group": "C",
+      "publicClause": "C3",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c08",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C09",
+      "group": "C",
+      "publicClause": "C2",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c09",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C10",
+      "group": "C",
+      "publicClause": "C2",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c10",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C11",
+      "group": "C",
+      "publicClause": "C2",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c11",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C12",
+      "group": "C",
+      "publicClause": "C2–C4",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c12",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C13",
+      "group": "C",
+      "publicClause": "C4",
+      "sourceKeys": [
+        "S08",
+        "S11"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c13",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C14",
+      "group": "C",
+      "publicClause": "C4",
+      "sourceKeys": [
+        "S09"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c14",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C15",
+      "group": "C",
+      "publicClause": "C4",
+      "sourceKeys": [
+        "S09"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c15",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C16",
+      "group": "C",
+      "publicClause": "C4",
+      "sourceKeys": [
+        "S08",
+        "S09"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c16",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C17",
+      "group": "C",
+      "publicClause": "C4",
+      "sourceKeys": [
+        "S08"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c17",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C18",
+      "group": "C",
+      "publicClause": "C4, E4",
+      "sourceKeys": [
+        "S10"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c18",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "C19",
+      "group": "C",
+      "publicClause": "C4–C5",
+      "sourceKeys": [
+        "S11"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#c19",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D01",
+      "group": "D",
+      "publicClause": "D1",
+      "sourceKeys": [
+        "S12"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d01",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D02",
+      "group": "D",
+      "publicClause": "D1",
+      "sourceKeys": [
+        "S12"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d02",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D03",
+      "group": "D",
+      "publicClause": "D2",
+      "sourceKeys": [
+        "S12"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d03",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D04",
+      "group": "D",
+      "publicClause": "D2",
+      "sourceKeys": [
+        "S12"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d04",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D05",
+      "group": "D",
+      "publicClause": "D3",
+      "sourceKeys": [
+        "S12"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d05",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D06",
+      "group": "D",
+      "publicClause": "D3",
+      "sourceKeys": [
+        "S12"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d06",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D07",
+      "group": "D",
+      "publicClause": "D5",
+      "sourceKeys": [
+        "S12"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d07",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D08",
+      "group": "D",
+      "publicClause": "D1, D4",
+      "sourceKeys": [
+        "S12"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d08",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "D09",
+      "group": "D",
+      "publicClause": "D3, B3",
+      "sourceKeys": [
+        "S12",
+        "S05"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#d09",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E01",
+      "group": "E",
+      "publicClause": "E1–E2",
+      "sourceKeys": [
+        "S18"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e01",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E02",
+      "group": "E",
+      "publicClause": "B1, E1–E2",
+      "sourceKeys": [
+        "S15",
+        "S18"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e02",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E03",
+      "group": "E",
+      "publicClause": "B1, C3, E1",
+      "sourceKeys": [
+        "S18"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e03",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E04",
+      "group": "E",
+      "publicClause": "B4, D3, E1",
+      "sourceKeys": [
+        "S18"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e04",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E05",
+      "group": "E",
+      "publicClause": "E2",
+      "sourceKeys": [
+        "S13",
+        "S15"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e05",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E06",
+      "group": "E",
+      "publicClause": "E2–E3",
+      "sourceKeys": [
+        "S15"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e06",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E07",
+      "group": "E",
+      "publicClause": "E1–E3",
+      "sourceKeys": [
+        "S15"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e07",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E08",
+      "group": "E",
+      "publicClause": "E3",
+      "sourceKeys": [
+        "S15"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e08",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "E09",
+      "group": "E",
+      "publicClause": "E4",
+      "sourceKeys": [
+        "S16"
+      ],
+      "admission": "admitted",
+      "candidateScored": true,
+      "publicContract": "acceptance-contract.md#e09",
+      "candidateScoringFamily": true
+    },
+    {
+      "id": "H01",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [
+        "S07"
+      ],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    },
+    {
+      "id": "H02",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [
+        "S07",
+        "S15"
+      ],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    },
+    {
+      "id": "H03",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [
+        "S18"
+      ],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    },
+    {
+      "id": "H04",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [
+        "S13",
+        "S15",
+        "S18"
+      ],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    },
+    {
+      "id": "H05",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [
+        "S13",
+        "S14"
+      ],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    },
+    {
+      "id": "H06",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [
+        "S08",
+        "S11",
+        "S13",
+        "S15"
+      ],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    },
+    {
+      "id": "H07",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [
+        "S15",
+        "S18"
+      ],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    },
+    {
+      "id": "H08",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [
+        "S12",
+        "S15",
+        "S16"
+      ],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    },
+    {
+      "id": "H09",
+      "group": "H",
+      "publicClause": null,
+      "sourceKeys": [],
+      "admission": "evaluator-qualified",
+      "candidateScored": false
+    }
+  ],
+  "currentExecutionStatus": "rjs-contract-2.0.1 / rjs-suite-2.0.1: 69 candidate families and 302 mandatory variants are executable and scoring-admitted for the modeled profile; H01-H09 are qualified evaluator-only checks.",
+  "qualification": {
+    "method": "rjs-simplification-audit-1",
+    "status": "accepted",
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e",
+    "acceptanceReview": "benchmarks/recoverable-job-service/private/calibration/final-acceptance-review.md#sha256-1c492c610b96299cf5283323a1f3ffe446c70f817942d6a4eb98ea32d2d1b7a8"
+  }
+}

@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';
+import {createReplayInput} from '../benchmarks/recoverable-job-service/private/replay.mjs';
+import {evaluateBounded} from '../benchmarks/recoverable-job-service/private/runtime.mjs';
+const source=await readFile('benchmarks/recoverable-job-service/private/reference.js','utf8'),input=createReplayInput(),records=[];
+const result=await evaluateBounded(source,{variantIds:['A01/primary'],replayInput:input,onReplayRecord:r=>records.push(r)});
+assert.equal(records.length,1,'exactly one final replay record before normal resolution');
+assert.equal(result.schemaVersion,2);assert.equal(result.inputIdentity.rootCommitment,input.commitment);
+assert.deepEqual(result.inputIdentity.cases,records[0].cases);assert.ok(result.inputIdentity.cases[0].fixtureAllocations>0);
+assert.ok(!JSON.stringify(result).includes(input.root),'private root excluded from public result');
+const second=await evaluateBounded(source,{variantIds:['A01/primary'],replayInput:JSON.parse(JSON.stringify(input))});
+assert.deepEqual(second.inputIdentity,result.inputIdentity,'fresh worker exact actual executed input identity');
+await assert.rejects(()=>evaluateBounded(source,{variantIds:['A01/primary'],replayInput:input,onReplayRecord:()=>{throw Error('private persistence failed');}}),/private persistence failed/);
+console.log('Trusted final callback, fresh-worker execution identity, secret boundary and callback failure propagation passed.');

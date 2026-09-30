@@ -1,0 +1,37 @@
+{
+  "report": {
+    "path": ".superpowers/sdd/2026-09-08-recoverable-job-service-integration/calibration-c09-digest-fix-report.md",
+    "bytes": 5286,
+    "sha256": "263f104beeafaf873302b9b9f8bf520d1756c34097aceee6d84d301534b754b9"
+  },
+  "freeze": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/c09-digest-fix-source-freeze.json",
+    "bytes": 48764,
+    "sha256": "f87d2639adaee741beaef0796e89b81f6b05739265939c5f6227df363b5718eb"
+  },
+  "mapping": {
+    "path": "benchmarks/recoverable-job-service/private/calibration/c09-digest-fix-mapping.json",
+    "bytes": 4348,
+    "sha256": "28bf4822ceca4339cdb75f290d4db827fbe3db64dbc0de3f7b8fc99d50a99ae3"
+  },
+  "variants": {
+    "path": "benchmarks/recoverable-job-service/private/variants.mjs",
+    "bytes": 29011,
+    "sha256": "d9fcbcc03a32b9c6ed1cb9fd46b38c8ebe814d0b5829fccb02ae16cee05c814e"
+  },
+  "identity": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "14b7d5028b6a2bb08b64f21171208c3266e67f3ef0d05b6f83991c8e5db2fcd5"
+  },
+  "accounting": {
+    "redRows": 2,
+    "greenRows": 18,
+    "lawfulPasses": 6,
+    "intendedMaterialRejections": 6,
+    "restoredPasses": 6,
+    "skipped": 0,
+    "directActualPredicateTraces": 6,
+    "maximumBoundedOperations": 281,
+    "maximumBoundedPromiseJobs": 1580
+  }
+}

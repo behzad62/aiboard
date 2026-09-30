@@ -1,0 +1,5 @@
+import {readFile,writeFile} from 'node:fs/promises';
+let p='benchmarks/recoverable-job-service/private/broker.mjs',s=await readFile(p,'utf8');s=s.replace("mkdtemp(join(tmpdir(),'rjs-'))","mkdtemp(join(this.baseDirectory??tmpdir(),'rjs-'))");await writeFile(p,s);
+p='benchmarks/recoverable-job-service/private/scenarios.mjs';s=await readFile(p,'utf8');s=s.replace('this.options=options;','this.b.baseDirectory=options.rootDirectory;this.options=options;');await writeFile(p,s);
+p='benchmarks/recoverable-job-service/private/evaluator.mjs';s=await readFile(p,'utf8');s=s.replace('for(const id of ids){const s=',"for(const id of ids){options.onFamilyStart?.(id);const s=");await writeFile(p,s);
+p='benchmarks/recoverable-job-service/private/runtime.mjs';s=await readFile(p,'utf8');s=s.replace("workerData:{source,options:{...options,rootDirectory:root}}","workerData:{source,options:{...Object.fromEntries(Object.entries(options).filter(([,v])=>typeof v!=='function')),rootDirectory:root}}");await writeFile(p,s);

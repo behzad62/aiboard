@@ -1,0 +1,898 @@
+{
+  "control": "forget-verified-facts",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "B07"
+    ],
+    "variantIds": [
+      "B07/fact-quiescent",
+      "B07/fact-output",
+      "B07/fact-evidence",
+      "B07/fact-channel",
+      "B07/fact-process",
+      "B07/fact-isolation"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "f76d1c45b490470e3aaf7ce5659cec69f47a8c28e6650d84487ff6092ac993f6",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "B07/fact-quiescent",
+        "B07/fact-output",
+        "B07/fact-evidence",
+        "B07/fact-channel",
+        "B07/fact-process",
+        "B07/fact-isolation"
+      ],
+      "scheduleHash": "3d5a6f5fce8511ca1087d932b94befc1c4959f2538dd8445714bf0c6ca7660b9",
+      "configurationHash": "95ab618a953ab1ad8200c811ce90f794456fa63c5ed823a0254bb3113042f2cc"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "B07",
+        "group": "B",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/B07/95ab618a953ab1ad8200c811ce90f794456fa63c5ed823a0254bb3113042f2cc",
+        "variants": [
+          {
+            "id": "B07/fact-quiescent",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 298,
+            "promiseJobs": 1373
+          },
+          {
+            "id": "B07/fact-output",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 324,
+            "promiseJobs": 1494
+          },
+          {
+            "id": "B07/fact-evidence",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 335,
+            "promiseJobs": 1547
+          },
+          {
+            "id": "B07/fact-channel",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 357,
+            "promiseJobs": 1655
+          },
+          {
+            "id": "B07/fact-process",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 379,
+            "promiseJobs": 1763
+          },
+          {
+            "id": "B07/fact-isolation",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "safetyFailures": [],
+            "operations": 400,
+            "promiseJobs": 1866
+          }
+        ],
+        "assertions": [
+          {
+            "label": "B07/fact-quiescent: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-quiescent: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-quiescent: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-quiescent: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-quiescent: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-quiescent: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-quiescent: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-quiescent: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "B07/fact-quiescent: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-output: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-output: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-output: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-output: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-output: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-output: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-output: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-output: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "B07/fact-output: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-evidence: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-evidence: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-evidence: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-evidence: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-evidence: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-evidence: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "B07/fact-evidence: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-channel: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-channel: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-channel: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-channel: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-channel: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-channel: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "B07/fact-channel: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-process: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-process: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-process: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-process: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-process: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-process: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "B07/fact-process: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-isolation: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-isolation: start must progress",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-isolation: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-isolation: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-isolation: public result schema",
+            "passed": true
+          },
+          {
+            "label": "B07/fact-isolation: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+            "passed": false
+          },
+          {
+            "label": "B07/fact-isolation: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "B07/fact-quiescent: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}; B07/fact-output: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}; B07/fact-evidence: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}; B07/fact-channel: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}; B07/fact-process: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}; B07/fact-isolation: stop must progress: {\"kind\":\"blocked\",\"blockers\":[{\"code\":\"cleanup\"}],\"failures\":[]}",
+        "operations": 2093,
+        "promiseJobs": 9698
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "B07",
+      "variantId": "B07/fact-quiescent",
+      "execution": {
+        "variant": {
+          "id": "B07/fact-quiescent",
+          "family": "B07",
+          "kind": "fact-crash",
+          "args": {
+            "fact": "quiescent"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2231,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/fact-output",
+      "execution": {
+        "variant": {
+          "id": "B07/fact-output",
+          "family": "B07",
+          "kind": "fact-crash",
+          "args": {
+            "fact": "output"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2773,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/fact-evidence",
+      "execution": {
+        "variant": {
+          "id": "B07/fact-evidence",
+          "family": "B07",
+          "kind": "fact-crash",
+          "args": {
+            "fact": "evidence"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2364,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/fact-channel",
+      "execution": {
+        "variant": {
+          "id": "B07/fact-channel",
+          "family": "B07",
+          "kind": "fact-crash",
+          "args": {
+            "fact": "channel"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2229,
+          "delay": 1
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/fact-process",
+      "execution": {
+        "variant": {
+          "id": "B07/fact-process",
+          "family": "B07",
+          "kind": "fact-crash",
+          "args": {
+            "fact": "process"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 2437,
+          "delay": 3
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "B07",
+      "variantId": "B07/fact-isolation",
+      "execution": {
+        "variant": {
+          "id": "B07/fact-isolation",
+          "family": "B07",
+          "kind": "fact-crash",
+          "args": {
+            "fact": "isolation"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/B07/qualification-v1",
+        "schedule": {
+          "partition": 3481,
+          "delay": 2
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

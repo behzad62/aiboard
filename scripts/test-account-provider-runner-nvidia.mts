@@ -72,7 +72,7 @@ function parseNormalizedSse(text: string): Array<Record<string, unknown>> {
   return events;
 }
 
-const nativeTools: NativeToolDefinition[] = [
+const functionTools: NativeToolDefinition[] = [
   {
     name: "echo_tool",
     description: "Echo a short message.",
@@ -109,6 +109,16 @@ fs.writeFileSync(authFile, "{}");
 const fakeBackend = http.createServer(async (req, res) => {
   capturedPath = req.url ?? "";
   capturedHeaders = req.headers;
+  if (req.method === "GET" && capturedPath === "/v1/models") {
+    capturedBody = {};
+    capturedRequests.push({ path: capturedPath, headers: capturedHeaders, body: capturedBody });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ data: [
+      { id: "z-ai/glm-5.2", object: "model" },
+      { id: "minimaxai/minimax-m3", object: "model" },
+    ] }));
+    return;
+  }
   const raw = await readRequestBody(req);
   capturedBody = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
   capturedRequests.push({
@@ -273,6 +283,26 @@ async function stopRunner(): Promise<void> {
 try {
   await waitForRunner();
 
+  const modelsResponse = await fetch(`${baseUrl}/providers/nvidia/models`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-runner-token": token,
+    },
+    body: JSON.stringify({ apiKey: "fake-nvidia-api-key" }),
+  });
+  const modelsPayload = await modelsResponse.json() as {
+    data?: Array<{ id?: string }>;
+  };
+  check(
+    "NVIDIA runner lists live models through the authenticated proxy",
+    modelsResponse.ok &&
+      capturedPath === "/v1/models" &&
+      capturedHeaders?.authorization === "Bearer fake-nvidia-api-key" &&
+      modelsPayload.data?.some((model) => model.id === "z-ai/glm-5.2") === true,
+    { status: modelsResponse.status, capturedPath, modelsPayload }
+  );
+
   const response = await fetch(`${baseUrl}/providers/nvidia/chat`, {
     method: "POST",
     headers: {
@@ -298,7 +328,7 @@ try {
           properties: { ok: { type: "boolean" } },
         },
       },
-      nativeTools,
+      functionTools,
       attachments: [],
       stream: true,
     }),
@@ -395,7 +425,7 @@ try {
           properties: { ok: { type: "boolean" } },
         },
       },
-      nativeTools,
+      functionTools,
       attachments: [],
       stream: true,
     }),

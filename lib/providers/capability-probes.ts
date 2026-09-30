@@ -1,4 +1,5 @@
-import type { ChatMessage, JsonSchemaObject, ModelInfo, StructuredOutputFormat } from "./base";
+import type { CertifiedProviderErrorMetadata, ChatMessage, JsonSchemaObject, ModelInfo, StructuredOutputFormat } from "./base";
+import type { CapabilityEvidence, ProviderTransportId } from "./tool-capabilities";
 import type { AttachmentPayload } from "@/lib/attachments/types";
 
 export type CapabilityProbeId =
@@ -19,8 +20,40 @@ export interface CapabilityProbeResult {
   status: CapabilityProbeStatus;
   detail: string;
   preview?: string;
+  failureKind?: "protocol_unsupported" | "transient" | "behavior";
+  errorMetadata?: CertifiedProviderErrorMetadata;
 }
 
+
+export function capabilityEvidenceFromToolProbe(input: {
+  providerId: string;
+  modelId: string;
+  transport: ProviderTransportId;
+  testedAt: string;
+  expiresAt: string;
+  result: CapabilityProbeResult;
+}): CapabilityEvidence | undefined {
+  if (input.result.id !== "toolCalls") return undefined;
+  const support =
+    input.result.status === "pass"
+      ? "supported"
+      : input.result.failureKind === "protocol_unsupported"
+        ? "unsupported"
+        : undefined;
+  if (!support) return undefined;
+  return {
+    providerId: input.providerId,
+    modelId: input.modelId,
+    capabilityId: "function_calling",
+    transport: input.transport,
+    support,
+    execution: "client",
+    source: "probed",
+    verifiedAt: input.testedAt,
+    expiresAt: input.expiresAt,
+    detail: input.result.detail,
+  };
+}
 export interface ModelCapabilityProbeProfile {
   fullModelId: string;
   providerId: string;
@@ -170,22 +203,7 @@ export const DOCUMENT_PROBE_MESSAGES: ChatMessage[] = [
 
 export const TOOL_CALL_PROBE_MESSAGES: ChatMessage[] = [
   { role: "system", content: TEST_SYSTEM },
-  {
-    role: "user",
-    content:
-      'Return only JSON with fields action="use_helper", helper="sum", and input containing a=2 and b=3.',
-  },
-];
-
-export const toolResultProbeMessages = (helperJson: string): ChatMessage[] => [
-  { role: "system", content: TEST_SYSTEM },
-  {
-    role: "user",
-    content:
-      'You requested this safe test helper: ' +
-      helperJson +
-      '\nThe helper returned 5. Reply with exactly: AIBOARD_TOOL_OK=5',
-  },
+  { role: "user", content: "Call the aiboard_sum function with a=2 and b=3. Do not answer directly." },
 ];
 
 export const CONCURRENCY_A_MESSAGES: ChatMessage[] = [

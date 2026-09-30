@@ -1,0 +1,62 @@
+Aborted(Assertion failed: list_empty(&rt->gc_obj_list), at: ../../vendor/quickjs/quickjs.c,2036,JS_FreeRuntime)
+B14 B14/primary: Observed public behavior and durable consequences.
+B15 B15/primary: Not executed; B15/missing: Not executed; B15/foreign: Not executed; B15/unfinished: Not executed
+B16 B16/primary: Not executed
+B17 B17/primary: Not executed; B17/missing-created: Not executed; B17/sequence-unsafe: Not executed; B17/evidence-digest: Not executed
+C01 C01/primary: Not executed
+C02 C02/primary: Not executed
+C03 C03/primary: Not executed; C03/artifact-missing: Not executed; C03/artifact-foreign: Not executed; C03/evidence-gap: Not executed
+C04 C04/primary: Not executed
+C05 C05/primary: Not executed; C05/version: Not executed; C05/negative-position: Not executed; C05/loss-invalid: Not executed; C05/frame-extra: Not executed; C05/receipt-extra: Not executed; C05/payload-extra: Not executed; C05/future-created: Not executed; C05/final-mismatch: Not executed; C05/retired-prefix: Not executed; C05/consumed-total: Not executed; C05/allowed-extension: Not executed
+C06 C06/primary: Not executed; C06/authority-loss-after-evidence-write: Not executed
+C07 C07/primary: Not executed; C07/protocol-corruption: Not executed; C07/checkpoint-cas: Not executed
+C08 C08/primary: Not executed; C08/accepted: Not executed; C08/consuming-not-applied: Not executed; C08/consuming-unknown: Not executed; C08/acked: Not executed
+C09 C09/primary: Not executed; C09/restore-store.commit.before: Not executed; C09/restore-store.commit.after: Not executed
+C10 C10/primary: Not executed; C10/restore-stale-head: Not executed
+C11 C11/primary: Not executed
+C12 C12/primary: Not executed; C12/handoff-self: Not executed; C12/handoff-cycle: Not executed; C12/handoff-destination-reused: Not executed; C12/handoff-final-source: Not executed; C12/handoff-foreign: Not executed; C12/handoff-missing: Not executed
+C13 C13/primary: Not executed; C13/final-mismatch: Not executed; C13/evidence-digest: Not executed
+C14 C14/primary: Not executed
+C15 C15/primary: Not executed; C15/unfinalized: Not executed; C15/pending-consumption: Not executed; C15/foreign-evidence: Not executed
+C16 C16/primary: Not executed; C16/terminal-transfer-store.commit.before: Not executed; C16/terminal-transfer-store.commit.after: Not executed
+C17 C17/primary: Not executed
+C18 C18/primary: Not executed; C18/root-birth: Not executed; C18/root-path: Not executed; C18/root-retained: Not executed; C18/root-foreignEntries: Not executed
+C19 C19/primary: Not executed; C19/final-reuse-epoch: Not executed; C19/final-reuse-deadline: Not executed; C19/final-reuse-head: Not executed
+D01 D01/primary: Not executed
+D02 D02/primary: Not executed; D02/anchor-missing: Not executed; D02/anchor-birth: Not executed
+D03 D03/primary: Not executed; D03/release-epoch: Not executed; D03/release-witness: Not executed; D03/release-replaced: Not executed
+D04 D04/primary: Not executed; D04/natural-nonzero-1: Not executed; D04/natural-nonzero-137: Not executed
+D05 D05/primary: Not executed; D05/delayed-stdout: Not executed; D05/delayed-stderr: Not executed
+D06 D06/primary: Not executed
+D07 D07/primary: Not executed
+D08 D08/primary: Not executed; D08/legacy-evidence-final-immutable: Not executed
+D09 D09/primary: Not executed
+E01 E01/primary: Not executed
+E02 E02/primary: Not executed
+E03 E03/primary: Not executed; E03/crash-consumer.consume.after: Not executed; E03/crash-driver.publishAck.after: Not executed
+E04 E04/primary: Not executed
+E05 E05/primary: Not executed
+E06 E06/primary: Not executed; E06/falsy-driver.acquire.before-0: Not executed; E06/falsy-driver.acquire.before-false: Not executed; E06/falsy-driver.acquire.before-null: Not executed; E06/falsy-driver.acquire.before-undefined: Not executed; E06/falsy-driver.inspect.before-0: Not executed; E06/falsy-driver.inspect.before-false: Not executed; E06/falsy-driver.inspect.before-null: Not executed; E06/falsy-driver.inspect.before-undefined: Not executed; E06/falsy-driver.detach.before-0: Not executed; E06/falsy-driver.detach.before-false: Not executed; E06/falsy-driver.detach.before-null: Not executed; E06/falsy-driver.detach.before-undefined: Not executed; E06/falsy-driver.release.after-0: Not executed; E06/falsy-driver.release.after-false: Not executed; E06/falsy-driver.release.after-null: Not executed; E06/falsy-driver.release.after-undefined: Not executed; E06/falsy-artifact.read.before-0: Not executed; E06/falsy-artifact.read.before-false: Not executed; E06/falsy-artifact.read.before-null: Not executed; E06/falsy-artifact.read.before-undefined: Not executed
+E07 E07/primary: Not executed; E07/expired-replay: Not executed; E07/changed-arguments: Not executed; E07/cross-type: Not executed; E07/service-closed: Not executed; E07/failed-close: Not executed; E07/obligations: Not executed; E07/callback-failure: Not executed
+E08 E08/primary: Not executed
+E09 E09/primary: Not executed
+node:internal/modules/run_main:107
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: {"kind":"invalid_harness","message":"RuntimeError: Aborted(Assertion failed: list_empty(&rt->gc_obj_list), at: ../../vendor/quickjs/quickjs.c,2036,JS_FreeRuntime). Build with -sASSERTIONS for more info.\n    at N (D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\node_modules\\@jitl\\quickjs-wasmfile-release-sync\\dist\\emscripten-module.mjs:6:61)\n    at b (D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\node_modules\\@jitl\\quickjs-wasmfile-release-sync\\dist\\emscripten-module.mjs:14:33)\n    at wasm://wasm/001eb57a:wasm-function[656]:0x3bd88\n    at wasm://wasm/001eb57a:wasm-function[1017]:0x54cec\n    at _Lifetime.disposer (D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\node_modules\\quickjs-emscripten-core\\src\\module.ts:349:16)\n    at _Lifetime.dispose (D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\node_modules\\quickjs-emscripten-core\\src\\lifetime.ts:177:12)\n    at _Scope.dispose (D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\node_modules\\quickjs-emscripten-core\\src\\lifetime.ts:341:18)\n    at QuickJSRuntime.dispose (D:\\repos\\ai-discussion-board\\.worktrees\\runner-v2-robust-build\\node_modules\\quickjs-emscripten-core\\src\\runtime.ts:133:23)\n    at Guest.dispose (file:///D:/repos/ai-discussion-board/.worktrees/runner-v2-robust-build/benchmarks/recoverable-job-service/private/guest.mjs:21:239)\n    at Scenario.dispose (file:///D:/repos/ai-discussion-board/.worktrees/runner-v2-robust-build/benchmarks/recoverable-job-service/private/scenarios.mjs:27:67)","familyId":"B14"}
++ actual - expected
+
++ 'invalid_harness'
+- 'valid'
+
+    at <anonymous> (D:\repos\ai-discussion-board\.worktrees\runner-v2-robust-build\scripts\test-recoverable-job-service.mts:21:8) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'invalid_harness',
+  expected: 'valid',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.18.0

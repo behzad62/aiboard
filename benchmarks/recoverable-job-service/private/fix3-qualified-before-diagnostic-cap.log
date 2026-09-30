@@ -1,0 +1,3 @@
+Reference: all 69 families / 227 mandatory variants pass, including 1025-record B14; 56453 ms.
+Material controls: all 227 mandatory variants rejected at their declared intended assertion.
+Diagnostics, repeatability, submission boundary and generated assets: pass. Independent full correct-control gate remains open.

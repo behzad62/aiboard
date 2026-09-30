@@ -1,0 +1,16 @@
+import {readFile,writeFile} from 'node:fs/promises';
+let path='benchmarks/recoverable-job-service/private/broker.mjs',b=await readFile(path,'utf8');
+b=b.replace('message:262144','message:8388608').replace('this.revision=0;','this.revision=0;this.storageBytes=0;');
+const old="let total=0;const copy=new Map(this.docs);for(const w of args.writes)copy.set(w.key,{revision:this.revision+1,value:w.value});for(const [k,v]of copy)total+=Buffer.byteLength(k+JSON.stringify(v));if(total>LIMITS.storage)return {kind:'not-applied',code:'capacity'};";
+const next="let total=this.storageBytes;for(const w of args.writes){const prev=this.docs.get(w.key);if(prev)total-=Buffer.byteLength(w.key+JSON.stringify(prev));total+=Buffer.byteLength(w.key+JSON.stringify({revision:this.revision+1,value:w.value}));}if(total>LIMITS.storage)return {kind:'not-applied',code:'capacity'};this.storageBytes=total;";
+if(!b.includes(old))throw Error('storage pattern');b=b.replace(old,next);await writeFile(path,b);
+path='benchmarks/recoverable-job-service/private/reference.js';let r=await readFile(path,'utf8');
+const anchor="  await guard(op);j=await update(jk(id),old=>({...old,state:'stopping',ownerId:grant.ownerId,epoch:grant.epoch}),[],op);";
+const fast=`  await guard(op);const setupEffects=await all('effect/'+id+'/');if(Object.keys(j.acquired).length===0&&setupEffects.every(row=>row.value.state==='intent')){const e=await sealEvidence({...await evidenceBlank(j),final:true,revision:1}),facts=Object.fromEntries(['quiescent','output','evidence','channel','process','isolation'].map(n=>[n,[]]));const v=await read(jk(id));j={...v.value,evidence:e,checkpointEverCreated:true,facts,state:'released',ownerId:grant.ownerId,epoch:grant.epoch};await commit([{key:jk(id),expected:v.revision,value:j}],[{type:'checkpoint-created',jobId:id,data:{generation:e.generation}},{type:'evidence-final',jobId:id,manifest:e},...Object.keys(facts).map(fact=>({type:'cleanup-fact',jobId:id,fact,data:{receipts:[]}})),{type:'terminal-transfer',jobId:id,manifest:e},{type:'released',jobId:id}],op);event(id,{type:'terminal',job:view(j)});return view(j);}
+`+anchor;
+if(!r.includes(anchor))throw Error('stop anchor');r=r.replace(anchor,fast);await writeFile(path,r);
+path='benchmarks/recoverable-job-service/private/scenarios.mjs';let x=await readFile(path,'utf8');
+const before="for(let i=0;i<count;i++){s.b.fault('driver.acquire.before','not-applied',{code:'backend'});await s.refuse('start',{batchId:s.batchId,workloadId:s.b.id()});}";
+const after="for(let i=0;i<count;i++){s.b.fault('driver.acquire.before','not-applied',{code:'backend'});const r=await s.refuse('start',{batchId:s.batchId,workloadId:s.b.id()});if(i<count-1)await s.ok('stop',{jobId:r.blockers.find(b=>b.jobId).jobId});}s.b.fault('store.commit.before','not-applied',{code:'backend',predicate:a=>a.audit.some(e=>e.type==='released')});await s.refuse('closeBatch',{batchId:s.batchId});";
+if(!x.includes(before))throw Error('B14 anchor');x=x.replace(before,after);await writeFile(path,x);
+for(const path of ['benchmarks/recoverable-job-service/public/runtime-contract.md','docs/benchmarks/recoverable-job-service/runtime-contract.md']){let d=await readFile(path,'utf8');d=d.replace('1 MiB / 256 KiB','1 MiB / 8 MiB').replace('256-KiB bridge','8-MiB bridge');await writeFile(path,d);}

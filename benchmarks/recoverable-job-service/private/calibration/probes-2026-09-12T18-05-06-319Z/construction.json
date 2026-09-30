@@ -1,0 +1,126 @@
+{
+  "purpose": "Source construction only; no candidate execution",
+  "identity": {
+    "contractHash": "e9bed0d0c9cc2450405c8bf40ed66111cbda7fd23a2407870cad5a143f9b9520",
+    "suiteHash": "1abe56655cf62155bdf8ff870f0dc0ab29bae84b06b4fcccabcb5a1661a5869e"
+  },
+  "classes": [
+    "P01-zero-prefix",
+    "P02-source-freshness",
+    "P03-source-obligations",
+    "P04-setup-attachment",
+    "P05-frame-category",
+    "P06-authority-deadline",
+    "P08-reclamation"
+  ],
+  "sources": {
+    "reference": "6a5b142037c60fb9ab480ccd64f307f556685be755878df0aa1ec39d3ceb1cf0",
+    "algorithm": "0ae59127f4aed2ff97599f6dec2d3d8a5cf2f3d58c2e0f44406a3c3bbcf8edac",
+    "truthful-outcome": "e576d5009012044e1985d4558afd7f8ea590416e99111796804ea7d7502832bf",
+    "representation": "a2e2a6b3d3c1c753edb9cafc78582e7f5bea312017e7df650aa7b680ee218445"
+  },
+  "materialSources": [
+    {
+      "control": "algorithm",
+      "selector": "optimistic-reconciliation",
+      "sha256": "a7fbba1f9a6d4f5992fd2444c2e743f921a405fef101fd9e328b158546061b06",
+      "bytes": 59666
+    },
+    {
+      "control": "algorithm",
+      "selector": "misreport-source-prefix",
+      "sha256": "a8d47979f401362108c0a67fc47f53c9a303d9da3b46f028d72b38042832d4ff",
+      "bytes": 58844
+    },
+    {
+      "control": "algorithm",
+      "selector": "omit-failure-diagnostic",
+      "sha256": "247c51a3e8a27b1977e31597db884202a30683d374871ae55626f036d44ee7a9",
+      "bytes": 58793
+    },
+    {
+      "control": "algorithm",
+      "selector": "discard-reconciliation-receipts",
+      "sha256": "7a76aa8ad6f421eef81422181f40e9c38f3ef6b9b9d1e4d4dc7879f42eac673a",
+      "bytes": 58497
+    },
+    {
+      "control": "algorithm",
+      "selector": "skip-barrier-tail",
+      "sha256": "ba2ffa00eecd625bc8919897afbafbcb365bdb9e295b5a28c052ed34c60012ef",
+      "bytes": 58568
+    },
+    {
+      "control": "algorithm",
+      "selector": "skip-reclamation",
+      "sha256": "68b76642d8d0330252d2340632335993f776cf093148aa9a84a7d481d0fe841c",
+      "bytes": 58577
+    },
+    {
+      "control": "algorithm",
+      "selector": "ignore-removal-failure",
+      "sha256": "3992f8ac71861984e7d0995e9090983e753a09465656c1236adcfe58d2f8233d",
+      "bytes": 58545
+    },
+    {
+      "control": "algorithm",
+      "selector": "delete-retained-evidence",
+      "sha256": "b4dc2dba3cf2910b3c9f4c14350adf7bbc90d8d821a5b5d76ee011b978ca03c3",
+      "bytes": 58565
+    },
+    {
+      "control": "algorithm",
+      "selector": "trust-scratch-handle",
+      "sha256": "1828eabf030a6918baa2afe6a125a81dd68b74105c987473a3f4127f6fe7fbdc",
+      "bytes": 58560
+    },
+    {
+      "control": "truthful-outcome",
+      "selector": "optimistic-reconciliation",
+      "sha256": "622a8d8206ccb1e4a9498f1bf1bbeb759df0bcd3940921004c40727a311235f8",
+      "bytes": 57352
+    },
+    {
+      "control": "representation",
+      "selector": "omit-evidence-write",
+      "sha256": "91527e736debfa8c6b492257816b747bcb915b5bfdafa45f3c924d2a1722863c",
+      "bytes": 56843
+    },
+    {
+      "control": "representation",
+      "selector": "skip-evidence-validation",
+      "sha256": "4cde858c83e0cfe91d63663886d0d111dada03aff53fc927ba4f12db424a7a9e",
+      "bytes": 57420
+    },
+    {
+      "control": "representation",
+      "selector": "ignore-payload-budget",
+      "sha256": "40416798556997f00ce18fe0e2f328de05c59b5190435dd3bab0e856024cfb4e",
+      "bytes": 56928
+    },
+    {
+      "control": "representation",
+      "selector": "unawaited-evidence-write",
+      "sha256": "c111f0d7de372903336f10504c8696ac592cceb9a511a74a8d31ad7af741105c",
+      "bytes": 56978
+    },
+    {
+      "control": "representation",
+      "selector": "delete-retained-evidence",
+      "sha256": "5feeba5274eba0736c4cd910761495462291dc9313453fc20a1fb8917eefd704",
+      "bytes": 57000
+    },
+    {
+      "control": "representation",
+      "selector": "skip-reclamation",
+      "sha256": "4e433333239a39e099bc1a48023ce293d39498b537d968afddc346a80cdb8e56",
+      "bytes": 57012
+    },
+    {
+      "control": "representation",
+      "selector": "ignore-removal-failure",
+      "sha256": "cf6390c2ef6c43b6bf80e94c13add4855afa0e44e39e9a4df70a3f2ac6874af5",
+      "bytes": 56980
+    }
+  ]
+}

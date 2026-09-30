@@ -13,6 +13,7 @@ import type {
   SkillEvidence,
 } from "@/lib/skills/types";
 import type { ModelContextOverrides } from "@/lib/providers/model-context";
+import type { CapabilityEvidence, ProviderTransportId, ToolCapabilityDescriptor } from "@/lib/providers/tool-capabilities";
 import type { BuildPhaseSpec } from "@/lib/orchestrator/build";
 import type { BuildPlanContractValidation } from "@/lib/orchestrator/build-plan-contract";
 import type { BuildEvidenceLedgerEntry } from "@/lib/orchestrator/build-progress";
@@ -278,6 +279,30 @@ export interface BuildCheckpoint {
   skillEvents?: BuildSkillEvent[];
 }
 
+export interface ToolRuntimeRunnerSettings {
+  url: string;
+  token: string;
+  access: "ask" | "project" | "full";
+}
+
+export interface RemoteMcpServerSettings {
+  enabled: boolean;
+  name: string;
+  url: string;
+  authorizationToken?: string;
+}
+
+export interface OpenAIFileSearchSettings {
+  enabled: boolean;
+  vectorStoreIds: string[];
+}
+
+export interface ToolRuntimeSettings {
+  runner?: ToolRuntimeRunnerSettings | null;
+  remoteMcpServer?: RemoteMcpServerSettings | null;
+  openaiFileSearch?: OpenAIFileSearchSettings | null;
+}
+
 export interface UserSettings {
   id: string;
   defaultEffort: EffortLevel;
@@ -293,6 +318,51 @@ export interface UserSettings {
   defaultBuildAlwaysRequireIndependentVerifier?: boolean;
   modelPricingOverrides?: Record<string, ModelPricingOverride>;
   modelContextOverrides?: ModelContextOverrides;
+  /** @deprecated Migrated on hydration into discoveredModelMetadata + providerToolCapabilityEvidence. */
+  discoveredModelCapabilities?: Record<
+    string,
+    {
+      image: boolean;
+      document: boolean;
+      audio: boolean;
+      video: boolean;
+      tools?: boolean;
+      toolChoice?: boolean;
+      structuredOutputs?: boolean;
+      reasoning?: boolean;
+      reasoningEffort?: boolean;
+      temperature?: boolean;
+      maxTokens?: boolean;
+      updatedAt: string;
+      source: "openrouter-models" | "provider-models";
+    }
+  >;
+  /** Discovery metadata only. This never proves runtime tool support. */
+  discoveredModelMetadata?: Record<
+    string,
+    {
+      image: boolean;
+      document: boolean;
+      audio: boolean;
+      video: boolean;
+      apiParameters?: {
+        toolChoice?: boolean;
+        structuredOutputs?: boolean;
+        reasoning?: boolean;
+        reasoningEffort?: boolean;
+        temperature?: boolean;
+        maxTokens?: boolean;
+      };
+      updatedAt: string;
+      source: "openrouter-models" | "provider-models";
+    }
+  >;
+  /** Verified/scoped tool evidence; expired probed entries are ignored at runtime. */
+  providerToolCapabilityEvidence?: CapabilityEvidence[];
+  /** User-facing OpenAI connection choice; internal provider ids remain openai/chatgpt. */
+  openAIConnectionMode?: "api" | "subscription";
+  /** Shared local/provider tool runtime configuration used by readiness and execution preflight. */
+  toolRuntime?: ToolRuntimeSettings;
 }
 
 export interface ProviderKey {
@@ -389,6 +459,10 @@ export interface CustomModel {
     audio: boolean;
     video: boolean;
   };
+  /** Explicit endpoint-owned tool support declarations; absent means conservative/unknown. */
+  toolCapabilityOverrides?: ToolCapabilityDescriptor[];
+  /** OpenAI-compatible transports this endpoint explicitly declares. */
+  compatibleTransports?: ProviderTransportId[];
   lastValidationSucceeded?: boolean | null;
   lastValidatedAt?: string | null;
   createdAt: string;

@@ -48,6 +48,7 @@ export function WorkBenchRunPanel({
         onUrlChange={onRunnerUrlChange}
         onTokenChange={onRunnerTokenChange}
         onCheck={onCheckRunner}
+        workBenchCase={selectedPack?.cases[0]?.case}
       />
       <WorkBenchAttemptDetail selectedPack={selectedPack} />
     </div>

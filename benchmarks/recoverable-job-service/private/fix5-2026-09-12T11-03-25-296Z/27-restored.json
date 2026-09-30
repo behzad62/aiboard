@@ -1,0 +1,715 @@
+{
+  "control": "split-terminal-publication",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C16"
+    ],
+    "variantIds": [
+      "C16/primary",
+      "C16/terminal-transfer-store.commit.before",
+      "C16/terminal-transfer-store.commit.after"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "bbf03d58b5734ace66d4622bc9359f7bc4b0c6bcb727419ebcb0dd82221e886d",
+    "suiteHash": "fb8ea5748c9ef3b343c1a55d7b1e900c453637a4ee1363beff25bf30cb8ec4da",
+    "schemaVersion": 1,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v1+legacy-capsule-v1+modeled-holder-v1",
+    "contractVersion": "rjs-contract-1.0.0",
+    "suiteVersion": "rjs-suite-1.1.0",
+    "candidateHash": "3858ad3aa139b373fe1df3ef960c57b9a95e60347402b052076bf45b2c2ffbdf",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C16/primary",
+        "C16/terminal-transfer-store.commit.before",
+        "C16/terminal-transfer-store.commit.after"
+      ],
+      "scheduleHash": "7dcefafff9426515bf77260952ccfe5bdbd94c9aaa3c1aa18c843c6ae0056c72",
+      "configurationHash": "9448a2a0247dbc64802325d7a8fc47126cd8cf23dc87c106592113757f1c7835"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C16",
+        "group": "C",
+        "passed": true,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-1.1.0/C16/9448a2a0247dbc64802325d7a8fc47126cd8cf23dc87c106592113757f1c7835",
+        "variants": [
+          {
+            "id": "C16/primary",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "poll must progress",
+                "passed": true
+              },
+              {
+                "label": "actual terminal transfer commit reached before crash",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "terminal reference and release publish atomically",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "exact retained bytes after public read",
+                "passed": true
+              },
+              {
+                "label": "exact accepted total",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 533,
+            "promiseJobs": 2429
+          },
+          {
+            "id": "C16/terminal-transfer-store.commit.before",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.before",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "crash keeps completed release effects exact",
+                "passed": true
+              },
+              {
+                "label": "crash keeps immutable final evidence",
+                "passed": true
+              },
+              {
+                "label": "terminal transfer published",
+                "passed": true
+              },
+              {
+                "label": "released published",
+                "passed": true
+              },
+              {
+                "label": "terminal transfer and release are atomic",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 412,
+            "promiseJobs": 1913
+          },
+          {
+            "id": "C16/terminal-transfer-store.commit.after",
+            "passed": true,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "candidate reached lawful store.commit.after",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "crash keeps completed release effects exact",
+                "passed": true
+              },
+              {
+                "label": "crash keeps immutable final evidence",
+                "passed": true
+              },
+              {
+                "label": "terminal transfer published",
+                "passed": true
+              },
+              {
+                "label": "released published",
+                "passed": true
+              },
+              {
+                "label": "terminal transfer and release are atomic",
+                "passed": true
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": true
+              }
+            ],
+            "reason": "Observed public behavior and durable consequences.",
+            "safetyFailures": [],
+            "operations": 412,
+            "promiseJobs": 1913
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C16/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: poll must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: actual terminal transfer commit reached before crash",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: terminal reference and release publish atomically",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: exact retained bytes after public read",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: exact accepted total",
+            "passed": true
+          },
+          {
+            "label": "C16/primary: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: candidate reached lawful store.commit.before",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: released public job",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: crash keeps completed release effects exact",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: crash keeps immutable final evidence",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: terminal transfer published",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: released published",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: terminal transfer and release are atomic",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.before: Trusted causal oracle checked observed trace",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: candidate reached lawful store.commit.after",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: released public job",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: crash keeps completed release effects exact",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: crash keeps immutable final evidence",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: terminal transfer published",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: released published",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: terminal transfer and release are atomic",
+            "passed": true
+          },
+          {
+            "label": "C16/terminal-transfer-store.commit.after: Trusted causal oracle checked observed trace",
+            "passed": true
+          }
+        ],
+        "reason": "All mandatory variants passed.",
+        "operations": 1357,
+        "promiseJobs": 6255
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 1,
+        "total": 1,
+        "coverage": 1
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0.2,
+    "safetyFailures": []
+  },
+  "actualInputs": [
+    {
+      "familyId": "C16",
+      "variantId": "C16/primary",
+      "execution": {
+        "variant": {
+          "id": "C16/primary",
+          "family": "C16",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C16/qualification-v1",
+        "schedule": {
+          "partition": 3416,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C16",
+      "variantId": "C16/terminal-transfer-store.commit.before",
+      "execution": {
+        "variant": {
+          "id": "C16/terminal-transfer-store.commit.before",
+          "family": "C16",
+          "kind": "transfer-crash",
+          "args": {
+            "point": "store.commit.before"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C16/qualification-v1",
+        "schedule": {
+          "partition": 4052,
+          "delay": 4
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    },
+    {
+      "familyId": "C16",
+      "variantId": "C16/terminal-transfer-store.commit.after",
+      "execution": {
+        "variant": {
+          "id": "C16/terminal-transfer-store.commit.after",
+          "family": "C16",
+          "kind": "transfer-crash",
+          "args": {
+            "point": "store.commit.after"
+          }
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C16/qualification-v1",
+        "schedule": {
+          "partition": 2063,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

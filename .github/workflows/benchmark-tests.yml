@@ -7,12 +7,14 @@ on:
 
 jobs:
   benchmark:
-    name: Certified benchmark checks
-    runs-on: ubuntu-latest
+    name: Certified benchmark checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [24.x]
+        os: [ubuntu-latest, windows-latest]
+        node-version: [24.18.0]
 
     steps:
       - name: Checkout
@@ -23,6 +25,10 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
+
+      - name: Acquire pinned Recoverable Job Service Runner source
+        shell: bash
+        run: node scripts/pinned-rjs-runner-source.mjs --acquire --remote origin --expected-repository "$GITHUB_REPOSITORY" --expected-server "$GITHUB_SERVER_URL"
 
       - name: Install dependencies
         run: npm ci
@@ -35,12 +41,13 @@ jobs:
           npm run publish-downloads 2>&1 | tee benchmark-results/publish-downloads.log
           npm run test:certified 2>&1 | tee benchmark-results/test-certified.log
           npm run test:benchmark 2>&1 | tee benchmark-results/test-benchmark.log
+          npm run test:benchmark:recoverable-job-service 2>&1 | tee benchmark-results/test-recoverable-job-service.log
           npm run build 2>&1 | tee benchmark-results/build.log
 
       - name: Upload benchmark logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-results
+          name: benchmark-results-${{ matrix.os }}
           path: benchmark-results/
           if-no-files-found: warn

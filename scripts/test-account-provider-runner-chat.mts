@@ -389,8 +389,8 @@ try {
   const healthResponse = await fetch(`${baseUrl}/health`);
   const health = await healthResponse.json();
   check(
-    "GPT-5.6-capable account-provider runner reports version 19",
-    healthResponse.ok && health.version === 19,
+    "capability-handshake account-provider runner reports version 21",
+    healthResponse.ok && health.version === 21,
     health
   );
 

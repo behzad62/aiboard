@@ -1,0 +1,309 @@
+{
+  "control": "wrong-loss-category",
+  "options": {
+    "mode": "development",
+    "seed": "qualification-v1",
+    "families": [
+      "C07"
+    ],
+    "variantIds": [
+      "C07/primary"
+    ],
+    "wallMs": 60000,
+    "totalWallMs": 600000,
+    "largeCount": 1025
+  },
+  "diagnostics": {
+    "contractHash": "94d377f6c4a04f18a43bb3f55f2dc8249fb6f082eb86aba5032103cbdd693ba6",
+    "suiteHash": "f202716bb7d86bb3f569e6fe9cd6f683c7abec60c10630e67abc2f0c61ad549d",
+    "inputIdentity": {
+      "version": "rjs-input-hmac-sha256-v1",
+      "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+      "cases": [
+        {
+          "version": "rjs-input-hmac-sha256-v1",
+          "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+          "variantId": "C07/primary",
+          "caseCommitment": "8b1ffe36343e4f50a42a8b17570e06c48c5b48dc4b8e0d99559aec2d75bd7b83",
+          "fixtureCommitment": "ca157841166842c3a41d3b50138121bd43269ac33fb4f40fa4061cfd11dcfe74",
+          "fixtureAllocations": 10,
+          "authenticationCommitment": "88fbe0e1176088d0b6c19f1778167c2f5bdee8c16f6653437fd2e61e07bf1d9c"
+        }
+      ]
+    },
+    "schemaVersion": 2,
+    "benchmark": "recoverable-job-service",
+    "profile": "modeled-core-v2+legacy-capsule-v1+modeled-holder-v1+authenticated-source-bootstrap-v1",
+    "contractVersion": "rjs-contract-2.0.0",
+    "suiteVersion": "rjs-suite-2.0.0",
+    "candidateHash": "da87bcc3fb8c8e3064f46dde23613942e4ad4358e0c3f9cd69770b936686da27",
+    "provenance": {
+      "mode": "development",
+      "seed": "qualification-v1",
+      "familyWallMs": 60000,
+      "totalWallMs": 600000,
+      "largeCount": 1025,
+      "operations": 100000,
+      "promiseJobs": 1000000,
+      "variantIds": [
+        "C07/primary"
+      ],
+      "scheduleHash": "e4bd40671cb31330af1cf72beca9684f9859cd3eb53ffd0da128f56ce80dd851",
+      "configurationHash": "c31b868474a8c8962b3b5b85c1217e7db6ddd1c87ac849a64de4c03926795461"
+    },
+    "status": "valid",
+    "resolved": false,
+    "families": [
+      {
+        "id": "C07",
+        "group": "C",
+        "passed": false,
+        "safetyChecked": true,
+        "mandatory": true,
+        "scheduleId": "rjs-suite-2.0.0/C07/c31b868474a8c8962b3b5b85c1217e7db6ddd1c87ac849a64de4c03926795461",
+        "variants": [
+          {
+            "inputIdentity": {
+              "version": "rjs-input-hmac-sha256-v1",
+              "rootCommitment": "41f32fd1cc84306f0719210c7ae6e952f85c088a98cea891f489514b8c09a3b5",
+              "variantId": "C07/primary",
+              "caseCommitment": "8b1ffe36343e4f50a42a8b17570e06c48c5b48dc4b8e0d99559aec2d75bd7b83",
+              "fixtureCommitment": "ca157841166842c3a41d3b50138121bd43269ac33fb4f40fa4061cfd11dcfe74",
+              "fixtureAllocations": 10,
+              "authenticationCommitment": "88fbe0e1176088d0b6c19f1778167c2f5bdee8c16f6653437fd2e61e07bf1d9c"
+            },
+            "id": "C07/primary",
+            "passed": false,
+            "safetyChecked": true,
+            "assertions": [
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "createBatch must progress",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "start must progress",
+                "passed": true
+              },
+              {
+                "label": "actual modeled workload acquired",
+                "passed": true
+              },
+              {
+                "label": "accepted job exposes coherent evidence",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "stop must progress",
+                "passed": true
+              },
+              {
+                "label": "released public job",
+                "passed": true
+              },
+              {
+                "label": "witness released after settlement",
+                "passed": true
+              },
+              {
+                "label": "all six durable facts",
+                "passed": true
+              },
+              {
+                "label": "public result schema",
+                "passed": true
+              },
+              {
+                "label": "readEvidence must progress",
+                "passed": true
+              },
+              {
+                "label": "diagnostic I/O loss has exact category and range",
+                "passed": false
+              },
+              {
+                "label": "Trusted causal oracle checked observed trace",
+                "passed": false
+              }
+            ],
+            "reason": "diagnostic I/O loss has exact category and range; safety: loss-permission",
+            "safetyFailures": [
+              {
+                "code": "loss-permission",
+                "jobId": "1337f4f19c009945d0ae7d20028f0879",
+                "detail": "Categorical loss lacks exact diagnostic refusal.",
+                "familyId": "C07",
+                "variantId": "C07/primary"
+              }
+            ],
+            "operations": 497,
+            "promiseJobs": 2302
+          }
+        ],
+        "assertions": [
+          {
+            "label": "C07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: createBatch must progress",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: start must progress",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: actual modeled workload acquired",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: accepted job exposes coherent evidence",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: stop must progress",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: released public job",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: witness released after settlement",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: all six durable facts",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: public result schema",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: readEvidence must progress",
+            "passed": true
+          },
+          {
+            "label": "C07/primary: diagnostic I/O loss has exact category and range",
+            "passed": false
+          },
+          {
+            "label": "C07/primary: Trusted causal oracle checked observed trace",
+            "passed": false
+          }
+        ],
+        "reason": "C07/primary: diagnostic I/O loss has exact category and range; safety: loss-permission",
+        "operations": 497,
+        "promiseJobs": 2302
+      }
+    ],
+    "groups": {
+      "A": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "B": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "C": {
+        "passed": 0,
+        "total": 1,
+        "coverage": 0
+      },
+      "D": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      },
+      "E": {
+        "passed": 0,
+        "total": 0,
+        "coverage": 0
+      }
+    },
+    "macroCoverage": 0,
+    "safetyFailures": [
+      {
+        "code": "loss-permission",
+        "jobId": "1337f4f19c009945d0ae7d20028f0879",
+        "detail": "Categorical loss lacks exact diagnostic refusal.",
+        "familyId": "C07",
+        "variantId": "C07/primary"
+      }
+    ]
+  },
+  "actualInputs": [
+    {
+      "familyId": "C07",
+      "variantId": "C07/primary",
+      "execution": {
+        "variant": {
+          "id": "C07/primary",
+          "family": "C07",
+          "kind": "primary",
+          "args": {}
+        },
+        "seed": "qualification-v1",
+        "brokerSeed": "rjs-suite-1/C07/qualification-v1",
+        "schedule": {
+          "partition": 2143,
+          "delay": 5
+        },
+        "largeCount": 1025,
+        "limits": {
+          "heap": 134217728,
+          "document": 65536,
+          "transaction": 262144,
+          "storage": 16777216,
+          "message": 8388608,
+          "operations": 100000,
+          "promiseJobs": 1000000,
+          "wallMs": 60000,
+          "scan": 64,
+          "payload": 65536,
+          "metadata": 32768,
+          "retention": 8192,
+          "pipe": 4096,
+          "maxJobs": 1100,
+          "maxBatches": 4,
+          "maxRunning": 16
+        }
+      },
+      "runtime": {
+        "entryPoint": "evaluateBounded",
+        "node": "24.18.0",
+        "familyWallMs": 60000,
+        "totalWallMs": 600000,
+        "externalVariantAllowanceMs": 250,
+        "workerResourceLimits": {
+          "maxOldGenerationSizeMb": 1024,
+          "stackSizeMb": 8
+        }
+      }
+    }
+  ]
+}

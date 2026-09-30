@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';import {readFile,writeFile,mkdir} from 'node:fs/promises';
+import {Broker,canonical} from '../benchmarks/recoverable-job-service/private/broker.mjs';import {Scenario} from '../benchmarks/recoverable-job-service/private/scenarios.mjs';
+import {createReplayInput} from '../benchmarks/recoverable-job-service/private/replay.mjs';
+const input=createReplayInput(),directory='.superpowers/sdd/2026-09-08-recoverable-job-service-integration/task-2-wave3-private-domains-'+new Date().toISOString().replaceAll(':','-');await mkdir(directory);
+async function exercise(extra){const s=new Scenario('', 'D02',{replayInput:input,variantId:'D02/anchor-birth',caseDefinition:{fixture:'wave3-controller-domains'}}),b=s.b,actual={};
+ if(extra)await b.call('store.commit',{writes:[],audit:[],operationId:await b.call('newId'),fence:{grant:b.grant,deadline:1000}});
+ b.fault('store.read.before','hook',{fn:async broker=>{actual.replacementBirth=broker.id();actual.nestedFinalRaceRequest=s.op('exportCapsule',{jobId:b.scopeId});actual.receipt=broker.receipt('store.commit',b.scopeId,broker.id(),{revision:1},{grant:b.grant,deadline:1000});}});await b.call('store.read',{key:'hook'});
+ actual.nestedConsumerRequest=await b.entropy.run('candidate-effect',()=>s.op('inspectJob',{jobId:b.scopeId}));
+ let heldId;b.fault('store.read.before','hold',{onHold:id=>{heldId=id;actual.holdRequest=s.op('inspectBatch',{batchId:b.scopeId});actual.holdControllerId=b.id();}});const pending=b.call('store.read',{key:'held'});await new Promise(r=>setImmediate(r));actual.heldId=heldId;b.resume(heldId);await pending;
+ const consumerId=b.consumer(undefined,{nested:()=>{actual.consumerCallbackId=b.id();actual.consumerCallbackRequest=s.op('inspectJob',{jobId:b.scopeId});}}),frame={key:{jobId:b.scopeId,channelId:b.scopeId,stream:'stdout',seq:0,offset:0,length:1,digest:await b.call('digest',{bytes:[9]}),artifactId:b.scopeId},bytes:[9]};
+ await b.call('consumer.consume',{consumerId,deliveryId:b.id(),frame});actual.subsequentId=b.id();actual.events=b.executedInput().events;actual.identity=b.inputIdentity();assert.ok(b.verify(actual.receipt));await b.shutdown();return actual;}
+const base=await exercise(false),extra=await exercise(true);await writeFile(directory+'/base.json',JSON.stringify({input,actual:base},null,2));await writeFile(directory+'/extra.json',JSON.stringify({input,actual:extra},null,2));
+for(const key of ['replacementBirth','nestedFinalRaceRequest','nestedConsumerRequest','receipt','heldId','holdControllerId','holdRequest','consumerCallbackId','consumerCallbackRequest','subsequentId','events','identity'])assert.ok(canonical(base[key])===canonical(extra[key]),key+' actual bytes remain identical under extra candidate store.commit');
+console.log('Actual hook replacement IDs, nested final/consumer requests, held controllers, fixture receipt authentication and complete fixture tape remain identical with extra candidate work.');
