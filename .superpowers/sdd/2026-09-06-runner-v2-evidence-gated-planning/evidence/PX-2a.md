@@ -278,3 +278,90 @@ attach/claim paths exists in both runs; no fence code touched).
   killed runner can leave ~150 KB until the OS cleans temp.
 - Measured with `permissionProfile: "full"` only; interactive wall-clock
   gain still unmeasured (same helper path via ps1 LSP branch).
+
+## Repair cycle 2 (2026-09-30, review PX-2a-review-r2: R2-B1 blocking, N-r2-1..N-r2-4 minors)
+
+Work on HEAD (`5d6e6540` = PX-2a repair 1). No commit, stage, stash, or
+push. No existing test weakened or deleted; the guarantee file untouched.
+
+### What changed
+
+`runner-v2/src/windows-job-process-host.ts` — the self-heal is REMOVED
+(R2-B1). `ensureJobHostHelperAssembly` now does `return jobHostHelperReady;`
+in place of the whole heal block (the reviewer's validated fix, applied
+verbatim in effect): once this runner process has compiled and pinned its
+helper, the pin is never refreshed from disk. A missing, emptied or changed
+file makes that call fall back to in-process Add-Type (the Job host
+re-hashes the bytes and reports `missing-file` / `digest-mismatch`); the
+runner never recompiles into the same place during its lifetime, so a
+contained command that deletes the DLL can no longer choose the moment of a
+recompile and get its own bytes blessed. Failed compiles (no pin yet) still
+retry via the shared in-flight promise — that path is not
+attacker-triggerable. Doc comments updated to say the pin is never
+refreshed and nothing on disk is trusted after it.
+
+`runner-v2/test/windows-job-launch-speed.test.ts` — T8 INVERTED (it pinned
+the vulnerable behavior): a deleted DLL now asserts `fallback` /
+`missing-file`, the call still succeeding, and the file NOT recreated. Its
+`finally` no longer calls `locateHelperAssembly()` (N-r2-1): restore is
+best-effort with no assertions inside `finally`, so a failure reports its
+own message; the byte-exact-restore assert sits after the block. New T10
+replays the delete-and-race shape from the round-2 exploit: a contained
+`node -e` (full profile, via the production call path) deletes the DLL,
+then overwrites it the moment it reappears, while a second call launches
+meanwhile (victim starts only after the delete is observed, racer still
+spinning). The evil bytes are a clone of the real helper plus a static
+constructor that appends `EVIL-LOADED` to a marker file, so any load is
+directly observable. Asserts: attacker exits 0 and reports `wrote=no`,
+victim succeeds via `fallback` / `missing-file`, no marker ever appears,
+assembly restored byte-exact. N-r2-4: every `aiboard-px2a-evil-*` scratch
+dir this file creates is tracked and removed in `after` (the 14 such dirs
+currently in `%TEMP%` predate this cycle — reviewer-era litter, left in
+place).
+
+### Prove-red (self-heal back -> new tests red -> byte-exact restore)
+
+Pristine sha256 (working tree, CRLF): host
+`3afe993901565a3f7acc6dc846dfa970091d5f692ed24c141765a6153e62ac3e`,
+speed test
+`97277e9118f9ab98258c352cf94197e5f7515e20911c7b6a8585ed0bd8f53c01`.
+With the repair-1 heal block put back verbatim, the T8+T10 subset run goes
+red twice over: T8 `mode` is `precompiled`, expected `fallback` (and the
+visible message is now the real mode assertion, not the `finally` mask —
+N-r2-1 fix confirmed); T10 attacker reports `wrote:yes` (the recompile
+reappeared and the attacker's overwrite landed mid-race). After restoring
+the fix both file hashes verified back byte-exact to the values above.
+
+### Validation suites and counts
+
+| Suite | Result |
+|---|---|
+| `windows-job-launch-speed.test.ts` (`--test-concurrency=1`) | 10/10 pass |
+| same at `--test-concurrency=4` with `windows-job-supervisor-input` + `windows-job-output-replay`, twice | 16/16 pass both runs |
+| `windows-job-real-host-guarantees.test.ts` (unchanged) | 12/12 pass |
+| `task8-raw-launch-closure.test.ts` | red on the same 5 PX-2c lines only (line numbers shifted by 1 from the heal-block removal: host `:396/:527/:555/:797`, supervisor `:384`); none from PX-2a |
+| `tsc --noEmit -p runner-v2/tsconfig.json` | clean |
+| `eslint` on the two changed files | clean |
+| `git diff --check` | clean |
+
+### Notes for the reviewer (minors)
+
+- N-r2-2 (bracket TEMP): not changed in this cycle. A TEMP path
+  containing `[`/`]` makes `Add-Type -OutputAssembly` treat the path as a
+  wildcard: the wrapper errors, exits 0, no DLL appears, `ensure` returns
+  null and calls run the in-process fallback with the once-per-state-dir
+  warn. Safe by construction (never loads); documented here instead of
+  fixed. Non-Latin TEMP behaves the same as the pre-PX-2a baseline
+  (csc temp files, not the output path).
+- N-r2-3 (compile timeout): not changed. The 120 s compile timeout sits on
+  the first call's critical path (concurrent first calls share the one
+  in-flight compile, so they wait together, then fall back). Before PX-2a
+  the same wait blocked the event loop; now it only parks the call.
+  Lowering to 30 s is a one-constant change left to the controller.
+- N-r2-6 (untested N8/N10/N11 corners): unchanged this cycle; the
+  round-2 probe results (30082-char source, once-per-dir log, prune plus
+  exit cleanup with no `aiboard-job-host-assembly-*` left) still stand.
+- Residual (review item 5): a same-user process that outlives a previous
+  runner can still race a runner's FIRST compile, and the `.ps1` in the
+  source dir is same-user writable. The pin cannot fix either; Job
+  containment remains lifecycle containment, not confinement.

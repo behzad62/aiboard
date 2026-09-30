@@ -204,21 +204,20 @@ export function extractJobHostHelperSource(scriptText: string): string | null {
  * loading from those bytes. Never throws: any failure returns null and the
  * call omits the helper fields, so each Job host falls back to in-process
  * Add-Type compile of the same source. A compile failure is NOT cached: the
- * next call retries (shared in-flight), so a transient failure self-heals.
+ * next call retries (shared in-flight), so a transient failure before the
+ * first pin heals. After the pin, nothing on disk is ever trusted again.
  */
 export async function ensureJobHostHelperAssembly(): Promise<WindowsJobHostHelperAssembly | null> {
   try {
     if (process.platform !== "win32") return null;
-    if (jobHostHelperReady) {
-      // Self-heal without trusting anything on disk: a vanished or emptied
-      // assembly file recompiles instead of pinning a permanent fallback.
-      try {
-        if (existsSync(jobHostHelperReady.path) && readFileSync(jobHostHelperReady.path).byteLength > 0) return jobHostHelperReady;
-      } catch {
-        // Fall through to recompile.
-      }
-      jobHostHelperReady = undefined;
-    }
+    // R2-B1: once this runner process has compiled and pinned its helper,
+    // the pin is never refreshed from disk. A missing, emptied or changed
+    // file makes the call fall back to in-process Add-Type (the Job host
+    // re-hashes the bytes and reports missing-file / digest-mismatch); the
+    // runner never recompiles into the same place during its lifetime, so
+    // a contained command that deletes the DLL cannot choose the moment of
+    // a recompile and get its own bytes blessed.
+    if (jobHostHelperReady) return jobHostHelperReady;
     if (jobHostHelperFlight) return await jobHostHelperFlight;
     const flight = compileJobHostHelperAssembly();
     jobHostHelperFlight = flight;

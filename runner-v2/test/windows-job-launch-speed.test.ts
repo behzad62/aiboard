@@ -37,7 +37,7 @@ import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding } from "../src/execution-host.js";
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
-import { ensureJobHostHelperAssembly, resetJobHostHelperAssemblyForTests } from "../src/windows-job-process-host.js";
+import { ensureJobHostHelperAssembly, extractJobHostHelperSource, resetJobHostHelperAssemblyForTests } from "../src/windows-job-process-host.js";
 
 const WINDOWS_SKIP = "Windows Job launch-speed pin requires a Windows host.";
 const BACKEND_SKIP = "Windows Job launch-speed pin requires the runner-windows-job-v1 backend to be selected.";
@@ -166,6 +166,9 @@ async function locateHelperAssembly(): Promise<{ dllPath: string; sha256: string
   return { dllPath: helper.path, sha256: helper.sha256 };
 }
 
+/** Every `aiboard-px2a-evil-*` scratch dir this file creates, removed in `after` (N-r2-4). */
+const evilScratchDirs: string[] = [];
+
 /** A valid assembly WITHOUT the expected type (the trust-anchor replacement). */
 let evilAssemblyPath: string | undefined;
 function evilAssembly(): { path: string; sha256: string } {
@@ -173,6 +176,7 @@ function evilAssembly(): { path: string; sha256: string } {
     return { path: evilAssemblyPath, sha256: sha256File(evilAssemblyPath) };
   }
   const directory = mkdtempSync(join(tmpdir(), "aiboard-px2a-evil-"));
+  evilScratchDirs.push(directory);
   const dllPath = join(directory, "EvilHelper.dll");
   execFileSync("powershell.exe",
     ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
@@ -377,6 +381,12 @@ before(async () => {
 }, { timeout: 120_000 });
 
 after(async () => {
+  for (const directory of evilScratchDirs.splice(0)) {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+    } catch {}
+  }
+  evilAssemblyPath = undefined;
   if (!harness) return;
   const h = harness;
   harness = undefined;
@@ -621,14 +631,21 @@ test("launch-speed: direct Job host falls back on missing type, load error, and 
   assert.equal(missing.helper.reason, "missing-file", "missing-file reason must be recorded");
 });
 
-// PX-2a.8 (repair 1, N3 self-heal) — a deleted assembly file recompiles
-// instead of pinning a permanent fallback.
-test("launch-speed: a deleted assembly file self-heals through recompile", { timeout: 120_000 }, async (t) => {
+// PX-2a.8 (repair 2, R2-B1) — a deleted assembly file NEVER recompiles in
+// place. The old self-heal recompiled at a moment the deleter chose, so a
+// contained command that deleted the DLL could overwrite the fresh file
+// before the runner hashed it and get its own bytes blessed. Now the call
+// falls back with missing-file for the rest of the runner life, the file is
+// not recreated, and the call still succeeds through the in-process
+// fallback.
+test("launch-speed: a deleted assembly file falls back and never recompiles", { timeout: 120_000 }, async (t) => {
   const h = needsJob(t);
   if (!h) return;
   const warm = await runTokenCall(h, `heal-warm-${randomUUID().slice(0, 8)}`);
   assert.match(warm.stdout, /px2a-token:/, "warmup call must succeed");
   const { dllPath } = await locateHelperAssembly();
+  const pristine = readFileSync(dllPath);
+  const pristineSha = sha256Bytes(pristine);
   rmSync(dllPath, { force: true });
   try {
     assert.ok(!existsSync(dllPath), "assembly file must be gone");
@@ -636,16 +653,18 @@ test("launch-speed: a deleted assembly file self-heals through recompile", { tim
     const { stdout, processId } = await runTokenCall(h, token);
     assert.match(stdout, /px2a-token:/, "call with a deleted assembly must succeed");
     const event = readHelperEvent(h.jobHostDir, processId);
-    assert.equal(event.mode, "precompiled", "deleted assembly must recompile, not pin a fallback");
-    assert.equal(event.reason, null, "no fallback reason may be recorded after healing");
-    assert.ok(existsSync(dllPath), "assembly file must exist again after the call");
+    assert.equal(event.mode, "fallback", "deleted assembly must fall back, never recompile in place");
+    assert.equal(event.reason, "missing-file", "deleted assembly must record missing-file");
+    assert.ok(!existsSync(dllPath), "the runner must not recreate the assembly file");
   } finally {
-    // A fresh compile has fresh bytes: pin the CURRENT pair, not the pristine
-    // bytes. If the heal failed, this recompiles once more rather than
-    // leaving later tests on a permanent fallback.
-    const current = await locateHelperAssembly();
-    assert.equal(sha256File(current.dllPath), current.sha256, "assembly present and pinned after the test");
+    // Best-effort restore only, no assertions here: a failure above must
+    // report its own message, not a recovery failure (N-r2-1). The pin
+    // still matches these bytes, so later tests run precompiled again.
+    try {
+      if (!existsSync(dllPath)) writeFileSync(dllPath, pristine);
+    } catch {}
   }
+  assert.equal(sha256File(dllPath), pristineSha, "assembly restored byte-exact");
 });
 
 // PX-2a.9 — a truncated assembly file is never loaded: the call still works
@@ -676,4 +695,105 @@ test("launch-speed: a truncated assembly file is never loaded", { timeout: 55_00
     writeFileSync(dllPath, pristine);
     assert.equal(sha256File(dllPath), dllBefore, "assembly restored byte-exact");
   }
+});
+
+// PX-2a.10 (repair 2, R2-B1 regression) — replays the delete-and-race shape
+// from the round-2 exploit: a contained command deletes the DLL, then
+// overwrites the file the moment it reappears, while a second call launches
+// meanwhile. With the self-heal removed nothing ever reappears, so the
+// attacker's write never lands and never loads: the victim call succeeds
+// through the fallback, no evil marker is written, and the attacker reports
+// wrote=no.
+test("launch-speed: a delete-and-race against the helper never loads attacker bytes", { timeout: 180_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const warm = await runTokenCall(h, `race-warm-${randomUUID().slice(0, 8)}`);
+  assert.match(warm.stdout, /px2a-token:/, "warmup call must succeed");
+  const { dllPath } = await locateHelperAssembly();
+  const pristine = readFileSync(dllPath);
+  const pristineSha = sha256Bytes(pristine);
+  // Evil clone of the real helper: the same type surface plus a static
+  // constructor that drops a marker the moment the type is first touched,
+  // so loading these bytes in any Job host is directly observable.
+  const markerPath = join(h.root, "px2a-evil-marker.txt");
+  rmSync(markerPath, { force: true });
+  const evilDir = mkdtempSync(join(tmpdir(), "aiboard-px2a-evil-"));
+  evilScratchDirs.push(evilDir);
+  const evilDllPath = join(evilDir, "Evil.dll");
+  const evilCsPath = join(evilDir, "evil.cs");
+  const scriptText = readFileSync(fileURLToPath(new URL("../src/managed-process-job-host.ps1", import.meta.url)), "utf8");
+  const helperSource = extractJobHostHelperSource(scriptText);
+  assert.ok(helperSource, "helper source must extract from the Job-host script");
+  const classHeader = /public static class ManagedProcessJobHost\s*\{/;
+  assert.ok(classHeader.test(helperSource), "helper class header must be present");
+  writeFileSync(evilCsPath,
+    helperSource.replace(classHeader, (header) =>
+      `${header}\n    static ManagedProcessJobHost() { System.IO.File.AppendAllText(@"${markerPath.replace(/"/g, '""')}", "EVIL-LOADED"); }`),
+    "utf8");
+  execFileSync("powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+      `Add-Type -TypeDefinition (Get-Content -LiteralPath '${evilCsPath}' -Raw -Encoding UTF8) -OutputAssembly '${evilDllPath}' -OutputType Library`],
+    { windowsHide: true, stdio: "ignore", timeout: 120_000 });
+  assert.ok(existsSync(evilDllPath), "evil assembly must compile");
+  assert.notEqual(sha256File(evilDllPath), pristineSha, "evil bytes must differ from the pinned assembly");
+  try {
+    // Contained deleter-plus-racer: removes the DLL, then overwrites it the
+    // moment it reappears — the exact shape of the round-2 exploit.
+    const attackerScript = [
+      `const fs = require('fs');`,
+      `const dll = ${JSON.stringify(dllPath)};`,
+      `const evil = ${JSON.stringify(evilDllPath)};`,
+      `try { fs.rmSync(dll, { force: true }); } catch {}`,
+      `console.log('px2a-attacker-deleted');`,
+      `let wrote = false;`,
+      `const end = Date.now() + 20000;`,
+      `while (Date.now() < end && !wrote) {`,
+      `  try { if (fs.existsSync(dll)) { fs.writeFileSync(dll, fs.readFileSync(evil)); wrote = true; } } catch {}`,
+      `  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10); } catch {}`,
+      `}`,
+      `console.log('px2a-attacker-wrote:' + (wrote ? 'yes' : 'no'));`,
+    ].join("\n");
+    callSeq += 1;
+    const attackerPromise = h.binding.commandExecution.execute({
+      executable: process.execPath,
+      arguments: ["-e", attackerScript],
+      workingDirectory: h.project,
+      timeoutMs: 60_000,
+      captureOutputBytes: 1024 * 1024,
+      context: {
+        runId: h.runId,
+        sessionId: `session-${h.runId}`,
+        actor: { role: "worker" as const, id: "worker-px2a" },
+        callId: `px2a-race-attacker-${callSeq}-${randomUUID().slice(0, 8)}`,
+        toolName: "process.run",
+        runnerInternal: true as const,
+      },
+    });
+    // The victim launches only after the delete is observed, while the
+    // racer is still spinning — the exploit's timing, without the flake.
+    await waitFor(() => !existsSync(dllPath), 30_000, "contained deleter to remove the assembly");
+    const token = `race-${randomUUID().slice(0, 8)}`;
+    const { stdout, processId } = await runTokenCall(h, token);
+    const attackerResult = await attackerPromise;
+    const attackerProc = (attackerResult as { process?: { outcome?: unknown; exitCode?: unknown } }).process;
+    assert.equal(attackerProc?.outcome, "exited", "contained attacker must exit");
+    assert.equal(attackerProc?.exitCode, 0, "contained attacker must exit 0");
+    const attackerCaptured = (attackerResult as { capturedOutput?: { stdout?: Uint8Array } }).capturedOutput;
+    const attackerStdout = attackerCaptured?.stdout ? Buffer.from(attackerCaptured.stdout).toString("utf8") : "";
+    assert.match(attackerStdout, /px2a-attacker-deleted/, "attacker must have run the delete");
+    assert.match(attackerStdout, /px2a-attacker-wrote:no/, "nothing ever reappeared for the attacker to overwrite");
+    assert.match(stdout, /px2a-token:/, "victim call must succeed through the fallback");
+    const event = readHelperEvent(h.jobHostDir, processId);
+    assert.equal(event.mode, "fallback", "victim call must never load precompiled bytes mid-race");
+    assert.equal(event.reason, "missing-file", "victim call must record missing-file");
+    assert.ok(!existsSync(markerPath), "attacker bytes must never load (no evil marker)");
+  } finally {
+    // Best-effort restore only (N-r2-1): the pin still matches these bytes.
+    try {
+      if (!existsSync(dllPath)) writeFileSync(dllPath, pristine);
+    } catch {}
+    rmSync(markerPath, { force: true });
+  }
+  assert.equal(sha256File(dllPath), pristineSha, "assembly restored byte-exact");
+  assert.ok(!existsSync(markerPath), "evil marker absent after cleanup");
 });
