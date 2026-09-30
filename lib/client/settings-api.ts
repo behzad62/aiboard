@@ -8,6 +8,7 @@
 import { v4 as uuidv4 } from "uuid";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI, type Model as GoogleModel } from "@google/genai";
 import type { CustomModel, UserSettings } from "@/lib/db/schema";
 import type { ModelInfo, StreamChunk } from "@/lib/providers/base";
 import { streamOpenAICompatibleChat } from "@/lib/providers/openai-compat";
@@ -346,6 +347,38 @@ function basicCatalogModel(
   };
 }
 
+type GoogleCatalogModelRecord = Pick<
+  GoogleModel,
+  "name" | "displayName" | "description" | "thinking" | "supportedActions"
+>;
+
+export async function collectGoogleModelCatalog(
+  models: AsyncIterable<GoogleCatalogModelRecord>
+): Promise<ProviderCatalogModel[]> {
+  const byId = new Map<string, ProviderCatalogModel>();
+  for await (const model of models) {
+    const resourceName = typeof model.name === "string" ? model.name.trim() : "";
+    const id = resourceName.replace(/^models\//, "");
+    if (!id) continue;
+    const actions = Array.isArray(model.supportedActions) ? model.supportedActions : [];
+    if (actions.length > 0 && !actions.includes("generateContent")) continue;
+    byId.set(
+      id,
+      basicCatalogModel(id, model.displayName?.trim() || id, {
+        description: model.description?.trim() || undefined,
+        reasoningEffort: model.thinking === true,
+      })
+    );
+  }
+  return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+async function fetchGoogleModelCatalog(apiKey: string): Promise<ProviderCatalogModel[]> {
+  const pager = await new GoogleGenAI({ apiKey }).models.list({
+    config: { pageSize: 1000, queryBase: true },
+  });
+  return collectGoogleModelCatalog(pager);
+}
 async function fetchOpenAICompatibleModelCatalog(
   apiKey: string,
   baseURL?: string
@@ -524,13 +557,11 @@ export async function fetchProviderModelCatalog(input: {
       runnerToken,
     });
   }
-
-  const compatibleBaseURL =
-    input.providerId === "google"
-      ? "https://generativelanguage.googleapis.com/v1beta/openai/"
-      : undefined;
-  if (["openai", "google"].includes(input.providerId)) {
-    return fetchOpenAICompatibleModelCatalog(apiKey, compatibleBaseURL);
+  if (input.providerId === "google") {
+    return fetchGoogleModelCatalog(apiKey);
+  }
+  if (input.providerId === "openai") {
+    return fetchOpenAICompatibleModelCatalog(apiKey);
   }
   throw new Error(`Live model discovery is not supported for ${input.providerId}`);
 }
