@@ -106,8 +106,9 @@ assert.match(rendered, /Tool support &amp; readiness/);
 assert.match(rendered, /Model discovery alone does not verify tool support/);
 assert.match(rendered, /Supported — setup required/);
 assert.match(rendered, /Missing: OpenAI vector store/);
-assert.match(rendered, /configuration: providers\.openai\.vectorStoreIds/);
-assert.doesNotMatch(rendered, /href=/, "setup guidance must not invent a link when no configuration surface exists");
-console.log("PASS rendered capability table keeps discovery, evidence, and setup guidance distinct");
+assert.doesNotMatch(rendered, /configuration: providers\.openai\.vectorStoreIds/);
+assert.match(rendered, /Configure tools/);
+assert.match(rendered, /Missing: OpenAI vector store<\/p>/, "resources without a real setup surface stay text-only");
+console.log("PASS rendered capability table keeps discovery, evidence, and actionable setup guidance distinct");
 
 console.log("PASS");

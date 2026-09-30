@@ -100,6 +100,10 @@ import type {
   ToolCapabilityDescriptor,
   ToolResourceState,
 } from "@/lib/providers/tool-capabilities";
+import {
+  applyToolRuntimeToRequest,
+  resolveToolRuntimeResourceStateCached,
+} from "./tool-runtime";
 
 export type { OrchestratorEvent } from "@/lib/orchestrator/engine";
 
@@ -355,6 +359,13 @@ export async function collectStreamWithUsage(
   artifactSink?: ProviderArtifactSink
 ): Promise<CollectedStreamResult> {
   if (signal?.aborted) throw abortError();
+  const effectiveToolRequest = applyToolRuntimeToRequest(toolRequest);
+  const needsLocalRunner = effectiveToolRequest.toolIntents.some(
+    (intent) => intent.id === "shell" || intent.id === "apply_patch",
+  );
+  const runtimeResourceState = await resolveToolRuntimeResourceStateCached({
+    checkRunnerHealth: needsLocalRunner,
+  });
   if (providerId === CUSTOM_PROVIDER_ID) {
     const customModel = getCustomModelByFullId(modelId);
     if (!customModel) {
@@ -381,7 +392,7 @@ export async function collectStreamWithUsage(
         reasoningEffort,
         structuredOutput,
         contextProfile,
-        ...toolRequest,
+        ...effectiveToolRequest,
         artifactSink,
       },
       customModelPlanningContext(customModel),
@@ -489,7 +500,7 @@ export async function collectStreamWithUsage(
       temperature,
       reasoningEffort,
       structuredOutput,
-      ...toolRequest,
+      ...effectiveToolRequest,
       artifactSink,
       contextProfile,
       ...(resolvedCaps ? { capabilities: resolvedCaps } : {}),
@@ -497,6 +508,7 @@ export async function collectStreamWithUsage(
     {
       ...(evidence.length > 0 ? { evidence } : {}),
       allowedTransports: runnerContext.allowedTransports,
+      resourceState: runtimeResourceState,
     },
   );
   providerParams.messages = callPlanEnables(providerParams, "web_search")

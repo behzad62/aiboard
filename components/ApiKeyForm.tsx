@@ -16,6 +16,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Copy } from "lucide-react";
 import { ProviderCapabilityTable } from "@/components/ProviderCapabilityTable";
+import { TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
 import type { ModelInfo } from "@/lib/providers/base";
 import type { ProviderCapabilityStatusRow } from "@/lib/providers/capability-status";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
@@ -119,6 +120,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [loadingOpenRouterCatalog, setLoadingOpenRouterCatalog] = useState(false);
   const [openRouterCatalogError, setOpenRouterCatalogError] = useState<string | null>(null);
   const [capabilityRows, setCapabilityRows] = useState<ProviderCapabilityStatusRow[]>([]);
+  const [toolRuntimeRevision, setToolRuntimeRevision] = useState(0);
   const [capabilityLoading, setCapabilityLoading] = useState(false);
   const [capabilityError, setCapabilityError] = useState<string | null>(null);
   const [openRouterCatalogFilters, setOpenRouterCatalogFilters] = useState<
@@ -176,6 +178,12 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   }, [provider.defaultModel, provider.enabled, provider.models, provider.baseURL, provider.modelIds]);
 
   useEffect(() => {
+    const refresh = () => setToolRuntimeRevision((value) => value + 1);
+    window.addEventListener(TOOL_RUNTIME_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(TOOL_RUNTIME_CHANGED_EVENT, refresh);
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     if (!defaultModel) {
       setCapabilityRows([]);
@@ -205,7 +213,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     return () => {
       cancelled = true;
     };
-  }, [provider.providerId, defaultModel, provider.lastValidatedAt, provider.baseURL, provider.runnerTokenHint]);
+  }, [provider.providerId, defaultModel, provider.lastValidatedAt, provider.baseURL, provider.runnerTokenHint, toolRuntimeRevision]);
   const filteredOpenRouterCatalog = openRouterCatalog
     .filter((model) => {
       const query = openRouterCatalogQuery.trim().toLowerCase();

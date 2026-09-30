@@ -34,6 +34,7 @@ export interface ResolvedCapabilityProfile {
   modelId: string;
   capabilities: Record<string, ResolvedCapabilityEntry>;
   transientFailures: CapabilityTransientFailure[];
+  resourceState?: ToolResourceState;
 }
 
 export interface MergeCapabilityEvidenceInput {
@@ -229,6 +230,7 @@ export function mergeCapabilityEvidence(
     modelId: input.modelId,
     capabilities,
     transientFailures: [...(input.transientFailures ?? [])],
+    ...(input.resourceState ? { resourceState: input.resourceState } : {}),
   };
 }
 

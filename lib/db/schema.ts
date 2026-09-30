@@ -279,6 +279,24 @@ export interface BuildCheckpoint {
   skillEvents?: BuildSkillEvent[];
 }
 
+export interface ToolRuntimeRunnerSettings {
+  url: string;
+  token: string;
+  access: "ask" | "project" | "full";
+}
+
+export interface RemoteMcpServerSettings {
+  enabled: boolean;
+  name: string;
+  url: string;
+  authorizationToken?: string;
+}
+
+export interface ToolRuntimeSettings {
+  runner?: ToolRuntimeRunnerSettings | null;
+  remoteMcpServer?: RemoteMcpServerSettings | null;
+}
+
 export interface UserSettings {
   id: string;
   defaultEffort: EffortLevel;
@@ -335,6 +353,8 @@ export interface UserSettings {
   >;
   /** Verified/scoped tool evidence; expired probed entries are ignored at runtime. */
   providerToolCapabilityEvidence?: CapabilityEvidence[];
+  /** Shared local/provider tool runtime configuration used by readiness and execution preflight. */
+  toolRuntime?: ToolRuntimeSettings;
 }
 
 export interface ProviderKey {

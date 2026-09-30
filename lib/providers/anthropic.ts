@@ -329,21 +329,51 @@ export function anthropicToolConfigForPlan(
   }
 
   if (planToolEnabled(params, "shell")) {
-    tools.push({ type: "bash_20250124", name: "bash" });
+    // Local shell execution belongs to AI Board's trusted Runner V2, not an
+    // Anthropic-hosted/container shell. Advertise the canonical action shape so
+    // returned tool_use blocks flow directly into the existing Build executor.
+    tools.push({
+      name: "shell",
+      description: "Run a bounded shell command in the project through AI Board Runner V2.",
+      input_schema: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["command"],
+        additionalProperties: false,
+      },
+    });
   }
   if (planToolEnabled(params, "apply_patch")) {
-    const parameters = planToolParameters(params, "apply_patch");
-    const maxCharacters = numberParam(
-      parameters,
-      "maxCharacters",
-      "max_characters",
-    );
+    // Use AI Board's exact-search/replace protocol instead of Anthropic's
+    // proprietary editor commands; this preserves workspace fences, review
+    // evidence, and the same patch safety path used by other Build workers.
     tools.push({
-      type: "text_editor_20250728",
-      name: "str_replace_based_edit_tool",
-      ...(maxCharacters !== undefined
-        ? { max_characters: maxCharacters }
-        : {}),
+      name: "patch",
+      description: "Apply exact search/replace edits to one project file through AI Board Runner V2.",
+      input_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          ops: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                search: { type: "string" },
+                replace: { type: "string" },
+              },
+              required: ["search", "replace"],
+              additionalProperties: false,
+            },
+          },
+          reason: { type: "string" },
+        },
+        required: ["path", "ops"],
+        additionalProperties: false,
+      },
     });
   }
   if (planToolEnabled(params, "computer_use")) {

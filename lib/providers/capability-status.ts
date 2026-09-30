@@ -21,7 +21,7 @@ export interface ProviderCapabilityStatusRow {
   supportSource: ResolvedCapabilityEntry["descriptor"]["supportSource"];
   execution: ResolvedCapabilityEntry["descriptor"]["execution"];
   transports: ProviderTransportId[];
-  missingPrerequisites: CapabilityPrerequisite[];
+  missingPrerequisites: Array<CapabilityPrerequisite & { reason?: string }>;
   verifiedAt?: string;
   detail?: string;
 }
@@ -67,7 +67,12 @@ export function capabilityStatusRows(
         transports: [...entry.descriptor.transports],
         missingPrerequisites: (entry.descriptor.prerequisites ?? [])
           .filter((item) => missing.has(item.id))
-          .map((item) => ({ ...item })),
+          .map((item) => ({
+            ...item,
+            ...(profile.resourceState?.prerequisites[item.id]?.reason
+              ? { reason: profile.resourceState.prerequisites[item.id].reason }
+              : {}),
+          })),
         ...(entry.descriptor.verifiedAt ? { verifiedAt: entry.descriptor.verifiedAt } : {}),
         ...(!transportCompatible
           ? {

@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import type { ProviderCapabilityStatusRow } from "@/lib/providers/capability-status";
+import { toolRuntimeSetupTarget } from "@/lib/client/tool-runtime";
 
 function capabilityLabel(id: string): string {
   return id
@@ -63,11 +64,10 @@ export function ProviderCapabilityTable({
                   {row.missingPrerequisites.map((item) => (
                     <p key={item.id}>
                       Missing: {item.label}
-                      {item.configurationPath
-                        ? ` · configuration: ${item.configurationPath}`
-                        : item.kind === "runtime"
-                          ? " · runtime setup is required; no in-app setup is available yet"
-                          : ""}
+                      {item.reason ? ` · ${item.reason}` : ""}
+                      {toolRuntimeSetupTarget(item.id) ? (
+                        <> · <a className="text-primary underline underline-offset-2" href={toolRuntimeSetupTarget(item.id)}>Configure tools</a></>
+                      ) : null}
                     </p>
                   ))}
                 </div>

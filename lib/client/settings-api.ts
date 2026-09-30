@@ -64,6 +64,7 @@ import { customCompatibleTransports } from "@/lib/providers/custom-capabilities"
 import { resolveProviderCapabilityProfile } from "@/lib/providers/capability-resolution";
 import { capabilityStatusRows, type ProviderCapabilityStatusRow } from "@/lib/providers/capability-status";
 import { mergeCapabilityEvidenceRecords } from "./provider-capability-migration";
+import { resolveToolRuntimeResourceStateCached } from "./tool-runtime";
 
 // ── Providers / keys ──────────────────────────────────────────────────────────
 
@@ -134,12 +135,13 @@ export async function resolveProviderCapabilityStatus(input: {
     ? getCustomModelByFullId(formatModelId(CUSTOM_PROVIDER_ID, input.modelId))
     : null;
   const customContext = custom ? customModelPlanningContext(custom) : undefined;
+  const resourceState = input.resourceState ?? await resolveToolRuntimeResourceStateCached();
   const profile = resolveProviderCapabilityProfile({
     providerId: input.providerId,
     modelId: input.modelId,
     catalogEvidence: persistedEvidence,
     runnerEvidence: runner.evidence,
-    resourceState: input.resourceState,
+    resourceState,
     customOverrides: customContext?.customOverrides,
   });
   return capabilityStatusRows(profile, {

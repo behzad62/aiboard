@@ -4,6 +4,7 @@ import {
   streamAnthropicWithClient,
 } from "../lib/providers/anthropic";
 import type { ChatParams } from "../lib/providers/base";
+import { nativeToolCallsToActionText } from "../lib/orchestrator/build";
 import { resolveProviderCallPlan } from "../lib/providers/call-planner";
 import {
   ProviderCallPlanError,
@@ -102,11 +103,43 @@ assert.deepEqual(anthropicToolConfigForPlan(params, "anthropic"), {
     { type: "advisor_20260301", name: "advisor", model: "claude-opus-5" },
     { type: "tool_search_tool_regex_20251119", name: "tool_search" },
     { type: "mcp_toolset", mcp_server_name: "docs" },
-    { type: "bash_20250124", name: "bash" },
     {
-      type: "text_editor_20250728",
-      name: "str_replace_based_edit_tool",
-      max_characters: 12000,
+      name: "shell",
+      description: "Run a bounded shell command in the project through AI Board Runner V2.",
+      input_schema: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["command"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "patch",
+      description: "Apply exact search/replace edits to one project file through AI Board Runner V2.",
+      input_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          ops: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                search: { type: "string" },
+                replace: { type: "string" },
+              },
+              required: ["search", "replace"],
+              additionalProperties: false,
+            },
+          },
+          reason: { type: "string" },
+        },
+        required: ["path", "ops"],
+        additionalProperties: false,
+      },
     },
     { type: "computer_toolset_20260801" },
     { type: "browser_toolset_20260801" },
@@ -274,6 +307,66 @@ for await (const chunk of streamAnthropicWithClient(
 assert.ok(mixedChunks.some((chunk) => chunk.type === "provider_tool_event" && chunk.providerToolEvent?.tool === "web_fetch"));
 assert.ok(mixedChunks.some((chunk) => chunk.type === "tool_call" && chunk.toolCall?.name === "lookup"));
 console.log("PASS mixed server/client events preserve provider execution while client functions reach the broker");
+
+const localExecutorClient = {
+  messages: {
+    stream: async () =>
+      asyncEvents([
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "shell-1",
+            name: "shell",
+            input: { command: "npm test", reason: "verify" },
+          },
+        },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: {
+            type: "tool_use",
+            id: "patch-1",
+            name: "patch",
+            input: {
+              path: "src/a.ts",
+              ops: [{ search: "old", replace: "new" }],
+              reason: "fix",
+            },
+          },
+        },
+        { type: "message_delta", delta: { stop_reason: "tool_use" } },
+      ]),
+  },
+};
+const localExecutorChunks = [];
+for await (const chunk of streamAnthropicWithClient(
+  localExecutorClient as never,
+  {
+    apiKey: "test",
+    model: "claude-opus-5",
+    messages: [{ role: "user", content: "Change and verify the project." }],
+    callPlan: messagesPlan([
+      resolved("shell", "client"),
+      resolved("apply_patch", "client"),
+    ]),
+  },
+  "anthropic",
+  "Anthropic",
+)) {
+  localExecutorChunks.push(chunk);
+}
+const localCalls = localExecutorChunks
+  .filter((chunk) => chunk.type === "tool_call" && chunk.toolCall)
+  .map((chunk) => chunk.toolCall!);
+assert.deepEqual(localCalls.map((call) => call.name), ["shell", "patch"]);
+assert.equal(
+  nativeToolCallsToActionText(localCalls),
+  '{"action":"shell","command":"npm test","reason":"verify"}\n' +
+    '{"action":"patch","path":"src/a.ts","ops":[{"search":"old","replace":"new"}],"reason":"fix"}',
+);
+console.log("PASS Anthropic local shell/editor calls map directly to canonical AI Board Runner V2 actions");
 
 assert.throws(
   () =>
