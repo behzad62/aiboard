@@ -482,3 +482,13 @@ Changed files: `runner-v2/src/windows-job-process-host.ts` (N1/N2/N3);
 `runner-v2/test/windows-job-spare-host.test.ts` (+3 tests, +1 import);
 `runner-v2/test/windows-job-real-host-guarantees.test.ts` (N5 gate +
 `spareClaimInFlight` view field only); this file.
+
+## Controller acceptance (2026-09-30)
+
+Independent re-review r3 (`PX-2c-review-r3.md`, Sonnet xhigh) on 31bf1957: **ACCEPT** for the OPT-IN spare. N1 fixed (a real runner crash inside the claim window: supervisor and child dead 264 ms after the new host starts, the record kept); the claimed-record kill needs the same authenticated identity proof as B1 (planted, token-corrupted, PID-reuse and live-claim probes left every bystander alive; exactly one process.kill in the host file); N2 fixed (1 execution, 0 fallbacks, the error surfaces as process_start_failed); N3, N5 fixed; B1, B2, M3-M5 not weakened. Suites at 31bf1957: spare-host 19/19, guarantees 12/12 with the spare off and on, PX-2b + speed 46/46, task8 2/2, Windows Job batch 259 pass / 0 fail / 1 pre-existing skip.
+
+Default-on is NOT approved. Needed first (owner decision, separate packet): N7 (a claim the supervisor processed but whose ack the host never saw falls back to a fresh launch and ran twice in a probe; close it with a durable claimed check before any fallback), M1 bootstrap and re-provision policy, a mixed-session measurement, the memory cost (about 140 MB per idle pair), PX-2a follow-ups, optionally creation-time binding.
+
+Follow-ups (non-blocking while opt-in): N8 slow unfenced reap path (10.5 s), N9 kept audit records never pruned, N10 comment/format glitch in the host file, N11 the host hash in Repair cycle 2 is a working-tree hash, N13 a sibling runner's in-flight claim can be reaped, N14 the PX-2b test file leaves 2 supervisors alive per run.
+
+**PX-2c ACCEPTED 2026-09-30 (opt-in only)** (wip commits cd475d57, 54f15b17, 31bf1957).
