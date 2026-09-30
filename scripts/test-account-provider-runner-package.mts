@@ -18,11 +18,12 @@ for (const [label, text] of [
   ["public runner", publicRunner],
   ["ZIP runner", archivedRunner],
 ] as const) {
-  assert.match(text, /const VERSION = 21;/, `${label} must publish current runner version`);
+  assert.match(text, /const VERSION = 22;/, `${label} must publish current runner version`);
   assert.match(text, /const RUNNER_CAPABILITY_SCHEMA_VERSION = 1;/, `${label} must publish capability schema v1`);
   assert.match(text, /providerCapabilities\(provider, body = \{\}\)/, `${label} must publish capability handshake producer`);
   assert.match(text, /action === "capabilities"/, `${label} must expose provider capability endpoint`);
   assert.match(text, /chatGptRunnerCapabilities\(\)/, `${label} must publish ChatGPT capability handler`);
+  assert.match(text, /listChatGptModels/, `${label} must publish ChatGPT live model discovery`);
   assert.match(text, /nvidiaRunnerCapabilities\(body\)/, `${label} must publish NVIDIA capability handler`);
   assert.match(text, /buildCopilotSdkRunnerCapabilities/, `${label} must publish Copilot capability integration`);
 }

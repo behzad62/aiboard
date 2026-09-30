@@ -31,7 +31,7 @@ import {
 } from "@/lib/client/settings-api";
 import { getProviderKey } from "@/lib/client/store";
 
-interface ProviderConfig {
+export interface ProviderConfig {
   providerId: string;
   name: string;
   models: ModelInfo[];
@@ -506,7 +506,9 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
         <div>
           <h3 className="font-semibold">{provider.name}</h3>
           {provider.hasKey && provider.keyHint && (
-            <p className="text-xs text-muted-foreground">Saved key: {provider.keyHint}</p>
+            <p className="text-xs text-muted-foreground">
+              {accountRunner ? "Saved runner token" : "Saved key"}: {provider.keyHint}
+            </p>
           )}
           {provider.runnerTokenHint && (
             <p className="text-xs text-muted-foreground">

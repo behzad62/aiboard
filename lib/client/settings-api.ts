@@ -148,6 +148,10 @@ export async function resolveProviderCapabilityStatus(input: {
     allowedTransports: customContext?.allowedTransports ?? runner.allowedTransports,
   });
 }
+export function saveOpenAIConnectionMode(mode: "api" | "subscription"): void {
+  updateUserSettings({ openAIConnectionMode: mode });
+}
+
 export function saveProviderKey(input: {
   providerId: string;
   apiKey?: string;
@@ -473,7 +477,7 @@ interface RunnerCatalogEntry {
 }
 
 async function fetchRunnerModelCatalog(input: {
-  providerId: "github-copilot" | "nvidia";
+  providerId: "chatgpt" | "github-copilot" | "nvidia";
   apiKey: string;
   baseURL: string;
   runnerToken: string;
@@ -496,6 +500,14 @@ async function fetchRunnerModelCatalog(input: {
     error?: string;
   };
   if (!response.ok) {
+    if (
+      input.providerId === "chatgpt" &&
+      /does not expose a stable model catalog/i.test(payload.error ?? "")
+    ) {
+      throw new Error(
+        "This account runner is too old for ChatGPT live model discovery. Download and restart account runner v22 or newer.",
+      );
+    }
     throw new Error(payload.error ?? `Provider model catalog request failed (${response.status})`);
   }
   return (payload.data ?? [])
@@ -523,10 +535,11 @@ export async function fetchProviderModelCatalog(input: {
   const explicitApiKey = input.apiKey?.trim() || "";
   const explicitBaseURL = input.baseURL?.trim() || "";
   const explicitRunnerToken = input.runnerToken?.trim() || "";
+  const isChatGPT = input.providerId === "chatgpt";
   const isGitHubCopilot = input.providerId === "github-copilot";
   const isNvidia = input.providerId === NVIDIA_PROVIDER_ID;
   const needsSavedRunnerSettings =
-    (isGitHubCopilot && !explicitBaseURL) ||
+    ((isChatGPT || isGitHubCopilot) && !explicitBaseURL) ||
     (isNvidia && (!explicitBaseURL || !explicitRunnerToken));
   const saved = !explicitApiKey || needsSavedRunnerSettings
     ? getProviderKey(input.providerId)
@@ -543,17 +556,22 @@ export async function fetchProviderModelCatalog(input: {
   if (input.providerId === "xai") {
     return fetchXaiLanguageModelCatalog(apiKey);
   }
-  if (input.providerId === "github-copilot" || input.providerId === NVIDIA_PROVIDER_ID) {
+  if (isChatGPT || isGitHubCopilot || input.providerId === NVIDIA_PROVIDER_ID) {
     const baseURL = input.baseURL?.trim() || saved?.baseURL?.trim() || "";
     const runnerToken =
-      input.providerId === "github-copilot"
+      isChatGPT || isGitHubCopilot
         ? apiKey
         : input.runnerToken?.trim() || saved?.runnerToken?.trim() || "";
     if (!baseURL || !runnerToken) {
       throw new Error("Save the local runner URL and token before browsing models");
     }
+    const runnerProviderId = isChatGPT
+      ? "chatgpt"
+      : isGitHubCopilot
+        ? "github-copilot"
+        : NVIDIA_PROVIDER_ID;
     return fetchRunnerModelCatalog({
-      providerId: input.providerId,
+      providerId: runnerProviderId,
       apiKey,
       baseURL,
       runnerToken,

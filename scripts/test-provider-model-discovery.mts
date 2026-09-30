@@ -82,14 +82,18 @@ for (const providerId of discoverable) {
     definition
   );
 }
-for (const providerId of ["foundry", "chatgpt"] as const) {
-  const definition = getProviderDefinition(providerId);
-  check(
-    `${providerId} does not claim live model discovery`,
-    definition?.modelDiscovery == null,
-    definition?.modelDiscovery
-  );
-}
+const chatgptDefinition = getProviderDefinition("chatgpt");
+check(
+  "chatgpt exposes live account model discovery through the runner",
+  chatgptDefinition?.modelDiscovery?.source === "runner" && chatgptDefinition.modelIdsField != null,
+  chatgptDefinition?.modelDiscovery,
+);
+const foundryDefinition = getProviderDefinition("foundry");
+check(
+  "foundry does not claim live model discovery",
+  foundryDefinition?.modelDiscovery == null,
+  foundryDefinition?.modelDiscovery,
+);
 
 const metaCatalog = MODEL_CATALOG.filter((model) => model.providerId === "meta");
 check(

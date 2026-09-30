@@ -237,6 +237,12 @@ export const PROVIDER_DEFINITIONS = {
     id: "chatgpt",
     name: "ChatGPT Plus/Pro",
     modelSource: "catalog",
+    modelDiscovery: { source: "runner" },
+    modelIdsField: {
+      label: "Additional model ids (optional)",
+      placeholder: "gpt-5.7",
+      hint: "Browse the models currently exposed to the signed-in ChatGPT account or add a model id manually.",
+    },
     credentialLabel: "Runner session token",
     credentialPlaceholder: "Paste the current token printed by the account runner",
     savedCredentialPlaceholder: "Leave blank to keep existing runner token",

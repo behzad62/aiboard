@@ -359,6 +359,8 @@ export interface UserSettings {
   >;
   /** Verified/scoped tool evidence; expired probed entries are ignored at runtime. */
   providerToolCapabilityEvidence?: CapabilityEvidence[];
+  /** User-facing OpenAI connection choice; internal provider ids remain openai/chatgpt. */
+  openAIConnectionMode?: "api" | "subscription";
   /** Shared local/provider tool runtime configuration used by readiness and execution preflight. */
   toolRuntime?: ToolRuntimeSettings;
 }
