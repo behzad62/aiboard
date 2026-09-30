@@ -40,9 +40,9 @@ PX-1-review-r1 F6).
 | G9 | Correct output attribution between two concurrent calls | None. | MISSING → NEW T9 |
 | G10 | Deadlines | `process-tools.test.ts:173` "process timeout is mechanical and terminates the child" — real production graph (→ real Job backend on win32) but asserts only `timedOut`. Matrix family timeout tests add `verified_empty` + dead grandchild on the real graph. The 5 s start/control and 30 s git deadlines have no fast real-host trigger (see limits). | Partially proven; promptness pinned → NEW T10 (repair 1: deadline 1.5 s → 3 s — the tree needs ~1 s to appear, so 1.5 s left ~0.4 s margin under load — and post-`verified_empty` grace 10 s → 2 s so a premature empty proof cannot pass) |
 | G11 | Durable audit (tamper-evident records) | `durable-process-store.test.ts:795` "completed effect marker survives SQLite restart and tampering fails integrity" — real SQLite, store-level, no host. | MISSING end-to-end → NEW T11 |
-| G12 | Crash recovery (fail closed, no relaunch) | `subprocess-runtime.test.ts:2765` "expired unbound launch is atomically orphaned…" and `:3251` use the file-local fake `Backend`. `execution-host.test.ts:30` "close conjunction retains a pre-adoption unknown launch" is streaming-level with a synthetic writer. | MISSING on real host → NEW T12 (repair 1 reworked it, r1 B3: Part A gives `recover()` real work on the real host — a live orphaned launch on a second host is reconciled, reported by invocationId with a non-success state, never relaunched, no new supervisors, and the launch itself is undisturbed; Part B keeps the host-death no-exit-code pins live + durably. Residual: lease-expiry takeover needs a >5 min wait with no product seam, so it stays untested) |
+| G12 | Crash recovery (fail closed, no relaunch) | `subprocess-runtime.test.ts:2765` "expired unbound launch is atomically orphaned…" and `:3251` use the file-local fake `Backend`. `execution-host.test.ts:30` "close conjunction retains a pre-adoption unknown launch" is streaming-level with a synthetic writer. | PARTIAL (review r2: recover() reports an in-flight launch as effect_outcome_unresolved; no runner crash is simulated; takeover, lease expiry and reconcile of an orphan stay OPEN on the real host) → NEW T12 (repair 1 reworked it, r1 B3: Part A gives `recover()` real work on the real host — a live orphaned launch on a second host is reconciled, reported by invocationId with a non-success state, never relaunched, no new supervisors, and the launch itself is undisturbed; Part B keeps the host-death no-exit-code pins live + durably. Residual: lease-expiry takeover needs a >5 min wait with no product seam, so it stays untested) |
 | G13 | Writer fence protocol (stale writer rejected; takeover) | `windows-process-backend.test.ts:2012-2013` inside `:1981` (takeover fence reconciles, stale-fence `signal` rejected) — r1 spot-check, not re-read this cycle. `owned-fence-lock.test.ts` is unit-level. | Partially proven (r1 F3a; PX-2b's most-needed row) |
-| G14 | Supervisor Bearer [REDACTED] + authenticated abort | None found on the real host (r1 F3b). | MISSING |
+| G14 | Supervisor bearer-token authentication + authenticated abort | None found on the real host (r1 F3b). | MISSING |
 | G15 | Release tombstone / no double release | `windows-process-backend.test.ts:2851-2980` look like the same fake-`service` style as `:2817` (r1 did not open each one). | MISSING on real host (unverified) |
 | G16 | C# Job-host surface that PX-2a rewrites (env block, argv, exit code, cwd, suspended-create→assign→resume) | Env block: `process-tools.test.ts:62` (real graph). Exit code: `process-tools.test.ts:115-126` (asserts exit 2). Cwd: inside-grant control of NEW T1. Argv/batch shims: no real-host test verified. Suspended-create then assign then resume: no test (T3/T12 trees spawning a descendant immediately are the only indirect cover). Supervisor exits ~4 s after release: no test; current ~4 s linger recorded as the PX-2a baseline (§6). Per r1 F3d spot-checks. | Partially proven; argv/shims + suspend/resume + release-linger MISSING |
 
@@ -265,9 +265,9 @@ only the two new untracked paths).
 
 Tests only; `runner-v2/src` untouched (`git diff --stat -- runner-v2/src`
 empty at the end; all five fault targets restored byte-exact, sha256
-before == after — table below). Deliverables: test file 1326 lines
+before == after — table below). Deliverables: test file 1369 lines (corrected after review r2)
 (sha256 `147a16d71e5c66ff4da83fef0547cded654af28a35cd308835564baf5fdabf30`),
-script 217 lines (sha256
+script 228 lines (sha256
 `aa5d4f9c940215e1a547c85c028a966f11e93b995dc3ed26d0af0567db82e9b3`).
 No commit/stage/stash/push. Red logs in `%TEMP%\px2t-red\` (R1–R9 +
 `FULL-green-1/2.log`, `SUITES-existing4.log`, `MEASURE-quiet-n20.log`,
@@ -327,3 +327,9 @@ Residual (not done): lease-expiry takeover; stale in-flight record through
 the production path (deeper T7 layers); G16 argv/shims + suspend/resume +
 release-linger tests; non-full-profile measurement; off-Windows CI sees
 12 skips (Windows-only net, stated).
+
+## Controller acceptance (2026-09-30)
+
+Independent review r2 (`PX-2t-review-r2.md`, Sonnet xhigh): **ACCEPT**. B1, B2, B4 and M1 resolved with the reviewer's own faults; B3 PARTIAL, so T12's title and comment and row G12 are relabelled PARTIAL/OPEN (controller text fix, no assertion changed); the G14 label and the line counts are corrected. Follow-ups: N4 (tests still tied to today's process model: T1 exact Job record count, T12 record and supervisor deepEqual, the powershell.exe child lookup in T3 and T12, the supervisor gate) goes to the PX-2c review; red runs still leave an `aiboard-px2t-*` temp root (EPERM in `after()`); the non-full profile is unmeasured.
+
+**PX-2t ACCEPTED 2026-09-30.**

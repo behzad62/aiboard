@@ -1176,15 +1176,17 @@ test(
   },
 );
 
-// G12 — crash recovery fails closed without relaunch, on the real host.
-// Part A gives recover() real work: a live orphaned launch (its owner stopped
-// driving it) is reconciled — reported, never relaunched, never a success —
-// and the launch itself is undisturbed (it still times out normally). Part B
+// G12 (PARTIAL) — recovery reports an in-flight launch fail-closed without
+// relaunch, on the real host. Part A gives recover() real work: a launch whose
+// owner stopped driving it is reported as effect_outcome_unresolved, never
+// relaunched, never a success, and the launch itself is undisturbed (it still
+// times out normally). No runner crash is simulated, and the launch is not
+// orphaned or reconciled: takeover, lease expiry and reconcile of an orphan
+// stay untested on the real host (review r2; see the evidence file). Part B
 // keeps the host-death audit pins: a killed call never gains an exit code,
-// live or durably. (Lease-expiry takeover needs a >5 min wait with no product
-// seam, so it stays untested — see the evidence file.)
+// live or durably.
 test(
-  "real-host pin: recovery reconciles a live launch fail-closed and host death leaves no exit code",
+  "real-host pin: recovery reports an in-flight launch fail-closed and host death leaves no exit code",
   { timeout: 55_000 },
   async (t) => {
     const h = needsJob(t);
