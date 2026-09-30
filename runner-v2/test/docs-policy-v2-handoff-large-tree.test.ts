@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -112,6 +112,78 @@ test("C2e/probe G1-select: a large docs tree still applies the owner's selection
     assert.equal(verifyHandoffSnapshotDigest(applied.stdout), true, "the project holds the applied snapshot");
     const generated = await runGit({ cwd: fixture.project, args: ["show", "HEAD:docs/generated/g-00000-padding-to-inflate-index-output-0123456789.md"] });
     assert.match(generated.stdout, /generated 0/, "the large tree applied with the handoff");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2e repair cycle 1/probe A1: a large ignored tree never blocks a tiny apply", async () => {
+  const RUN = "run-c2e-r1-a1";
+  const fixture = await openFactoryPort("c2er1a1", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    // 45,000 ignored files (a node_modules-sized tree): `git status
+    // --porcelain` never shows them, but the old whole-tree `ls-files
+    // --others` listing buffered all 4.4 MiB and refused the apply on the
+    // git output cap. The apply now checks only the paths it will write.
+    const ignored = join(fixture.project, "ignored_deps");
+    mkdirSync(ignored, { recursive: true });
+    for (let index = 0; index < 45000; index += 1) {
+      writeFileSync(join(ignored, `dep-${String(index).padStart(6, "0")}-padding-to-inflate-the-untracked-listing-0123456789-abcdefghij-klmnopqr.js`), "x\n");
+    }
+    appendFileSync(join(fixture.project, ".git", "info", "exclude"), "ignored_deps/\n");
+    const status = await runGit({ cwd: fixture.project, args: ["status", "--porcelain", "-z", "--untracked-files=all"] });
+    assert.equal(status.stdout.length, 0, "the ignored tree stays invisible to the clean-project check");
+    const before = await runGit({ cwd: fixture.project, args: ["rev-parse", "HEAD"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, `the snapshot commits under the ignored tree (pause=${JSON.stringify(driven.projection.pauseReason)})`);
+    const selected = await selectHandoffOwner(fixture, RUN, "apply_to_project", "handoff:c2e-r1-a1");
+    assert.equal(selected.status, "completed", "the tiny apply completes despite the 45,000 ignored files");
+    assert.equal(selected.projectHandoff?.choice, "apply_to_project");
+    const after = await runGit({ cwd: fixture.project, args: ["rev-parse", "HEAD"] });
+    assert.notEqual(after.stdout.trim(), before.stdout.trim(), "the project head moves");
+    const applied = await runGit({ cwd: fixture.project, args: ["show", "HEAD:docs/project/STATE.md"] });
+    assert.equal(verifyHandoffSnapshotDigest(applied.stdout), true, "the project holds the applied snapshot");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2e repair cycle 1/probe A3: an ignored file at an added path still refuses the apply", async () => {
+  const RUN = "run-c2e-r1-a3";
+  const fixture = await openFactoryPort("c2er1a3", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    // The project ignores a path the integration adds: the apply must
+    // refuse with the exact untracked-or-ignored collision, leaving the
+    // head, the status and the user's file untouched. The check runs on
+    // the written paths alone now, so this refusal proves it stayed
+    // exactly as strong without the whole-tree listing.
+    writeFileSync(join(fixture.project, ".gitignore"), "site/generated.md\n");
+    mkdirSync(join(fixture.project, "site"), { recursive: true });
+    writeFileSync(join(fixture.project, "site", "generated.md"), "user ignored file\n");
+    await runGit({ cwd: fixture.project, args: ["add", "--", ".gitignore"] });
+    await runGit({ cwd: fixture.project, args: ["commit", "-m", "seed an ignored path"] });
+    const worktree = fixture.integration.path;
+    mkdirSync(join(worktree, "site"), { recursive: true });
+    writeFileSync(join(worktree, "site", "generated.md"), "integration file\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "site/generated.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "add the path the project ignores"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, `the snapshot commits (pause=${JSON.stringify(driven.projection.pauseReason)})`);
+    const before = await runGit({ cwd: fixture.project, args: ["rev-parse", "HEAD"] });
+    await assert.rejects(
+      () => selectHandoffOwner(fixture, RUN, "apply_to_project", "handoff:c2e-r1-a3"),
+      /would overwrite the untracked or ignored path site\/generated\.md/,
+      "the apply refuses the ignored-path collision",
+    );
+    const after = await runGit({ cwd: fixture.project, args: ["rev-parse", "HEAD"] });
+    assert.equal(after.stdout.trim(), before.stdout.trim(), "the project head does not move");
+    assert.equal(readFileSync(join(fixture.project, "site", "generated.md"), "utf8"), "user ignored file\n", "the user's ignored file is untouched");
+    const status = await runGit({ cwd: fixture.project, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "the project stays clean");
   } finally {
     await fixture.close();
   }

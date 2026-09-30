@@ -27,7 +27,9 @@ import {
   claudePointerSatisfiesV2,
   handoffEntryCollisionSkipReason,
   handoffEntryGenericSkipReason,
+  handoffStateBlockerSkipReason,
   handoffStateSkipReason,
+  type HandoffStateBlockerKind,
   HANDOFF_STATE_LINK_COMPONENTS,
   resolveHandoffLinkTarget,
   spliceMarkedArchitectSectionBytes,
@@ -1130,7 +1132,16 @@ export class IntegrationManager {
         if (write.path === "docs/project/STATE.md") {
           const blocker = await this.commitStateNonLinkBlocker("HEAD");
           if (blocker !== null) {
-            skipped.push({ path: write.path, reason: handoffStateSkipReason(blocker.component) });
+            // C2e repair cycle 1 (N-1): the recorded skip names the
+            // blocker accurately; a case collision keeps the legacy
+            // wording so stored logs replay unchanged.
+            const reasonKind = stateBlockerReasonKind(blocker.kind);
+            skipped.push({
+              path: write.path,
+              reason: reasonKind === null
+                ? handoffStateSkipReason(blocker.component)
+                : handoffStateBlockerSkipReason(blocker.component, reasonKind),
+            });
             continue;
           }
         }
@@ -1139,14 +1150,21 @@ export class IntegrationManager {
         // C2e (F-matrix): the v1 Architect path refuses with a clear
         // reason naming the blocker (as it does for a docs link), never
         // with a raw ENOTDIR/EEXIST/EISDIR crash from the write below.
+        // C2e repair cycle 1 (N-2): only the write the blocker can
+        // affect is refused -- a directory (or submodule entry, or
+        // case collision) at STATE.md never blocks an unrelated write
+        // like docs/project/README.md. N-1/N-3: a submodule entry is
+        // named accurately.
         const blocker = await this.commitStateNonLinkBlocker("HEAD");
-        if (blocker !== null) {
+        if (blocker !== null && (blocker.kind === "file-not-dir" || write.path === "docs/project/STATE.md")) {
           throw new Error(
             blocker.kind === "file-not-dir"
               ? `Project document path ${write.path} is refused because ${blocker.component} is a regular file, not a directory.`
               : blocker.kind === "case-collision"
                 ? `Project document path ${write.path} is refused because the commit tree tracks two spellings of ${blocker.component}.`
-                : `Project document path ${write.path} is refused because ${blocker.component} is a directory.`,
+                : blocker.kind === "submodule"
+                  ? `Project document path ${write.path} is refused because ${blocker.component} is a submodule entry.`
+                  : `Project document path ${write.path} is refused because ${blocker.component} is a directory.`,
           );
         }
       }
@@ -1654,7 +1672,10 @@ export class IntegrationManager {
               "Automatic handoff failed after advancing the project branch and could not roll it back."
             );
           }
-          if (await this.projectMatchesRevision(projectRevision)) {
+          if (await this.projectMatchesRevision(
+            projectRevision,
+            await this.applyChangedPathSet(projectRevision, committedRevision),
+          )) {
             await this.cleanupOwnedProjectApply(
               { path: journalPath, journal },
               committedRevision
@@ -1755,7 +1776,10 @@ export class IntegrationManager {
       if (journal.retirementKind === "winner") {
         if (
           head !== journal.targetCommit ||
-          !await this.projectMatchesRevision(journal.targetCommit)
+          !await this.projectMatchesRevision(
+            journal.targetCommit,
+            await this.applyChangedPathSet(journal.expectedParent, journal.targetCommit),
+          )
         ) {
           fail("a retiring winning transition no longer matches the project state.");
         }
@@ -1788,7 +1812,16 @@ export class IntegrationManager {
     const matching = records.filter(({ journal }) => journal.targetCommit === head);
     if (matching.length === 0) {
       if (records.every(({ journal }) => journal.expectedParent === head)) {
-        if (!await this.projectMatchesRevision(head)) {
+        // C2e repair cycle 1 (B-1): the clobber check covers the union of
+        // the paths the journaled applies would write, never a
+        // whole-project listing.
+        const written = new Set<string>();
+        for (const { journal: pending } of records) {
+          for (const path of await this.applyChangedPathSet(pending.expectedParent, pending.targetCommit)) {
+            written.add(path);
+          }
+        }
+        if (!await this.projectMatchesRevision(head, written)) {
           fail("the pre-advance project state contains unrelated changes.");
         }
         return null;
@@ -1809,12 +1842,15 @@ export class IntegrationManager {
       fail("the target commit is not this run's integrated result.");
     }
 
-    if (await this.projectMatchesRevision(journal.targetCommit)) {
+    // C2e repair cycle 1 (B-1): the clobber check covers the paths this
+    // journaled apply writes, never a whole-project listing.
+    const written = await this.applyChangedPathSet(journal.expectedParent, journal.targetCommit);
+    if (await this.projectMatchesRevision(journal.targetCommit, written)) {
       await this.retireAbandonedBeforeWinnerCleanup(journal.targetCommit);
       await this.completeRecoveredProjectApply(record);
       return this.descriptor(true, journal.targetCommit);
     }
-    if (!await this.projectMatchesRevision(journal.expectedParent)) {
+    if (!await this.projectMatchesRevision(journal.expectedParent, written)) {
       fail("the post-advance index or worktree contains unrelated changes.");
     }
     const repaired = await this.git(
@@ -1822,7 +1858,7 @@ export class IntegrationManager {
       ["read-tree", "-u", "-m", journal.expectedParent, journal.targetCommit],
       true
     );
-    if (repaired.exitCode !== 0 || !await this.projectMatchesRevision(journal.targetCommit)) {
+    if (repaired.exitCode !== 0 || !await this.projectMatchesRevision(journal.targetCommit, written)) {
       fail(`the exact journaled checkout could not be repaired: ${repaired.stderr.trim()}`);
     }
     await this.retireAbandonedBeforeWinnerCleanup(journal.targetCommit);
@@ -1830,21 +1866,78 @@ export class IntegrationManager {
     return this.descriptor(true, journal.targetCommit);
   }
 
-  private async projectMatchesRevision(revision: string): Promise<boolean> {
-    const [indexTree, revisionTree, worktree, untracked] = await Promise.all([
+  private async projectMatchesRevision(revision: string, writtenPaths: ReadonlySet<string>): Promise<boolean> {
+    const [indexTree, revisionTree, worktree] = await Promise.all([
       this.git(this.repositoryRoot, ["write-tree"], true),
       this.git(this.repositoryRoot, ["rev-parse", `${revision}^{tree}`], true),
       this.git(this.repositoryRoot, ["diff", "--quiet"], true),
-      this.git(this.repositoryRoot, ["ls-files", "--others", "-z"], true),
     ]);
-    return (
+    if (!(
       indexTree.exitCode === 0 &&
       revisionTree.exitCode === 0 &&
       indexTree.stdout.trim() === revisionTree.stdout.trim() &&
-      worktree.exitCode === 0 &&
-      untracked.exitCode === 0 &&
-      untracked.stdout.length === 0
-    );
+      worktree.exitCode === 0
+    )) return false;
+    // C2e repair cycle 1 (B-1): no whole-project `ls-files --others`
+    // listing ever enters a capped buffer -- it includes every IGNORED
+    // file (invisible to `git status --porcelain`) and overflows the cap
+    // on node_modules-sized trees. Two checks replace it. First, a plain
+    // untracked listing with the standard excludes: a user file sitting
+    // anywhere outside the apply still blocks recovery, exactly as
+    // before, with the same exposure as the apply's own `status
+    // --porcelain` clean check. Second, the paths the pending apply
+    // writes are checked in bounded chunks of literal pathspecs, WITHOUT
+    // --exclude-standard: `--others` still reports ignored files at those
+    // paths, so crash recovery still refuses when an ignored file sits at
+    // a target path instead of overwriting it.
+    const untracked = await this.git(this.repositoryRoot, [
+      "ls-files",
+      "--others",
+      "--exclude-standard",
+      "-z",
+    ], true);
+    if (untracked.exitCode !== 0 || untracked.stdout.length > 0) return false;
+    const paths = [...writtenPaths];
+    for (let index = 0; index < paths.length; index += 200) {
+      const present = await this.git(this.repositoryRoot, [
+        "ls-files",
+        "--others",
+        "-z",
+        "--",
+        ...paths.slice(index, index + 200).map((path) => `:(literal)${path}`),
+      ], true);
+      if (present.exitCode !== 0 || present.stdout.length > 0) return false;
+    }
+    return true;
+  }
+
+  /**
+   * The paths one apply revision changes into the next (C2e repair cycle
+   * 1, B-1): the changed-name listing goes through `diff --output` into a
+   * scratch file (removed before returning) instead of one capped git
+   * buffer, so the set stays available no matter how large the tree is.
+   */
+  private async applyChangedPathSet(fromRevision: string, toRevision: string): Promise<Set<string>> {
+    const directory = resolve(this.stateDirectory, "handoff");
+    await mkdir(directory, { recursive: true });
+    const scratchPath = resolve(directory, `${this.runSegment}.${safeName(randomUUID())}.names`);
+    if (relative(directory, scratchPath).startsWith("..")) {
+      throw new Error("Project handoff files escaped the runner state directory.");
+    }
+    await this.git(this.repositoryRoot, [
+      "diff",
+      "--name-only",
+      "-z",
+      `--output=${scratchPath}`,
+      fromRevision,
+      toRevision,
+      "--",
+    ]);
+    try {
+      return new Set((await readFile(scratchPath)).toString("utf8").split("\0").filter(Boolean));
+    } finally {
+      await rm(scratchPath, { force: true });
+    }
   }
 
   private async projectIdentity(): Promise<string> {
@@ -2092,9 +2185,18 @@ export class IntegrationManager {
   ): Promise<void> {
     // C2e (G1): the changed-name listing of a large apply is a whole-tree
     // listing too, so it also goes through --output into a scratch file
-    // (removed before returning) instead of one capped git buffer. The
-    // project is proven clean just before the apply, so the untracked
-    // listing stays a few bytes; the collision refusal itself is unchanged.
+    // (removed before returning) instead of one capped git buffer.
+    // C2e repair cycle 1 (B-1): the untracked listing below used to be
+    // buffered the same way, but `ls-files --others` without
+    // --exclude-standard reports every IGNORED file too, which `git status
+    // --porcelain` never shows -- a project with a large ignored tree
+    // (node_modules-sized) refused a tiny apply on the 4 MiB cap. Only the
+    // paths the apply will write are checked now, in bounded chunks of
+    // literal pathspecs: each git call's output holds only collisions, so
+    // it stays a few bytes no matter how many ignored files the project
+    // holds. `--others` still reports ignored files at those paths, so the
+    // ignored-path collision refusal is exactly as strong; `:(literal)`
+    // keeps glob characters in file names exact.
     await this.git(this.repositoryRoot, [
       "diff",
       "--name-only",
@@ -2105,19 +2207,29 @@ export class IntegrationManager {
       "--",
     ]);
     try {
-      const [changedBytes, untracked] = await Promise.all([
-        readFile(scratchPath),
-        this.git(this.repositoryRoot, ["ls-files", "--others", "-z"]),
-      ]);
-      const changedPaths = new Set(changedBytes.toString("utf8").split("\0").filter(Boolean));
-      const collision = untracked.stdout
-        .split("\0")
-        .filter(Boolean)
-        .find((path) => changedPaths.has(path));
-      if (collision) {
-        throw new Error(
-          `Automatic project handoff would overwrite the untracked or ignored path ${collision}.`
-        );
+      const changedBytes = await readFile(scratchPath);
+      const changedPaths = changedBytes.toString("utf8").split("\0").filter(Boolean);
+      const changedSet = new Set(changedPaths);
+      for (let index = 0; index < changedPaths.length; index += 200) {
+        const chunk = changedPaths
+          .slice(index, index + 200)
+          .map((path) => `:(literal)${path}`);
+        const untracked = await this.git(this.repositoryRoot, [
+          "ls-files",
+          "--others",
+          "-z",
+          "--",
+          ...chunk,
+        ]);
+        const collision = untracked.stdout
+          .split("\0")
+          .filter(Boolean)
+          .find((path) => changedSet.has(path));
+        if (collision) {
+          throw new Error(
+            `Automatic project handoff would overwrite the untracked or ignored path ${collision}.`
+          );
+        }
       }
     } finally {
       await rm(scratchPath, { force: true });
@@ -2529,7 +2641,16 @@ export class IntegrationManager {
     // skipped-STATE.md reason from these through the shared describer; the
     // AR-R05 gate accepts the recorded reason the way it accepts
     // export_only.
-    const dirLinks = await this.commitStateLinkComponents(commit);
+    const blockers = await this.commitStateBlockers(commit);
+    const dirLinks = blockers.map((blocker) => blocker.component);
+    // C2e repair cycle 1 (N-1): the first blocker's kind travels with the
+    // result so the runtime records an accurate skip reason. Links and
+    // case collisions carry no kind: the describer keeps the legacy
+    // wording for them, so stored logs replay unchanged.
+    const firstKind = blockers[0]?.kind;
+    const stateBlockerKind = firstKind === "file" || firstKind === "submodule" || firstKind === "directory"
+      ? firstKind
+      : undefined;
     // C2d repair cycle 1 (escalation): the commit tree's entry-file
     // spellings, so the shared describer can corroborate a colliding
     // entry skip from the tree (fresh, reused and withdrawn commits
@@ -2539,7 +2660,14 @@ export class IntegrationManager {
     const entryCollisions = await this.commitEntryCollisionSpellings(commit);
     if (entryCollisions.agents.length > 1) entryPoint.agentsCollisionSpellings = entryCollisions.agents;
     if (entryCollisions.claude.length > 1) entryPoint.claudeCollisionSpellings = entryCollisions.claude;
-    return { commit, parent, head, entryPoint, ...(dirLinks.length > 0 ? { dirLinks } : {}) };
+    return {
+      commit,
+      parent,
+      head,
+      entryPoint,
+      ...(dirLinks.length > 0 ? { dirLinks } : {}),
+      ...(stateBlockerKind !== undefined ? { stateBlockerKind } : {}),
+    };
   }
 
   /**
@@ -2555,8 +2683,13 @@ export class IntegrationManager {
    * same tree-derived skip reason for it, which the AR-R05 gate accepts
    * exactly as it accepts the CD-17 link reason, so no such layout wedges
    * the run.
+   * C2e repair cycle 1 (N-1): each blocker carries its kind, so the
+   * recorded skip reason names a regular file, a submodule entry or a
+   * directory accurately instead of calling everything a link. Links and
+   * case collisions carry no forward kind (the describer keeps the legacy
+   * wording for them), so stored logs replay unchanged.
    */
-  private async commitStateLinkComponents(commit: string): Promise<string[]> {
+  private async commitStateBlockers(commit: string): Promise<Array<{ component: string; kind: "link" | "file" | "submodule" | "directory" | "case-collision" }>> {
     const parts = ["docs", "project", "STATE.md"];
     const actual: string[] = [];
     for (let level = 0; level < parts.length; level += 1) {
@@ -2582,24 +2715,30 @@ export class IntegrationManager {
       const resolved = await this.commitTreeEntryResolved(treeRef, want);
       const entry = resolved.entry;
       if (entry === undefined) return [];
+      const component = HANDOFF_STATE_LINK_COMPONENTS[level] ?? "";
+      if (component === "") return [];
       if (resolved.collision.length > 1 && level < parts.length - 1) {
-        return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
+        return [{ component, kind: "case-collision" as const }];
       }
       const { mode, name } = entry;
       if (mode === "120000") {
-        return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
+        return [{ component, kind: "link" as const }];
       }
       if (level < parts.length - 1) {
         // C2e (F-matrix): a tracked file where a directory is expected
         // blocks STATE.md the way a link does -- nothing below can be a
         // link, and the blocker itself is reported.
         if (mode !== "040000") {
-          return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
+          return [{ component, kind: mode === "160000" ? "submodule" as const : "file" as const }];
         }
         actual.push(name);
-      } else if (mode === "040000") {
+      } else if (mode !== "100644" && mode !== "100755") {
         // C2e (F-matrix): a tracked directory where STATE.md is expected.
-        return [HANDOFF_STATE_LINK_COMPONENTS[level] ?? ""].filter((entry) => entry !== "");
+        // C2e repair cycle 1 (N-3): a submodule entry (mode 160000, an
+        // empty directory on disk) or any other non-regular, non-link
+        // mode at the STATE.md level blocks the write the same way --
+        // without this the run stalls on EISDIR every attempt.
+        return [{ component, kind: mode === "160000" ? "submodule" as const : "directory" as const }];
       }
     }
     return [];
@@ -2616,7 +2755,7 @@ export class IntegrationManager {
    */
   private async commitStateNonLinkBlocker(
     treeRef: string,
-  ): Promise<{ component: string; kind: "file-not-dir" | "dir-not-file" | "case-collision" } | null> {
+  ): Promise<{ component: string; kind: "file-not-dir" | "dir-not-file" | "case-collision" | "submodule" } | null> {
     const parts = ["docs", "project", "STATE.md"];
     const actual: string[] = [];
     for (let level = 0; level < parts.length; level += 1) {
@@ -2637,9 +2776,21 @@ export class IntegrationManager {
       if (resolved.collision.length > 1 && level < parts.length - 1) return { component, kind: "case-collision" };
       if (entry.mode === "120000") return null;
       if (level < parts.length - 1) {
+        // C2e repair cycle 1 (N-1/N-3): a submodule entry where a
+        // directory is expected carries its own kind so the recorded
+        // reason and the v1 refusal name it accurately.
+        if (entry.mode === "160000") return { component, kind: "submodule" };
         if (entry.mode !== "040000") return { component, kind: "file-not-dir" };
         actual.push(entry.name);
+      } else if (entry.mode === "160000") {
+        // C2e repair cycle 1 (N-3): a submodule entry (mode 160000, an
+        // empty directory on disk) at STATE.md blocks the write the way
+        // a directory does -- without this the run stalls on EISDIR
+        // every attempt.
+        return { component, kind: "submodule" };
       } else if (entry.mode === "040000") {
+        return { component, kind: "dir-not-file" };
+      } else if (entry.mode !== "100644" && entry.mode !== "100755") {
         return { component, kind: "dir-not-file" };
       } else {
         return null;
@@ -2709,8 +2860,18 @@ export class IntegrationManager {
         skipped.push(shape(entryLinkSkipDetail(raw, target, ancestor)));
         continue;
       }
-      const mode = await this.commitTreePathMode(commit, target);
-      if (mode === undefined || mode === "120000") {
+      const found = await this.commitTreePathMode(commit, target);
+      if (found === undefined || found.mode === "120000") {
+        skipped.push(shape(entryLinkSkipDetail(raw, target)));
+        continue;
+      }
+      // C2e repair cycle 1 (N-4): a directory target, a submodule entry,
+      // or a target the tree holds only under another spelling reads
+      // exactly as a fresh commit words it ("not a regular tracked
+      // file"). Only a regular blob at the exact requested spelling keeps
+      // the generic re-description, so tampering layouts (a blob without
+      // the section) still complete instead of pausing.
+      if (found.mode === "040000" || found.mode === "160000" || !found.exact) {
         skipped.push(shape(entryLinkSkipDetail(raw, target)));
         continue;
       }
@@ -2752,8 +2913,12 @@ export class IntegrationManager {
    * (C2e m-4). A mid-level non-tree (a file where a directory is expected)
    * also reports undefined: the target is unreachable, which the caller
    * words as "not a regular tracked file" exactly as the stager does.
+   * C2e repair cycle 1 (N-4): `exact` tells whether the tree holds the
+   * target under the requested spelling at every level -- a folded
+   * (case-only) match is not the regular tracked file the stager checked,
+   * so the caller words it as "not a regular tracked file" too.
    */
-  private async commitTreePathMode(commit: string, path: string): Promise<string | undefined> {
+  private async commitTreePathMode(commit: string, path: string): Promise<{ mode: string; exact: boolean } | undefined> {
     const parts = path.split("/");
     const actual: string[] = [];
     const insensitive = await this.checkoutIgnoresCase();
@@ -2766,11 +2931,11 @@ export class IntegrationManager {
         entry = await this.commitTreeEntryFolded(parentRef, want);
       }
       if (entry === undefined) return undefined;
+      actual.push(entry.name);
       if (index < parts.length - 1) {
         if (entry.mode !== "040000") return undefined;
-        actual.push(entry.name);
       } else {
-        return entry.mode;
+        return { mode: entry.mode, exact: actual.join("/") === path };
       }
     }
     return undefined;
@@ -3665,6 +3830,20 @@ function linkTargetResolvesInsideAllowingDotDot(target: string): boolean {
     }
   }
   return true;
+}
+
+/**
+ * The recorded STATE.md skip-reason kind for a stage-time non-link
+ * blocker (C2e repair cycle 1, N-1). A case collision keeps the legacy
+ * link wording (null here), so stored logs replay unchanged.
+ */
+function stateBlockerReasonKind(
+  kind: "file-not-dir" | "dir-not-file" | "case-collision" | "submodule",
+): HandoffStateBlockerKind | null {
+  if (kind === "file-not-dir") return "file";
+  if (kind === "dir-not-file") return "directory";
+  if (kind === "submodule") return "submodule";
+  return null;
 }
 
 /**

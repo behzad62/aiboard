@@ -796,6 +796,84 @@ test("C2e/m-4 reuse wording: a reused commit records the fresh skip wording, not
 });
 
 /**
+ * C2e repair cycle 1 (N-4): drive one entry-link layout fresh and through
+ * the commit-reuse path, returning both recorded AGENTS.md skip reasons.
+ * The fresh drive lands its own commit; the reuse drive faults the first
+ * read-back so the resume reuses the landed commit by key.
+ */
+async function entrySkipWordingFreshAndReuse(
+  label: string,
+  runPrefix: string,
+  setup: (worktree: string) => Promise<void>,
+): Promise<{ fresh: string; reuse: string }> {
+  const architect = silentArchitect();
+  let fresh: string;
+  {
+    const RUN = `${runPrefix}-fresh`;
+    const fixture = await openFactoryPort(`${label}f`, RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+    try {
+      await setup(fixture.integration.path);
+      const driven = await driveHandoff(fixture, RUN, { architect });
+      const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+      assert.equal(snapshots.length, 1, "the fresh layout hands off");
+      fresh = String((snapshots[0]!.payload as Record<string, unknown>).agentsSectionViaLink);
+    } finally {
+      await fixture.close();
+    }
+  }
+  let reuse: string;
+  {
+    const RUN = `${runPrefix}-reuse`;
+    const fixture = await openFactoryPort(`${label}r`, RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+    try {
+      await setup(fixture.integration.path);
+      failNextSnapshotReadOnce(fixture.integration, "Injected handoff snapshot read failure.");
+      let driven = await driveHandoff(fixture, RUN, { architect });
+      assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
+      await resumeHandoff(fixture, RUN, `resume:${runPrefix}`, { architect });
+      driven = await driveHandoff(fixture, RUN, { architect });
+      const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+      assert.equal(snapshots.length, 1, "the retry reuses the landed commit instead of wedging");
+      reuse = String((snapshots[0]!.payload as Record<string, unknown>).agentsSectionViaLink);
+      const relanded = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+      assert.equal(relanded.stdout.trim(), "3", "the retry reuses the landed commit instead of committing again");
+      const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", `handoff:${runPrefix}`);
+      assert.equal(selected.status, "completed", "the owner selection completes");
+    } finally {
+      await fixture.close();
+    }
+  }
+  return { fresh, reuse };
+}
+
+test("C2e repair cycle 1/m-4a reuse wording: a directory target records the fresh skip wording", async () => {
+  const { fresh, reuse } = await entrySkipWordingFreshAndReuse("c2er1m4a", "run-c2e-r1-m4a", async (worktree) => {
+    mkdirSync(join(worktree, "somedir"), { recursive: true });
+    writeFileSync(join(worktree, "somedir", "keep.md"), "keep\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "somedir/keep.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a tracked directory target"] });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "somedir");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "somedir");
+  });
+  const expected = "AGENTS.md is a symbolic link to somedir; the entry is skipped (target somedir is not a regular tracked file).";
+  assert.equal(fresh, expected, "the fresh commit records the real cause");
+  assert.equal(reuse, expected, "the reuse records exactly what the fresh commit records");
+});
+
+test("C2e repair cycle 1/m-4b reuse wording: a case-variant target records the fresh skip wording", async () => {
+  const { fresh, reuse } = await entrySkipWordingFreshAndReuse("c2er1m4b", "run-c2e-r1-m4b", async (worktree) => {
+    writeFileSync(join(worktree, "NOTES.md"), "team notes\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "NOTES.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed the NOTES.md target"] });
+    await commitEntryLinkMode(worktree, "AGENTS.md", "notes.md");
+    await checkoutEntryLinkAsPlainFile(worktree, "AGENTS.md", "notes.md");
+  });
+  const expected = "AGENTS.md is a symbolic link to notes.md; the entry is skipped (target notes.md is not a regular tracked file).";
+  assert.equal(fresh, expected, "the fresh commit records the real cause");
+  assert.equal(reuse, expected, "the reuse records exactly what the fresh commit records");
+});
+
+/**
  * C2d repair cycle 1 (B3): the manager-plus-describer gate check for one
  * lowercase-target layout. The commit lands through the factory-built
  * port; the shared describer and `handoffEntryFileStatus` decide exactly

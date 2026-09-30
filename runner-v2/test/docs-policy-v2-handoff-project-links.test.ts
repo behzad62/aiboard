@@ -14,6 +14,7 @@ import {
   V2_AGENTS_SECTION_BODY,
   V2_CLAUDE_POINTER_LINE,
   describeSnapshotCommitFacts,
+  handoffStateBlockerSkipReason,
   handoffStateSkipReason,
   spliceMarkedArchitectSectionBytes,
 } from "../src/project-docs.js";
@@ -1030,7 +1031,7 @@ test("C2e/probe F-docs-file: a tracked file at docs skips STATE.md and still han
     const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
     assert.equal(snapshots.length, 1, "the run hands off instead of stalling on ENOTDIR");
     const payload = snapshots[0]!.payload as Record<string, unknown>;
-    assert.equal(payload.stateSkippedReason, handoffStateSkipReason("docs"), "the skip reason is tree-derived, exactly as for a link");
+    assert.equal(payload.stateSkippedReason, handoffStateBlockerSkipReason("docs", "file"), "the skip reason names the file blocker accurately");
     assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
     assert.equal(payload.agentsSectionCommitted, true);
     assert.equal(payload.claudeLineCommitted, true);
@@ -1081,7 +1082,7 @@ test("C2e/probe F-project-file: a tracked file at docs/project skips STATE.md an
     const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
     assert.equal(snapshots.length, 1, "the run hands off instead of stalling on EEXIST");
     const payload = snapshots[0]!.payload as Record<string, unknown>;
-    assert.equal(payload.stateSkippedReason, handoffStateSkipReason("docs/project"), "the skip reason is tree-derived, exactly as for a link");
+    assert.equal(payload.stateSkippedReason, handoffStateBlockerSkipReason("docs/project", "file"), "the skip reason names the file blocker accurately");
     assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
@@ -1130,7 +1131,7 @@ test("C2e/probe F-state-dir: a tracked directory at docs/project/STATE.md skips 
     const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
     assert.equal(snapshots.length, 1, "the run hands off instead of stalling on EISDIR");
     const payload = snapshots[0]!.payload as Record<string, unknown>;
-    assert.equal(payload.stateSkippedReason, handoffStateSkipReason("docs/project/STATE.md"), "the skip reason is tree-derived, exactly as for a link");
+    assert.equal(payload.stateSkippedReason, handoffStateBlockerSkipReason("docs/project/STATE.md", "directory"), "the skip reason names the directory blocker accurately");
     assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
     const commit = String(payload.commit);
     const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
@@ -1155,6 +1156,115 @@ test("C2e/probe F-state-dir: a tracked directory at docs/project/STATE.md skips 
       }),
       /Project document path docs\/project\/STATE\.md is refused because docs\/project\/STATE\.md is a directory\./,
       "a directory at STATE.md refuses the v1 batch before any write",
+    );
+    const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(after.stdout.trim(), before.stdout.trim(), "the refused batch commits nothing");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2e repair cycle 1/probe F10: a STATE.md directory refuses only the blocked v1 write", async () => {
+  const RUN = "run-c2e-r1-f10";
+  const fixture = await openFactoryPort("c2er1f10", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    // A tracked directory at `docs/project/STATE.md` (the F-state-dir
+    // layout): the kernel run still hands off with the tree-derived
+    // reason.
+    mkdirSync(join(worktree, "docs", "project", "STATE.md"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project", "STATE.md", "keep.md"), "user keep\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/project/STATE.md/keep.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a tracked directory at docs/project/STATE.md"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the run hands off with the directory skip");
+    // The v1 regression (N-2): a write the blocker cannot affect lands
+    // instead of being refused for the STATE.md directory.
+    const before = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    const documents = await fixture.integration.commitProjectDocuments({
+      writes: [{ path: "docs/project/README.md", content: "# project readme\n" }],
+      summary: "Record documents",
+      runId: RUN,
+      requestId: "project-doc:c2e-r1-f10:docs/project/README.md",
+    });
+    assert.ok(documents.commit, "the unrelated v1 write commits");
+    const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(after.stdout.trim(), String(Number(before.stdout.trim()) + 1), "the v1 batch commits exactly once");
+    const readme = await runGit({ cwd: worktree, args: ["show", `${documents.commit}:docs/project/README.md`] });
+    assert.equal(readme.stdout, "# project readme\n", "the README lands in the commit");
+    // The blocked write itself is still refused with a clear reason.
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+        summary: "Record documents",
+        runId: RUN,
+        requestId: "project-doc:c2e-r1-f10:docs/project/STATE.md",
+      }),
+      /Project document path docs\/project\/STATE\.md is refused because docs\/project\/STATE\.md is a directory\./,
+      "the STATE.md write is still refused",
+    );
+    assert.equal(readFileSync(join(worktree, "docs", "project", "STATE.md", "keep.md"), "utf8"), "user keep\n", "the user's directory is untouched");
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C2e repair cycle 1/probe F7: a submodule entry at docs/project/STATE.md skips STATE.md and still hands off", async () => {
+  const RUN = "run-c2e-r1-f7";
+  const fixture = await openFactoryPort("c2er1f7", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    // A gitlink (mode 160000, an empty directory on disk) at
+    // `docs/project/STATE.md` (today: EISDIR on every attempt, and a raw
+    // EISDIR throw on the v1 path).
+    mkdirSync(join(worktree, "docs", "project"), { recursive: true });
+    writeFileSync(join(worktree, "docs", "project", "README.md"), "user readme\n");
+    await runGit({ cwd: worktree, args: ["add", "--", "docs/project/README.md"] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed docs/project"] });
+    const head = (await runGit({ cwd: worktree, args: ["rev-parse", "HEAD"] })).stdout.trim();
+    assert.match(head, /^[a-f0-9]{40}$/);
+    await runGit({ cwd: worktree, args: ["update-index", "--add", "--cacheinfo", `160000,${head},docs/project/STATE.md`] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a submodule entry at docs/project/STATE.md"] });
+    mkdirSync(join(worktree, "docs", "project", "STATE.md"), { recursive: true });
+    const mode = await runGit({ cwd: worktree, args: ["ls-tree", "HEAD", "--", "docs/project/STATE.md"] });
+    assert.match(mode.stdout, /^160000 commit /m, "the commit holds the submodule entry");
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the run hands off instead of stalling on EISDIR");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(
+      payload.stateSkippedReason,
+      handoffStateBlockerSkipReason("docs/project/STATE.md", "submodule"),
+      "the skip reason names the submodule entry accurately",
+    );
+    assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
+    const commit = String(payload.commit);
+    const files = await runGit({ cwd: worktree, args: ["show", "--name-only", "--format=", commit] });
+    assert.deepEqual(
+      files.stdout.split("\n").map((line) => line.trim()).filter(Boolean),
+      ["AGENTS.md", "CLAUDE.md"],
+      "only the entry files commit; nothing is written under the submodule entry",
+    );
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "no write landed in a file the commit does not record");
+    const selected = await selectHandoffOwner(fixture, RUN, "keep_integration_branch", "handoff:c2e-r1-f7");
+    assert.equal(selected.status, "completed", "the owner selection completes");
+    // The v1 Architect path refuses with a clear reason, never with a crash.
+    const before = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: [{ path: "docs/project/STATE.md", content: DEFAULT_STATE_TEMPLATE }],
+        summary: "Record documents",
+        runId: RUN,
+        requestId: "project-doc:c2e-r1-f7:docs/project/STATE.md",
+      }),
+      /Project document path docs\/project\/STATE\.md is refused because docs\/project\/STATE\.md is a submodule entry\./,
+      "a submodule entry at STATE.md refuses the v1 batch before any write",
     );
     const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
     assert.equal(after.stdout.trim(), before.stdout.trim(), "the refused batch commits nothing");

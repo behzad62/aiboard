@@ -212,3 +212,80 @@ Backups under `/tmp` (`c2e-backup-integration-manager.ts`,
   editor args are forbidden) and on git writing the file with the same
   bytes as stdout (verified byte-semantics in a scratch repo; the
   G1-select and m-8 applies prove it end to end).
+
+---
+
+# Repair cycle 1 (review r1: REPAIR — B-1 blocking; N-1..N-4 recommended)
+
+## Repair scope (review r1: 1 blocking + 4 recommended)
+
+| Item | Change |
+|---|---|
+| B-1 (blocking) | `assertCheckoutWillNotOverwriteUntracked` no longer buffers the whole-tree `ls-files --others -z` listing (it includes IGNORED files, which `git status --porcelain` never shows). Only the paths the apply will write are checked, in bounded chunks of 200 `:(literal)` pathspecs per `ls-files --others -z` call; each call's output holds only collisions. `--others` without `--exclude-standard` still reports ignored files at those paths, so the ignored-path collision refusal is byte-identical. `projectMatchesRevision` (recovery only) no longer buffers the whole-tree listing either: it checks the index/worktree against the revision as before, then a `--exclude-standard` untracked listing (a user file anywhere outside the apply still blocks recovery, same exposure as the apply's own `status --porcelain` clean check) plus the chunked written-paths check above, so an ignored file at a target path still refuses instead of being overwritten. `git ls-files` has no `--output` flag (verified), so the listing cannot go through a file. No cap was raised. Follow-up found in validation: the first attempt (`--exclude-standard` alone) regressed `integration-manager.test.ts` "crash recovery never overwrites an ignored untracked target path" and "journal recovery blocks mismatches ..." — fixed by the two-part check; both green again (see suites). |
+| N-2 | v1 `commitProjectDocuments` refuses only the write the blocker can affect: `blocker.kind === "file-not-dir" \|\| write.path === "docs/project/STATE.md"`. A directory/submodule/collision at STATE.md no longer blocks an unrelated `docs/project/README.md` write. |
+| N-3 | Both commit-tree walks count any non-regular, non-link mode at the STATE.md level as a blocker (mode 160000 gitlink, 040000 directory, anything else): `commitStateBlockers` and `commitStateNonLinkBlocker`. Kernel skips STATE.md with the tree-derived reason; v1 refuses clearly (`is a submodule entry.`). |
+| N-4 | `commitTreePathMode` now reports `{ mode, exact }` (`exact` = the tree holds the target under the requested spelling at every level). The reuse/withdrawn re-description words mode 040000 / 160000 and folded-only matches as "not a regular tracked file", exactly as the stager does; only a regular blob at the exact spelling keeps the generic wording (tampering layouts still complete). |
+| N-1 | `project-docs.ts` gains `HandoffStateBlockerKind` ("file" \| "submodule" \| "directory") and `handoffStateBlockerSkipReason` (new sentences; `handoffStateSkipReason` frozen byte-identical). The kind travels `commitStateBlockers` → `documentCommitResult.stateBlockerKind` → `describeSnapshotCommitFacts.commitStateBlockerKind` (both runtime call sites) → recorded `stateSkippedReason`. Links and case collisions carry no kind and keep the legacy wording, so stored logs replay unchanged. Scope note: the case-collision record keeps the legacy sentence (C2d test C-1 asserts it); only file/gitlink/directory records changed, per the brief. |
+
+## Changed files (sha256, final bytes)
+
+- `01f8bfab4d2dd13fd3e7dde57e91ccdd8189c85f85279cb59a6b43e0fb30847d` runner-v2/src/integration-manager.ts (prove-reds ran against `d4eaf504...`; the recovery follow-up above moved it to the final hash — the reverted/re-restored regions are textually identical in both)
+- `782d56118984ed5d7b2f20f8448b8679a123ed1062b35dcf1d7524fd085d39a0` runner-v2/src/build-runtime.ts
+- `87d593264c42cca900152195fa15fdc441a83f36fa2f3db5db8b33f984c918d7` runner-v2/src/project-docs.ts
+- `f51070b3ebb71710ee703bda6aa05f5489d9ed7a0a046435b6c4c10a81d76a49` runner-v2/test/docs-policy-v2-handoff-project-links.test.ts
+- `e66649644c27ffaef977607e81789ea8462f2ceef67142300be7fe251e248af3` runner-v2/test/docs-policy-v2-handoff-entry-links.test.ts
+- `be86a6fd9c4b4d308e7d73d762a1b8f6af86df5cd6f7f59bf889ee39f7a9128f` runner-v2/test/docs-policy-v2-handoff-large-tree.test.ts
+- harness unchanged (`1e2eaca0387a21d99d96f4f968ba3c60385fcd6ca0707a66257b1c63c9af7434`); retry file unchanged (`b663675ce816316f8107d95ce725745a795c64771ee546c624ebb6ca7a840e17`).
+
+## New/updated tests
+
+- large-tree "C2e repair cycle 1/probe A1": 45,000 ignored files + tiny apply → completes, project holds the applied snapshot (prove-red below).
+- large-tree "C2e repair cycle 1/probe A3": ignored file at an added path → refused with the exact old collision message, head/status/file unchanged (keeps the refusal exactly as strong under the new mechanism).
+- project-links "C2e repair cycle 1/probe F10" (reviewer F10): STATE.md directory + v1 README-only write → commits; STATE.md write still refused.
+- project-links "C2e repair cycle 1/probe F7" (reviewer F7): gitlink at STATE.md → 1 snapshot with the submodule wording, selection completes, v1 refuses `is a submodule entry.`
+- entry-links "C2e repair cycle 1/m-4a" (directory target) and "m-4b" (case-variant target): fresh and reuse record the byte-identical "not a regular tracked file" reason.
+- Updated to the N-1 wording: F-docs-file and F-project-file (`handoffStateBlockerSkipReason(..., "file")`), F-state-dir (`"directory"`). Link/collision assertions (F-collide, C-1) untouched and still legacy-worded.
+
+## Suites (worker-run, NODE_TEST_CONTEXT cleared)
+
+New tests, each `--test-concurrency=1`:
+
+- C2e repair cycle 1/probe A1: pass 1/1 (179.8 s; 201.2 s in the large-tree-alone run).
+- C2e repair cycle 1/probe A3: pass 1/1 (177.6 s; 141.2 s in the large-tree-alone run).
+- C2e repair cycle 1/probe F10 + F7: pass 2/2 (208.4 s + 136.7 s).
+- C2e repair cycle 1/m-4a + m-4b: pass 2/2 (344.6 s + 316.9 s).
+- Recovery re-run after the follow-up fix (`--test-name-pattern="ignored|mismatch|ref moved|retiring|concurrent managers"`, integration-manager.test.ts): pass 7/7 (~40 s).
+
+Validation (six files, `--test-concurrency=4`, NODE_TEST_CONTEXT cleared): exit 0 —
+entry-links, project-links, retry, integration-manager.test.ts, project-doc-commit.test.ts,
+replay-compatibility.test.ts: 132 tests, 132 pass, 0 fail (`duration_ms 4471710`, ~75 min
+wall under load). An earlier run on the pre-follow-up bytes failed exactly the two
+recovery tests named above and nothing else; the follow-up fixed them (re-run green) and
+the final full run is clean.
+
+Large-tree file ALONE (`--test-concurrency=1`, NODE_TEST_CONTEXT cleared): 6 tests, 6 pass,
+0 fail (`duration_ms 2893861`, ~48 min wall under load) — G1 (510.9 s), G1-control
+(443.6 s), G1-select (1076.8 s), A1 (201.2 s), A3 (141.2 s), G1-flat (519.3 s). The
+pre-existing G1 tests needed no change (none asserted the old refusal).
+
+Static (final bytes): tsc (`tsc -p runner-v2/tsconfig.json --noEmit`) clean, exit 0;
+eslint on all six changed files clean, exit 0; `git diff --check -- runner-v2/` clean
+(the only worktree hits are pre-existing trailing-whitespace lines in another packet's
+`muse-pipeline-2026-09-29.md`, untouched here).
+
+Suites not run: native-delivery files (the pipeline runs them); whole-repo suite (out of scope).
+
+## Prove-red records (sha256 before/after, byte-exact restore)
+
+Backups under `C:\Users\b_a_s\AppData\Local\Temp\c2e-r1-pr\` (`integration-manager.fixed.ts`
+refreshed to the final `01f8bfab...` bytes); every restore below was verified by hash at the
+time (`d4eaf504...`), and each reverted/re-restored region is textually identical in the
+final bytes, so the reds prove the final code too.
+
+1. B-1: with the whole-tree `ls-files --others -z` listing put back, "C2e repair cycle 1/probe A1" goes red with the exact old failure: `GitCommandError: Git output exceeded 4194304 bytes or its exact bounded artifact is unavailable.` (`output_limit`, from `assertCheckoutWillNotOverwriteUntracked`). Restored to `d4eaf504...` (hash match).
+2. N-2: with the old `if (blocker !== null)` v1 condition put back, "C2e repair cycle 1/probe F10" goes red: `Project document path docs/project/README.md is refused because docs/project/STATE.md is a directory.` Restored (hash match).
+3. N-3: with the directory-only STATE.md-level checks put back in both walks, "C2e repair cycle 1/probe F7" goes red: 0 snapshots (`0 !== 1`, the EISDIR stall). Restored to `d4eaf504...` (hash match).
+
+## Correction to the C2e record
+
+The C2e.md sentence "The untracked listing stays buffered (the project is proven clean just before, so it is a few bytes)" was wrong: the clean check is `git status --porcelain`, which never lists ignored files, while `ls-files --others` without `--exclude-standard` lists them all. This repair removes the whole-tree untracked listing instead of buffering it.

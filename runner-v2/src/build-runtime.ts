@@ -2462,6 +2462,9 @@ export class BuildRuntime {
       entryPoint: result.entryPoint,
       storedPaths: stored.paths,
       ...(result.dirLinks?.[0] !== undefined ? { commitStateLink: result.dirLinks[0] } : {}),
+      // C2e repair cycle 1 (N-1): the blocker kind travels to the
+      // recorded skip reason; absent keeps the legacy link wording.
+      ...(result.stateBlockerKind !== undefined ? { commitStateBlockerKind: result.stateBlockerKind } : {}),
       ...(result.skipped !== undefined ? { stageSkipped: result.skipped } : {}),
       ...(result.redirected !== undefined ? { stageRedirected: result.redirected } : {}),
     });
@@ -2751,6 +2754,9 @@ export class BuildRuntime {
         entryPoint: found.entryPoint,
         storedPaths: stored.paths,
         ...(found.dirLinks?.[0] !== undefined ? { commitStateLink: found.dirLinks[0] } : {}),
+        // C2e repair cycle 1 (N-1): same kind pass-through as the
+        // current-stop path above.
+        ...(found.stateBlockerKind !== undefined ? { commitStateBlockerKind: found.stateBlockerKind } : {}),
         ...(found.skipped !== undefined ? { stageSkipped: found.skipped } : {}),
       });
       const withdrawnStateChanged = withdrawnDescribed.stateChanged;

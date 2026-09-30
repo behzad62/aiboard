@@ -238,6 +238,15 @@ export interface ProjectDocCommitResult {
    * case-insensitive).
    */
   dirLinks?: string[];
+  /**
+   * C2e repair cycle 1 (N-1): the kind of the first commit-tree STATE.md
+   * blocker, present only for a non-link, non-collision blocker (a
+   * regular file, a submodule entry or a directory). The runtime records
+   * the accurate skip reason from this; absent means the legacy link
+   * wording. Read from the commit, never the checkout. Additive: older
+   * callers simply omit it.
+   */
+  stateBlockerKind?: HandoffStateBlockerKind;
   commit: string;
   parent: string;
   head: string;
@@ -413,9 +422,38 @@ export const HANDOFF_STATE_LINK_COMPONENTS: readonly string[] = [
  * C2c repair cycle 2 (m-4): the recorded STATE.md skip for one commit-tree
  * link component. The single wording source for the fresh path, the
  * commit-reuse path and the withdrawn-stop path.
+ *
+ * Frozen: stored logs already carry this sentence, so it never changes;
+ * new blockers get their own wording below and old records keep reading
+ * through this function.
  */
 export function handoffStateSkipReason(linkComponent: string): string {
   return `${HANDOFF_STATE_PATH} is not written: ${linkComponent} is a symbolic link or junction; the handoff proceeds without it.`;
+}
+
+/**
+ * C2e repair cycle 1 (N-1): the kind of a commit-tree STATE.md blocker
+ * that is not a link. Only these three kinds travel forward; links and
+ * case collisions keep the legacy wording above so stored logs replay
+ * unchanged.
+ */
+export type HandoffStateBlockerKind = "file" | "submodule" | "directory";
+
+/**
+ * C2e repair cycle 1 (N-1): the recorded STATE.md skip for one commit-tree
+ * non-link blocker, naming the blocker accurately. The single wording
+ * source for the fresh path, the commit-reuse path and the withdrawn-stop
+ * path -- every path takes the kind from the commit tree, so all three
+ * record the same sentence.
+ */
+export function handoffStateBlockerSkipReason(component: string, kind: HandoffStateBlockerKind): string {
+  if (kind === "file") {
+    return `${HANDOFF_STATE_PATH} is not written: ${component} is a regular file, not a directory; the handoff proceeds without it.`;
+  }
+  if (kind === "submodule") {
+    return `${HANDOFF_STATE_PATH} is not written: ${component} is a submodule entry; the handoff proceeds without it.`;
+  }
+  return `${HANDOFF_STATE_PATH} is not written: ${component} is a directory; the handoff proceeds without it.`;
 }
 
 /**
@@ -514,6 +552,14 @@ export interface SnapshotCommitDescriptionInput {
    * case-insensitive, including STATE.md itself.
    */
   commitStateLink?: string;
+  /**
+   * C2e repair cycle 1 (N-1): the kind of the first commit-tree STATE.md
+   * blocker, when it is a regular file, a submodule entry or a
+   * directory. Present only then; absent (links, collisions, older
+   * callers) keeps the legacy link wording so stored logs replay
+   * unchanged.
+   */
+  commitStateBlockerKind?: HandoffStateBlockerKind;
   /** Stage-time skips: kept only when the commit tree corroborates the link. */
   stageSkipped?: ReadonlyArray<{ path: string; reason: string }>;
   /** Stage-time redirects: kept only when the commit tree proves the ViaLink. */
@@ -553,8 +599,14 @@ export interface SnapshotCommitDescription {
  */
 export function describeSnapshotCommitFacts(input: SnapshotCommitDescriptionInput): SnapshotCommitDescription {
   const stateChanged = input.storedPaths.includes(HANDOFF_STATE_PATH);
+  // C2e repair cycle 1 (N-1): a file, submodule or directory blocker is
+  // recorded with its accurate wording; anything else (links, collisions,
+  // older callers) keeps the legacy wording, so stored logs replay
+  // unchanged.
   const stateSkippedReason = !stateChanged && input.commitStateLink !== undefined
-    ? handoffStateSkipReason(input.commitStateLink)
+    ? input.commitStateBlockerKind !== undefined
+      ? handoffStateBlockerSkipReason(input.commitStateLink, input.commitStateBlockerKind)
+      : handoffStateSkipReason(input.commitStateLink)
     : undefined;
   const stageSkipFor = (path: string): string | undefined =>
     input.stageSkipped?.find((entry) => entry.path === path)?.reason;
