@@ -38,6 +38,7 @@ import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding }
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { ensureJobHostHelperAssembly, extractJobHostHelperSource, resetJobHostHelperAssemblyForTests } from "../src/windows-job-process-host.js";
+import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 
 const WINDOWS_SKIP = "Windows Job launch-speed pin requires a Windows host.";
 const BACKEND_SKIP = "Windows Job launch-speed pin requires the runner-windows-job-v1 backend to be selected.";
@@ -844,4 +845,11 @@ test("launch-speed: a delete-and-race against the helper never loads attacker by
   }
   assert.equal(sha256File(dllPath), pristineSha, "assembly restored byte-exact");
   assert.ok(!existsSync(markerPath), "evil marker absent after cleanup");
+});
+
+// PX-2e: no supervisor or Job host started by this file (temp roots
+// `aiboard-px2a-*`) may still be alive at file end. Leftovers are recorded,
+// killed, and reported here.
+after(async () => {
+  await checkNoWindowsJobProcessesLeft(["aiboard-px2a-"]);
 });

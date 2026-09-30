@@ -33,6 +33,7 @@ import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding }
 import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config.js";
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { createWindowsJobProcessHost, type WindowsJobProcessHost, type WindowsJobSpareOptions } from "../src/windows-job-process-host.js";
+import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tsxPath = fileURLToPath(new URL("../../node_modules/tsx/dist/cli.mjs", import.meta.url));
@@ -1337,4 +1338,13 @@ test("spare pin: a failing claimed-record persist surfaces and never runs the ca
     } catch {}
     rmSync(world.root, { recursive: true, force: true });
   }
+});
+
+// PX-2e: no supervisor or Job host started by this file (temp roots
+// `aiboard-px2c-*`) may still be alive at file end. The per-test record
+// gates above stay authoritative; this process-level guard additionally
+// covers supervisors without a record. Leftovers are recorded, killed, and
+// reported here.
+after(async () => {
+  await checkNoWindowsJobProcessesLeft(["aiboard-px2c-"]);
 });

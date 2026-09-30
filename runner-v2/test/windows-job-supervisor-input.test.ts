@@ -4,7 +4,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
-import test from "node:test";
+import test, { after } from "node:test";
+import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 
 for (const interactive of [true, false]) test(`Windows Job supervisor retains exact ownership after input-pipe error (interactive=${interactive})`, async () => {
   const url = new URL("../src/managed-process-supervisor.mjs", import.meta.url);
@@ -35,4 +36,11 @@ for (const interactive of [true, false]) test(`Windows Job supervisor retains ex
   backend.emit("exit", 1);
   assert.equal(status.jobEmptyProof, true, "only the exact Job-host exit attests kill-on-close");
   assert.equal(status.ownershipReleased, false, "output still needs separate terminal settlement");
+});
+
+// PX-2e: this file drives the supervisor source in-VM and must never leave a
+// real supervisor or Job host behind. The worktree-scoped guard below fails
+// the file if any managed supervisor from this worktree is still alive.
+after(async () => {
+  await checkNoWindowsJobProcessesLeft([]);
 });

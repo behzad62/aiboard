@@ -52,6 +52,7 @@ import {
   type WindowsJobChannelAuthority,
 } from "../src/windows-job-process-channel.js";
 import { createWindowsProcessBackend, WindowsJobObjectProcessBackend } from "../src/windows-process-backend.js";
+import { checkNoWindowsJobProcessesLeft, retireOwnedTreeForTests } from "./support/windows-job-leftover-guard.js";
 
 const WINDOWS_SKIP = "Windows Job fence-effects pin requires a Windows host.";
 const BACKEND_SKIP = "Windows Job fence-effects pin requires the runner-windows-job-v1 backend to be selected.";
@@ -1285,16 +1286,16 @@ test("px2b: supervisor wait parks while the outcome is unknown", { timeout: 55_0
     assert.equal(body.status, "exited_unknown");
     assert.ok(elapsed >= 700 && elapsed < 5_000, `unknown outcome must park, took ${elapsed}ms`);
   } finally {
-    try {
-      await service.signalOwned(launched.processId, "SIGKILL", owner, { ...fence });
-    } catch {
-      // Already terminal.
-    }
-    try {
-      await service.releaseOwned(launched.processId, owner, launched.startedAt, { ...fence });
-    } catch {
-      // Best-effort cleanup only.
-    }
+    // PX-2e: this call ends with unacknowledged retained output
+    // (exited_unknown with pending output), where a plain signal+release is
+    // refused by design and the supervisor would park forever. Drain with
+    // exact ACKs so the supervisor reaches stopped and exits itself.
+    await retireOwnedTreeForTests(service, {
+      processId: launched.processId,
+      owner,
+      fence: { ...fence },
+      startedAt: launched.startedAt,
+    });
   }
 });
 
@@ -1355,16 +1356,15 @@ test("px2b: supervisor wait returns at once on a stale change cursor", { timeout
     assert.notEqual(body.updatedAt, first.updatedAt, "cursor return must carry newer state");
     assert.ok(elapsed < 1_000, `stale cursor must return at once, took ${elapsed}ms`);
   } finally {
-    try {
-      await service.signalOwned(launched.processId, "SIGKILL", owner, { ...fence });
-    } catch {
-      // Already terminal.
-    }
-    try {
-      await service.releaseOwned(launched.processId, owner, launched.startedAt, { ...fence });
-    } catch {
-      // Best-effort cleanup only.
-    }
+    // PX-2e: the ticking child leaves unacknowledged retained output, where
+    // a plain signal+release is refused by design and the supervisor would
+    // park forever. Drain with exact ACKs so it reaches stopped and exits.
+    await retireOwnedTreeForTests(service, {
+      processId: launched.processId,
+      owner,
+      fence: { ...fence },
+      startedAt: launched.startedAt,
+    });
   }
 });
 
@@ -1484,4 +1484,12 @@ test("px2b: status-change wait throws on an old supervisor without the endpoint"
       );
     },
   );
+});
+
+// PX-2e: no supervisor or Job host started by this file (temp roots
+// `aiboard-px2b-*`) may still be alive at file end. Leftovers are recorded,
+// killed, and reported here; the per-test teardowns above must already have
+// retired their trees through the designed drain path.
+after(async () => {
+  await checkNoWindowsJobProcessesLeft(["aiboard-px2b-"]);
 });

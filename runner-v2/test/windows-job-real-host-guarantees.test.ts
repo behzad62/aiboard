@@ -50,6 +50,7 @@ import { emptyRunnerCapabilitiesConfig } from "../src/runner-capabilities-config
 import type { RunnerCapabilityContract } from "../src/runner-capability-contract.js";
 import { createWindowsJobProcessHost, type WindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { createWindowsProcessBackend } from "../src/windows-process-backend.js";
+import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 
 const WINDOWS_SKIP = "Windows Job real-host pin requires a Windows host.";
 const BACKEND_SKIP = "Windows Job real-host pin requires the runner-windows-job-v1 backend to be selected.";
@@ -1417,3 +1418,12 @@ test(
     }
   },
 );
+
+// PX-2e: no supervisor or Job host started by this file (temp roots
+// `aiboard-px2t-*`) may still be alive at file end. The per-test record
+// gates above stay authoritative; this process-level guard additionally
+// covers supervisors without a record. Leftovers are recorded, killed, and
+// reported here.
+after(async () => {
+  await checkNoWindowsJobProcessesLeft(["aiboard-px2t-"]);
+});
