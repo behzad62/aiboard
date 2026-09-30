@@ -77,7 +77,7 @@ interface SettingsData {
 
 const MODES: DiscussionMode[] = ["panel", "debate", "specialist", "build"];
 
-const TAB_VALUES = ["providers", "tools", "pricing", "defaults", "storage", "security"];
+const TAB_VALUES = ["providers", "tools", "capability-lab", "pricing", "defaults", "storage", "security"];
 
 export default function SettingsPage() {
   const [tab, setTab] = useState("providers");
@@ -188,9 +188,10 @@ export default function SettingsPage() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-6">
+        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4 lg:grid-cols-7">
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="tools">Tools</TabsTrigger>
+          <TabsTrigger value="capability-lab">Capability Lab</TabsTrigger>
           <TabsTrigger value="pricing">Pricing</TabsTrigger>
           <TabsTrigger value="defaults">Defaults</TabsTrigger>
           <TabsTrigger value="storage">Storage</TabsTrigger>
@@ -323,17 +324,21 @@ export default function SettingsPage() {
             </Tabs>
           </div>
 
-          <CapabilityLab
-            providers={effectiveProviders}
-            capabilityProfiles={data?.settings.modelCapabilityProfiles}
-            onChanged={load}
-          />
         </TabsContent>
 
         {/* ── Tools ─────────────────────────────────────────────── */}
         <TabsContent value="tools">
           <ToolRuntimeSettingsPanel
             settings={data?.settings.toolRuntime}
+            onChanged={load}
+          />
+        </TabsContent>
+
+        {/* ── Capability Lab ───────────────────────────────────── */}
+        <TabsContent value="capability-lab">
+          <CapabilityLab
+            providers={effectiveProviders}
+            capabilityProfiles={data?.settings.modelCapabilityProfiles}
             onChanged={load}
           />
         </TabsContent>
