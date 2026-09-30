@@ -44,9 +44,12 @@ import {
   newPolicyStaleTasksRequireArchitect,
   nextAnswerReviewId,
   readyPlanIdentity,
+  classifyStopSnapshot,
+  EXCEPTIONAL_RECOVERY_PAUSE_REASON,
   rebuildSchedulerProjection,
   effectiveRepairPlanLimit,
   repairCyclesExhausted,
+  type StopSnapshotStopKind,
 } from "./scheduler-store.js";
 import type { PlanningSourceReader } from "./planning-tools.js";
 import {
@@ -423,6 +426,51 @@ const HANDOFF_SNAPSHOT_FAILURE_DETAIL_MAX_LENGTH = 300;
  * C2a repair (M4): bounded, redacted failure cause for the pause detail --
  * the error message only (never a stack), single-lined and truncated.
  */
+/**
+ * C3a (AR-R08): the "no notes" reason every stop snapshot renders until
+ * C3b adds the Architect stop notes.
+ */
+const STOP_SNAPSHOT_NO_NOTES_REASON = "stop notes are added in C3b";
+
+/**
+ * C3a (AR-R08): the log event that recorded the current stop (the latest
+ * stop event). `project.handoff_requested` is C2's stop and is never
+ * returned here -- the caller stands down while a handoff is requested.
+ * Terminal failure is the abort resolution; an exceptional-recovery pause
+ * carries its fixed reason; every other stop is the latest pause-typed
+ * event (`run.paused`, `repair.issue_paused`, `repair.cycle_limit_reached`,
+ * or the recording failure's own `run.paused`).
+ */
+function findCurrentStopEvent(
+  events: SchedulerEvent[],
+  projection: SchedulerProjection,
+): SchedulerEvent | undefined {
+  if (projection.status === "failed") {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      if (events[index]!.type === "context_manifest.recording_resolved") return events[index]!;
+    }
+    return undefined;
+  }
+  if (projection.pauseReason?.reason === EXCEPTIONAL_RECOVERY_PAUSE_REASON) {
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      if (events[index]!.type === "process.recovery_updated") return events[index]!;
+    }
+    return undefined;
+  }
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const type = events[index]!.type;
+    if (
+      type === "run.paused" ||
+      type === "repair.issue_paused" ||
+      type === "repair.cycle_limit_reached" ||
+      type === "context_manifest.recording_failed"
+    ) {
+      return events[index]!;
+    }
+  }
+  return undefined;
+}
+
 function snapshotFailureDetail(cause: unknown): string {
   const message = cause instanceof Error ? cause.message : String(cause);
   const singleLine = message.replace(/\s+/g, " ").trim();
@@ -1180,6 +1228,12 @@ export class BuildRuntime {
 
     let projection = rebuildSchedulerProjection(events);
     if (projection.status === "completed") return { status: "completed" };
+    // C3a (AR-R08): snapshot at every stop other than handoff. Order
+    // against C2's handoff commit below is irrelevant: while a handoff is
+    // requested this stands down, otherwise that call is a no-op. Never
+    // blocks or changes the stop; the paused/failed returns below read the
+    // same projection values as before (a stop record never touches them).
+    await this.maybeCommitStopSnapshot(projection);
     const handoffSnapshot = await this.maybeCommitHandoffSnapshot(projection);
     if (handoffSnapshot) return handoffSnapshot;
     if (projection.status === "failed") {
@@ -2715,6 +2769,211 @@ export class BuildRuntime {
    * missing stop facts -- throws, and the caller pauses the current stop
    * before committing. Resume retries.
    */
+  /**
+   * C3a (AR-R08; packet C3 steps 1, 2 and 4): snapshot at every stop other
+   * than handoff. Runs at the top of `dispatchStep` after C2's handoff
+   * commit: when the run is stopped (paused, failed or stopped) and the
+   * stop is not C2's handoff wait, render C1 with the stop kind and commit
+   * STATE.md (plus the entry lines when missing) on the integration branch
+   * through C2's kernel-commit method and event, with "no notes" (C3b adds
+   * notes). Never blocks or changes the stop: skips record the CD-9/CD-5
+   * reason durably, and a commit failure records a `commit_failed` finding
+   * while the stop proceeds. Idempotent per stop event: a recorded stop is
+   * never retried, so replay and resume create no duplicate commit.
+   */
+  private async maybeCommitStopSnapshot(projection: SchedulerProjection): Promise<void> {
+    if (projection.projectDocsPolicyVersion !== 2) return;
+    if (projection.status !== "paused" && projection.status !== "failed" && projection.status !== "stopped") return;
+    // C2's stop owns the handoff wait: the handoff snapshot (or its retry
+    // pause) already covers it, so C3a stands down while one is requested.
+    if (projection.projectHandoff?.status === "requested") return;
+    const events = this.store.readRun(this.runId);
+    const stop = findCurrentStopEvent(events, projection);
+    if (!stop) return;
+    if (
+      (projection.projectDocs?.snapshots ?? []).some((record) => record.stopSequence === stop.sequence) ||
+      (projection.projectDocs?.stopSnapshotSkips ?? []).some((record) => record.stopSequence === stop.sequence)
+    ) {
+      return;
+    }
+    const stopProjection = rebuildSchedulerProjection(events.filter((event) => event.sequence <= stop.sequence));
+    const classified = classifyStopSnapshot({
+      status: stopProjection.status === "failed" ? "failed" : stopProjection.status === "stopped" ? "stopped" : "paused",
+      ...(stopProjection.pauseReason?.reason !== undefined ? { reason: stopProjection.pauseReason.reason } : {}),
+      ...(stopProjection.pauseReason?.detail !== undefined ? { detail: stopProjection.pauseReason.detail } : {}),
+      ownerInitiated: stop.actor.role === "user",
+    });
+    // Skip rule (CD-9, CD-5): no snapshot before the triage decision
+    // `build`, while a `clarify` triage is pending, on an answered run,
+    // with `handoffFiles: "export_only"`, or for C2's own
+    // `handoff_snapshot_failed` pause (C2 retries that commit itself).
+    // Decided on the stop projection, so a pause during triage stays
+    // skipped after the run is answered.
+    const triage = stopProjection.planningTriageDecision;
+    const skipReason = triage !== "build"
+      ? triage === "clarify" ? "clarify_pending" : triage === "answer" ? "answered_run" : "pre_triage"
+      : handoffFilesOf(stopProjection) !== "commit"
+        ? "export_only"
+        : stopProjection.pauseReason?.reason === "handoff_snapshot_failed"
+          ? "handoff_snapshot_failed"
+          : undefined;
+    if (skipReason !== undefined) {
+      this.appendStopSnapshotSkipped({ stopSequence: stop.sequence, stopKind: classified.stopKind, reason: skipReason });
+      return;
+    }
+    try {
+      await this.commitStopSnapshot({ stop, stopProjection, stopKind: classified.stopKind });
+    } catch (error) {
+      this.appendStopSnapshotSkipped({
+        stopSequence: stop.sequence,
+        stopKind: classified.stopKind,
+        reason: `commit_failed: ${snapshotFailureDetail(error)}`,
+      });
+    }
+  }
+
+  /** C3a: one append for every stop without a snapshot commit (skip rule or commit failure). */
+  private appendStopSnapshotSkipped(input: {
+    stopSequence: number;
+    stopKind: StopSnapshotStopKind;
+    reason: string;
+  }): void {
+    this.store.append({
+      runId: this.runId,
+      type: "project_docs.stop_snapshot_skipped",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `stop-snapshot-skip:${input.stopSequence}:${input.reason}`,
+      payload: {
+        stopSequence: input.stopSequence,
+        stopKind: input.stopKind,
+        reason: input.reason,
+      },
+    });
+  }
+
+  /**
+   * C3a: render the stop snapshot and commit it through C2's
+   * kernel-commit method (`commitHandoffSnapshot`, idempotent per stop
+   * key), then record it through C2's event. The entry-line writes ride
+   * along so the commit keeps the v2 entry shape; the spec copy stays a
+   * handoff-only concern. Throws with a bounded cause; the caller records
+   * the finding and the stop proceeds.
+   */
+  private async commitStopSnapshot(input: {
+    stop: SchedulerEvent;
+    stopProjection: SchedulerProjection;
+    stopKind: StopSnapshotStopKind;
+  }): Promise<void> {
+    const { stop, stopProjection, stopKind } = input;
+    const stopSequence = stop.sequence;
+    const revision = await this.handedOffRevision(stopProjection);
+    if (!revision.trim()) {
+      throw new Error("no handed-off revision recorded at the stop");
+    }
+    if (!this.projectDocs) {
+      throw new Error("the project document port is unavailable");
+    }
+    const port = this.projectDocs;
+    let previousSnapshotEdited = false;
+    try {
+      const tip = await port.readIntegrationTipFile({ path: "docs/project/STATE.md" });
+      previousSnapshotEdited = tip.content !== null && !verifyHandoffSnapshotDigest(tip.content);
+    } catch (error) {
+      throw new Error(`stop snapshot tip read failed (${snapshotFailureDetail(error)})`);
+    }
+    const rendered = handoffSnapshotInputFromProjection(stopProjection, {
+      stopAt: stop.occurredAt,
+      revision,
+      notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON,
+      ...(previousSnapshotEdited ? { previousSnapshotEdited: true as const } : {}),
+    });
+    let body: string;
+    try {
+      body = renderHandoffSnapshot({ ...rendered, stopKind });
+    } catch (error) {
+      throw new Error(`stop snapshot render failed (${snapshotFailureDetail(error)})`);
+    }
+    if (!verifyHandoffSnapshotDigest(body)) {
+      throw new Error("the rendered stop snapshot failed its digest check");
+    }
+    const snapshotKey = `stop-snapshot:${stopSequence}`;
+    let result: ProjectDocCommitResult;
+    try {
+      result = await port.commitHandoffSnapshot({
+        writes: [
+          { path: "docs/project/STATE.md", content: body },
+          { path: "AGENTS.md", content: V2_AGENTS_SECTION_BODY },
+          { path: "CLAUDE.md", content: V2_CLAUDE_POINTER_LINE },
+        ],
+        summary: `AIBoard stop snapshot (${stopKind}) for run ${this.runId}`,
+        runId: this.runId,
+        snapshotKey,
+      });
+    } catch (error) {
+      throw new Error(`stop snapshot commit failed (${snapshotFailureDetail(error)})`);
+    }
+    let stored: { content: string | null; paths: string[] };
+    try {
+      stored = await port.readHandoffSnapshotFile({ commit: result.commit, path: "docs/project/STATE.md" });
+    } catch (error) {
+      throw new Error(`stop snapshot read-back failed (${snapshotFailureDetail(error)})`);
+    }
+    const described = describeSnapshotCommitFacts({
+      entryPoint: result.entryPoint,
+      storedPaths: stored.paths,
+      ...(result.dirLinks?.[0] !== undefined ? { commitStateLink: result.dirLinks[0] } : {}),
+      ...(result.stateBlockerKind !== undefined ? { commitStateBlockerKind: result.stateBlockerKind } : {}),
+      ...(result.skipped !== undefined ? { stageSkipped: result.skipped } : {}),
+      ...(result.redirected !== undefined ? { stageRedirected: result.redirected } : {}),
+    });
+    const stateChanged = described.stateChanged;
+    const stateSkippedReason = described.stateSkippedReason;
+    let committedDigest = "";
+    if (stateChanged || stateSkippedReason === undefined) {
+      if (stored.content === null || !verifyHandoffSnapshotDigest(stored.content)) {
+        throw new Error(stored.content === null
+          ? `commit ${result.commit} holds no docs/project/STATE.md`
+          : `commit ${result.commit} holds a STATE.md that failed its digest check`);
+      }
+      committedDigest = /body_sha256: ([a-f0-9]{64})/.exec(stored.content.split("\n")[0] ?? "")?.[1] ?? "";
+      if (!committedDigest) {
+        throw new Error("the committed stop snapshot carries no digest");
+      }
+      if (!stateChanged) {
+        throw new Error(`commit ${result.commit} lists no docs/project/STATE.md path`);
+      }
+    }
+    const entryStatus = handoffEntryFileStatus(result.entryPoint, {
+      ...(described.agentsRedirect !== undefined ? { agentsRedirect: described.agentsRedirect } : {}),
+      ...(described.agentsRedirectTarget !== undefined ? { agentsRedirectTarget: described.agentsRedirectTarget } : {}),
+      ...(described.agentsSkip !== undefined ? { agentsSkip: described.agentsSkip } : {}),
+      ...(described.claudeRedirect !== undefined ? { claudeRedirect: described.claudeRedirect } : {}),
+      ...(described.claudeSkip !== undefined ? { claudeSkip: described.claudeSkip } : {}),
+    });
+    if (entryStatus === null) {
+      throw new Error(`commit ${result.commit} lacks the v2 AGENTS.md section or the CLAUDE.md line`);
+    }
+    this.appendHandoffSnapshotCommitted({
+      stopSequence,
+      stopKind,
+      revision,
+      commit: result.commit,
+      parent: result.parent,
+      head: result.head,
+      bodyDigest: committedDigest,
+      paths: stored.paths,
+      previousSnapshotEdited: stateChanged && stored.content !== null
+        ? stored.content.includes(PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE)
+        : false,
+      ...(entryStatus.agentsSectionViaLink !== undefined ? { agentsSectionViaLink: entryStatus.agentsSectionViaLink } : {}),
+      ...(entryStatus.claudeLineViaLink !== undefined ? { claudeLineViaLink: entryStatus.claudeLineViaLink } : {}),
+      ...(entryStatus.agentsSectionCommitted ? {} : { agentsSectionCommitted: false as const }),
+      ...(entryStatus.claudeLineCommitted ? {} : { claudeLineCommitted: false as const }),
+      ...(stateSkippedReason !== undefined ? { stateSkippedReason } : {}),
+    });
+  }
+
   private async reconcileWithdrawnSnapshotCommits(
     projection: SchedulerProjection,
     currentStopSequence: number,
