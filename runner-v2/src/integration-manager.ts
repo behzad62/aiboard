@@ -2732,9 +2732,11 @@ export class IntegrationManager {
    * the run.
    * C2e repair cycle 1 (N-1): each blocker carries its kind, so the
    * recorded skip reason names a regular file, a submodule entry or a
-   * directory accurately instead of calling everything a link. Links and
-   * case collisions carry no forward kind (the describer keeps the legacy
-   * wording for them), so stored logs replay unchanged.
+   * directory accurately instead of calling everything a link. Links carry
+   * no forward kind (the describer keeps the legacy wording for them), so
+   * stored logs replay unchanged. C2e repair cycle 2 (N-R2-4) gives a case
+   * collision its own "collision" kind; a link among the colliding
+   * spellings still wins (INT-1).
    */
   private async commitStateBlockers(commit: string): Promise<Array<{ component: string; kind: "link" | "file" | "submodule" | "directory" | "case-collision" }>> {
     const parts = ["docs", "project", "STATE.md"];
