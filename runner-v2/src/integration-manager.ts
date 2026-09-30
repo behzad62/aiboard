@@ -2732,9 +2732,11 @@ export class IntegrationManager {
    * the run.
    * C2e repair cycle 1 (N-1): each blocker carries its kind, so the
    * recorded skip reason names a regular file, a submodule entry or a
-   * directory accurately instead of calling everything a link. Links and
-   * case collisions carry no forward kind (the describer keeps the legacy
-   * wording for them), so stored logs replay unchanged.
+   * directory accurately instead of calling everything a link. Links carry
+   * no forward kind (the describer keeps the legacy wording for them), so
+   * stored logs replay unchanged. C2e repair cycle 2 (N-R2-4) gives a case
+   * collision its own "collision" kind; a link among the colliding
+   * spellings still wins (INT-1).
    */
   private async commitStateBlockers(commit: string): Promise<Array<{ component: string; kind: "link" | "file" | "submodule" | "directory" | "case-collision" }>> {
     const parts = ["docs", "project", "STATE.md"];
@@ -2764,12 +2766,16 @@ export class IntegrationManager {
       if (entry === undefined) return [];
       const component = HANDOFF_STATE_LINK_COMPONENTS[level] ?? "";
       if (component === "") return [];
-      if (resolved.collision.length > 1 && level < parts.length - 1) {
-        return [{ component, kind: "case-collision" as const }];
-      }
       const { mode, name } = entry;
+      // C2d m-9 / INT-1 fix: a link among the folded spellings wins over the
+      // collision (the resolved entry prefers the 120000 match), so the walk
+      // agrees with the stage-time link check (probe F-collide); a collision
+      // with no link keeps its own "two spellings" reason.
       if (mode === "120000") {
         return [{ component, kind: "link" as const }];
+      }
+      if (resolved.collision.length > 1 && level < parts.length - 1) {
+        return [{ component, kind: "case-collision" as const }];
       }
       if (level < parts.length - 1) {
         // C2e (F-matrix): a tracked file where a directory is expected
