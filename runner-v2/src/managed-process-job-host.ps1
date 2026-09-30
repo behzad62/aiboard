@@ -712,8 +712,9 @@ public static class ManagedProcessJobHost
 # check and load. On a missing file, a digest mismatch, or a load error the
 # assembly is never loaded: this falls back to compiling the same source
 # in-process (today's Add-Type behavior) and records why in the Job event
-# file. One PowerShell host per call, one Job per call, and every proof below
-# are unchanged.
+# file. A valid assembly without the expected type falls back the same way
+# (`missing-type`). One PowerShell host per call, one Job per call, and every
+# proof below are unchanged.
 function Initialize-JobHostType {
     param($HelperAssemblyPath, $HelperAssemblySha256, $EventPath)
     $script:jobHostHelperMode = "fallback"
@@ -741,8 +742,15 @@ function Initialize-JobHostType {
             } else {
                 try {
                     [Reflection.Assembly]::Load($helperBytes) | Out-Null
-                    $script:jobHostHelperMode = "precompiled"
-                    $script:jobHostHelperReason = $null
+                    # N5: a valid assembly without the expected type must fall
+                    # back like any other load-side failure, not exit 1 below
+                    # on `Unable to find type [ManagedProcessJobHost]`.
+                    if ($null -eq ('ManagedProcessJobHost' -as [type])) {
+                        $script:jobHostHelperReason = "missing-type"
+                    } else {
+                        $script:jobHostHelperMode = "precompiled"
+                        $script:jobHostHelperReason = $null
+                    }
                 } catch {
                     $script:jobHostHelperReason = "load-error"
                 }

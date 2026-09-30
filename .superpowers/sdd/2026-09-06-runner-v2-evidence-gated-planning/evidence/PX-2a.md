@@ -144,3 +144,137 @@ supervisor linger (resource, off the critical path).
   wall-clock gain was not measured here.
 - Inserted source lines use LF inside CRLF files (git autocrlf notice only;
   `diff --check`, eslint, tsc clean).
+
+## Repair cycle 1 (2026-09-30, review PX-2a-review-r1: B1, B2, trust anchor, N2-N11)
+
+Work on HEAD (`abeb6d7e`; PX-2a `7a1703e2` plus PX-2b `e8eb8720`, PX-2c
+`cd475d57`, PX-2t text fix on top). No commit, stage, stash, or push. No
+existing test weakened or deleted; the guarantee file untouched.
+
+### What changed
+
+`runner-v2/src/windows-job-process-host.ts` — the helper compile is now
+once per RUNNER PROCESS, asynchronous, with the digest ONLY IN MEMORY:
+
+- `compileJobHostHelperAssembly` (async, same module as the Job-host
+  launch): reads the C# from the fixed `managed-process-job-host.ps1`
+  literal, compiles with a throwaway `powershell.exe -File <fixed wrapper>
+  <dll argv>` (B1: the one audited runner-internal launch beside the Job
+  host launch), C# source base64 over the private stdin pipe, DLL path as a
+  plain argv string (N6: nothing path-like is ever parsed as PowerShell; N7:
+  no shared source file, private unpredictable dir). Output goes to a fresh
+  per-process `tmpdir()/aiboard-job-host-assembly-<rand>/<sourceDigest>/`
+  dir, hashed on read-back; digest kept in module memory, never written to
+  or read from disk (trust anchor). N11: other digest dirs pruned after a
+  successful compile, plus best-effort per-process dir removal on exit.
+- `ensureJobHostHelperAssembly()` is now async and TOTAL (never throws;
+  N2): one in-flight compile shared by concurrent calls, successes cached,
+  failures NOT cached (next call retries: N3 self-heal), a vanished/emptied
+  DLL recompiles (missing-file self-heal). `resetJobHostHelperAssemblyForTests`
+  is the documented test-only cache reset.
+- `launchOwned`/`startSpare` resolve the helper BEFORE spawning the
+  supervisor (N2: a helper failure can no longer strand a supervisor behind
+  a persisted `running` record) and warn once per state dir when calls run
+  without the helper (N10 runner-level log; per-call tamper reasons stay in
+  that call's `job-events.jsonl`, see limits).
+- `extractJobHostHelperSource` strips the CRLF trailing `\r` (N8):
+  extracted source is 30082 chars, no stray `\r`; the C# body is
+  byte-identical to the PX-2a blob (sha `0f78e002…` before and after).
+
+`runner-v2/src/managed-process-job-host.ps1` (`Initialize-JobHostType`
+only, C# untouched): after `Assembly.Load`, a missing
+`ManagedProcessJobHost` type falls back with reason `missing-type` (N5)
+instead of exiting 1.
+
+`runner-v2/test/task8-raw-launch-closure.test.ts`: exactly ONE added
+allowlist entry — `windows-job-process-host.ts` /
+`compileJobHostHelperAssembly` / `powershell-script-launcher,
+powershell-launcher, child-process-spawn` ("runner-internal one-time
+helper compile beside the Job host launch"). The module-level `.ps1`
+constant is gone (literal moved into the compile function), `spawnSync` is
+gone from the compile path (B1+N4).
+
+`runner-v2/test/windows-job-launch-speed.test.ts`: 9 tests. T1 rewritten
+(B2: no machine-wide compiler watch; the per-call helper event
+`mode=precompiled, reason=null` is the deterministic proof). T2 adapted
+(DLL located via the `ensure` export). T3 rewritten (a legacy
+`ManagedProcessJobHost.dll.sha256` record beside an intact DLL is ignored:
+still precompiled). New: T5 evil-DLL-plus-matching-record replacement
+never loads (fallback `digest-mismatch`); T6 unusable-TEMP `ensure`
+returns null, persists nothing, next call self-heals to precompiled (N2);
+T7 direct-ps1 missing-type / load-error / missing-file all fall back,
+exit 0, reason recorded (N5 + reason pins); T8 deleted DLL recompiles to
+precompiled (N3 self-heal); T9 truncated DLL falls back `digest-mismatch`.
+N9: the watcher removes its stop dir even when the watched work throws.
+
+### Prove-red records (fault -> red -> byte-exact restore)
+
+Pristine sha256 (working tree): host `c931ef2e…`, ps1 `3ab114c2…`,
+speed test `81d67faf…`, closure test `52448e10…`. After every fault the
+same sha256 was verified back.
+
+| Test | Fault | Red result |
+|---|---|---|
+| T1 (changed) | ps1 C# start marker broken (`@'` -> `@"`) | fail 1: calls fall back, `precompiled` assert fails |
+| T2 (changed) | host vouches for live disk bytes (pin defeated) | fail: tampered bytes LOADED — `Unable to find an entry point named 'SetInformationJobO…ject'` |
+| T9 (new) | same pin defeat | fail: truncated bytes vouched (`load-error`, not `digest-mismatch`) |
+| T5 (new) | same pin defeat | fail: replacement loads — reason `missing-type`, expected `digest-mismatch` |
+| T3 (new) | host prefers on-disk `.sha256` (record trust) | fail: stray zeros record diverts the call to `fallback`, expected `precompiled` |
+| T6 (new) | `ensure`/compile rethrow (N2 reintroduced) | fail: `ENOENT … mkdtemp '…aiboard-px2a-badtemp-…'` (the review's exact signature) |
+| T7 (new) | ps1 type check reverted (`if ($false)`) | fail: `valid assembly without the type must fall back, not exit 1` |
+| T8 (new) | self-heal existence check removed | fail 1: deleted DLL pins a fallback, expected `precompiled` |
+
+A first T6 fault (rethrow at `ensure` level only) stayed green and was
+discarded: the compile-level catch already contained the mkdtemp throw.
+The corrected fault (rethrow at both levels) goes red as above.
+
+### Validation suites and counts (`NODE_TEST_CONTEXT` cleared)
+
+| Suite | Result |
+|---|---|
+| `windows-job-launch-speed.test.ts` (`--test-concurrency=1`) | 9/9 pass |
+| same at `--test-concurrency=4` with `windows-job-supervisor-input` + `windows-job-output-replay`, twice | 15/15 pass both runs |
+| `windows-job-real-host-guarantees.test.ts` (unchanged) | 12/12 pass |
+| `windows-job-fence-effects.test.ts` (PX-2b) | 14/14 pass |
+| `windows-job-spare-host.test.ts` (PX-2c) | 9/9 pass |
+| `windows-process-backend` + `one-shot-command-family-production-matrix` + `execution-host` + `subprocess-runtime` + `durable-process-store` (`--test-concurrency=4`) | 222 tests: 221 pass, 0 fail, 1 skipped (pre-existing subprocess-runtime skip) |
+| `task8-raw-launch-closure.test.ts` | PX-2a findings GONE (all 3 allowlisted); still red on 5 PX-2c findings (see limits) |
+| `tsc --noEmit -p runner-v2/tsconfig.json` | clean |
+| `eslint` on the three changed TS files | clean (ps1 has no matching config, as before) |
+| `git diff --check` | clean |
+
+### Measurement (`measure-git-launch.mts`, n=20, quiet machine stated but not verifiable)
+
+BEFORE (repair base, this HEAD): quiet median 1714.4 / p90 1968.4;
+large median 2215.8 / p90 2364.4; rev-parse median 1998.9 / p90 2265.4.
+The machine was heavily loaded (quiet min 1629.2 vs 634.4 after), so the
+before numbers are load-dominated, not a clean baseline.
+AFTER: quiet median **701.7** / p90 731.9; large median **804.0** / p90
+901.4; rev-parse median **768.9** / p90 894.9 — matching the original
+PX-2a after-numbers (695.4 / 854.4 / 772.4). Fence effects per call:
+quiet 11/11, large 13/14, revparse ~13/14 (per-call variance across
+attach/claim paths exists in both runs; no fence code touched).
+
+### Not done / limits (repair 1)
+
+- `task8-raw-launch-closure` stays red at HEAD on 5 findings, ALL in
+  PX-2c code (`cd475d57`, verified via `git log -S`): supervisor
+  `retireSpare backend?.kill`, host `<module> process.kill` (spare crash
+  recovery), `retireSpare entry.launcher.kill`, `startSpare spawn`,
+  `sweepRetiredSpareRecords process.kill`. Out of this lane (one allowlist
+  entry only); PX-2c's repair owns them.
+- N10 is partial by design: helper-unavailable warns once per state dir
+  at launch. Single-call tamper fallbacks keep their reason ONLY in that
+  call's `job-events.jsonl`: launch resolves at supervisor startup, before
+  the Job host boots and writes its event, so the runner has no later
+  observation point without extra I/O on every call.
+- A deleted/emptied DLL recompiles (fail-open to a fresh trusted
+  compile); a tampered/non-empty DLL never recompiles (fail-closed
+  fallback) — the mismatch itself stays the tamper signal.
+- No on-disk state from the old design is read; stale
+  `job-host-assemblies/` dirs and `.sha256` files from PX-2a processes are
+  inert and left in place.
+- Old per-process temp dirs are removed best-effort on process exit; a
+  killed runner can leave ~150 KB until the OS cleans temp.
+- Measured with `permissionProfile: "full"` only; interactive wall-clock
+  gain still unmeasured (same helper path via ps1 LSP branch).

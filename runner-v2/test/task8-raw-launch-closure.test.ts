@@ -50,6 +50,7 @@ const RAW_EXECUTION_ALLOWLIST: readonly RawExecutionRule[] = [
   { file: "portable-process-supervisor.mjs", container: "isAlive", kinds: ["process-kill"], reason: "non-destructive PID existence probe only" },
   { file: "windows-job-process-host.ts", container: "<module>", kinds: ["child-process-import"], reason: "authenticated Windows Job host import only" },
   { file: "windows-job-process-host.ts", container: "launchOwned", kinds: ["child-process-spawn"], reason: "authenticated Windows Job supervisor launch" },
+  { file: "windows-job-process-host.ts", container: "compileJobHostHelperAssembly", kinds: ["powershell-script-launcher", "powershell-launcher", "child-process-spawn"], reason: "runner-internal one-time helper compile beside the Job host launch" },
   { file: "windows-job-process-host.ts", container: "probeActiveJobCreateClose", kinds: ["powershell-script-launcher", "powershell-launcher", "child-process-spawnSync"], reason: "fixed active Job create/close semantic probe" },
   { file: "windows-job-process-host.ts", container: "abortStartingSupervisor", kinds: ["member-kill"], reason: "pre-adoption owned supervisor rollback only" },
   { file: "windows-process-semantic-probes.ts", container: "<module>", kinds: ["child-process-import"], reason: "capability-probe inspection helper import only" },

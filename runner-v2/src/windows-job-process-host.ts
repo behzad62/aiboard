@@ -17,12 +17,19 @@ const DEFAULT_START_DEADLINE_MS = 5_000;
 const DEFAULT_CONTROL_DEADLINE_MS = 5_000;
 const DEFAULT_ACTIVE_JOB_PROBE_DEADLINE_MS = 2_000;
 const DEFAULT_MAX_INPUT_BYTES = 1024 * 1024;
-const JOB_HOST_SCRIPT_FILENAME = "managed-process-job-host.ps1";
-const JOB_HOST_HELPER_DIRNAME = "job-host-assemblies";
 const JOB_HOST_HELPER_DLL_FILENAME = "ManagedProcessJobHost.dll";
-const JOB_HOST_HELPER_DIGEST_FILENAME = "ManagedProcessJobHost.dll.sha256";
 const JOB_HOST_SOURCE_MARKER_START = "$jobHostCsSource = @'";
 const JOB_HOST_COMPILE_TIMEOUT_MS = 120_000;
+/** Fixed stdin-driven compile wrapper: source arrives base64 over the private
+ * stdin pipe, the output path arrives as a plain argv string. Neither ever
+ * passes through PowerShell command-line parsing, so no path content
+ * (ASCII or curly quotes, `$`, backticks) is ever executable. */
+const JOB_HOST_COMPILE_WRAPPER = [
+  "$encoded = [Console]::In.ReadLine()",
+  "$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded))",
+  "Add-Type -TypeDefinition $source -OutputAssembly $args[0] -OutputType Library",
+  "",
+].join("\r\n");
 
 export interface WindowsJobOwnershipKey { readonly runId: string; readonly sessionId: string }
 export interface WindowsJobWriterFence { readonly ownerId: string; readonly fencingToken: number }
@@ -154,15 +161,26 @@ export class WindowsJobHostError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = "WindowsJobHostError"; }
 }
 
-/** Digest-pin record for one compiled Job-host helper assembly. */
+/** Digest-pin record for one compiled Job-host helper assembly. The digest lives
+ * in the runner process's memory only and travels to each Job host over the
+ * private stdin channel; no on-disk digest record is ever written or read. */
 export interface WindowsJobHostHelperAssembly { readonly path: string; readonly sha256: string }
 
-/** Assembly directories whose compile already failed in this process: never retry per call. */
-const helperAssemblyCompileFailures = new Set<string>();
-
-function jobHostScriptPath(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), JOB_HOST_SCRIPT_FILENAME);
-}
+/**
+ * PX-2a repair 1: the compiled helper is per-runner-process state. It is
+ * compiled once into a fresh, unpredictable per-process directory, its digest
+ * is kept in memory only, and a later runner process compiles its own
+ * assembly to its own fresh path. There is no on-disk digest record to move,
+ * no cross-process compile race, and no temp-file swap window: the C# source
+ * travels to the compiler over a private stdin pipe (never a shared file),
+ * and the output path arrives as a plain argv string (never parsed as
+ * PowerShell, so no path content is executable).
+ */
+let jobHostHelperReady: WindowsJobHostHelperAssembly | null | undefined;
+let jobHostHelperFlight: Promise<WindowsJobHostHelperAssembly | null> | undefined;
+let jobHostHelperProcessDir: string | undefined;
+/** N10: state directories already warned once that their calls run without the helper. */
+const jobHostHelperFallbackWarned = new Set<string>();
 
 /** Extract the embedded C# helper source from the Job-host script. Null when the markers are absent. */
 export function extractJobHostHelperSource(scriptText: string): string | null {
@@ -172,66 +190,102 @@ export function extractJobHostHelperSource(scriptText: string): string | null {
   // The here-string closes on a line holding exactly `'@`.
   const end = scriptText.indexOf("\n'@", bodyStart);
   if (end < 0) return null;
-  return scriptText.slice(bodyStart, end).replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+  // N8: on CRLF checkouts the slice ends with a stray `\r` (the match consumed
+  // the `\n` but not the `\r`), so strip it: the extracted source is then
+  // byte-identical to PowerShell's here-string on either line ending.
+  return scriptText.slice(bodyStart, end).replace(/^\r?\n/, "").replace(/\r?\n$/, "").replace(/\r$/, "");
 }
 
 /**
  * PX-2a: resolve the precompiled, digest-pinned Job-host helper assembly for
- * this state directory, compiling it once (into a runner-owned directory
- * under the state directory, keyed by source digest) when absent. The host
- * records the assembly sha256 at compile time and passes that digest to each
- * Job host over the private stdin channel; the Job host re-hashes the bytes
- * before loading from them. Returns null when unavailable: calls then omit
- * the helper fields and each Job host falls back to in-process Add-Type
- * compile of the same source.
+ * this runner process, compiling it once (asynchronously, off the event loop)
+ * when absent. The digest is kept in memory and passed to each Job host over
+ * the private stdin channel; the Job host re-hashes the file bytes before
+ * loading from those bytes. Never throws: any failure returns null and the
+ * call omits the helper fields, so each Job host falls back to in-process
+ * Add-Type compile of the same source. A compile failure is NOT cached: the
+ * next call retries (shared in-flight), so a transient failure self-heals.
  */
-export function ensureJobHostHelperAssembly(stateDirectory: string): WindowsJobHostHelperAssembly | null {
-  if (process.platform !== "win32") return null;
-  let scriptText: string;
+export async function ensureJobHostHelperAssembly(): Promise<WindowsJobHostHelperAssembly | null> {
   try {
-    scriptText = readFileSync(jobHostScriptPath(), "utf8");
+    if (process.platform !== "win32") return null;
+    if (jobHostHelperReady) {
+      // Self-heal without trusting anything on disk: a vanished or emptied
+      // assembly file recompiles instead of pinning a permanent fallback.
+      try {
+        if (existsSync(jobHostHelperReady.path) && readFileSync(jobHostHelperReady.path).byteLength > 0) return jobHostHelperReady;
+      } catch {
+        // Fall through to recompile.
+      }
+      jobHostHelperReady = undefined;
+    }
+    if (jobHostHelperFlight) return await jobHostHelperFlight;
+    const flight = compileJobHostHelperAssembly();
+    jobHostHelperFlight = flight;
+    try {
+      const assembly = await flight;
+      if (assembly) jobHostHelperReady = assembly;
+      return assembly;
+    } finally {
+      if (jobHostHelperFlight === flight) jobHostHelperFlight = undefined;
+    }
   } catch {
     return null;
   }
-  const source = extractJobHostHelperSource(scriptText);
-  if (source === null) return null;
-  const sourceDigest = createHash("sha256").update(source, "utf8").digest("hex");
-  const directory = join(resolve(stateDirectory), JOB_HOST_HELPER_DIRNAME, sourceDigest);
-  const dllPath = join(directory, JOB_HOST_HELPER_DLL_FILENAME);
-  const digestPath = join(directory, JOB_HOST_HELPER_DIGEST_FILENAME);
-  if (helperAssemblyCompileFailures.has(directory)) return null;
-  try {
-    const recorded = existsSync(dllPath) && existsSync(digestPath)
-      ? readFileSync(digestPath, "utf8").trim().toLowerCase()
-      : null;
-    if (recorded !== null && /^[a-f0-9]{64}$/.test(recorded)) {
-      // Pass-through on purpose: the Job host re-hashes the file bytes
-      // against this digest on every call and falls back on any mismatch, so
-      // a tampered assembly file or a tampered digest record is never loaded.
-      // No recompile here: the mismatch itself is the observed signal.
-      return { path: dllPath, sha256: recorded };
-    }
-  } catch {
-    // Fall through to compile.
-  }
-  const compiled = compileJobHostHelperAssembly(source, dllPath, digestPath);
-  if (compiled === null) helperAssemblyCompileFailures.add(directory);
-  return compiled;
 }
 
-function compileJobHostHelperAssembly(source: string, dllPath: string, digestPath: string): WindowsJobHostHelperAssembly | null {
-  const scratch = mkdtempSync(join(tmpdir(), "aiboard-job-host-assembly-"));
+/**
+ * Runner-internal one-time compile of the Job-host helper, in the same module
+ * as the Job-host launch. Reads the embedded C# from the fixed Job-host
+ * script, compiles it with a throwaway PowerShell into the per-process
+ * directory, hashes the bytes it reads back, and keeps the digest in memory.
+ * Null on any failure; never throws.
+ */
+async function compileJobHostHelperAssembly(): Promise<WindowsJobHostHelperAssembly | null> {
   try {
-    mkdirSync(dirname(dllPath), { recursive: true });
+    const scriptText = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "managed-process-job-host.ps1"), "utf8");
+    const source = extractJobHostHelperSource(scriptText);
+    if (source === null) return null;
+    const sourceDigest = createHash("sha256").update(source, "utf8").digest("hex");
+    if (!jobHostHelperProcessDir) {
+      jobHostHelperProcessDir = mkdtempSync(join(tmpdir(), "aiboard-job-host-assembly-"));
+      const owned = jobHostHelperProcessDir;
+      process.once("exit", () => {
+        try {
+          rmSync(owned, { recursive: true, force: true });
+        } catch {}
+      });
+    }
+    const generationDir = join(jobHostHelperProcessDir, sourceDigest);
+    mkdirSync(generationDir, { recursive: true });
+    const dllPath = join(generationDir, JOB_HOST_HELPER_DLL_FILENAME);
+    const wrapperPath = join(generationDir, "compile-helper-wrapper.ps1");
     rmSync(dllPath, { force: true });
-    const sourcePath = join(scratch, "ManagedProcessJobHost.cs");
-    writeFileSync(sourcePath, source, "utf8");
-    const quote = (value: string): string => `'${value.replace(/'/g, "''")}'`;
-    const command = `Add-Type -TypeDefinition (Get-Content -LiteralPath ${quote(sourcePath)} -Raw -Encoding UTF8) -OutputAssembly ${quote(dllPath)} -OutputType Library`;
-    const result = spawnSync("powershell.exe",
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
-      { windowsHide: true, stdio: "ignore", timeout: JOB_HOST_COMPILE_TIMEOUT_MS, killSignal: "SIGKILL" });
-    if (result.status !== 0 || result.error) return null;
+    writeFileSync(wrapperPath, JOB_HOST_COMPILE_WRAPPER, "utf8");
+    const exitCode = await new Promise<number>((resolvePromise) => {
+      let settled = false;
+      const finish = (code: number): void => {
+        if (settled) return;
+        settled = true;
+        resolvePromise(code);
+      };
+      const child = spawn("powershell.exe",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapperPath, dllPath],
+        { windowsHide: true, stdio: ["pipe", "ignore", "ignore"], timeout: JOB_HOST_COMPILE_TIMEOUT_MS, killSignal: "SIGKILL" });
+      child.once("error", () => finish(-1));
+      child.once("exit", (code) => finish(code ?? -1));
+      const stdin = child.stdin;
+      if (!stdin) {
+        finish(-1);
+        return;
+      }
+      stdin.write(`${Buffer.from(source, "utf8").toString("base64")}\n`, (error) => {
+        if (error) finish(-1);
+        else stdin.end();
+      });
+    });
+    if (exitCode !== 0) return null;
     let bytes: Buffer;
     try {
       bytes = readFileSync(dllPath);
@@ -240,13 +294,42 @@ function compileJobHostHelperAssembly(source: string, dllPath: string, digestPat
     }
     if (bytes.byteLength === 0) return null;
     const sha256 = createHash("sha256").update(bytes).digest("hex");
-    writeFileSync(digestPath, `${sha256}\n`, "utf8");
+    // N11: one source generation per runner process; drop any other digest dir.
+    try {
+      for (const entry of readdirSync(jobHostHelperProcessDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && entry.name !== sourceDigest)
+          rmSync(join(jobHostHelperProcessDir, entry.name), { recursive: true, force: true });
+      }
+    } catch {}
     return { path: dllPath, sha256 };
   } catch {
     return null;
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
   }
+}
+
+/**
+ * Test-only reset for the per-process helper cache (prove-red and fallback
+ * pins): drops the ready assembly and any in-flight compile and forgets the
+ * per-process directory, so the next call recompiles from the current script
+ * and environment. Never throws. Production code never calls this.
+ */
+export function resetJobHostHelperAssemblyForTests(): void {
+  jobHostHelperReady = undefined;
+  jobHostHelperFlight = undefined;
+  jobHostHelperProcessDir = undefined;
+}
+
+/**
+ * N10: warn once per state directory when its calls run without the precompiled
+ * helper. Per-call tamper fallbacks (a replaced or damaged assembly file) keep
+ * their reason in that call's `job-events.jsonl` helper event: launch resolves
+ * at supervisor startup, before the Job host boots and writes its event, so
+ * the runner has no later observation point without extra I/O on every call.
+ */
+export function logJobHostHelperFallbackOnce(stateDirectory: string, reason: string): void {
+  if (jobHostHelperFallbackWarned.has(stateDirectory)) return;
+  jobHostHelperFallbackWarned.add(stateDirectory);
+  console.warn(`[runner-windows-job-v1] precompiled Job-host helper unavailable (${reason}); calls in ${stateDirectory} fall back to in-process compile.`);
 }
 
 /** Concrete authenticated owner of Job records, supervisors, control and output. */
@@ -335,6 +418,13 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       this.refreshSpareInBackground(input);
       return spareSnapshot;
     }
+    // PX-2a repair 1 (N2): resolve the precompiled helper BEFORE spawning the
+    // supervisor. ensureJobHostHelperAssembly never throws, so a helper-side
+    // failure (unusable TEMP, missing compiler) can no longer strand a
+    // spawned supervisor behind a persisted `running` record: the call simply
+    // omits the helper fields and falls back.
+    const helperAssembly = await ensureJobHostHelperAssembly().catch(() => null);
+    if (!helperAssembly) logJobHostHelperFallbackOnce(this.stateDirectory, "no-helper-config");
     const processId = this.validatedProcessId(this.idFactory());
     if (this.readRecord(processId)) throw new WindowsJobHostError("process_id_conflict", `Process ${processId} already exists.`);
     const processDirectory = this.containedProcessPath(processId, "");
@@ -364,11 +454,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       ...(input.fence ? { currentFence: { ...input.fence } } : {}),
     };
     this.records.set(processId, record); this.persist(record);
-    // PX-2a: resolve the precompiled helper once per state directory (compiled
-    // on first use). The digest travels over the private stdin channel, never
-    // argv, env, or HTTP; a null here omits the fields and the Job host falls
-    // back to in-process Add-Type compile.
-    const helperAssembly = ensureJobHostHelperAssembly(this.stateDirectory);
+    // PX-2a repair 1: the digest is this runner process's in-memory pin and
+    // travels over the private stdin channel, never argv, env, or HTTP; a
+    // null here omits the fields and the Job host falls back to in-process
+    // Add-Type compile.
     try {
       await writeSupervisorConfig(launcher, JSON.stringify({
         processId, token, statusPath, stdoutPath: record.stdoutPath, stderrPath: record.stderrPath,
@@ -451,6 +540,13 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
   }
 
   private async startSpare(owner: WindowsJobOwnershipKey): Promise<WindowsJobSpareInfo> {
+    // PX-2a repair 1 (N2): resolve the precompiled helper BEFORE spawning the
+    // supervisor. ensureJobHostHelperAssembly never throws, so a helper-side
+    // failure (unusable TEMP, missing compiler) can no longer strand a
+    // spawned supervisor behind a persisted `running` record: the call simply
+    // omits the helper fields and falls back.
+    const helperAssembly = await ensureJobHostHelperAssembly().catch(() => null);
+    if (!helperAssembly) logJobHostHelperFallbackOnce(this.stateDirectory, "no-helper-config");
     const processId = this.validatedProcessId(this.idFactory());
     if (this.readRecord(processId)) throw new WindowsJobHostError("process_id_conflict", `Process ${processId} already exists.`);
     const processDirectory = this.containedProcessPath(processId, "");
@@ -488,9 +584,8 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       spare: true, spareClaimed: false,
     };
     this.records.set(processId, record); this.persist(record);
-    // PX-2a's helper compile happens here, off the call's critical path: the
-    // digest still travels over the private stdin channel per call site.
-    const helperAssembly = ensureJobHostHelperAssembly(this.stateDirectory);
+    // PX-2a repair 1: the digest is this runner process's in-memory pin and
+    // still travels over the private stdin channel per call site.
     const idleTimeoutMs = this.spareOptions.idleTimeoutMs;
     try {
       await writeSupervisorConfig(launcher, JSON.stringify({
