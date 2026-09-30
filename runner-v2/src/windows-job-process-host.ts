@@ -92,7 +92,7 @@ export interface WindowsJobProcessHost {
    * stays armed. Throws on transport/auth failure so callers fall back to
    * a timed delay.
    */
-  waitOwnedStatusChange?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, timeoutMs: number): Promise<void>;
+  waitOwnedStatusChange?(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, timeoutMs: number, sinceUpdatedAt?: string): Promise<void>;
 }
 export interface WindowsJobChannelState {
   readonly nextSequence: number; readonly inputClosed: boolean;
@@ -843,8 +843,21 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     }
     const status = await this.authenticatedStatus(record);
     this.throwIfTerminalOutputPending(status);
-    if (status.status !== "stopped" || !status.ownershipReleased)
+    if (status.status !== "stopped" || !status.ownershipReleased) {
+      // PX-2b repair 1 (B4): a release refused while retained output is still
+      // draining is output-unsettled whether or not the empty proof has
+      // landed yet. The backend leaves the control lane usable for
+      // process_output_unsettled_terminal (no release effect ran, so a later
+      // release re-verifies every predicate), which is exactly what the
+      // ACK-drain recovery needs; other refusals keep the lane closed. A
+      // release attempted before the empty proof therefore no longer latches
+      // the lane for good. Scoped to release only: signal and observe keep
+      // their exact previous behavior.
+      if (status.status === "exited_unknown" && !status.ownershipReleased &&
+          (status.retainedOutputChunks > 0 || status.retainedOutputBytes > 0))
+        throw new WindowsJobHostError("process_output_unsettled_terminal", "Windows Job terminal outcome is pending while retained output remains unsettled.");
       throw new WindowsJobHostError("process_control_unavailable", `Windows Job process ${processId} is not verified terminal.`);
+    }
     // PX-2b: the second pre-lock terminal re-read is gone. It ran back-to-back
     // with the check above with no intervening host action, and the same
     // stopped+ownershipReleased predicate is still enforced authoritatively
@@ -914,13 +927,17 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     });
   }
 
-  async waitOwnedStatusChange(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, timeoutMs: number): Promise<void> {
+  async waitOwnedStatusChange(processId: string, owner: WindowsJobOwnershipKey, fence: WindowsJobWriterFence, timeoutMs: number, sinceUpdatedAt?: string): Promise<void> {
     // PX-2b: read-only event wait, deliberately outside the fence lock (a
     // parked wait must never block retained-output acknowledgements, which
     // need the lock to drain). Preconditions match every other effect; the
     // caller re-polls and re-attests under the fence afterwards.
+    // PX-2b repair 1 (N2): the wait carries the caller's last seen state as a
+    // `since` cursor (defaulting to the durable file state at wait start), so
+    // any change after it returns at once instead of parking to the timeout.
     const record = this.ownedRecord(processId, owner); this.assertActive(record); this.assertCurrentFence(record, fence);
-    await waitForSupervisorStatusChange(record.supervisor, timeoutMs);
+    const since = sinceUpdatedAt ?? readSupervisorStatus(record.supervisor.statusPath)?.updatedAt;
+    await waitForSupervisorStatusChange(record.supervisor, timeoutMs, since);
   }
 
   async probeActiveJobCreateClose(): Promise<boolean> {
@@ -1294,35 +1311,74 @@ function readSupervisorStatus(path: string): SupervisorStatus | null {
 export async function waitForSpareReadyStatus(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
   const deadline = Date.now() + deadlineMs;
   for (;;) {
-    const status = readSupervisorStatus(supervisor.statusPath);
-    if (status && status.protocol === PROTOCOL && status.processId === processId && status.supervisorPid === supervisor.supervisorPid) {
-      if (status.spare === true && status.spareReady === true && status.claimed !== true && status.port > 0 && status.status === "starting") {
-        supervisor.port = status.port;
-        return status;
+    let wake!: () => void;
+    const woke = new Promise<void>((resolve) => { wake = resolve; });
+    const watcher = armFileWatch(dirname(supervisor.statusPath), basename(supervisor.statusPath), wake);
+    try {
+      const status = readSupervisorStatus(supervisor.statusPath);
+      if (status && status.protocol === PROTOCOL && status.processId === processId && status.supervisorPid === supervisor.supervisorPid) {
+        if (status.spare === true && status.spareReady === true && status.claimed !== true && status.port > 0 && status.status === "starting") {
+          supervisor.port = status.port;
+          return status;
+        }
+        if ((status.status === "stopped" || status.status === "exited_unknown") && status.spareReady !== true)
+          throw new WindowsJobHostError("process_start_failed", `Windows Job spare supervisor failed before becoming ready: ${status.error ?? status.status}.`);
       }
-      if ((status.status === "stopped" || status.status === "exited_unknown") && status.spareReady !== true)
-        throw new WindowsJobHostError("process_start_failed", `Windows Job spare supervisor failed before becoming ready: ${status.error ?? status.status}.`);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await Promise.race([woke, new Promise((resolve) => setTimeout(resolve, Math.min(remaining, STARTUP_WATCH_TICK_MS)))]);
+    } finally {
+      try { watcher?.close(); } catch {}
     }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    await waitForFileActivity(dirname(supervisor.statusPath), basename(supervisor.statusPath), remaining);
   }
   throw new WindowsJobHostError("process_start_failed", "Windows Job spare supervisor did not become ready before the deadline.");
+}
+
+/**
+ * PX-2b repair 1 (B1): short park bound for the startup waits. A lost watch
+ * event can stall one iteration at most; the loop re-reads and the outer
+ * deadline still decides.
+ */
+const STARTUP_WATCH_TICK_MS = 250;
+
+/**
+ * PX-2b repair 1 (B1): arm the directory watch BEFORE the status read, so a
+ * line that lands between the read and the registration still wakes this
+ * iteration. Undefined when watch() itself fails: the caller then parks only
+ * the short tick and re-reads. An error event wakes at once so the loop
+ * re-arms with no delay.
+ */
+function armFileWatch(directory: string, filename: string, wake: () => void): { close(): void } | undefined {
+  try {
+    const watcher = watch(directory);
+    watcher.once("error", wake);
+    watcher.on("change", (_event, name) => { if (name === filename) wake(); });
+    return watcher;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function waitForSupervisor(supervisor: SupervisorRecord, processId: string, deadlineMs: number): Promise<SupervisorStatus> {
   const deadline = Date.now() + deadlineMs;
   for (;;) {
-    const status = readSupervisorStatus(supervisor.statusPath);
-    if (status && status.protocol === PROTOCOL && status.processId === processId && status.supervisorPid === supervisor.supervisorPid && status.port > 0) {
-      supervisor.port = status.port;
-      if (status.status === "stopped" || status.status === "exited_unknown") return status;
-      if (status.status === "running")
-        return await supervisorRequest(supervisor, "/status", "GET", undefined, Math.max(250, deadline - Date.now()));
+    let wake!: () => void;
+    const woke = new Promise<void>((resolve) => { wake = resolve; });
+    const watcher = armFileWatch(dirname(supervisor.statusPath), basename(supervisor.statusPath), wake);
+    try {
+      const status = readSupervisorStatus(supervisor.statusPath);
+      if (status && status.protocol === PROTOCOL && status.processId === processId && status.supervisorPid === supervisor.supervisorPid && status.port > 0) {
+        supervisor.port = status.port;
+        if (status.status === "stopped" || status.status === "exited_unknown") return status;
+        if (status.status === "running")
+          return await supervisorRequest(supervisor, "/status", "GET", undefined, Math.max(250, deadline - Date.now()));
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await Promise.race([woke, new Promise((resolve) => setTimeout(resolve, Math.min(remaining, STARTUP_WATCH_TICK_MS)))]);
+    } finally {
+      try { watcher?.close(); } catch {}
     }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) break;
-    await waitForFileActivity(dirname(supervisor.statusPath), basename(supervisor.statusPath), remaining);
   }
   throw new WindowsJobHostError("process_start_failed", "Windows Job supervisor did not become ready before the deadline.");
 }
@@ -1343,10 +1399,15 @@ export function waitForFileActivity(directory: string, filename: string, timeout
       try { watcher?.close(); } catch {}
       resolve();
     };
-    const timer = setTimeout(finish, Math.max(1, timeoutMs));
+    let timer = setTimeout(finish, Math.max(1, timeoutMs));
     try {
       watcher = watch(directory);
     } catch {
+      // PX-2b repair 1 (B1): an unwatchable directory falls back to the short
+      // tick, never to sleeping the whole remaining deadline. The caller
+      // re-reads and its own deadline still decides.
+      clearTimeout(timer);
+      timer = setTimeout(finish, Math.min(Math.max(1, timeoutMs), STARTUP_WATCH_TICK_MS));
       return;
     }
     watcher.once("error", () => finish());
@@ -1357,14 +1418,18 @@ export function waitForFileActivity(directory: string, filename: string, timeout
 /**
  * PX-2b: event-driven settlement wait over the existing authenticated
  * supervisor channel. The supervisor answers immediately when already
- * terminal (no lost wakeup: terminal state is final) and otherwise parks
- * the request until its next durable persist or the bounded timeout.
- * Throws on transport/auth failure so the caller falls back to a timed
- * delay; every existing deadline stays armed. Exported for tests.
+ * stopped (no lost wakeup: stopped is final) or when the `since` cursor is
+ * stale, and otherwise parks the request until its next durable persist or
+ * the bounded timeout. Throws on transport/auth failure so the caller falls
+ * back to a timed delay; every existing deadline stays armed. Exported for
+ * tests.
  */
-export async function waitForSupervisorStatusChange(supervisor: SupervisorRecord, timeoutMs: number): Promise<SupervisorStatus> {
+export async function waitForSupervisorStatusChange(supervisor: SupervisorRecord, timeoutMs: number, sinceUpdatedAt?: string): Promise<SupervisorStatus> {
   const bounded = Number.isSafeInteger(timeoutMs) ? Math.min(5_000, Math.max(1, timeoutMs)) : 1_000;
-  return await supervisorRequest<SupervisorStatus>(supervisor, `/wait-status?timeoutMs=${bounded}`, "GET", undefined, bounded + 250);
+  const query = typeof sinceUpdatedAt === "string" && sinceUpdatedAt.length > 0
+    ? `/wait-status?timeoutMs=${bounded}&since=${encodeURIComponent(sinceUpdatedAt)}`
+    : `/wait-status?timeoutMs=${bounded}`;
+  return await supervisorRequest<SupervisorStatus>(supervisor, query, "GET", undefined, bounded + 250);
 }
 
 async function supervisorRequest<T = SupervisorStatus>(supervisor: SupervisorRecord, path: string, method: "GET" | "POST", body?: Record<string, unknown>, timeoutMs = DEFAULT_START_DEADLINE_MS + 250): Promise<T> {

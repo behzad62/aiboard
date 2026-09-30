@@ -114,9 +114,19 @@ function waitForStatusPersist(timeoutMs) {
 }
 function parseWaitStatusTimeout(url) {
   const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
-  const timeoutMs = Number(new URLSearchParams(query).get("timeoutMs"));
+  const raw = new URLSearchParams(query).get("timeoutMs");
+  // PX-2b repair 1 (N6): a missing timeoutMs used to read as Number(null) =
+  // 0, so the 1_000 default was dead and the wait parked 1 ms. Absent means
+  // the default; a present value is still clamped to 1-5000 ms.
+  if (raw === null) return 1_000;
+  const timeoutMs = Number(raw);
   if (!Number.isSafeInteger(timeoutMs)) return 1_000;
   return Math.min(5_000, Math.max(1, timeoutMs));
+}
+function parseWaitStatusSince(url) {
+  const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const since = new URLSearchParams(query).get("since");
+  return typeof since === "string" && since.length > 0 ? since : undefined;
 }
 
 // Persist identity before reading configuration. If the Runner dies after it
@@ -183,13 +193,20 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (request.method === "GET" && (request.url === "/wait-status" || request.url.startsWith("/wait-status?"))) {
-    // PX-2b: event-driven settlement. Terminal state is final, so a change
-    // that already landed returns immediately (no lost wakeup); otherwise the
-    // response parks until the next persist or the bounded timeout. Callers
-    // re-poll and re-attest after every return, and every existing deadline
-    // stays armed as the backstop.
+    // PX-2b repair 1 (N2/N3): `since=<updatedAt>` returns at once on any
+    // change after the caller's last seen state, not only terminal. An
+    // already-stopped state returns at once (no lost wakeup: stopped is
+    // final), while exited_unknown parks — the outcome there is still
+    // unsettled. Otherwise the response parks until the next persist or the
+    // bounded timeout. Callers re-poll and re-attest after every return, and
+    // every existing deadline stays armed as the backstop.
     const timeoutMs = parseWaitStatusTimeout(request.url);
-    if (status.status === "stopped" || status.status === "exited_unknown") {
+    const since = parseWaitStatusSince(request.url);
+    if (since !== undefined && status.updatedAt !== since) {
+      json(response, 200, status);
+      return;
+    }
+    if (status.status === "stopped") {
       json(response, 200, status);
       return;
     }

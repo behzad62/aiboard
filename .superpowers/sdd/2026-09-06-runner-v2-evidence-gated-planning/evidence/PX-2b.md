@@ -307,4 +307,182 @@ changed for it.
   diff --check`, eslint, tsc clean; autocrlf notice only).
 - No commit/stage/stash/push performed; earlier `wip(px-2t)`/`wip(px-2a)`
   commits untouched; this work is uncommitted for independent review.
+## Repair cycle 1 (answers PX-2b-review-r1 B1-B4, N1-N7)
+
+Product changes (all inside the packet writable set):
+
+- B1 (`windows-job-process-host.ts` `armFileWatch`/`waitForSupervisor`/
+  `waitForSpareReadyStatus`/`waitForFileActivity`): the watch is armed
+  BEFORE the status read and each park is capped at a 250 ms tick; a
+  `watch()` failure falls back to the same short tick, never to the whole
+  remaining deadline. The spare-ready wait had the same read-then-arm shape
+  and got the same fix. The reviewer's sweep as a bounded test (50 trials,
+  0-1200 us offsets): 0 stalls (pre-fix reconstruction: 30/50 stall).
+- B2: the new tests below turn red under each of F1-F7 (prove-red table).
+  The release-guard test pins the probe-D shape (post-check fence/status
+  mutation refused, no tombstone). Analysis note: the in-fence `final`
+  terminal check is unreachable from outside while the supervisor is alive
+  (live `/status` reads win over the forged file, so the mutation is
+  masked), and a dead supervisor fails earlier at the transport/file
+  fallback — so scenario B runs against a dead supervisor deterministically,
+  and no byte-exact fault isolates the `final` check alone. The check stays
+  as defense-in-depth.
+- B3 (`windows-job-process-channel.ts` `detachWaiters`): `detach()` settles
+  the in-flight `waitForChange` at once; the parked HTTP request completes
+  on its own and is ignored. `waitForTerminal` then rejects with the
+  detached error (probe-B shape: bound 250 ms vs 452-1006 pre-fix).
+- B4 root cause, product side (`windows-job-process-host.ts` `releaseOwned`
+  pre-lock refusal only): a release refused while retained output is still
+  draining (`exited_unknown`, unreleased, chunks/bytes pending) now throws
+  `process_output_unsettled_terminal` whether or not `jobEmptyProof` has
+  landed. The backend already unlatches the control lane for exactly that
+  code (no release effect ran, so a later release re-verifies every
+  predicate); all other refusals keep the lane closed. Chosen over "release
+  waits for the proof" because `releaseOwned` has no wait/timeout parameter
+  and callers (e.g. C1's live-tree refusal) require a prompt
+  refuse-or-release; parking a fence effect on supervisor event timing would
+  change release's contract and could stall teardown. Scoped to release
+  only: the shared `throwIfTerminalOutputPending` is byte-unchanged, so
+  `signalOwned`/observe paths keep their exact behavior (a broad version of
+  this change was caught during repair to alter the retained-signal path and
+  was narrowed before validation).
+- B4 test side (`windows-process-backend.test.ts`, the two wait conditions
+  only, no assertion touched): `:2609` and `:2664` now wait for
+  `exited_unknown` with retained chunks AND `jobEmptyProof === true` — the
+  condition the release really needs — instead of the `root_exited` line
+  that lands first.
+- N1 (`windows-job-process-channel.ts` acquire + terminal check): the
+  terminal read compares `startedAt` against the attach snapshot AND the
+  backend binding birth (`binding.startedAt`, absent for legacy/fake
+  bindings). Owner decision recorded: the fused terminal proof performs 3
+  binding compares per call (was 5) plus one snapshot compare; the cut funds
+  the 2-effect (~43 ms) terminal fusion and the residual needs two record
+  rewrites inside one call to fool it, while observe-final and release still
+  compare against the binding.
+- N2 (supervisor `since` cursor + host plumbing): `/wait-status` accepts
+  `since=<updatedAt>` and returns at once on any change after it;
+  `waitOwnedStatusChange` defaults the cursor to the durable file state at
+  wait start. A persist landing between the file read and the request only
+  causes one extra poll+reattest cycle (spurious-wakeup class).
+- N3: immediate return only for `stopped`; `exited_unknown` parks.
+- N4: crash-between test (probe-H shape) added.
+- N5: A2's lower-token case now upgrades to token 2 first so token 1 is a
+  genuine valid-shape stale token; E1's old-fence check runs through the
+  fused method; D3a keeps helper-path coverage while the real-supervisor
+  wake/immediate tests pin behavior; channel-fallback (no
+  `waitOwnedStatusChange`, old-supervisor 404) tests added.
+- N6: missing `timeoutMs` now means the 1 s default (was a 1 ms park);
+  stray indents fixed; this file's EOF blank line removed.
+- ALSO (PX-2a r2 flake): E1 released straight after the fused upgrade
+  without waiting for stopped, racing the supervisor's exit detection under
+  whole-file load (the only step in the file without a settle wait; release
+  requires stopped). It now polls reconcile to stopped+released (bounded)
+  before release and reports the poll count. Cause proven with a `/tmp`
+  probe of the old shape (upgrade then immediate release, 15 launches):
+  refused `not verified terminal` 10/15 on this machine — the whole-file
+  2/7 is the same race under load, not shared file state (separate state
+  dirs per test; only the missing wait explains it). Validation runs report
+  `e1 stopped-settle polls: 1` on the quiet machine; the fix converts the
+  would-be refusal into a short wait by construction.
+
+New tests (all in `windows-job-fence-effects.test.ts`; 35 total, was 14):
+sweep + watch-fallback (B1); snapshot/binding/processId/stopped/released
+negatives + fused-reattest + delay-fallback + detach-cancel (fake,
+F1-F5/B3); live wake (F6), landed-stopped shape (F7, see note), release
+guard, live detach bound (B3); crash-between (N4); unknown-parks (N3);
+stale/fresh cursor (N2); default-timeout (N6); old-supervisor 404 (N5).
+
+F7 note: the immediate branch is unobservable post-hoc — a stopped
+supervisor exits within milliseconds (a fetch right after the stopped
+observation already refuses) and pipelined second requests do not observe it
+either (async handlers run concurrently and wake together on the next
+persist; verified: pipelined pair under the F7 fault stays green). Hence a
+deterministic source-shape pin (branch present, stopped-only); deleting the
+branch or restoring `exited_unknown` turns it red.
+
+Prove-reds (fault script `/tmp/px2b-faults.cjs`; every restore sha256-equal,
+byte-exact; shas are file bytes before `->` after):
+
+- F1a (channel: delete `terminal.startedAt !== this.attachedStartedAt`):
+  `1457809a214e -> 50b2c7e239a9`; "rejects a birth the attach snapshot
+  never saw" fails 0/1 -> red. Restored equal.
+- F1b (channel: delete the binding-startedAt leg):
+  `1457809a214e -> bc13bb643ea7`; "rejects a birth outside the binding"
+  red. Restored equal. (F1 splits in two because N1 compares both.)
+- F2 (channel: delete the processId leg): `1457809a214e -> 341c67243c4a`;
+  "rejects a foreign processId" red. Restored equal.
+- F3 (channel: delete the stopped leg): `1457809a214e -> c832893de421`;
+  "rejects a non-stopped terminal" red. Restored equal.
+- F4 (channel: delete the ownershipReleased leg):
+  `1457809a214e -> 56ae3bccc89c`; "rejects an unreleased terminal" red.
+  Restored equal.
+- F5 (channel: delete the fused-acquire reattest):
+  `1457809a214e -> 57b819735684`; "withholds the channel when reattest
+  fails" red. Restored equal.
+- F6 (supervisor: delete the `settleStatusWaiters()` call):
+  `655680ab6c60 -> 3bc81c09d48d`; "wakes on a persist" red (5007 ms vs the
+  4 s bound). Restored equal.
+- F7 (supervisor: `if (status.status === "stopped")` -> `if (false)`):
+  `655680ab6c60 -> 5fdba58ab330`; the shape pin red. Restored equal.
+- N3 (supervisor: restore `|| exited_unknown` to the immediate branch):
+  `655680ab6c60 -> f1f76834ac38`; BOTH the shape pin and "parks while the
+  outcome is unknown" red. Restored equal.
+- N2 (supervisor: delete the `since` branch):
+  `655680ab6c60 -> b1d5b6b3c633`; "stale change cursor" red (2005 ms vs
+  the 1 s bound; ticks slowed to 3 s so a mere next-tick wake cannot pass).
+  Restored equal.
+- N6 (supervisor: `if (raw === null)` -> `if (false)`):
+  `655680ab6c60 -> 9b341aab9a99`; "defaults a missing timeout" red
+  (22 ms vs the 700 ms floor). Restored equal.
+- B3 (channel: delete the detach notify): `bfa1fac6a4a2 -> 6bea0b1acb9a`
+  (base sha differs: re-proved after the detach drain-line fix below);
+  "detach settles a live terminal wait" red (890 ms vs 250 ms). Restored
+  equal.
+- B1 (host: no arm + full-remaining tick, i.e. the pre-fix shape):
+  sweep red with 30/50 stalls at offsets 300-1200 us (green: 0/50).
+  Restored equal.
+- Release guard: no byte-exact fault isolates the in-fence `final` check
+  (analysis above); the test pins the system property instead (post-check
+  mutation => refused, no tombstone).
+
+Self-caught during repair: the B3 edit first dropped detach's
+`await this.outputTail` drain line (PowerShell string surgery), which broke
+`windows-job-process-channel.test.ts` C2-round6 (held ACK never accounted:
+18/18 on pristine HEAD vs 17/18). Restored the line, re-verified 18/18 and
+re-proved B3. Lesson recorded: verify every string-surgery hunk against
+`git diff`, not the command echo.
+
+Validation (final code: narrowed B4 + restored drain):
+
+- `windows-job-fence-effects.test.ts` (`--test-concurrency=1`): 35/35
+  green 7 times in a row (final code; `e1 stopped-settle polls: 1` each —
+  quiet machine).
+- Batch `--test-concurrency=4` (backend, output-replay, supervisor-input,
+  production-matrix, execution-host x3, subprocess-runtime,
+  durable-process-store, task8-raw-launch-closure): 233 pass / 1 fail /
+  1 skip x3 runs, i.e. 3x consistent. The single failure is
+  `task8-raw-launch-closure` "Task 8 production tree ...", whose 5 findings
+  are all PX-2c spare code (`retireSpare`/`startSpare`/
+  `sweepRetiredSpareRecords`, `cd475d57`); this packet adds no spawn/kill
+  and touches none of those lines, so the failure is pre-existing at HEAD
+  and belongs to the PX-2c lane (finding, not fixed here; allowlist/test
+  file outside this packet's writable set).
+- The two B4 tests isolated 37x each: sink 0/37, ack 0/37. Both also green
+  in all 3 batch runs.
+- Guards + channel-adjacent on final code (real-host-guarantees,
+  launch-speed, spare-host, process-channel, terminal-observation,
+  cleanup-bootstrap, owned-fence-lock, streaming-process-session-runtime):
+  314/314.
+- `tsc --noEmit`: clean. `eslint` on all changed files: clean.
+  `git diff --check`: clean.
+- Measure `measure-git-launch.mts` (n=20, quiet, win32 node v24.18.0):
+  quiet (git status) median 1023 ms / p90 1163 ms, 11 effects/call
+  (14 -> 11 held; claimAndAttach=1, attach=0); large (ls-files) median
+  1388 / p90 1522, 14 effects/call; revparse median 1287 / p90 1361,
+  ~14 effects/call. Fusion shape holds everywhere (split attach 0, fused
+  claim+attach 1); totals within +-1 of the review-held counts (read-count
+  chunking/load noise); wall-clock carries load noise (see section 6),
+  counts are the guarantee. No new fence effects added by this cycle
+  (cursor file-read and event waits are outside the lock).
+- No commit/stage/stash/push performed; other lanes' commits untouched.
 

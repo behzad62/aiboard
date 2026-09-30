@@ -2604,8 +2604,8 @@ test("Windows Job sink failure leaves a durable unknown terminal until retained 
       /sink rejected retained bytes/,
     );
     await waitForCondition(() => {
-      const durable = JSON.parse(readFileSync(statusPath, "utf8").trim().split(/\r?\n/).at(-1)!) as { status: string; retainedOutputChunks?: number };
-      return durable.status === "exited_unknown" && (durable.retainedOutputChunks ?? 0) > 0;
+      const durable = JSON.parse(readFileSync(statusPath, "utf8").trim().split(/\r?\n/).at(-1)!) as { status: string; retainedOutputChunks?: number; jobEmptyProof?: boolean };
+      return durable.status === "exited_unknown" && (durable.retainedOutputChunks ?? 0) > 0 && durable.jobEmptyProof === true;
     });
     await assert.rejects(backend.release(binding, fence), /terminal|output|retained|control/i);
     assert.equal(await recoverRetainedJobOutput(backend, binding, hostRecord.supervisor.supervisorPid), "held");
@@ -2657,8 +2657,8 @@ test("Windows Job acknowledgement failure cannot report clean terminal or releas
       /injected durable acknowledgement failure/,
     );
     await waitForCondition(() => {
-      const durable = JSON.parse(readFileSync(statusPath, "utf8").trim().split(/\r?\n/).at(-1)!) as { status: string; retainedOutputChunks?: number };
-      return durable.status === "exited_unknown" && (durable.retainedOutputChunks ?? 0) > 0;
+      const durable = JSON.parse(readFileSync(statusPath, "utf8").trim().split(/\r?\n/).at(-1)!) as { status: string; retainedOutputChunks?: number; jobEmptyProof?: boolean };
+      return durable.status === "exited_unknown" && (durable.retainedOutputChunks ?? 0) > 0 && durable.jobEmptyProof === true;
     });
     await assert.rejects(backend.release(binding, fence), /terminal|output|retained|control/i);
     rejectAcknowledgement = false;

@@ -9,7 +9,7 @@ import {
   type InteractiveProcessWrite,
 } from "./interactive-process-channel.js";
 import type { ProcessBackendBinding, ProcessEffectFence } from "./process-backend.js";
-import type { WindowsJobOwnershipKey, WindowsJobProcessHost } from "./windows-job-process-host.js";
+import type { WindowsJobChannelState, WindowsJobOwnershipKey, WindowsJobProcessHost } from "./windows-job-process-host.js";
 
 type DuplexWindowsJobProcessHost = WindowsJobProcessHost & Required<Pick<WindowsJobProcessHost,
   "attachOwnedChannel" | "writeOwnedInput" | "closeOwnedInput" | "acknowledgeOwnedOutput" | "claimOwnedFence">>;
@@ -30,9 +30,15 @@ export function createWindowsJobProcessChannelProvider(options: {
   readonly clock?: () => number;
   authority(binding: ProcessBackendBinding, fence: ProcessEffectFence): WindowsJobChannelAuthority;
 }) {
-      const acquire = async (binding: ProcessBackendBinding, fence: ProcessEffectFence) => {
+  const acquire = async (binding: ProcessBackendBinding, fence: ProcessEffectFence) => {
     const authority = options.authority(binding, fence);
     const service = authority.service;
+    // PX-2b repair 1 (N1): the binding carries the birth the backend attested
+    // at launch. The terminal read compares against the attach snapshot AND
+    // this binding birth, restoring the binding link next to the read.
+    const bindingStartedAt = typeof binding?.startedAt === "string" ? binding.startedAt : undefined;
+    const open = (state: WindowsJobChannelState) =>
+      new WindowsJobProcessChannel(authority, state.nextSequence, state.inputClosed, state.outputOffsets, state.outputSequences, options.pollIntervalMs, options.replayCapacityBytes, options.clock ?? Date.now, state.retainedOutput ?? [], state.snapshot.startedAt, bindingStartedAt);
     if (service.claimAndAttachOwnedChannel) {
       // PX-2b: the claim compare-and-set and the attachment read run as one
       // atomic fence effect (claim first, exactly as in the split path
@@ -41,14 +47,14 @@ export function createWindowsJobProcessChannelProvider(options: {
       // an unverified birth: a stale birth throws here.
       const state = await service.claimAndAttachOwnedChannel(authority.processId, authority.owner, fence);
       await authority.reattest();
-      return new WindowsJobProcessChannel(authority, state.nextSequence, state.inputClosed, state.outputOffsets, state.outputSequences, options.pollIntervalMs, options.replayCapacityBytes, options.clock ?? Date.now, state.retainedOutput ?? [], state.snapshot.startedAt);
+      return open(state);
     }
     // Split path (fakes, hosts without the fused method): exactly the
     // historical claim, reattest, attach order.
     await service.claimOwnedFence(authority.processId, authority.owner, fence);
     await authority.reattest();
     const state = await service.attachOwnedChannel(authority.processId, authority.owner, fence);
-    return new WindowsJobProcessChannel(authority, state.nextSequence, state.inputClosed, state.outputOffsets, state.outputSequences, options.pollIntervalMs, options.replayCapacityBytes, options.clock ?? Date.now, state.retainedOutput ?? [], state.snapshot.startedAt);
+    return open(state);
   };
   return Object.freeze({
     version: BACKPRESSURED_INTERACTIVE_PROCESS_CHANNEL_VERSION,
@@ -82,6 +88,7 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     private readonly clock: () => number,
     private readonly retainedOutput: readonly BackpressuredOutputMetadata[],
     private readonly attachedStartedAt: string,
+    private readonly bindingStartedAt?: string,
   ) {}
 
   retainedWindow() { return this.retainedOutput.map((frame) => ({ ...frame })); }
@@ -145,17 +152,21 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
           if (this.offsets.stdout + this.offsets.stderr === before) {
             if (this.outputFailure) throw this.outputFailure;
             this.assertAttached();
-            // PX-2b: one attested terminal read carries every predicate the
-            // three back-to-back reconciles used to re-check: birth identity
-            // (against the attach-time snapshot, itself taken after the
-            // acquire reattest proved the binding birth), stopped state, and
-            // ownership release. No host action ran between those reads,
-            // supervisor terminal state is monotonic, and the backend
-            // observe-level reconcile still re-attests after return.
+            // PX-2b repair 1 (N1): one attested terminal read carries every
+            // predicate the three back-to-back reconciles used to re-check:
+            // birth identity against the attach-time snapshot AND the backend
+            // binding birth (the fused attach snapshot is taken inside the
+            // combined effect before the acquire reattest, so the snapshot
+            // alone no longer links the binding; the split path takes it
+            // after), stopped state, and ownership release. No host action
+            // ran between those reads, supervisor terminal state is
+            // monotonic, and the backend observe-level reconcile still
+            // re-attests after return.
             const terminal = await this.authority.control(() => this.authority.service.reconcileOwned(
               this.authority.processId, this.authority.owner, this.authority.fence));
             this.assertAttached();
             if (terminal.processId !== this.authority.processId || terminal.startedAt !== this.attachedStartedAt ||
+                (this.bindingStartedAt !== undefined && terminal.startedAt !== this.bindingStartedAt) ||
                 terminal.status !== "stopped" || !terminal.ownershipReleased)
               throw new Error("Windows Job terminal result is not currently authenticated.");
             this.assertAttached();
@@ -167,8 +178,13 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
       await this.waitForChange(1000);
     }
   }
+  private readonly detachWaiters = new Set<() => void>();
   async detach(): Promise<unknown> {
     this.detached = true; if (this.timer) clearInterval(this.timer); this.timer = undefined; this.sink = undefined;
+    // PX-2b repair 1 (B3): cancel the in-flight event wait so closeAttachment
+    // does not park on it to its timeout; the parked HTTP request still
+    // completes on its own and is ignored.
+    for (const finish of [...this.detachWaiters]) finish();
     await this.outputTail.catch((error) => this.rememberOutputFailure(error));
     return { detached: true };
   }
@@ -230,17 +246,27 @@ class WindowsJobProcessChannel implements InteractiveProcessChannel {
     if (this.detached || !this.sink) throw new Error("Windows Job terminal output reader is unavailable.");
   }
 
-    private async waitForChange(timeoutMs: number): Promise<void> {
+  private async waitForChange(timeoutMs: number): Promise<void> {
     // PX-2b: event-driven settlement wait over the authenticated supervisor
     // channel. Any absence or transport/auth failure falls back to the
     // previous timed delay; every existing deadline stays armed as the
     // backstop, and the caller re-polls and re-attests after every return.
+    // PX-2b repair 1 (B3): the wait is abortable — detach() settles it at
+    // once instead of leaving it parked to its timeout.
     const wait = this.authority.service.waitOwnedStatusChange;
     if (!wait) { await delay(this.pollIntervalMs); return; }
+    let onDetach!: () => void;
+    const detached = new Promise<void>((resolve) => { onDetach = resolve; this.detachWaiters.add(onDetach); });
     try {
-      await wait.call(this.authority.service, this.authority.processId, this.authority.owner, this.authority.fence, timeoutMs);
+      await Promise.race([
+        wait.call(this.authority.service, this.authority.processId, this.authority.owner, this.authority.fence, timeoutMs),
+        detached.then(() => { throw new Error("Windows Job channel is detached."); }),
+      ]);
     } catch {
+      if (this.detached) this.assertAttached();
       await delay(this.pollIntervalMs);
+    } finally {
+      this.detachWaiters.delete(onDetach);
     }
   }
   private startPolling() {
