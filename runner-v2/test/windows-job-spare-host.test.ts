@@ -26,7 +26,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test, { after, before, type TestContext } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost, type ExecutionHost, type ExecutionHostRunBinding } from "../src/execution-host.js";
@@ -1035,5 +1035,306 @@ test("spare pin: recovery inside the claim window keeps the call record", { time
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// N1 — a runner crash inside the claim window retires the whole tree and
+// keeps the record. The doomed runner below is SIGKILLed after the supervisor
+// acked the claim but before the host flips its record, so the disk record
+// stays claim-marked while the durable status reads claimed. A restarted host
+// must retire the supervisor plus the child (nobody else owns them) and keep
+// the record as the audit trail.
+test("spare pin: a runner crash inside the claim window retires the tree and keeps the record", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  assert.ok(existsSync(tsxPath), "tsx CLI must exist to spawn the crash-window runner");
+  const root = mkdtempSync(join(tmpdir(), "aiboard-px2c-claimcrash-"));
+  const owned: number[] = [];
+  try {
+    const jobHostDir = join(root, "job-host");
+    mkdirSync(jobHostDir, { recursive: true });
+    const hb = join(root, "hb.txt");
+    const marker = join(root, "marker.txt");
+    const hostUrl = pathToFileURL(join(here, "..", "src", "windows-job-process-host.js")).href;
+    const envJson = JSON.stringify(
+      Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string")),
+    );
+    const runnerLines = [
+      `import { writeFileSync } from "node:fs";`,
+      `import { createWindowsJobProcessHost } from ${JSON.stringify(hostUrl)};`,
+      `const dir = process.argv[2] as string;`,
+      `const hb = process.argv[3] as string;`,
+      `const marker = process.argv[4] as string;`,
+      `const host = createWindowsJobProcessHost({ stateDirectory: dir, spare: { idleTimeoutMs: 120000 } });`,
+      `await host.prestartSpare({ runId: "px2c-n1-run", sessionId: "px2c-n1-session" });`,
+      `const orig = (host as any).persist.bind(host);`,
+      `(host as any).persist = (r: any) => {`,
+      `  if (r.spare === true && r.spareClaimed === true) {`,
+      `    writeFileSync(marker, "in-window");`,
+      `    process.kill(process.pid, "SIGKILL");`,
+      `    return;`,
+      `  }`,
+      `  return orig(r);`,
+      `};`,
+      `await (host as any).launchOwned({`,
+      `  runId: "px2c-n1-run",`,
+      `  sessionId: "px2c-n1-session",`,
+      `  command: process.execPath,`,
+      `  args: ["-e", "const fs=require('fs');const p=process.argv[1];setInterval(()=>{try{fs.appendFileSync(p,'x');}catch(e){}},200);setTimeout(()=>process.exit(0),120000)", hb],`,
+      `  workingDirectory: dir,`,
+      `  environment: ${envJson},`,
+      `  interactive: true,`,
+      `  fence: { ownerId: "px2c-n1", fencingToken: 1 },`,
+      `});`,
+    ];
+    const runnerPath = join(root, "claim-crash-runner.mts");
+    writeFileSync(runnerPath, runnerLines.join("\n"));
+    const child = spawn(process.execPath, [tsxPath, runnerPath, jobHostDir, hb, marker], {
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    });
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr += Buffer.from(chunk).toString("utf8");
+    });
+    const exit = await new Promise<{ code: number | null; signal: string | null }>((resolve) => {
+      child.once("exit", (code, signal) => resolve({ code, signal: signal ?? null }));
+    });
+    assert.ok(existsSync(marker), `doomed runner must reach the claim window (exit ${String(exit.code)}/${String(exit.signal)}, stderr: ${stderr.slice(-500)})`);
+    interface ClaimWindowRecord {
+      readonly spare?: unknown;
+      readonly spareClaimed?: unknown;
+      readonly spareClaimInFlight?: unknown;
+      readonly processId?: unknown;
+      readonly supervisor?: { readonly supervisorPid?: unknown };
+    }
+    const readRawRecords = (): ClaimWindowRecord[] =>
+      readdirSync(jobHostDir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => JSON.parse(readFileSync(join(jobHostDir, name), "utf8")) as ClaimWindowRecord);
+    const inFlight = readRawRecords().filter((record) => record.spareClaimInFlight === true);
+    assert.equal(inFlight.length, 1, "exactly one claim-window record must remain on disk");
+    const rec = inFlight[0] as ClaimWindowRecord;
+    assert.equal(rec.spare, true, "window record must carry the spare mark");
+    assert.equal(rec.spareClaimed ?? false, false, "window record must not be flipped to claimed");
+    const supPid = rec.supervisor?.supervisorPid;
+    assert.ok(typeof supPid === "number" && supPid > 0, "window record must name its supervisor");
+    assert.ok(typeof rec.processId === "string", "window record must carry its processId");
+    const processId = rec.processId as string;
+    const statusPath = join(jobHostDir, rec.processId, "supervisor.jsonl");
+    const lastStatus = (): Record<string, unknown> =>
+      readFileSync(statusPath, "utf8")
+        .split(/\r?\n/)
+        .filter((line) => line.trim().length > 0)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .at(-1) as Record<string, unknown>;
+    await waitFor(() => {
+      try {
+        return ((lastStatus()["childPid"] as number) ?? 0) > 0;
+      } catch {
+        return false;
+      }
+    }, 15_000, "claim-window child to start");
+    await waitFor(() => {
+      try {
+        return readFileSync(hb, "utf8").length > 0;
+      } catch {
+        return false;
+      }
+    }, 15_000, "claim-window child heartbeat");
+    const first = readFileSync(hb, "utf8").length;
+    await sleep(800);
+    assert.ok(readFileSync(hb, "utf8").length > first, "child heartbeat must be growing before recovery");
+    const childPid = lastStatus()["childPid"] as number;
+    assert.ok(childPid > 0, "durable status must name the call child");
+    owned.push(supPid as number, childPid);
+    // Recovery: a restarted runner on the same directory retires the tree and
+    // keeps the record.
+    const service2 = createWindowsJobProcessHost({ stateDirectory: jobHostDir });
+    assert.ok(existsSync(join(jobHostDir, `${processId}.json`)), "claim-window record must survive recovery");
+    await waitForDeath([supPid as number], 20_000, "claim-window supervisor");
+    await waitForDeath([childPid], 20_000, "claim-window child");
+    const settled = readFileSync(hb, "utf8").length;
+    await sleep(1500);
+    assert.equal(readFileSync(hb, "utf8").length, settled, "heartbeat must stop once the tree is retired");
+    const kept = JSON.parse(readFileSync(join(jobHostDir, `${processId}.json`), "utf8")) as {
+      spareReapedAt?: unknown;
+      spareClaimInFlight?: unknown;
+    };
+    assert.equal(typeof kept.spareReapedAt, "string", "kept record must note its claim-window reap");
+    assert.equal(kept.spareClaimInFlight, true, "kept record must stay claim-marked");
+    assert.deepEqual(service2.spareStats?.(), { prestarts: 0, claims: 0, fallbacks: 0 }, "recovery must adopt nothing");
+    await assertNoLiveSupervisors(jobHostDir);
+  } finally {
+    await killIdentifiedPids(owned);
+    try {
+      for (const name of readdirSync(join(root, "job-host")).filter((entry) => entry.endsWith(".json"))) {
+        try {
+          const raw = JSON.parse(readFileSync(join(root, "job-host", name), "utf8")) as {
+            supervisor?: { supervisorPid?: unknown };
+          };
+          if (typeof raw.supervisor?.supervisorPid === "number") owned.push(raw.supervisor.supervisorPid);
+        } catch {}
+      }
+    } catch {}
+    await killIdentifiedPids(owned);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// N2a — a failure after the acked claim surfaces as a launch failure and the
+// command runs exactly once: no silent fallback may re-run it.
+test("spare pin: a post-ack failure surfaces and never runs the call twice", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const world = await createPrivateSpareWorld("postack", { idleTimeoutMs: 120000 });
+  try {
+    await prestartSpareOrFail(world.service, { runId: world.runId, sessionId: world.sessionId });
+    const fallbacksBefore = world.service.spareStats?.().fallbacks ?? 0;
+    const counter = join(world.root, `n2a-${randomUUID().slice(0, 8)}.txt`);
+    const owned = world.service as unknown as {
+      applyStatus(...args: never[]): unknown;
+      persist(record: unknown): void;
+    };
+    const origApply = owned.applyStatus.bind(world.service);
+    let thrown = false;
+    owned.applyStatus = (...args: never[]): unknown => {
+      if (!thrown) {
+        const end = Date.now() + 10_000;
+        while (Date.now() < end) {
+          try {
+            if (readFileSync(counter, "utf8").length > 0) break;
+          } catch {}
+        }
+        thrown = true;
+        throw new Error("EPERM injected after ack (applyStatus)");
+      }
+      return origApply(...args);
+    };
+    let failure: unknown;
+    try {
+      await world.service.launchOwned({
+        runId: world.runId,
+        sessionId: world.sessionId,
+        command: process.execPath,
+        args: ["-e", `require('fs').appendFileSync(${JSON.stringify(counter)},'x');setTimeout(()=>process.exit(0),4000)`],
+        workingDirectory: world.root,
+        environment: { ...process.env } as Record<string, string>,
+        interactive: true,
+        fence: { ownerId: "px2c-n2a", fencingToken: 1 },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    assert.equal(
+      (failure as { code?: unknown })?.code,
+      "process_start_failed",
+      "a post-ack failure must surface as a launch failure",
+    );
+    await sleep(6000);
+    const runs = (() => {
+      try {
+        return readFileSync(counter, "utf8").length;
+      } catch {
+        return 0;
+      }
+    })();
+    assert.equal(runs, 1, "the acked command must have run exactly once");
+    assert.equal(world.service.spareStats?.().fallbacks ?? 0, fallbacksBefore, "no fallback may follow an acked claim");
+  } finally {
+    try {
+      const rec = readSpareRecords(world.jobHostDir).find((entry) =>
+        entry.args.some((arg) => arg.includes("n2a-")),
+      );
+      if (rec) await killIdentifiedPids([rec.pid, rec.supervisorPid].filter((pid) => pid > 0));
+    } catch {}
+    try {
+      await world.service.retireSpare?.();
+    } catch {}
+    try {
+      await world.binding.close();
+    } catch {}
+    try {
+      await world.host.close();
+    } catch {}
+    rmSync(world.root, { recursive: true, force: true });
+  }
+});
+
+// N2b — a failing claimed-record persist surfaces as a launch failure and the
+// command runs exactly once: no silent fallback may re-run it.
+test("spare pin: a failing claimed-record persist surfaces and never runs the call twice", { timeout: 55_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const world = await createPrivateSpareWorld("persistack", { idleTimeoutMs: 120000 });
+  try {
+    await prestartSpareOrFail(world.service, { runId: world.runId, sessionId: world.sessionId });
+    const fallbacksBefore = world.service.spareStats?.().fallbacks ?? 0;
+    const counter = join(world.root, `n2b-${randomUUID().slice(0, 8)}.txt`);
+    const owned = world.service as unknown as {
+      persist(record: unknown): void;
+    };
+    const origPersist = owned.persist.bind(world.service);
+    let thrown = false;
+    owned.persist = (record: unknown): void => {
+      if ((record as { spareClaimed?: unknown })?.spareClaimed === true && !thrown) {
+        const end = Date.now() + 10_000;
+        while (Date.now() < end) {
+          try {
+            if (readFileSync(counter, "utf8").length > 0) break;
+          } catch {}
+        }
+        thrown = true;
+        throw new Error("EPERM injected after ack (persist)");
+      }
+      origPersist(record);
+    };
+    let failure: unknown;
+    try {
+      await world.service.launchOwned({
+        runId: world.runId,
+        sessionId: world.sessionId,
+        command: process.execPath,
+        args: ["-e", `require('fs').appendFileSync(${JSON.stringify(counter)},'x');setTimeout(()=>process.exit(0),4000)`],
+        workingDirectory: world.root,
+        environment: { ...process.env } as Record<string, string>,
+        interactive: true,
+        fence: { ownerId: "px2c-n2b", fencingToken: 1 },
+      });
+    } catch (error) {
+      failure = error;
+    }
+    assert.equal(
+      (failure as { code?: unknown })?.code,
+      "process_start_failed",
+      "a failing claimed-record persist must surface as a launch failure",
+    );
+    await sleep(6000);
+    const runs = (() => {
+      try {
+        return readFileSync(counter, "utf8").length;
+      } catch {
+        return 0;
+      }
+    })();
+    assert.equal(runs, 1, "the acked command must have run exactly once");
+    assert.equal(world.service.spareStats?.().fallbacks ?? 0, fallbacksBefore, "no fallback may follow an acked claim");
+  } finally {
+    try {
+      const rec = readSpareRecords(world.jobHostDir).find((entry) =>
+        entry.args.some((arg) => arg.includes("n2b-")),
+      );
+      if (rec) await killIdentifiedPids([rec.pid, rec.supervisorPid].filter((pid) => pid > 0));
+    } catch {}
+    try {
+      await world.service.retireSpare?.();
+    } catch {}
+    try {
+      await world.binding.close();
+    } catch {}
+    try {
+      await world.host.close();
+    } catch {}
+    rmSync(world.root, { recursive: true, force: true });
   }
 });

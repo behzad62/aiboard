@@ -399,18 +399,25 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // PX-2c repair 1 (B1/L3): crash recovery. An unclaimed spare is owned
     // durably (its record survives a runner crash) but must never be adopted
     // as a call. A new runner on this state directory drops the previous
-    // runner's spare records instead of relaunching anything, and kills a
-    // previous spare's processes only through killVerifiedSpareSupervisor:
+    // runner's spare records instead of relaunching anything, and retires a
+    // previous spare's processes only through the audited helpers below:
+    // previous idle spares through killVerifiedSpareSupervisor — never by a
     // never by a recorded PID alone, only after an authenticated live-status
-    // proof with the record's token. A pair marked inside its claim window
-    // (spareClaimInFlight) keeps its record as the audit trail: the tree is
-    // still retired on proof, but the record is kept, never deleted.
+    // proof with the record's token — and pairs lost inside their claim window
+    // (spareClaimInFlight) through retireVerifiedClaimWindowTree, which accepts
+    // the expected claimed proof, retires the whole tree, and keeps the record.
     for (const [processId, value] of [...this.records]) {
       if (value.spare === true && value.spareClaimed !== true) {
         // Snapshot the durable status BEFORE the files below are dropped: the
         // async identity proof still needs it, and the record must be gone
-        // synchronously (S5/S6 pin the synchronous drop).
-        const durable = readSupervisorStatus(value.supervisor.statusPath);
+        // synchronously (S5/S6 pin the synchronous drop). N3: an unreadable
+        // status path is no proof, never a constructor throw.
+        let durable: SupervisorStatus | null = null;
+        try {
+          durable = readSupervisorStatus(value.supervisor.statusPath);
+        } catch {
+          durable = null;
+        }
         this.records.delete(processId);
         if (value.spareClaimInFlight === true) {
           try {
@@ -420,6 +427,7 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
           this.removeSpareFiles(processId);
         }
         void killVerifiedSpareSupervisor(value, durable, SPARE_REAP_VERIFY_TIMEOUT_MS).catch(() => undefined);
+        void retireVerifiedClaimWindowTree(value, durable, SPARE_REAP_VERIFY_TIMEOUT_MS, SPARE_RETIRE_TREE_TIMEOUT_MS, this.stopDeadlineMs).catch(() => undefined);
       }
     }
   }
@@ -430,7 +438,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     // PX-2c: claim the pre-started spare when one is waiting. Any miss, death,
     // staleness, or identity failure returns null and the call starts the
     // normal way below, exactly as today.
-    const spareSnapshot = await this.tryClaimSpareCall(input).catch(() => null);
+    const spareSnapshot = await this.tryClaimSpareCall(input).catch((error: unknown) => {
+      if (error instanceof WindowsJobHostError) throw error;
+      return null;
+    });
     if (spareSnapshot) {
       this.refreshSpareInBackground(input);
       return spareSnapshot;
@@ -664,6 +675,10 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
     const entry = this.spareEntry;
     this.spareEntry = undefined;
     if (!entry) return null;
+    // PX-2c repair 2 (N2): once the claim below is acked, any later failure
+    // must reach the caller as a launch failure — never a silent fallback
+    // that runs the command a second time.
+    let claimAcked = false;
     const { launcher, processId } = entry;
     const fail = (): null => {
       this.spareCounts.fallbacks += 1;
@@ -703,10 +718,11 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       // PX-2c repair 1 (M3/L3): mark the claim window durably BEFORE the IPC
       // claim lands, so a concurrent run-end sweep skips this pair instead of
       // killing a call mid-claim, and a crash here keeps an audit trail.
-      const claiming: HostRecord = { ...record, spareClaimInFlight: true, updatedAt: this.clock() };
+      const claiming: HostRecord = { ...record, spareClaimInFlight: true, updatedAt: this.clock(), ...(input.fence ? { currentFence: { ...input.fence } } : {}) };
       this.records.set(processId, claiming); this.persist(claiming);
       const acknowledged = await this.sendSpareClaim(launcher, entry.token, input);
       if (!acknowledged) return fail();
+      claimAcked = true;
       // The claim landed: adopt the reservation for this call. The spare mark
       // stays (spareClaimed) so a second claim of this pair is impossible.
       const now = this.clock();
@@ -742,7 +758,12 @@ export class AuthenticatedWindowsJobProcessHost implements WindowsJobProcessHost
       }
       this.spareCounts.claims += 1;
       return this.snapshot(claimed);
-    } catch {
+    } catch (error) {
+      if (claimAcked) {
+        await abortStartingSupervisor(launcher, entry.token, this.stopDeadlineMs).catch(() => undefined);
+        if (error instanceof WindowsJobHostError) throw error;
+        throw new WindowsJobHostError("process_start_failed", `Windows Job spare claim did not settle: ${error instanceof Error ? error.message : String(error)}`);
+      }
       return fail();
     }
   }
@@ -1511,14 +1532,17 @@ const SPARE_REAP_VERIFY_TIMEOUT_MS = 2_000;
  * live-status proof with the record's own token: the durable status file must
  * already name this pair (processId, supervisorPid, unclaimed spare), and the
  * live supervisor must answer `GET /status` with the same identity. Anything
- * else — no file, a mismatch, silence, a wrong token — returns "skipped" and
- * the caller only drops the record. Never throws.
+ * else — no file, a mismatch, silence, a wrong token, or a pair inside its
+ * claim window (spareClaimInFlight, unless the caller passes acceptClaimed) —
+ * returns "skipped" and the caller only drops the record. Never throws.
+ * acceptClaimed is true only for the claim-window retire fallback below, where
+ * `claimed` is the expected proof rather than a reason to skip.
  */
-async function killVerifiedSpareSupervisor(record: HostRecord, durable: SupervisorStatus | null, timeoutMs: number): Promise<"killed" | "skipped"> {
+async function killVerifiedSpareSupervisor(record: HostRecord, durable: SupervisorStatus | null, timeoutMs: number, acceptClaimed = false): Promise<"killed" | "skipped"> {
   try {
     if (!durable || durable.protocol !== PROTOCOL || durable.processId !== record.processId
       || durable.supervisorPid !== record.supervisor.supervisorPid
-      || durable.spare !== true || durable.claimed === true) return "skipped";
+      || durable.spare !== true || (!acceptClaimed && (durable.claimed === true || record.spareClaimInFlight === true))) return "skipped";
     const port = durable.port > 0 ? durable.port : record.supervisor.port;
     if (!(port > 0)) return "skipped";
     let live: SupervisorStatus;
@@ -1530,13 +1554,100 @@ async function killVerifiedSpareSupervisor(record: HostRecord, durable: Supervis
     }
     if (live.protocol !== PROTOCOL || live.processId !== record.processId
       || live.supervisorPid !== record.supervisor.supervisorPid || live.port !== port
-      || live.spare !== true || live.claimed === true) return "skipped";
+      || live.spare !== true || (!acceptClaimed && live.claimed === true)) return "skipped";
     try {
       process.kill(record.supervisor.supervisorPid, "SIGKILL");
     } catch {
       // Already gone between the proof and the kill: the record is still dropped.
     }
     return "killed";
+  } catch {
+    return "skipped";
+  }
+}
+
+/**
+ * PX-2c repair 2 (N1): bounded retire budget for the claim-window tree below.
+ * Crash recovery never blocks a host start on it (fire-and-forget).
+ */
+const SPARE_RETIRE_TREE_TIMEOUT_MS = 10_000;
+
+/** Recovery waits probe retirement through the supervisor channel below, never by PID. */
+/** Non-throwing durable-status read for recovery fallbacks: unreadable means no proof. */
+function readSupervisorStatusQuiet(path: string): SupervisorStatus | null {
+  try {
+    return readSupervisorStatus(path);
+  } catch {
+    return null;
+  }
+}/**
+ * PX-2c repair 2 (N1): retire a pair the previous runner lost inside the
+ * claim window (spareClaimInFlight on disk while the supervisor already acked,
+ * so the durable status reads claimed:true). The B1 helper must skip claimed
+ * pairs, but here `claimed` is EXPECTED: after the same authenticated
+ * identity proof (the durable file names this pair plus a live token-authed
+ * GET /status with the same identity), the whole tree is retired through the
+ * supervisor's own authenticated POST /signal — its stopOwnedTree owns the
+ * single backend-kill site. Retirement is confirmed through the supervisor
+ * channel (durable stopped plus a refused port, never a PID probe); when the
+ * signal cannot retire the pair, the audited kill helper above runs as the
+ * fallback with acceptClaimed. The call's durable record is
+ * always kept as the audit trail: this helper never deletes anything, and
+ * the constructor persists spareReapedAt before calling it. Never throws.
+ */
+async function retireVerifiedClaimWindowTree(record: HostRecord, durable: SupervisorStatus | null, verifyTimeoutMs: number, retireTimeoutMs: number, stopDeadlineMs: number): Promise<"retired" | "skipped"> {
+  try {
+    if (record.spareClaimInFlight !== true) return "skipped";
+    if (!durable || durable.protocol !== PROTOCOL || durable.processId !== record.processId
+      || durable.supervisorPid !== record.supervisor.supervisorPid
+      || durable.spare !== true || durable.claimed !== true) return "skipped";
+    const port = durable.port > 0 ? durable.port : record.supervisor.port;
+    if (!(port > 0)) return "skipped";
+    let live: SupervisorStatus;
+    try {
+      live = await supervisorRequest<SupervisorStatus>(
+        { ...record.supervisor, port }, "/status", "GET", undefined, verifyTimeoutMs);
+    } catch {
+      return "skipped";
+    }
+    if (live.protocol !== PROTOCOL || live.processId !== record.processId
+      || live.supervisorPid !== record.supervisor.supervisorPid || live.port !== port
+      || live.spare !== true || live.claimed !== true) return "skipped";
+    // Identity proven with the claim accepted. Retire the whole tree through
+    // the supervisor: the call's fence travels in the claim-window record
+    // (persisted before the ack), satisfying the supervisor's fence check.
+    // A fenceless call skips to the audited fallback kill below.
+    try {
+      await supervisorRequest<SupervisorStatus>(
+        { ...record.supervisor, port }, "/signal", "POST",
+        { signal: "SIGKILL", deadlineMs: stopDeadlineMs, fence: record.currentFence },
+        verifyTimeoutMs + retireTimeoutMs);
+    } catch {}
+    // Wait for the supervisor to prove the tree empty (durable stopped) and
+    // then exit (its port refuses): no PID is ever probed or killed here.
+    // A fenceless call the signal cannot retire falls to the audited helper
+    // below, the file's single PID-kill site.
+    const deadline = Date.now() + retireTimeoutMs;
+    for (;;) {
+      let current: SupervisorStatus | null = null;
+      try {
+        current = readSupervisorStatus(record.supervisor.statusPath);
+      } catch {
+        current = null;
+      }
+      if (current !== null && current.status === "stopped") {
+        try {
+          await supervisorRequest<SupervisorStatus>(
+            { ...record.supervisor, port }, "/status", "GET", undefined, Math.min(verifyTimeoutMs, 1_000));
+        } catch {
+          break;
+        }
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    await killVerifiedSpareSupervisor(record, readSupervisorStatusQuiet(record.supervisor.statusPath), verifyTimeoutMs, true).catch(() => undefined);
+    return "retired";
   } catch {
     return "skipped";
   }

@@ -119,6 +119,7 @@ interface JobRecordView {
   readonly args: readonly string[];
   readonly spare: boolean;
   readonly spareClaimed: boolean;
+  readonly spareClaimInFlight: boolean;
 }
 
 function readJobRecords(h: Px2tHarness): JobRecordView[] {
@@ -142,6 +143,7 @@ function readJobRecordDir(jobHostDir: string): JobRecordView[] {
         args?: unknown;
         spare?: unknown;
         spareClaimed?: unknown;
+        spareClaimInFlight?: unknown;
         supervisor?: { supervisorPid?: unknown };
       };
       if (typeof raw.processId !== "string" || typeof raw.startedAt !== "string") continue;
@@ -155,6 +157,7 @@ function readJobRecordDir(jobHostDir: string): JobRecordView[] {
         args: Array.isArray(raw.args) ? raw.args.filter((entry): entry is string => typeof entry === "string") : [],
         spare: raw.spare === true,
         spareClaimed: raw.spareClaimed === true,
+        spareClaimInFlight: raw.spareClaimInFlight === true,
       });
     } catch {
       continue;
@@ -194,21 +197,35 @@ function recordCount(h: Px2tHarness): number {
 
 /** Zero-leftover gate: every supervisor THIS run started must be gone.
  * Supervisors already alive before the file started are excluded, so a PX-2c
- * pre-started spare does not need to edit this net. PX-2c repair 1 (N4): the
- * gate is spare-aware in the narrowest way — it additionally ignores exactly
- * the idle spare identified by its own durable spare record
- * (`spare:true, spareClaimed:false`). A claimed spare is a call and is still
- * enforced; any call supervisor that outlives its call still fails this gate. */
+ * pre-started spare does not need to edit this net. PX-2c repair 2 (N5): the
+ * spare-aware clause ignores exactly the one idle spare by its own durable
+ * record — a single live record with `spare:true, spareClaimed:false` and no
+ * claim mark. Two leaked idle spares, a claimed spare (a call, still
+ * enforced), a claim-window orphan (spareClaimInFlight, still enforced), and
+ * any call supervisor that outlives its call still fail this gate. */
 async function assertNoLiveSupervisors(h: Px2tHarness, timeoutMs = 20_000): Promise<void> {
   await waitFor(
     () =>
-      readJobRecords(h).every(
-        (record) =>
+      readJobRecords(h).every((record) => {
+        if (
           record.supervisorPid < 1 ||
           preExistingSupervisorPids.has(record.supervisorPid) ||
-          (record.spare && !record.spareClaimed) ||
-          !processAlive(record.supervisorPid),
-      ),
+          !processAlive(record.supervisorPid)
+        )
+          return true;
+        if (!record.spare || record.spareClaimed || record.spareClaimInFlight) return false;
+        return (
+          readJobRecords(h).filter(
+            (candidate) =>
+              candidate.spare &&
+              !candidate.spareClaimed &&
+              !candidate.spareClaimInFlight &&
+              candidate.supervisorPid > 0 &&
+              !preExistingSupervisorPids.has(candidate.supervisorPid) &&
+              processAlive(candidate.supervisorPid),
+          ).length === 1
+        );
+      }),
     timeoutMs,
     "Job supervisors of this run",
   );

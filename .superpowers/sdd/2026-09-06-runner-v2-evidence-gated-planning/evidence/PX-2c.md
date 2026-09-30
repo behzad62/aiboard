@@ -269,7 +269,7 @@ reset, revert or rewrite of any commit. Spare stays OPT-IN (no default-on).
   supervisor needed none. Scope note: the brief allowed at most one
   addition; the rename is exactness maintenance the suite itself demands.
 
-### M2 — no silent re-run after an acked claim (fixed)
+### M2 — no silent re-run after an acked claim (repair-1 claim CORRECTED in §9: r2 proved this was not fixed)
 
 `tryClaimSpareCall`'s post-ack failure now falls back only on positive proof
 no child ever started (`childPid === 0` in the durable status); otherwise it
@@ -364,3 +364,121 @@ Changed files: `runner-v2/src/windows-job-process-host.ts`,
 `task8-raw-launch-closure.test.ts` (1 rename + 1 entry),
 `windows-job-real-host-guarantees.test.ts` (gate + spare-on switch only);
 `runner-v2/scripts/measure-git-launch.mts` untouched; this file.
+
+## 9. Repair cycle 2 (answers PX-2c-review-r2: N1, N2 blocking; N3, N5 + listener lows)
+
+Worked on HEAD `f1ed5d2b` (above `54f15b17` plus the controller PX-2a fix
+`241d5f64`). No commit/stage/stash/push; no amend, reset, revert or rewrite of
+any commit. Spare stays OPT-IN. `execution-host.ts`, the supervisor, the
+channel and the fixture are untouched in this cycle.
+
+CORRECTION: §8's M2 subsection ("fixed") was a false claim. The r2 reviewer
+reproduced the double run (command executed twice) through two swallows: the
+post-ack `throw` sat inside the outer `try` whose `catch` returned `fail()`,
+and `launchOwned` added `.catch(() => null)`. The real fix is below.
+
+### N1 — claim-window crash retires the whole tree, keeps the record (fixed)
+
+- New `retireVerifiedClaimWindowTree(record, durable, verifyMs, retireMs,
+  stopMs)` in `windows-job-process-host.ts`. For a disk record with
+  `spareClaimInFlight` it accepts `claimed:true` in the durable status AND in
+  a live token-authed `GET /status` (same identity proof as B1: protocol,
+  processId, supervisorPid, port, spare) as the EXPECTED state, then retires
+  the whole tree through the supervisor's own authenticated `POST /signal`
+  (`stopOwnedTree` keeps the single backend-kill site) and confirms through
+  the supervisor channel (durable `stopped` plus a refused port — no PID is
+  ever probed or killed in this helper). The call's durable record is never
+  deleted; the constructor persists `spareReapedAt` before calling it.
+- `killVerifiedSpareSupervisor` keeps B1 semantics by default and gains
+  `acceptClaimed = false`: the claim-window retire calls it as the fallback
+  (e.g. a fenceless call the signal cannot retire) with `acceptClaimed: true`.
+  It remains the file's ONLY `process.kill` site — `task8-raw-launch-closure`
+  is 2/2 with no test edit and no new allowlist entry.
+- `tryClaimSpareCall` now persists the call's fence in the pre-ack
+  `spareClaimInFlight` record, so a restarted runner's `/signal` satisfies the
+  supervisor's fence check. Production calls always carry a fence; a fenceless
+  claim-window orphan gets best-effort treatment (signal attempt, then the
+  audited fallback) and its record is still kept.
+- Constructor reap routes `spareClaimInFlight` records to the retire helper
+  and every other unclaimed spare to the kill helper (each self-gates); a
+  pre-ack crash (durable not yet claimed) is skipped by both and left to the
+  supervisor's surviving idle-timeout retire, with the record kept.
+
+### N2 — acked-claim failures surface, never re-run (fixed)
+
+- `tryClaimSpareCall` sets `claimAcked = true` once the IPC claim is acked.
+  The outer `catch` rethrows when acked (best-effort abort, record kept —
+  `fail()` cleanup and its fallback count are pre-ack only); the proven
+  `childPid === 0` inner path still returns `null` for a genuine fresh
+  fallback. `launchOwned` narrows `.catch(() => null)` to rethrow
+  `WindowsJobHostError` (unexpected non-host errors still fall back).
+
+### Lows
+
+- N3: the constructor's durable-status read is guarded — an unreadable status
+  path (e.g. EISDIR) reads as "no proof" (record dropped, no kill) instead of
+  throwing out of the constructor. A shared `readSupervisorStatusQuiet`
+  covers the retire fallback the same way.
+- N5: the guarantee gate now ignores exactly one live idle spare by its own
+  record (a single live `spare:true, spareClaimed:false` record with no claim
+  mark). Two leaked idle spares, a claimed spare, a `spareClaimInFlight`
+  orphan (now also carried in the record view), and any outliving call
+  supervisor still fail the gate.
+- Listener binding (r2 N4): not bound to the PID. The live proof stays
+  token + port + identity fields. A creation-time check would need a birth
+  identity captured at spawn (the record carries none — `startedAt` is a
+  wall-clock string, not a boot id) plus new inspection plumbing in the reap
+  path; the forged-listener attack stays same-user-only (state-dir write plus
+  a listener with the record's token). Recorded as enablement-time hardening,
+  as r2 allows.
+
+### Tests (spare file 16 → 19)
+
+- N1: "a runner crash inside the claim window retires the tree and keeps the
+  record" — a real doomed runner (tmp `.mts` through the repo tsx CLI,
+  q.v. S5) prestarts, is SIGKILLed inside the claimed persist, and a new host
+  on the same directory must leave neither supervisor nor child alive while
+  the record survives with `spareReapedAt` and the claim mark.
+- N2a: injected post-ack `applyStatus` failure (thrown only after the child
+  appended once) asserts `process_start_failed`, exactly one execution, and no
+  fallback. N2b: same shape for a throwing claimed-record persist (the throw
+  waits for the single execution first, so the count is deterministic).
+
+### Prove-red (sha256 working-tree hashes before/after, byte-exact restore)
+
+Final file hashes (also the restore targets):
+`windows-job-process-host.ts`
+`332657e1cd09264fbd69ac605cb9b0faaaf37c9d511907f3922325b43ae16b6f`;
+`windows-job-spare-host.test.ts`
+`8267e537e6fac2b8a238df5bec6db2e68fa54561c230c5c1051e6508c19fd214`;
+`windows-job-real-host-guarantees.test.ts`
+`9960de5b45e92b5ab07eac29eae632a57bef9e6f68c7d83783cace3b841d89a1`.
+
+| Test | Fault (single-line insertion, file) | Red result |
+|---|---|---|
+| N1 crash | retire helper opens with `return "skipped";` (claim-window retire disabled) | N1 test RED: `claim-window supervisor to die did not settle within 20000ms` (tree survives); 18/19 pass → restore → hash `332657e1…` again |
+| N2a + N2b | outer catch opens with `if (false)` (acked-claim failure swallowed again) | both N2 tests RED: no surfaced error (`undefined` vs `process_start_failed`); 17/19 pass → restore → hash `332657e1…` again |
+
+Fault backups lived under `%TEMP%` (`D:\tmp\px2cr2-host-backup.ts`) and were
+copied back byte-exact (hash-verified); no fault is committed. The N1 red was
+re-run on the final channel-poll retire shape after the task8-driven rework.
+
+### Validation (`NODE_TEST_CONTEXT` cleared where the repo clears it)
+
+- `windows-job-spare-host.test.ts` (conc 1): 19/19 (final shape, post-restore hash verified).
+- `windows-job-real-host-guarantees.test.ts` (conc 1): 12/12 spare OFF, 12/12 spare ON (`PX2C_SPARE_ON=1`, N5 gate).
+- `windows-job-launch-speed.test.ts` + `windows-job-fence-effects.test.ts` (PX-2b, conc 1): 46/46.
+- `task8-raw-launch-closure.test.ts` (conc 1): 2/2, test file untouched.
+- 7-file batch (conc 4: process-backend, output-replay, supervisor-input,
+  one-shot-command-family-production-matrix, execution-host,
+  subprocess-runtime, durable-process-store): 228 tests, 227 pass, 0 fail,
+  1 skipped (pre-existing subprocess-runtime skip). The r2 load flake in
+  `windows-process-backend.test.ts:1844` passed in this run.
+- `tsc --noEmit -p runner-v2/tsconfig.json` clean; `eslint` on the three
+  touched files clean; `git diff --check` clean; `git status` shows only the
+  three intended files.
+
+Changed files: `runner-v2/src/windows-job-process-host.ts` (N1/N2/N3);
+`runner-v2/test/windows-job-spare-host.test.ts` (+3 tests, +1 import);
+`runner-v2/test/windows-job-real-host-guarantees.test.ts` (N5 gate +
+`spareClaimInFlight` view field only); this file.
