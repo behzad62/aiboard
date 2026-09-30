@@ -541,8 +541,9 @@ test("launch-speed: replacing the DLL and its on-disk record never loads the rep
 });
 
 // PX-2a.6 (repair 1, N2) — helper resolution never throws: with an unusable
-// TEMP it returns null (no persisted running record, no orphan supervisor),
-// and the next call self-heals through a fresh compile.
+// TEMP it returns null (no persisted running record, no orphan supervisor);
+// the failure is remembered for the runner's lifetime (repair 3, R3-B1), and
+// only a new runner process compiles again.
 test("launch-speed: helper resolution never throws and falls back cleanly", { timeout: 120_000 }, async (t) => {
   const h = needsJob(t);
   if (!h) return;
@@ -579,17 +580,64 @@ test("launch-speed: helper resolution never throws and falls back cleanly", { ti
   const recordsAfter = new Set(
     readdirSync(h.jobHostDir).filter((entry) => entry.endsWith(".json")));
   assert.deepEqual(recordsAfter, recordsBefore, "failed helper resolution must persist no records");
-  // Self-heal: failures are not cached, so the next call recompiles and runs
-  // precompiled with no leak of its own.
-  const token = `heal-${randomUUID().slice(0, 8)}`;
+  // R3-B1 (repair 3): a failed compile is remembered for the runner's
+  // lifetime. With a good TEMP again, the runner still never recompiles into
+  // its per-process directory (a contained process alive during such a retry
+  // could get its bytes pinned); calls fall back to in-process Add-Type.
+  assert.equal(await ensureJobHostHelperAssembly(), null, "a failed compile must never be retried in place");
+  assert.equal(await ensureJobHostHelperAssembly(), null, "a failed compile stays failed for the runner's lifetime");
+  const fallbackToken = `after-fail-${randomUUID().slice(0, 8)}`;
+  const fallback = await runTokenCall(h, fallbackToken);
+  assert.match(fallback.stdout, /px2a-token:/, "call after a failed compile must still succeed");
+  const fallbackEvent = readHelperEvent(h.jobHostDir, fallback.processId);
+  assert.equal(fallbackEvent.mode, "fallback", "call after a failed compile must fall back");
+  assert.equal(fallbackEvent.reason, "no-helper-config", "the fallback must say no helper was configured");
+  const fallbackRecord = findRecordByToken(h.jobHostDir, fallbackToken);
+  assert.ok(fallbackRecord, "fallback call must leave a findable Job record");
+  await waitFor(() => !processAlive(fallbackRecord.supervisorPid), 1_000, "fallback call supervisor to exit");
+  // A runner restart (simulated by the test-only reset) restores the fast path.
+  resetJobHostHelperAssemblyForTests();
+  const token = `restart-${randomUUID().slice(0, 8)}`;
   const { stdout, processId } = await runTokenCall(h, token);
-  assert.match(stdout, /px2a-token:/, "call after the fault window must succeed");
+  assert.match(stdout, /px2a-token:/, "call after a runner restart must succeed");
   const event = readHelperEvent(h.jobHostDir, processId);
-  assert.equal(event.mode, "precompiled", "call must self-heal back to the precompiled helper");
-  assert.equal(event.reason, null, "no fallback reason may be recorded after healing");
+  assert.equal(event.mode, "precompiled", "a new runner process must compile and use the helper again");
+  assert.equal(event.reason, null, "no fallback reason may be recorded after a restart");
   const record = findRecordByToken(h.jobHostDir, token);
-  assert.ok(record, "healed call must leave a findable Job record");
-  await waitFor(() => !processAlive(record.supervisorPid), 1_000, "healed call supervisor to exit");
+  assert.ok(record, "restarted call must leave a findable Job record");
+  await waitFor(() => !processAlive(record.supervisorPid), 1_000, "restarted call supervisor to exit");
+});
+
+// PX-2a.6b (repair 3, N-r2-2) — Windows PowerShell 5.1 Add-Type cannot
+// compile to a path holding wildcard characters (unescaped it does not
+// resolve; escaped, csc gets the escaped text and fails). So with a bracket
+// TEMP the runner does not try at all: it resolves to null at once (no
+// compile process), remembers it, and calls fall back to in-process Add-Type.
+test("launch-speed: a TEMP path with brackets skips the helper compile and falls back", { timeout: 120_000 }, async (t) => {
+  const h = needsJob(t);
+  if (!h) return;
+  const bracketTemp = join(tmpdir(), `aiboard-px2a-br[1]-${randomUUID().slice(0, 8)}`);
+  mkdirSync(bracketTemp, { recursive: true });
+  const savedTemp = process.env.TEMP;
+  const savedTmp = process.env.TMP;
+  resetJobHostHelperAssemblyForTests();
+  process.env.TEMP = bracketTemp;
+  process.env.TMP = bracketTemp;
+  try {
+    const helper = await ensureJobHostHelperAssembly();
+    assert.equal(helper, null, "a bracket TEMP path must resolve to the fallback");
+    const written = readdirSync(bracketTemp, { recursive: true }).map(String);
+    assert.ok(!written.some((entry) => entry.endsWith("compile-helper-wrapper.ps1")),
+      `no compile may be attempted for a wildcard path (found: ${written.join(", ")})`);
+    assert.equal(await ensureJobHostHelperAssembly(), null, "the skip is remembered for the runner's lifetime");
+  } finally {
+    if (savedTemp === undefined) delete process.env.TEMP;
+    else process.env.TEMP = savedTemp;
+    if (savedTmp === undefined) delete process.env.TMP;
+    else process.env.TMP = savedTmp;
+    resetJobHostHelperAssemblyForTests();
+    rmSync(bracketTemp, { recursive: true, force: true });
+  }
 });
 
 // PX-2a.7 (repair 1, N5 + reason pins) — direct Job-host runs: a valid

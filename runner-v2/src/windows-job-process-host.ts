@@ -205,32 +205,34 @@ export function extractJobHostHelperSource(scriptText: string): string | null {
  * the private stdin channel; the Job host re-hashes the file bytes before
  * loading from those bytes. Never throws: any failure returns null and the
  * call omits the helper fields, so each Job host falls back to in-process
- * Add-Type compile of the same source. A compile failure is NOT cached: the
- * next call retries (shared in-flight), so a transient failure before the
- * first pin heals. After the pin, nothing on disk is ever trusted again.
+ * Add-Type compile of the same source. The runner compiles AT MOST ONCE per
+ * process: a failed compile is remembered for the runner's lifetime (every
+ * later call falls back; a runner restart restores the fast path), and after
+ * a pin nothing on disk is ever trusted again.
  */
 export async function ensureJobHostHelperAssembly(): Promise<WindowsJobHostHelperAssembly | null> {
   try {
     if (process.platform !== "win32") return null;
-    // R2-B1: once this runner process has compiled and pinned its helper,
-    // the pin is never refreshed from disk. A missing, emptied or changed
-    // file makes the call fall back to in-process Add-Type (the Job host
-    // re-hashes the bytes and reports missing-file / digest-mismatch); the
-    // runner never recompiles into the same place during its lifetime, so
-    // a contained command that deletes the DLL cannot choose the moment of
-    // a recompile and get its own bytes blessed.
-    if (jobHostHelperReady) return jobHostHelperReady;
+    // R2-B1 and R3-B1: the runner never recompiles into the same place during
+    // its lifetime. After a pin, a missing, emptied or changed file makes the
+    // call fall back to in-process Add-Type (the Job host re-hashes the bytes
+    // and reports missing-file / digest-mismatch). After a failed compile,
+    // every later call falls back too: a retry into the same per-process
+    // directory would let a contained process that is alive during the retry
+    // get its own bytes hashed and pinned.
+    if (jobHostHelperReady !== undefined) return jobHostHelperReady;
     if (jobHostHelperFlight) return await jobHostHelperFlight;
     const flight = compileJobHostHelperAssembly();
     jobHostHelperFlight = flight;
     try {
       const assembly = await flight;
-      if (assembly) jobHostHelperReady = assembly;
+      jobHostHelperReady = assembly;
       return assembly;
     } finally {
       if (jobHostHelperFlight === flight) jobHostHelperFlight = undefined;
     }
   } catch {
+    jobHostHelperReady = null;
     return null;
   }
 }
@@ -258,6 +260,12 @@ async function compileJobHostHelperAssembly(): Promise<WindowsJobHostHelperAssem
         } catch {}
       });
     }
+    // PX-2a repair 3: Windows PowerShell 5.1 Add-Type resolves -OutputAssembly
+    // as a wildcard path (an unescaped `[`/`]` does not resolve) and passes an
+    // escaped path on to csc (which then fails), so a path holding wildcard
+    // characters cannot be compiled to. Do not try: this runner process uses
+    // the in-process Add-Type fallback, and the failure is remembered.
+    if (/[[\]*?`]/.test(jobHostHelperProcessDir)) return null;
     const generationDir = join(jobHostHelperProcessDir, sourceDigest);
     mkdirSync(generationDir, { recursive: true });
     const dllPath = join(generationDir, JOB_HOST_HELPER_DLL_FILENAME);
