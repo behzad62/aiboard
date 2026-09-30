@@ -189,6 +189,51 @@ test("C2e repair cycle 1/probe A3: an ignored file at an added path still refuse
   }
 });
 
+test("C2e repair cycle 2/probe L160: 400 long-path files still apply without overflowing the command line", async () => {
+  // Short fixture label and run id: the integration worktree already sits
+  // ~80 characters deep under the temp root, so the ~153-character probe
+  // paths stay below the 260-character cleanup limit.
+  const RUN = "r2l";
+  const fixture = await openFactoryPort("r2l", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    // 400 added files with relative paths of about 153 characters: a
+    // fixed 200-pathspec chunk puts ~32,800 characters on one Windows
+    // command line (the CreateProcess limit is 32,767), so the apply was
+    // refused with "Process launch was not proven" (Win32 206). The
+    // byte-budgeted chunks stay near 16 KiB per git call however long the
+    // paths are, so the owner's selection completes. Components stay far
+    // below per-component limits and the absolute paths stay below 260 so
+    // fixture cleanup is unaffected.
+    const worktree = fixture.integration.path;
+    const dir = `docs/generated/${"d".repeat(66)}`;
+    mkdirSync(join(worktree, ...dir.split("/")), { recursive: true });
+    const firstRel = `${dir}/f-0000-${"g".repeat(60)}.md`;
+    assert.ok(firstRel.length >= 150 && firstRel.length < 200, `the probe paths are long (${firstRel.length}) but cleanup-safe`);
+    for (let index = 0; index < 400; index += 1) {
+      const name = `f-${String(index).padStart(4, "0")}-${"g".repeat(60)}.md`;
+      writeFileSync(join(worktree, ...dir.split("/"), name), `# long-path ${index}\n`);
+    }
+    await runGit({ cwd: worktree, args: ["add", "--", dir] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed 400 long-path files"] });
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, `the snapshot commits over the long-path tree (pause=${JSON.stringify(driven.projection.pauseReason)})`);
+    const before = await runGit({ cwd: fixture.project, args: ["rev-parse", "HEAD"] });
+    const selected = await selectHandoffOwner(fixture, RUN, "apply_to_project", "handoff:r2l");
+    assert.equal(selected.status, "completed", "the apply selection completes despite the long paths");
+    assert.equal(selected.projectHandoff?.choice, "apply_to_project");
+    const after = await runGit({ cwd: fixture.project, args: ["rev-parse", "HEAD"] });
+    assert.notEqual(after.stdout.trim(), before.stdout.trim(), "the project head moves");
+    const applied = await runGit({ cwd: fixture.project, args: ["show", "HEAD:docs/project/STATE.md"] });
+    assert.equal(verifyHandoffSnapshotDigest(applied.stdout), true, "the project holds the applied snapshot");
+    const longFile = await runGit({ cwd: fixture.project, args: ["show", `HEAD:${firstRel}`] });
+    assert.match(longFile.stdout, /long-path 0/, "a long-path file applied with the handoff");
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("C2c round 3/probe G1-flat: 40,000 files directly under docs still commit the snapshot and v1 documents", async () => {
   const RUN = "run-c2c-r3-g1flat";
   const fixture = await openFactoryPort("r3g1flat", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");

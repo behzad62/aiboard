@@ -670,7 +670,22 @@ test("C2b repair B2/G3: a transient reconciliation failure pauses before committ
     // The factory's risk_based verifier policy is already in the shared log
     // (factory.create); qualify the green FV generation before completion.
     appendHandoffEvents(fixture, RUN, lowRiskSeed(RUN, fixture.baselineRevision));
+    // C2e repair cycle 2 (load-only hardening): under heavy machine load
+    // a transient process-launch failure can pause the stop-1 commit
+    // itself before anything lands (pause with no snapshot event and no
+    // commit). That state proves the injected read fault never fired -- it
+    // fires only on the post-commit read-back -- so resume and re-drive
+    // until the exact injected-failure state holds. The assertions below
+    // still prove the injected failure pauses with the commit landed.
     let driven = await driveHandoff(fixture, RUN, driveOpts);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const commits = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length;
+      const landedNow = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+      if (commits !== 0 || landedNow.stdout.trim() !== "0") break;
+      assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
+      await resumeHandoff(fixture, RUN, `resume:c2b-g3-setup-${attempt}`, driveOpts);
+      driven = await driveHandoff(fixture, RUN, driveOpts);
+    }
     assert.equal(driven.projection.pauseReason?.reason, "handoff_snapshot_failed");
     assert.equal(driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed").length, 0);
     const landed = await runGit({ cwd: fixture.integration.path, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });

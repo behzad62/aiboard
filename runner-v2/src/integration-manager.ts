@@ -15,6 +15,7 @@ import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ChangeSet } from "./change-set.js";
 import {
+  GitCommandError,
   unavailableGitRunner,
   type GitBinaryRunner,
   type GitCommandOptions,
@@ -1155,8 +1156,14 @@ export class IntegrationManager {
         // case collision) at STATE.md never blocks an unrelated write
         // like docs/project/README.md. N-1/N-3: a submodule entry is
         // named accurately.
+        // C2e repair cycle 2 (N-R2-1): any blocker ABOVE STATE.md (at
+        // `docs` or `docs/project`, whatever its kind) blocks every write
+        // under docs/ -- nothing below a file, a submodule entry or a
+        // collision can be written, so the batch is refused here, before
+        // any write lands, instead of failing later on a raw `git add`
+        // with a stray file left behind.
         const blocker = await this.commitStateNonLinkBlocker("HEAD");
-        if (blocker !== null && (blocker.kind === "file-not-dir" || write.path === "docs/project/STATE.md")) {
+        if (blocker !== null && (blocker.component !== "docs/project/STATE.md" || write.path === "docs/project/STATE.md")) {
           throw new Error(
             blocker.kind === "file-not-dir"
               ? `Project document path ${write.path} is refused because ${blocker.component} is a regular file, not a directory.`
@@ -1443,15 +1450,22 @@ export class IntegrationManager {
       // bytes no matter how large the tree is, while the patch bytes -- and
       // every downstream guarantee (conflict refusal via --check, the audit
       // patch file, the journal) -- are unchanged.
-      await this.git(this.path, [
-        "diff",
-        "--binary",
-        "--full-index",
-        `--output=${patchPath}`,
-        this.baselineRevision,
-        this.revision,
-        "--",
-      ]);
+      // C2e repair cycle 2 (crash leak): a failed diff call never leaves
+      // a partial patch file behind.
+      try {
+        await this.git(this.path, [
+          "diff",
+          "--binary",
+          "--full-index",
+          `--output=${patchPath}`,
+          this.baselineRevision,
+          this.revision,
+          "--",
+        ]);
+      } catch (error) {
+        await rm(patchPath, { force: true });
+        throw error;
+      }
       if ((await stat(patchPath)).size === 0) {
         await rm(patchPath, { force: true });
         return this.descriptor(true, projectRevision);
@@ -1672,10 +1686,20 @@ export class IntegrationManager {
               "Automatic handoff failed after advancing the project branch and could not roll it back."
             );
           }
-          if (await this.projectMatchesRevision(
-            projectRevision,
-            await this.applyChangedPathSet(projectRevision, committedRevision),
-          )) {
+          // C2e repair cycle 2 (N-R2-3): the repair check itself must
+          // never replace the original error -- a throw from the listing
+          // or the match only skips the cleanup, then the original
+          // failure propagates.
+          let rolledBackClean = false;
+          try {
+            rolledBackClean = await this.projectMatchesRevision(
+              projectRevision,
+              await this.applyChangedPathSet(projectRevision, committedRevision),
+            );
+          } catch {
+            rolledBackClean = false;
+          }
+          if (rolledBackClean) {
             await this.cleanupOwnedProjectApply(
               { path: journalPath, journal },
               committedRevision
@@ -1696,6 +1720,9 @@ export class IntegrationManager {
           await rm(patchPath, { force: true });
           await rm(indexPath, { force: true });
           await rm(`${indexPath}.lock`, { force: true });
+          // C2e repair cycle 2 (crash leak): the written-path check's
+          // scratch file shares the transition index name.
+          await rm(`${indexPath}.names`, { force: true });
         }
       }
     });
@@ -1886,25 +1913,34 @@ export class IntegrationManager {
     // anywhere outside the apply still blocks recovery, exactly as
     // before, with the same exposure as the apply's own `status
     // --porcelain` clean check. Second, the paths the pending apply
-    // writes are checked in bounded chunks of literal pathspecs, WITHOUT
-    // --exclude-standard: `--others` still reports ignored files at those
-    // paths, so crash recovery still refuses when an ignored file sits at
-    // a target path instead of overwriting it.
-    const untracked = await this.git(this.repositoryRoot, [
-      "ls-files",
-      "--others",
-      "--exclude-standard",
-      "-z",
-    ], true);
+    // writes are checked in byte-bounded chunks of literal pathspecs,
+    // WITHOUT --exclude-standard: `--others` still reports ignored files
+    // at those paths, so crash recovery still refuses when an ignored
+    // file sits at a target path instead of overwriting it.
+    // C2e repair cycle 2 (N-R2-2): more than ~4 MiB of non-ignored
+    // untracked paths would overflow the capped buffer instead of proving
+    // anything -- that only means "not proven clean", so recovery refuses
+    // (false) instead of throwing on tree size. Fail-closed either way.
+    let untracked;
+    try {
+      untracked = await this.git(this.repositoryRoot, [
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+      ], true);
+    } catch (error) {
+      if (error instanceof GitCommandError && error.code === "output_limit") return false;
+      throw error;
+    }
     if (untracked.exitCode !== 0 || untracked.stdout.length > 0) return false;
-    const paths = [...writtenPaths];
-    for (let index = 0; index < paths.length; index += 200) {
+    for (const chunk of chunkLiteralPathspecs([...writtenPaths])) {
       const present = await this.git(this.repositoryRoot, [
         "ls-files",
         "--others",
         "-z",
         "--",
-        ...paths.slice(index, index + 200).map((path) => `:(literal)${path}`),
+        ...chunk,
       ], true);
       if (present.exitCode !== 0 || present.stdout.length > 0) return false;
     }
@@ -1924,16 +1960,18 @@ export class IntegrationManager {
     if (relative(directory, scratchPath).startsWith("..")) {
       throw new Error("Project handoff files escaped the runner state directory.");
     }
-    await this.git(this.repositoryRoot, [
-      "diff",
-      "--name-only",
-      "-z",
-      `--output=${scratchPath}`,
-      fromRevision,
-      toRevision,
-      "--",
-    ]);
     try {
+      // C2e repair cycle 2 (N-R2-3): the diff call sits inside the try so
+      // a failed or crashed call never leaves a partial scratch file.
+      await this.git(this.repositoryRoot, [
+        "diff",
+        "--name-only",
+        "-z",
+        `--output=${scratchPath}`,
+        fromRevision,
+        toRevision,
+        "--",
+      ]);
       return new Set((await readFile(scratchPath)).toString("utf8").split("\0").filter(Boolean));
     } finally {
       await rm(scratchPath, { force: true });
@@ -2114,6 +2152,10 @@ export class IntegrationManager {
     await rm(patchPath, { force: true });
     await rm(indexPath, { force: true });
     await rm(`${indexPath}.lock`, { force: true });
+    // C2e repair cycle 2 (crash leak): the written-path check's scratch
+    // file shares the transition index name; a crash between the check
+    // and this cleanup leaves it behind otherwise.
+    await rm(`${indexPath}.names`, { force: true });
     await this.clearProjectApplyJournal(record.path);
   }
 
@@ -2191,29 +2233,30 @@ export class IntegrationManager {
     // --exclude-standard reports every IGNORED file too, which `git status
     // --porcelain` never shows -- a project with a large ignored tree
     // (node_modules-sized) refused a tiny apply on the 4 MiB cap. Only the
-    // paths the apply will write are checked now, in bounded chunks of
-    // literal pathspecs: each git call's output holds only collisions, so
-    // it stays a few bytes no matter how many ignored files the project
-    // holds. `--others` still reports ignored files at those paths, so the
-    // ignored-path collision refusal is exactly as strong; `:(literal)`
-    // keeps glob characters in file names exact.
-    await this.git(this.repositoryRoot, [
-      "diff",
-      "--name-only",
-      "-z",
-      `--output=${scratchPath}`,
-      fromRevision,
-      toRevision,
-      "--",
-    ]);
+    // paths the apply will write are checked now, in byte-bounded chunks
+    // of literal pathspecs (C2e repair cycle 2, B-2): each git call's
+    // output holds only collisions, so it stays a few bytes no matter how
+    // many ignored files the project holds, and no call's command line
+    // overflows no matter how long the paths are. `--others` still
+    // reports ignored files at those paths, so the ignored-path collision
+    // refusal is exactly as strong; `:(literal)` keeps glob characters in
+    // file names exact.
     try {
+      // C2e repair cycle 2 (N-R2-3): the diff call sits inside the try so
+      // a failed or crashed call never leaves a partial scratch file.
+      await this.git(this.repositoryRoot, [
+        "diff",
+        "--name-only",
+        "-z",
+        `--output=${scratchPath}`,
+        fromRevision,
+        toRevision,
+        "--",
+      ]);
       const changedBytes = await readFile(scratchPath);
       const changedPaths = changedBytes.toString("utf8").split("\0").filter(Boolean);
       const changedSet = new Set(changedPaths);
-      for (let index = 0; index < changedPaths.length; index += 200) {
-        const chunk = changedPaths
-          .slice(index, index + 200)
-          .map((path) => `:(literal)${path}`);
+      for (const chunk of chunkLiteralPathspecs(changedPaths)) {
         const untracked = await this.git(this.repositoryRoot, [
           "ls-files",
           "--others",
@@ -2644,13 +2687,17 @@ export class IntegrationManager {
     const blockers = await this.commitStateBlockers(commit);
     const dirLinks = blockers.map((blocker) => blocker.component);
     // C2e repair cycle 1 (N-1): the first blocker's kind travels with the
-    // result so the runtime records an accurate skip reason. Links and
-    // case collisions carry no kind: the describer keeps the legacy
-    // wording for them, so stored logs replay unchanged.
+    // result so the runtime records an accurate skip reason. Links carry
+    // no kind: the describer keeps the legacy wording for them, so stored
+    // logs replay unchanged. C2e repair cycle 2 (N-R2-4): a case
+    // collision travels as "collision" with its own accurate wording.
     const firstKind = blockers[0]?.kind;
-    const stateBlockerKind = firstKind === "file" || firstKind === "submodule" || firstKind === "directory"
-      ? firstKind
-      : undefined;
+    const stateBlockerKind: HandoffStateBlockerKind | undefined =
+      firstKind === "file" || firstKind === "submodule" || firstKind === "directory"
+        ? firstKind
+        : firstKind === "case-collision"
+          ? "collision"
+          : undefined;
     // C2d repair cycle 1 (escalation): the commit tree's entry-file
     // spellings, so the shared describer can corroborate a colliding
     // entry skip from the tree (fresh, reused and withdrawn commits
@@ -3834,8 +3881,9 @@ function linkTargetResolvesInsideAllowingDotDot(target: string): boolean {
 
 /**
  * The recorded STATE.md skip-reason kind for a stage-time non-link
- * blocker (C2e repair cycle 1, N-1). A case collision keeps the legacy
- * link wording (null here), so stored logs replay unchanged.
+ * blocker (C2e repair cycle 1, N-1; C2e repair cycle 2, N-R2-4). A case
+ * collision records the collision wording, so stored logs (which carry
+ * the legacy link sentence as a plain string) still replay unchanged.
  */
 function stateBlockerReasonKind(
   kind: "file-not-dir" | "dir-not-file" | "case-collision" | "submodule",
@@ -3843,7 +3891,38 @@ function stateBlockerReasonKind(
   if (kind === "file-not-dir") return "file";
   if (kind === "dir-not-file") return "directory";
   if (kind === "submodule") return "submodule";
+  if (kind === "case-collision") return "collision";
   return null;
+}
+
+/**
+ * Literal-pathspec chunks bounded by command-line bytes as well as count
+ * (C2e repair cycle 2, B-2). The written-path checks pass every path as a
+ * `:(literal)` argument of one git call; a fixed count alone overflows the
+ * Windows 32,767-character command line when paths are long (200 paths
+ * averaging 150+ characters fail with Win32 206 / ENAMETOOLONG). Each
+ * chunk holds at most 16 KiB of pathspec text and at most 200 paths; a
+ * single path longer than the budget still goes out alone (one path per
+ * call), so a path of any length is checked.
+ */
+const WRITTEN_PATH_CHUNK_BYTES = 16 * 1024;
+const WRITTEN_PATH_CHUNK_COUNT = 200;
+
+function* chunkLiteralPathspecs(paths: readonly string[]): Generator<string[]> {
+  let chunk: string[] = [];
+  let bytes = 0;
+  for (const path of paths) {
+    const spec = `:(literal)${path}`;
+    const size = Buffer.byteLength(spec, "utf8") + 1;
+    if (chunk.length > 0 && (chunk.length >= WRITTEN_PATH_CHUNK_COUNT || bytes + size > WRITTEN_PATH_CHUNK_BYTES)) {
+      yield chunk;
+      chunk = [];
+      bytes = 0;
+    }
+    chunk.push(spec);
+    bytes += size;
+  }
+  if (chunk.length > 0) yield chunk;
 }
 
 /**

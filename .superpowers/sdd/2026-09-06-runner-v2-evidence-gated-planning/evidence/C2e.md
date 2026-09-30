@@ -289,3 +289,64 @@ final bytes, so the reds prove the final code too.
 ## Correction to the C2e record
 
 The C2e.md sentence "The untracked listing stays buffered (the project is proven clean just before, so it is a few bytes)" was wrong: the clean check is `git status --porcelain`, which never lists ignored files, while `ls-files --others` without `--exclude-standard` lists them all. This repair removes the whole-tree untracked listing instead of buffering it.
+
+---
+
+# Repair cycle 2 (review r2: REPAIR — B-2 blocking; N-R2-1 recommended; N-R2-4 before T7a; minors)
+
+## Repair scope (review r2: 1 blocking + 1 recommended + wording + minors + controller retry flake)
+
+| Item | Change |
+|---|---|
+| B-2 (blocking) | Both written-path checks chunk by a byte budget as well as a count: one shared `chunkLiteralPathspecs` generator (`integration-manager.ts`, 16 KiB of pathspec text and at most 200 paths per `git ls-files` call; a single path longer than the budget still goes out alone, one path per call). Used at the apply site (`assertCheckoutWillNotOverwriteUntracked`) and the recovery site (`projectMatchesRevision`). |
+| N-R2-1 | The v1 path refuses any write whose blocker sits above STATE.md: `blocker.component !== "docs/project/STATE.md" \|\| write.path === "docs/project/STATE.md"`. A file, submodule entry or collision at `docs` or `docs/project` refuses every write under `docs/` up front with the clear kind-naming reason, before any write lands (no raw `git add ... is in submodule` failure, no stray file). A blocker AT STATE.md still refuses only the STATE.md write (N-2 preserved: directory/submodule/collision at STATE.md no longer block README; V1c still commits). |
+| N-R2-4 | `HandoffStateBlockerKind` gains `"collision"`; `handoffStateBlockerSkipReason` records `docs/project/STATE.md is not written: the commit tree tracks two spellings of <component>; the handoff proceeds without it.` The kind travels `commitStateBlockers` (`case-collision` → `collision`) and the stage-time `stateBlockerReasonKind` into the single describer. Links keep the legacy wording; old logs (sentences stored as plain strings, validated only as non-empty) replay unchanged. C2d test C-1 now asserts the collision wording. |
+| N-R2-2 | The recovery untracked listing (`ls-files --others --exclude-standard -z`) catches `GitCommandError` code `output_limit` and returns false: more than ~4 MiB of non-ignored untracked paths means "not proven clean", so recovery refuses instead of throwing on tree size. Fail-closed either way. |
+| N-R2-3 / scratch leak | Both `--output` diff calls (`applyChangedPathSet`, `assertCheckoutWillNotOverwriteUntracked`) moved inside their `try/finally`, so a failed call never leaves a partial `.names` file; the apply patch diff removes a partial patch file on throw; `cleanupOwnedProjectApply` and the apply `finally` also remove `${indexPath}.names`. The rollback-branch repair check is guarded so a throw from the listing/match never replaces the original error. |
+| Retry flake (controller) | `docs-policy-v2-handoff-retry.test.ts` "C2b repair B2/G3": the single controller failure (`actual 0, expected 1` on "the stop-1 kernel commit landed" under heavy load) is a load-only transient pausing the stop-1 commit itself before anything lands (r2's own probes saw `read ECONNRESET` transients in fixture cleanup under load; the injected read fault fires only on the post-commit read-back, so a 0-event/0-commit pause proves it never fired). The test now resumes and re-drives (bounded, 3 attempts) only in exactly that state; the final assertions are unchanged, so what it proves is unweakened. Sibling tests share the fault-injection pattern but never flaked; left unchanged. |
+
+## Changed files (sha256, final bytes)
+
+- `1b91485fbc886b1613687f7d668d5d57c288da964394da6bbe0cbff1f5d43795` runner-v2/src/integration-manager.ts
+- `3780647ce1816ad5d6942c4b2c995d01fdbd09ea9b587e1fcc485cb30be19bb3` runner-v2/src/project-docs.ts
+- `86650283d69662a9da0d9b631acf771bc002710b87843c83f03509ef5a998739` runner-v2/test/docs-policy-v2-handoff-large-tree.test.ts
+- `326605278bf68929ceda20447136ef0ae31b10e6ff7248dc338a63ccffe4f256` runner-v2/test/docs-policy-v2-handoff-project-links.test.ts
+- `ee4f3fd60820a64967bb4a6af91dd5cac1305b4841837e21fbd128cf05748178` runner-v2/test/docs-policy-v2-handoff-retry.test.ts
+- harness unchanged (no helper was needed); project-doc-commit.test.ts unchanged (its link-blocker refusal at `v1docslink` takes the link path, unaffected); build-runtime.ts, scheduler-store.ts unchanged.
+
+## New/updated tests
+
+- large-tree "C2e repair cycle 2/probe L160": 400 added files with relative paths of ~153 characters through the real apply → completes, head moves, project holds the snapshot and a long-path file (prove-red below). Fixture label/run id shortened (`r2l`) so the worktree paths stay below 260 for cleanup.
+- project-links "C2e repair cycle 2/probe V1a" (reviewer V1a): gitlink at `docs` → kernel hands off with the submodule wording; v1 README write refused up front (`... docs is a submodule entry.`), nothing committed, no stray file, worktree clean (prove-red below).
+- project-links C-1 updated to the collision wording (`handoffStateBlockerSkipReason("docs", "collision")`); F-collide (link-preferred) still asserts the legacy link wording, unchanged.
+- retry "C2b repair B2/G3": setup drive hardened as above; the proved assertions unchanged.
+
+## Suites (worker-run, NODE_TEST_CONTEXT cleared)
+
+New/changed tests, each `--test-concurrency=1`:
+
+- C2e repair cycle 2/probe V1a: pass 1/1 (`duration_ms 79778`, ~79 s).
+- C2e repair cycle 2/probe L160: pass 1/1 (`duration_ms 108459`, ~108 s).
+- C2d escalation C-1 (updated): pass 1/1 (`duration_ms 70177`, ~70 s).
+- C2b repair B2/G3 (hardened): pass 1/1 (`duration_ms 165739`, ~166 s).
+
+Validation (six files, `--test-concurrency=4`, NODE_TEST_CONTEXT cleared): exit 0 — entry-links, project-links, retry, integration-manager.test.ts, project-doc-commit.test.ts, replay-compatibility.test.ts (the streamed summary block was truncated in delivery, so no per-file counts are quoted; the verdict rests on the zero exit with no failure marker).
+
+Large-tree file ALONE (`--test-concurrency=1`, NODE_TEST_CONTEXT cleared): 7 tests, 7 pass, 0 fail (`duration_ms 1790837`, ~30 min) — G1 (288.4 s), G1-control (242.3 s), G1-select (651.2 s), A1 (124.1 s), A3 (92.8 s), L160 (110.8 s), G1-flat (280.3 s).
+
+Static (final bytes): tsc (`tsc -p runner-v2/tsconfig.json --noEmit`) clean, exit 0; eslint on all five changed files clean, exit 0; `git diff --check -- runner-v2/` clean.
+
+Suites not run: native-delivery files (the pipeline runs them); whole-repo suite (out of scope).
+
+## Prove-red records (sha256 before/after, byte-exact restore)
+
+Backup under `C:\Users\b_a_s\AppData\Local\Temp\c2e-r2-fixed-manager.ts` (`1b91485f...`); every restore verified by hash.
+
+1. B-2: with the fixed-count `for (index += 200)` chunking put back at the apply site, "C2e repair cycle 2/probe L160" goes red with the exact reported failure: `SubprocessRuntimeError: Process launch was not proven.` caused by `WindowsJobHostError: CreateProcess (Win32 206)` from `assertCheckoutWillNotOverwriteUntracked`. Restored to `1b91485f...` (hash match).
+2. N-R2-1: with the old `blocker.kind === "file-not-dir" || ...` v1 condition put back, "C2e repair cycle 2/probe V1a" goes red with the exact reported failure: `GitCommandError: git add -- docs/project/README.md failed with exit code 128: fatal: Pathspec 'docs/project/README.md' is in submodule 'docs'`. Restored to `1b91485f...` (hash match).
+
+## Not done / limits
+
+- The B-2 chunk budget (16 KiB) is measured in UTF-8 pathspec bytes; the Windows command line counts UTF-16 characters, so the budget undershoots the 32,767 limit by about half even for non-ASCII names.
+- N-R2-2 converts only the cap overflow to a refusal; any other listing failure still throws fail-closed, as before.
+- A hard process kill between a scratch write and its `finally`/journal cleanup can still orphan a `.names`/`.patch` file; every throw path now cleans up, and journal-tied files are removed by recovery cleanup.

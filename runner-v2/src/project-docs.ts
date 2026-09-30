@@ -433,11 +433,12 @@ export function handoffStateSkipReason(linkComponent: string): string {
 
 /**
  * C2e repair cycle 1 (N-1): the kind of a commit-tree STATE.md blocker
- * that is not a link. Only these three kinds travel forward; links and
- * case collisions keep the legacy wording above so stored logs replay
+ * that is not a link. C2e repair cycle 2 (N-R2-4): a case collision
+ * records its own wording too. Only links keep the legacy wording above,
+ * so stored logs (which carry their sentence as a plain string) replay
  * unchanged.
  */
-export type HandoffStateBlockerKind = "file" | "submodule" | "directory";
+export type HandoffStateBlockerKind = "file" | "submodule" | "directory" | "collision";
 
 /**
  * C2e repair cycle 1 (N-1): the recorded STATE.md skip for one commit-tree
@@ -452,6 +453,9 @@ export function handoffStateBlockerSkipReason(component: string, kind: HandoffSt
   }
   if (kind === "submodule") {
     return `${HANDOFF_STATE_PATH} is not written: ${component} is a submodule entry; the handoff proceeds without it.`;
+  }
+  if (kind === "collision") {
+    return `${HANDOFF_STATE_PATH} is not written: the commit tree tracks two spellings of ${component}; the handoff proceeds without it.`;
   }
   return `${HANDOFF_STATE_PATH} is not written: ${component} is a directory; the handoff proceeds without it.`;
 }
@@ -585,7 +589,8 @@ export interface SnapshotCommitDescription {
  * - STATE.md is recorded as written, or skipped with the canonical reason
  *   for the tree's first ancestor-or-self link (STATE.md itself counts).
  *   A case-colliding component (say `docs` with `Docs`, C2d repair cycle
- *   1) reports the same way through the shared reason. A stage-time
+ *   1) reports through its own collision reason (C2e repair cycle 2,
+ *   N-R2-4). A stage-time
  *   reason alone -- an out-of-band junction the tree never held --
  *   records nothing, so the caller pauses fail-closed (m-3); a committed
  *   STATE.md never carries a reason (m-1).
@@ -600,9 +605,9 @@ export interface SnapshotCommitDescription {
 export function describeSnapshotCommitFacts(input: SnapshotCommitDescriptionInput): SnapshotCommitDescription {
   const stateChanged = input.storedPaths.includes(HANDOFF_STATE_PATH);
   // C2e repair cycle 1 (N-1): a file, submodule or directory blocker is
-  // recorded with its accurate wording; anything else (links, collisions,
-  // older callers) keeps the legacy wording, so stored logs replay
-  // unchanged.
+  // recorded with its accurate wording; C2e repair cycle 2 (N-R2-4) adds
+  // the collision wording. Anything else (links, older callers without a
+  // kind) keeps the legacy wording, so stored logs replay unchanged.
   const stateSkippedReason = !stateChanged && input.commitStateLink !== undefined
     ? input.commitStateBlockerKind !== undefined
       ? handoffStateBlockerSkipReason(input.commitStateLink, input.commitStateBlockerKind)

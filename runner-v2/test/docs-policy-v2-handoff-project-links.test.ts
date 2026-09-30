@@ -15,7 +15,6 @@ import {
   V2_CLAUDE_POINTER_LINE,
   describeSnapshotCommitFacts,
   handoffStateBlockerSkipReason,
-  handoffStateSkipReason,
   spliceMarkedArchitectSectionBytes,
 } from "../src/project-docs.js";
 import {
@@ -1273,6 +1272,55 @@ test("C2e repair cycle 1/probe F7: a submodule entry at docs/project/STATE.md sk
   }
 });
 
+test("C2e repair cycle 2/probe V1a: a submodule entry above STATE.md refuses the v1 README write before any write", async () => {
+  const RUN = "run-c2e-r2-v1a";
+  const fixture = await openFactoryPort("c2er2v1a", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  const architect = silentArchitect();
+  try {
+    const worktree = fixture.integration.path;
+    // A gitlink (mode 160000) at `docs` itself: nothing below it can be
+    // written, so the kernel run still hands off with the tree-derived
+    // submodule reason.
+    const head = (await runGit({ cwd: worktree, args: ["rev-parse", "HEAD"] })).stdout.trim();
+    assert.match(head, /^[a-f0-9]{40}$/);
+    await runGit({ cwd: worktree, args: ["update-index", "--add", "--cacheinfo", `160000,${head},docs`] });
+    await runGit({ cwd: worktree, args: ["commit", "-m", "seed a submodule entry at docs"] });
+    mkdirSync(join(worktree, "docs"), { recursive: true });
+    const mode = await runGit({ cwd: worktree, args: ["ls-tree", "HEAD", "--", "docs"] });
+    assert.match(mode.stdout, /^160000 commit /m, "the commit holds the submodule entry");
+    const driven = await driveHandoff(fixture, RUN, { architect });
+    const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
+    assert.equal(snapshots.length, 1, "the run hands off with the submodule skip above STATE.md");
+    const payload = snapshots[0]!.payload as Record<string, unknown>;
+    assert.equal(
+      payload.stateSkippedReason,
+      handoffStateBlockerSkipReason("docs", "submodule"),
+      "the skip reason names the submodule entry accurately",
+    );
+    // The v1 Architect path refuses the README write up front with the
+    // clear reason -- never a raw `git add ... is in submodule` failure,
+    // and no stray file is left behind.
+    const before = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    await assert.rejects(
+      () => fixture.integration.commitProjectDocuments({
+        writes: [{ path: "docs/project/README.md", content: "# project readme\n" }],
+        summary: "Record documents",
+        runId: RUN,
+        requestId: "project-doc:c2e-r2-v1a:docs/project/README.md",
+      }),
+      /Project document path docs\/project\/README\.md is refused because docs is a submodule entry\./,
+      "a submodule entry above STATE.md refuses the v1 write before any write",
+    );
+    const after = await runGit({ cwd: worktree, args: ["rev-list", "--count", `${fixture.baselineRevision}..HEAD`] });
+    assert.equal(after.stdout.trim(), before.stdout.trim(), "the refused batch commits nothing");
+    assert.equal(existsSync(join(worktree, "docs", "project", "README.md")), false, "the refused write left no stray file");
+    const status = await runGit({ cwd: worktree, args: ["status", "--porcelain"] });
+    assert.equal(status.stdout.trim(), "", "the worktree stays clean");
+  } finally {
+    await fixture.close();
+  }
+});
+
 /**
  * C2d repair cycle 1 (B2): a valid snapshot body with its digest line,
  * built directly so the manager-level probe controls both bodies.
@@ -1383,7 +1431,7 @@ test("C2d repair cycle 1/escalation C-1: colliding docs/ and Docs/ directories s
     const snapshots = driven.events.filter((event) => event.type === "project_docs.handoff_snapshot_committed");
     assert.equal(snapshots.length, 1, "the colliding layout hands off instead of wedging on the pathspec");
     const payload = snapshots[0]!.payload as Record<string, unknown>;
-    assert.equal(payload.stateSkippedReason, handoffStateSkipReason("docs"), "the skip reason is commit-tree-derived, as for a link");
+    assert.equal(payload.stateSkippedReason, handoffStateBlockerSkipReason("docs", "collision"), "the skip reason names the collision accurately");
     assert.equal(payload.bodyDigest, "", "no STATE.md is committed, so no digest is recorded");
     assert.equal(payload.agentsSectionCommitted, true);
     assert.equal(payload.claudeLineCommitted, true);
