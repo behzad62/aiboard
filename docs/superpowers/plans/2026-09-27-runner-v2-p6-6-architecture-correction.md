@@ -176,6 +176,37 @@ come from S2/S3 at `764fdffb`; a packet worker re-checks them at its base.
   (n ≥ 20, quiet machine) before the next: PX-2t (real-host guarantee tests first), PX-2a, PX-2b,
   PX-2c. One Job per call always; the shared broker is not built unless the owner asks again.
   Accepted PX-2 packets merge into lane A so later packets run faster.
+- **CD-22 — Impact-based verification (owner, 2026-09-30, option 1).** Test scope grows with risk,
+  not with repository size. Per packet and per repair: the worker runs the new or changed tests
+  first, then the test file that owns them, then the directly affected files; it expands only on
+  a failure, a shared or public contract change, or a reviewer's named risk; target budget about
+  10-15 minutes of test time, broader runs justified in the evidence. The controller does NOT run
+  the broad groups (the whole handoff group, the large-tree file, the native-delivery files) after
+  every packet or repair: it runs them once at the end of each phase (phase C: before T7a), and
+  the full suite once at T8. Tests are evidence, not ceremony: extend or parameterize an existing
+  test before adding a new slow one; merging, parameterizing and deleting obsolete tests is
+  allowed (a deleted test's behaviour must stay proven elsewhere, stated in the evidence). Every
+  evidence record keeps its "Validation scope" (changed, verified, run with counts, not run and
+  why). This matches the gate schedule of the 2026-09-30 planning standard (per change: exact and
+  directly affected tests; end of phase: broader; end of plan: full suite once). Owner also asked
+  that the AIBoard runner itself follow this guidance; the gap check and its fix packet are
+  recorded under CD-23.
+- **CD-23 — The runner itself follows impact-based verification (owner, 2026-09-30: "make sure
+  AIBoard runner also follows this guidance. if not add task to fix it").** A read-only gap check
+  (2026-09-30) found that it does not: the worker prompt has no test-scope, budget or
+  test-accumulation guidance (`native-worker-driver.ts:104-118`); `submit_task` has no validation
+  scope report; the per-task integration boundary and the high-tier review always run the project's
+  whole build and test scripts (`delivery-execution.ts:705-740`, `:888-905`; `executedScope` is
+  hard-typed `"full_test_script"` at `delivery-acceptance.ts:131`/`:237` and required by
+  `scheduler-store.ts:6780`/`:6955`) while the affected-test ladder (`affected-tests.ts`) stays
+  informational; the reviewer never judges whether the validation scope was sufficient (the
+  task `validation.targetedRationale`/`affectedScopeRationale` have no consumer); there is no
+  per-task validation time budget and no test tiers; `validation-policy.ts` (full suite only at the
+  final candidate, EP16) has no importer. Final verification already runs once per run (correct).
+  This SUPERSEDES the F8 deferral ("affected-test selection stays informational; P7") and the F3/P7
+  deferral of wiring `validation-policy.ts`. Fix packets IV-1..IV-3 (section 6) run in lane B after
+  W3; E1's suite-shrink rule gains a disposition carve-out. Every stored log still replays
+  unchanged (a new `executedScope` value is additive).
 
 ---
 
@@ -289,7 +320,7 @@ signal.
 | T10 | parent T10 + AR-R30 | Prompt hygiene | T7 and R3 merged | Parent T10 acceptance | T8 |
 | T8 | parent T8 + AR-R31 | Final gate | T10 | Parent T8 acceptance | P6.6 complete |
 
-Dependency graph (acyclic): C1→C2→C3→C4→C5→T7a (C2 ran as C2a→C2b→C2c→FX-1/FX-2/TX-1 per CD-13 and CD-16; then C2c→TX-2→C2d→C2e→C3 per CD-19)→T7b→T7c→T7d; C5→E1→E2→E3→E4→E5→V1→V2→V3→W1→W2→W3;
+Dependency graph (acyclic): C1→C2→C3→C4→C5→T7a (C2 ran as C2a→C2b→C2c→FX-1/FX-2/TX-1 per CD-13 and CD-16; then C2c→TX-2→C2d→C2e→C3 per CD-19)→T7b→T7c→T7d; C5→E1→E2→E3→E4→E5→V1→V2→V3→W1→W2→W3→IV-1→IV-2→IV-3 (CD-23);
 {T7d, W3}→T10→T8. C4 and C5 follow C3 because they share `agent-prompts.ts`, `build-runtime.ts`
 and planning tools. Lane B packets touch `scheduler-store.ts` and `build-runtime.ts` like T7a;
 the controller merges lane B into lane A before T10 and runs the affected suites at the merge.
@@ -626,6 +657,15 @@ Runs as C2a then C2b (CD-13).
 - **Done when:** PX-2t, the Windows Job suites and the lifecycle tests (parent death, run end with
   zero leftover processes, recovery after a runner crash) are green; the probe shows the gain.
 
+### PX-2e — No leftover processes from the Windows Job test files (CD-21 follow-up; lane C)
+
+- **Outcome:** each Windows Job test file (guarantees, speed, spare-host, PX-2b, supervisor-input,
+  output-replay) leaves no supervisor or Job host alive after it ends; a shared end-of-file check
+  fails the file if one does. Cause: 50 supervisors from the PX-2 work were found alive hours later
+  (2026-09-30), slowing every other test run; PX-2c review r3 N14 saw 2 per PX-2b run.
+- **Done when:** the leak table before and after is in `evidence/PX-2e.md`, each leak is fixed at
+  its cause, the end check is proven red, and the changed files pass once each (CD-22 scope).
+
 ### C2d — Case-variant docs spellings (CD-19, CD-15)
 
 - **Outcome:** on a case-insensitive checkout, a docs layout whose spelling differs only in case
@@ -701,6 +741,10 @@ that need a reviewer disposition before approval; "not a real gap" with a ration
 OA-11/EP45) and S3 N3 backlog (a `verified` claim must cite a location or evidence id the reviewing
 session actually read, checked against the tool ledger). Tests: as listed in S3 for each packet;
 E5 vacuous-test fixture, release-by-disposition and uncited-verified refusal.
+**E1 carve-out (CD-23):** suite-shrink detection also accepts an explicit, reviewer-accepted
+"obsolete or merged; behaviour proven in <test id or file>" disposition, so legitimate test
+consolidation is not flagged; an unexplained shrink stays a blocking finding. Test: a merged test
+with a disposition passes; the same shrink without one is flagged.
 
 ### R2 — V1-V3 (lane B)
 
@@ -732,6 +776,45 @@ E5 vacuous-test fixture, release-by-disposition and uncited-verified refusal.
   (S3 L2) so each claim carries a mechanical label and a reviewer `verified` on an
   `unverified_claim` link is refused; pre-link runner evidence to criteria; prefill
   final-verification plans for detected categories.
+
+### IV-1..IV-3 — The runner follows impact-based verification (CD-23; lane B, after W3)
+
+- **IV-1 Worker guidance, validation scope and reviewer judgement.** The worker system prompt
+  (`native-worker-driver.ts` `buildWorkerSystemPrompt`, and `runner-v2/skills/verification/SKILL.md`)
+  tells workers: run the new or changed tests first, then the owning test file, then direct
+  dependents; expand only on a failure, a shared or public contract change, or a reviewer's named
+  risk; stay near the task's validation budget and justify anything broader; extend or
+  parameterize existing tests before adding files; merging or deleting obsolete tests is allowed
+  with "behaviour proven in X". `submit_task` requires a `validationScope` {changed, verified,
+  testsRun [command, counts], notRun [what, why]} (`agent-contracts.ts`, `worker-runtime.ts`), stored
+  with the submission (`scheduler-store.ts`, additive) and shown to the reviewer and the
+  Architect (`agent-prompts.ts`, composing with C5/AR-R16). The deliverable reviewer
+  (`native-deliverable-review.ts` pass prompts) judges the validation scope and the task's
+  `validation.targetedRationale`/`affectedScopeRationale` against the diff and raises a finding
+  when impacted areas were not run or the reason is thin. Tests: prompt pins; a submission without
+  a validation scope is refused; the reviewer context carries it; a thin scope yields a finding.
+- **IV-2 Selected execution at the boundary and the high-tier review.** When the affected-test
+  ladder selects a rung other than `full_suite` and no widening trigger applies, the per-task
+  boundary and the high-tier review run the selected tests (a new additive
+  `executedScope: "selected"`, accepted by `delivery-acceptance.ts` and `scheduler-store.ts`,
+  with the selection recorded), and the project's whole build and test scripts run at milestone or
+  merge-group points and at final verification (which already runs once per run). Wire
+  `validation-policy.ts` (`resolveValidationMandates`, `partitionPacketVsFinal`) into task
+  acceptance in `build-runtime.ts`, so a full-suite mandate belongs to the final candidate unless
+  an explicit mandate says otherwise (EP16). Selective command templates in
+  `final-verification-profile.ts`; when no safe selection exists, the full script still runs
+  (fail safe). Tests: a narrow change runs the selected tests only and records them; a widening
+  trigger runs the full script; replay of old `full_test_script` records unchanged; V2 reuse still
+  applies.
+- **IV-3 Validation budget and test tiers.** A per-task validation wall-clock budget (default about
+  10 minutes) in the budget ledger (`budget-policy.ts`, `budget-ledger.ts`), counting
+  `run_evidence_command` (`evidence-tools.ts`) and boundary durations; above it the worker must
+  record a justification that the reviewer sees (never a hard failure of correct work). An optional
+  project-configured tier map (fast / component / integration / slow / release → commands) in the
+  execution profile (`final-verification-profile.ts`, `final-verification-contracts.ts`); the
+  harness picks tiers by the task's risk tier (`change-risk.ts`) and by milestone versus final.
+  Tests: over-budget without a reason is surfaced; a tier map drives the chosen commands; no tier
+  map keeps today's behaviour.
 
 ---
 
