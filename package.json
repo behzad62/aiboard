@@ -40,7 +40,9 @@
     "test:fireworks": "tsx scripts/test-fireworks-engine.mts && tsx scripts/test-fireworks-hidden-view.mts && tsx scripts/test-fireworks-ai-schema.mts && tsx scripts/test-fireworks-scoring.mts && tsx scripts/test-fireworks-scenarios.mts && tsx scripts/test-fireworks-calibration-bots.mts && tsx scripts/test-certified-fireworks-ui.mts && tsx scripts/test-fireworks-ui.tsx && tsx scripts/test-certified-fireworks-runner.mts && tsx scripts/test-certified-e2e-fireworks-teamiq.mts",
     "test:certified": "npm run test:benchmark:unit && npm run test:benchmark:tracks && npm run test:benchmark:workbench && npm run test:benchmark:e2e && npm run test:gameiq-guards",
     "test:openrouter-live": "tsx scripts/test-openrouter-structured-output-live.mts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:provider-runtime": "tsx scripts/test-provider-runtime.mts",
+    "test:provider-runtime:live": "tsx scripts/test-provider-runtime-live.mts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
