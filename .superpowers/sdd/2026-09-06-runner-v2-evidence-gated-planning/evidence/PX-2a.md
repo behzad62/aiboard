@@ -384,3 +384,13 @@ Prove-red (sha256 before/after, byte-exact restore of `windows-job-process-host.
 Changed-file sha256: `windows-job-process-host.ts` d3bce3b48fa723b8439a9a4d803fc6c7eb76cedf88b4500ccfe3d2c7180074c1; `windows-job-launch-speed.test.ts` 0e19e083495da79c9eaf4cda97fed4fa1cb185df695c6ce723b03ecb81ba224b.
 
 Limit: a machine whose TEMP holds wildcard characters runs every call on the in-process Add-Type path (no speed gain from PX-2a there). Logs: session scratchpad `px2ar3fix/`.
+
+## Controller acceptance (2026-09-30)
+
+Independent re-review r4 (`PX-2a-review-r4.md`, Sonnet xhigh) on 241d5f64: **ACCEPT**. R3-B1 fixed (probes D, D4 and the bracket-TEMP D2b never pin or load attacker bytes; the same probes win against 1daf1b89); the compile runs at most once per runner process on every path; the round-1 and round-2 exploits stay clean; the PowerShell 5.1 bracket claim verified and the wildcard regex has no bypass (29 TEMP names); suites green (speed 11/11, 17/17 at concurrency 4, guarantees 12/12, task8 2/2).
+
+Correction to the Repair cycle 3 limit: a TEMP path with non-Latin characters also makes the compile fail; that failure is remembered and the runner falls back, so the same "no speed gain on this machine" limit applies. Earlier cycle sections of this file still hold superseded statements ("self-heal", "safe by construction"); the repair-cycle sections supersede them.
+
+Follow-ups (non-blocking): the bracket test cannot tell "remembered" from "skipped again" and no real call runs under a bracket TEMP; the compile-failure cause is not logged; the 120 s compile timeout is unchanged; the compile-time race residual noted in this file remains; the speed file's direct-host test flake (from the PX-2b review).
+
+**PX-2a ACCEPTED 2026-09-30** (wip commits 7a1703e2, 5d6e6540, 1daf1b89 and controller fix 241d5f64 + evidence f1ed5d2b).
