@@ -30,6 +30,7 @@ const tests = [
   "scripts/test-custom-provider-capability-ui.tsx",
   "scripts/test-provider-capability-status.mts",
   "scripts/test-provider-legacy-removal.mts",
+  "scripts/test-provider-runtime-live-harness.mts",
   "scripts/test-account-provider-runner-package.mts",
 ] as const;
 

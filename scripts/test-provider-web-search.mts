@@ -1,7 +1,6 @@
 /* Provider-native web search request shaping (run: npx tsx scripts/test-provider-web-search.mts) */
 import {
   WEB_SEARCH_CAPABILITY_NOTE,
-  shouldEnableProviderNativeWebSearch,
   webSearchToolIntent,
   withWebSearchCapabilityNote,
 } from "../lib/providers/web-search";

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import type { UserSettings } from "../lib/db/schema";
 
 import { migrateProviderCapabilitySettings } from "../lib/client/provider-capability-migration";
 import {
@@ -6,7 +7,7 @@ import {
   type CapabilityProbeResult,
 } from "../lib/providers/capability-probes";
 
-const legacySettings = {
+const legacySettings: UserSettings = {
   id: "default",
   defaultEffort: "medium",
   defaultMode: "panel",
@@ -43,7 +44,7 @@ const legacySettings = {
       source: "provider-models",
     },
   },
-} as any;
+};
 
 const migrated = migrateProviderCapabilitySettings(legacySettings);
 assert.equal(migrated.changed, true);
@@ -85,7 +86,7 @@ assert.deepEqual(
   ],
   "generic provider model listings must never become verified tool evidence",
 );
-const second = migrateProviderCapabilitySettings(migrated.settings as any);
+const second = migrateProviderCapabilitySettings(migrated.settings);
 assert.equal(second.changed, false, "capability persistence migration must be idempotent");
 assert.equal(second.settings, migrated.settings);
 console.log("PASS legacy discovery metadata migrates without generic tool guesses");

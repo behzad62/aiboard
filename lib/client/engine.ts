@@ -43,7 +43,6 @@ import {
   type ChatParams,
   type ModelContextProfile,
   type NativeToolCall,
-  type NativeToolDefinition,
   type SelectedModel,
   type StreamChunk,
   type StreamUsage,

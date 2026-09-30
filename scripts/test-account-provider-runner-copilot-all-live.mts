@@ -176,7 +176,7 @@ try {
     model: "gemini-3.5-flash",
     reasoningEffort: "low",
     maxTokens: 256,
-    webSearch: true,
+    toolIntents: [{ id: "web_search", requirement: "optional" }],
     messages: [{ role: "user", content: "Use the web_search built-in tool to look up the official GitHub Copilot SDK repository. Reply with exactly github.com." }],
     stream: true,
   });
@@ -239,7 +239,7 @@ try {
     model: gptModel?.id ?? "gpt-5.4-mini",
     reasoningEffort: "medium",
     maxTokens: 128,
-    webSearch: true,
+    toolIntents: [{ id: "web_search", requirement: "optional" }],
     messages: [{ role: "user", content: "Reply with exactly BUILD_RAW_LIVE_OK." }],
     functionTools: [],
     stream: true,

@@ -23,12 +23,14 @@ $env:AIBOARD_PROVIDER_RUNTIME_LIVE="1"
 npm run test:provider-runtime:live
 ```
 
-The harness runs only live probes that already have usable credentials/account state. Individual probes print `SKIP` and exit successfully when their credential is absent.
+The harness runs only live probes that already have usable credentials/account state. Missing credentials are skipped before the provider-specific script starts. Every `RUN`/`SKIP` line records the provider, model(s), and transport so drift results are attributable.
 
 Current live probe groups:
 
 - **OpenRouter** — uses `OPENROUTER_API_KEY`, or the existing `AIBOARD_STORE_PATH` lookup supported by `test-openrouter-structured-output-live.mts`. `OPENROUTER_LIVE_MODELS` can override the small default model list.
 - **GitHub Copilot account runner** — uses the existing local account-runner login in `~/.aiboard-account-provider-runner.json`. If no Copilot token is present, the probe skips.
+
+The Copilot live requests use the same canonical `toolIntents` wire contract as the current runner; they do not rely on removed legacy `webSearch` flags.
 
 The live harness is deliberately separate from capability persistence. A live auth, network, rate-limit, or provider outage therefore cannot write permanent `unsupported` capability evidence. Runtime capability persistence continues to use the scoped evidence/probe rules in the application itself.
 

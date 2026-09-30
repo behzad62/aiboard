@@ -115,7 +115,7 @@ try {
       model: "gemini-3.5-flash",
       reasoningEffort: "medium",
       maxTokens: 256,
-      webSearch: true,
+      toolIntents: [{ id: "web_search", requirement: "optional" }],
       messages: [{
         role: "user",
         content: "Use the web_search built-in tool to look up the official GitHub Copilot SDK repository. Reply with exactly its hostname and no other text.",

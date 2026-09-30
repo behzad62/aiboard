@@ -239,7 +239,7 @@ export interface AnthropicPlanToolConfig {
 
 export function anthropicToolConfigForPlan(
   params: ChatParams,
-  providerId: string,
+  _providerId: string,
 ): AnthropicPlanToolConfig {
   const tools: Array<Record<string, unknown>> = [];
   const betas = new Set<string>();
