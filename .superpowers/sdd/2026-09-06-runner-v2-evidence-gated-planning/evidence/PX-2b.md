@@ -486,3 +486,10 @@ Validation (final code: narrowed B4 + restored drain):
   (cursor file-read and event waits are outside the lock).
 - No commit/stage/stash/push performed; other lanes' commits untouched.
 
+## Controller acceptance (2026-09-30)
+
+Independent re-review r2 (`PX-2b-review-r2.md`, Sonnet xhigh) on the repair commit 6a581f66: **ACCEPT**. B1 (0 stalls in 3 x 242 sweeps), B2 (faults F1a-F7 each turn a test red), B3 (detach settles in 11-34 ms) and B4 (a refused release no longer latches the lane; the two backend tests changed only their wait conditions; batch 3 x green apart from the PX-2c task8 lines, since fixed; the two tests 0/37 isolated failures) resolved; N1, N3, N4 done; fence effects unchanged by the repair; no weakening; old records taken over correctly. The EOF blank line (N6) is removed with this note.
+
+Follow-ups (non-blocking): the B4 product branch has no test that fails without it; N2 is partial (the channel never passes the caller's cursor to /wait-status); `waitForFileActivity` is dead in production and the watch-failure test drives it instead of the production wait; stale statements in this file's body; a pre-existing flake in the speed file's direct-host test (1/15) goes to the PX-2a lane; the interactive streaming path is unmeasured; no committed old-record replay test.
+
+**PX-2b ACCEPTED 2026-09-30** (wip commits e8eb8720 + 6a581f66).
