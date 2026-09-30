@@ -4,10 +4,11 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/pro
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test, { type TestContext } from "node:test";
+import test, { after, type TestContext } from "node:test";
 import { createWindowsJobProcessHost } from "../src/windows-job-process-host.js";
 import { createWindowsJobProcessChannelProvider } from "../src/windows-job-process-channel.js";
 import type { ProcessBackendBinding } from "../src/process-backend.js";
+import { checkNoWindowsJobProcessesLeft } from "./support/windows-job-leftover-guard.js";
 
 const owner = { runId: "replay-run", sessionId: "replay-agent" };
 const fence = { ownerId: "replay-owner", fencingToken: 1 };
@@ -116,3 +117,9 @@ async function createFixture(t: TestContext) {
     },
   };
 }
+// PX-2e: this file uses a synthetic in-process supervisor fixture (temp roots
+// `p683-job-replay-*`) and must never leave a real supervisor or Job host
+// behind. Leftovers are recorded, killed, and reported here.
+after(async () => {
+  await checkNoWindowsJobProcessesLeft(["p683-job-replay-"]);
+});

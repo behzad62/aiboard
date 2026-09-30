@@ -21,6 +21,10 @@ if (!bootstrapProcessId || !bootstrapStatusPath) {
 }
 let config;
 let abortRequest;
+// PX-2c spare state: true only between a spare reservation's backend spawn
+// and its single claim. Never set for normal launches.
+let spareUnclaimed = false;
+let spareIdleTimer;
 let backend;
 let backendInput;
 let childExitResolve;
@@ -39,9 +43,25 @@ const childExited = new Promise((resolve) => {
 });
 
 process.on("message", (message) => {
+  // PX-2c: a pre-started spare is claimed over this same private IPC channel
+  // from the runner (never HTTP: claiming creates the call's Job, which is
+  // spawn authority). Any other message type is ignored fail-closed.
+  if (message?.type === "claim") {
+    void handleSpareClaim(message);
+    return;
+  }
   if (message?.type !== "abort") return;
   abortRequest = message;
   if (config) void abortStartup(message);
+});
+
+// PX-2c: parent death retires an UNCLAIMED spare only. The runner holds the
+// IPC channel open for a spare (normal launches disconnect after their stdin
+// handoff), so a broken channel means the owning runner is gone: kill the
+// waiting Job host and exit, leaving no untracked process. Claimed spares
+// and normal launches keep today's survive-for-adoption behavior.
+process.on("disconnect", () => {
+  if (isSpareConfig() && spareUnclaimed) void retireSpare("parent-dead");
 });
 
 const status = {
@@ -63,6 +83,50 @@ const status = {
 function persistStatus() {
   status.updatedAt = new Date().toISOString();
   appendFileSync(bootstrapStatusPath, `${JSON.stringify(status)}\n`, { mode: 0o600 });
+  settleStatusWaiters();
+}
+
+// PX-2b: event-driven settlement waits. Every durable state change persists,
+// so resolving parked /wait-status waiters on every persist cannot miss a
+// change (a change that already landed reads as terminal immediately at the
+// endpoint; a later change resolves the waiter). Spurious wakeups are
+// harmless: the host re-polls and re-attests after every wakeup.
+const statusWaiters = new Set();
+function settleStatusWaiters() {
+  if (statusWaiters.size === 0) return;
+  const pending = [...statusWaiters];
+  statusWaiters.clear();
+  for (const finish of pending) finish();
+}
+function waitForStatusPersist(timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      statusWaiters.delete(finish);
+      clearTimeout(timer);
+      resolve({ ...status });
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    statusWaiters.add(finish);
+  });
+}
+function parseWaitStatusTimeout(url) {
+  const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const raw = new URLSearchParams(query).get("timeoutMs");
+  // PX-2b repair 1 (N6): a missing timeoutMs used to read as Number(null) =
+  // 0, so the 1_000 default was dead and the wait parked 1 ms. Absent means
+  // the default; a present value is still clamped to 1-5000 ms.
+  if (raw === null) return 1_000;
+  const timeoutMs = Number(raw);
+  if (!Number.isSafeInteger(timeoutMs)) return 1_000;
+  return Math.min(5_000, Math.max(1, timeoutMs));
+}
+function parseWaitStatusSince(url) {
+  const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+  const since = new URLSearchParams(query).get("since");
+  return typeof since === "string" && since.length > 0 ? since : undefined;
 }
 
 // Persist identity before reading configuration. If the Runner dies after it
@@ -79,6 +143,10 @@ try {
   ) {
     throw new Error("Supervisor bootstrap identity did not match its configuration.");
   }
+  // PX-2c: a spare reserves the supervisor plus the Job host with no Job and
+  // no child. It always runs the interactive backend (the production path);
+  // its call's command arrives later over the private IPC claim, never HTTP.
+  if (config.spare === true) config.interactive = true;
   appendFileSync(config.stdoutPath, "", { mode: 0o600 });
   appendFileSync(config.stderrPath, "", { mode: 0o600 });
   status.retainedOutputChunks = 0;
@@ -122,6 +190,34 @@ const server = createServer(async (request, response) => {
   }
   if (request.method === "GET" && request.url === "/status") {
     json(response, 200, status);
+    return;
+  }
+  if (request.method === "GET" && (request.url === "/wait-status" || request.url.startsWith("/wait-status?"))) {
+    // PX-2b repair 1 (N2/N3): `since=<updatedAt>` returns at once on any
+    // change after the caller's last seen state, not only terminal. An
+    // already-stopped state returns at once (no lost wakeup: stopped is
+    // final), while exited_unknown parks — the outcome there is still
+    // unsettled. Otherwise the response parks until the next persist or the
+    // bounded timeout. Callers re-poll and re-attest after every return, and
+    // every existing deadline stays armed as the backstop.
+    const timeoutMs = parseWaitStatusTimeout(request.url);
+    const since = parseWaitStatusSince(request.url);
+    if (since !== undefined && status.updatedAt !== since) {
+      json(response, 200, status);
+      return;
+    }
+    if (status.status === "stopped") {
+      json(response, 200, status);
+      return;
+    }
+    const next = await waitForStatusPersist(timeoutMs);
+    json(response, 200, next);
+    return;
+  }
+  // PX-2c: an unclaimed spare has no call: only status waits may observe it.
+  // Anything that would mutate or signal fails closed until the IPC claim.
+  if (spareUnclaimed && request.method === "POST") {
+    json(response, 409, { error: "spare_unclaimed" });
     return;
   }
   if (request.method === "POST" && request.url === "/write") {
@@ -205,6 +301,121 @@ const server = createServer(async (request, response) => {
     json(response, 500, { error: error instanceof Error ? error.message : String(error) });
   }
 });
+
+function isSpareConfig() {
+  return Boolean(config) && config.spare === true;
+}
+
+// The Job-config object the powershell host consumes on its stdin: byte for
+// byte the normal launch shape, so a claimed spare runs exactly like a fresh
+// launch from the Job host's point of view.
+function currentJobConfiguration() {
+  return {
+    command: config.command,
+    args: config.args,
+    cwd: config.cwd,
+    env: config.env,
+    stdoutPath: config.stdoutPath,
+    stderrPath: config.stderrPath,
+    eventPath: config.eventPath,
+    helperAssemblyPath: config.helperAssemblyPath,
+    helperAssemblySha256: config.helperAssemblySha256,
+  };
+}
+
+function spareClaimTokenMatches(supplied) {
+  if (typeof supplied !== "string" || typeof config?.token !== "string") return false;
+  const presented = Buffer.from(supplied);
+  const expected = Buffer.from(config.token);
+  return presented.length === expected.length && timingSafeEqual(presented, expected);
+}
+
+// PX-2c: claim the spare for exactly one call. The runner sends the call over
+// the private IPC channel; the supervisor fills its reserved config and hands
+// the waiting Job host the call. A second claim is rejected: a spare serves
+// exactly one call and is never reused.
+async function handleSpareClaim(message) {
+  const reply = (ok, error) => {
+    try {
+      process.send?.({ type: "claim_ack", token: typeof message?.token === "string" ? message.token : null, ok, ...(error ? { error } : {}) });
+    } catch {}
+  };
+  try {
+    if (!isSpareConfig() || !spareUnclaimed) {
+      reply(false, "not_spare_or_already_claimed");
+      return;
+    }
+    if (!spareClaimTokenMatches(message?.token)) {
+      reply(false, "claim_identity_mismatch");
+      return;
+    }
+    const job = message?.job;
+    if (!job || typeof job.command !== "string" || job.command.length === 0 ||
+        !Array.isArray(job.args) || typeof job.cwd !== "string" || job.cwd.length === 0 ||
+        !job.env || typeof job.env !== "object") {
+      reply(false, "claim_job_invalid");
+      return;
+    }
+    if (!backend || backend.exitCode !== null || backend.signalCode !== null || !backendInput || backendInput.destroyed) {
+      reply(false, "claim_backend_unavailable");
+      return;
+    }
+    clearTimeout(spareIdleTimer);
+    spareIdleTimer = undefined;
+    config.command = job.command;
+    config.args = [...job.args];
+    config.cwd = job.cwd;
+    config.env = { ...job.env };
+    config.interactive = true;
+    spareUnclaimed = false;
+    status.claimed = true;
+    status.spareReady = false;
+    persistStatus();
+    const line = `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(currentJobConfiguration())).toString("base64") })}\n`;
+    await new Promise((resolvePromise, reject) => backendInput.write(line, (error) => error ? reject(error) : resolvePromise()));
+    reply(true);
+  } catch (error) {
+    reply(false, error instanceof Error ? error.message : String(error));
+  }
+}
+
+function armSpareIdleTimer() {
+  clearTimeout(spareIdleTimer);
+  const configured = config?.spareIdleTimeoutMs;
+  const idleMs = Number.isSafeInteger(configured) ? Math.min(300_000, Math.max(1_000, configured)) : 60_000;
+  spareIdleTimer = setTimeout(() => {
+    if (isSpareConfig() && spareUnclaimed) void retireSpare("idle-timeout");
+  }, idleMs);
+  spareIdleTimer.unref?.();
+}
+
+// PX-2c: retire an unclaimed spare without ever launching a call: terminate
+// the waiting Job host, record why, and exit. Parent death, idle timeout, and
+// run-end/abort share this path; crash recovery never relaunches from it.
+async function retireSpare(reason) {
+  if (!isSpareConfig() || !spareUnclaimed) return;
+  clearTimeout(spareIdleTimer);
+  spareIdleTimer = undefined;
+  spareUnclaimed = false;
+  // PX-2c repair 1 (B2): no direct backend kill here. stopOwnedTree owns the
+  // single backend-kill site (allowlisted once); retirement still records its
+  // reason and the supervisor still exits when the kill is refused or late.
+  try {
+    await stopOwnedTree("SIGKILL", config.stopDeadlineMs);
+  } catch {}
+  // Unconditional: the backend-exit listener may have marked us stopped
+  // during the kill above. Either order must leave the retirement reason on
+  // the durable status (markStopped preserves a recorded spareRetired).
+  status.status = "stopped";
+  if (!status.spareRetired) status.error = `Spare retired without a call (${reason}).`;
+  status.ownershipReleased = true;
+  status.spareRetired = reason;
+  persistStatus();
+  try {
+    server.close(() => process.exit(0));
+  } catch {}
+  setTimeout(() => process.exit(0), 250).unref?.();
+}
 
 function assertCurrentRequestFence(candidate) {
   if (!config.recordPath && candidate === undefined) return;
@@ -290,6 +501,9 @@ function launchWindowsJob() {
     status.exitCode = exitCode;
     markOwnershipUncertain("Windows Job Object host closed before proving the job empty.");
   });
+  // PX-2c note: this literal is intentionally inline (not the shared
+  // currentJobConfiguration() below): windows-job-supervisor-input.test.ts
+  // slices this function body into a VM. Keep the two shapes identical.
   const jobConfiguration = {
     command: config.command,
     args: config.args,
@@ -298,10 +512,25 @@ function launchWindowsJob() {
     stdoutPath: config.stdoutPath,
     stderrPath: config.stderrPath,
     eventPath: config.eventPath,
+    helperAssemblyPath: config.helperAssemblyPath,
+    helperAssemblySha256: config.helperAssemblySha256,
   };
-  backendInput.write(config.interactive
-    ? `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(jobConfiguration)).toString("base64") })}\n`
-    : `${JSON.stringify(jobConfiguration)}\n`);
+  if (config.spare === true) {
+    // PX-2c: the supervisor (node) and the Job host (PowerShell) have booted
+    // and now block on stdin with NO Job and NO child until the runner's IPC
+    // claim delivers the call. Holding the write keeps spawn authority on the
+    // existing private channel; HTTP can only observe until the claim lands.
+    spareUnclaimed = true;
+    status.spare = true;
+    status.claimed = false;
+    status.spareReady = true;
+    persistStatus();
+    armSpareIdleTimer();
+  } else {
+    backendInput.write(config.interactive
+      ? `${JSON.stringify({ encoding: "base64-utf8-json", payload: Buffer.from(JSON.stringify(jobConfiguration)).toString("base64") })}\n`
+      : `${JSON.stringify(jobConfiguration)}\n`);
+  }
 }
 
 function drainInteractiveOutput(stream, readable) {
@@ -428,7 +657,9 @@ function markStopped() {
   settled = true;
   if (jobEventTimer) clearInterval(jobEventTimer);
   status.status = "stopped";
-  status.error = null;
+  // PX-2c: a retired spare already recorded why it never served a call; the
+  // backend-exit race after its kill must not clear that reason.
+  if (!status.spareRetired) status.error = null;
   status.ownershipReleased = true;
   persistStatus();
   childExitResolve();
