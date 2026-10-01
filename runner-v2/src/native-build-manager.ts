@@ -445,16 +445,18 @@ export class NativeBuildManager implements BuildControlPlane {
   ): Promise<SchedulerProjection> {
     const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () => {
-      // C3a repair cycle 1 (B-1): record the owner pause/cancel, then
-      // snapshot the stop. The runtime entry point serializes on the
-      // step queue, so a mid-step pump pass finishes first and the
-      // commit never runs concurrently with a step. The call stays
+      // C3a repair cycle 2 (R2-1a): record the owner pause/cancel,
+      // then quiesce FIRST -- quiesceRun() stops the run's running
+      // command and browser, which is what ends an in-flight step.
+      // The snapshot call never waits for a step (the runtime returns
+      // at once while one is in flight; the step boundary takes the
+      // snapshot), so the pause never blocks on a long command or
+      // model call, on docs-v1 runs included. The call stays
       // optional for older test doubles; it never throws.
       handle.runtime.pause(reason, idempotencyKey);
-      await handle.runtime.commitStopSnapshotIfStopped?.();
-      const projection = handle.runtime.projection();
       await handle.finalVerificationCleanup?.quiesceRun();
-      return projection;
+      await handle.runtime.commitStopSnapshotIfStopped?.();
+      return handle.runtime.projection();
     });
   }
 

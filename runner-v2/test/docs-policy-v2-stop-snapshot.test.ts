@@ -11,10 +11,10 @@ import {
   type SchedulerActorRole,
 } from "../src/scheduler-store.js";
 import { ArtifactStore } from "../src/artifact-store.js";
-import { type BuildStepResult, type IndependentVerifierDriver } from "../src/build-runtime.js";
+import { BuildRuntime, type BuildStepResult, type IndependentVerifierDriver } from "../src/build-runtime.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { NativeBuildFactory, snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
-import { NativeBuildManager } from "../src/native-build-manager.js";
+import { NativeBuildManager, type NativeBuildRuntimeHandle } from "../src/native-build-manager.js";
 import type { BuildRiskAssessmentInput } from "../src/risk-policy.js";
 import { SqliteBuildSpecStore } from "../src/sqlite-build-spec-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -883,6 +883,316 @@ test("C3a/M-4: a refused skip append never throws out of the stop", async () => 
     assert.equal(snapshotCommits(events).length, 0);
     assert.equal(await revCount(fixture), "0", "a failed commit leaves no commit behind");
   } finally {
+    await fixture.close();
+  }
+});
+
+test("C3a/R2-1: an owner pause during a blocked step returns promptly, quiesces first, then snapshots once the step ends", async () => {
+  const RUN = "run-c3a-blocked-pause";
+  const fixture = await openFactoryPort("stop-blocked-pause", RUN, (runId) => v2PlanOnlySeed(runId), "plan_only");
+  let manager: NativeBuildManager | undefined;
+  const store = openHandoffStore(fixture, RUN);
+  try {
+    // The step blocks inside the Architect turn (the standing model
+    // call). The blocked operation never resolves on its own: quiesce
+    // ends it the way killing a running command would, so the turn
+    // throws, the step rejects, and the pump-equivalent entry point
+    // takes the snapshot.
+    let entered = false;
+    let releaseTurn!: () => void;
+    const turnGate = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    const runtime = buildRuntimeForHandoff({
+      runId: RUN,
+      store,
+      projectDocs: fixture.port,
+      architect: {
+        driver: {
+          run: async () => {
+            entered = true;
+            await turnGate;
+            throw new Error("probe: the running command was killed by quiesce");
+          },
+        },
+      },
+      clock: advancingClock(),
+      runPolicy: "plan_only",
+      evidenceStore: fixture.evidence,
+    });
+    // Quiesce-first order: record every quiesce and every snapshot call.
+    const order: string[] = [];
+    let quiesced = false;
+    const commit = runtime.commitStopSnapshotIfStopped.bind(runtime);
+    runtime.commitStopSnapshotIfStopped = async () => {
+      order.push("snapshot");
+      return commit();
+    };
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(fixture.state, "blocked-builds.sqlite")),
+      createRuntime: async (): Promise<NativeBuildRuntimeHandle> => ({
+        ...(managedHandle(
+          runtime,
+          async () => ({
+            integrationRevision: fixture.baselineRevision,
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: false,
+          }),
+          RUN,
+        ) as unknown as NativeBuildRuntimeHandle),
+        finalVerificationCleanup: {
+          quiesceRun: async () => {
+            quiesced = true;
+            order.push("quiesce");
+          },
+          cleanup: async () => ({}),
+        },
+      }),
+    });
+    await manager.create(managerSpec(RUN, "plan_only"));
+    const stepPromise = runtime.step();
+    void stepPromise.catch(() => undefined);
+    const enteredDeadline = Date.now() + 10000;
+    while (!entered && Date.now() < enteredDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(entered, true, "the step blocks inside the Architect turn");
+    // The owner pause lands mid-step: it must resolve within a bounded
+    // time instead of hanging behind the blocked step, and it must
+    // quiesce (which ends the step) before snapshotting.
+    const pausePromise = manager.pause(RUN, "user", "pause:c3a-blocked");
+    const winner = await Promise.race([
+      pausePromise.then(() => "pause" as const),
+      new Promise((resolve) => setTimeout(() => resolve("timeout" as const), 3000)),
+    ]);
+    // Always end the blocked step before asserting: a red run must
+    // still settle the step and the pause so cleanup cannot hang
+    // behind them.
+    releaseTurn();
+    await stepPromise.catch(() => undefined);
+    assert.equal(winner, "pause", "pause() resolves within a bounded time while a step is blocked");
+    const paused = await pausePromise;
+    assert.equal(paused.status, "paused", "the stop proceeds");
+    assert.equal(paused.pauseReason?.reason, "user");
+    assert.equal(quiesced, true, "quiesce ran before the pause returned");
+    assert.deepEqual(order, ["quiesce", "snapshot"], "quiesce runs before the snapshot call");
+    // The step ended the way a killed command ends it; the stop then
+    // takes exactly one snapshot through the pump-equivalent entry point.
+    await assert.rejects(stepPromise, /killed by quiesce/);
+    await runtime.commitStopSnapshotIfStopped();
+    const events = manager.events(RUN);
+    const stop = events.find((event) => event.type === "run.paused")!;
+    const found = snapshotCommits(events);
+    assert.equal(found.length, 1, "the mid-step owner pause commits exactly one stop snapshot once the step ends");
+    const payload = found[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.stopKind, "paused");
+    assert.equal(payload.stopSequence, stop.sequence);
+    const body = await stateBody(fixture, payload.commit as string);
+    assert.ok(body.includes("stop: paused \u2014 user"));
+    assert.equal(await revCount(fixture), "1");
+  } finally {
+    await manager?.close();
+    store.close();
+    await fixture.close();
+  }
+});
+
+test("C3a/R2-1: an owner pause during a blocked step on a docs-v1 run returns promptly and writes nothing", async () => {
+  const RUN = "run-c3a-blocked-pause-v1";
+  // Docs policy v1 stamped explicitly over the plan-only flow.
+  const seed = (runId: string): NewSchedulerEvent[] =>
+    v2PlanOnlySeed(runId).map((event) =>
+      event.type === "project_docs.policy_configured"
+        ? { ...event, payload: { ...(event.payload as Record<string, unknown>), version: 1 } }
+        : event);
+  const fixture = await openFactoryPort("stop-blocked-pause-v1", RUN, seed, "plan_only");
+  let manager: NativeBuildManager | undefined;
+  const store = openHandoffStore(fixture, RUN);
+  try {
+    let entered = false;
+    let releaseTurn!: () => void;
+    const turnGate = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    const runtime = buildRuntimeForHandoff({
+      runId: RUN,
+      store,
+      projectDocs: fixture.port,
+      architect: {
+        driver: {
+          run: async () => {
+            entered = true;
+            await turnGate;
+            throw new Error("probe: the running command was killed by quiesce");
+          },
+        },
+      },
+      clock: advancingClock(),
+      runPolicy: "plan_only",
+      evidenceStore: fixture.evidence,
+    });
+    let quiesced = false;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(fixture.state, "blocked-v1-builds.sqlite")),
+      createRuntime: async (): Promise<NativeBuildRuntimeHandle> => ({
+        ...(managedHandle(
+          runtime,
+          async () => ({
+            integrationRevision: fixture.baselineRevision,
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: false,
+          }),
+          RUN,
+        ) as unknown as NativeBuildRuntimeHandle),
+        finalVerificationCleanup: {
+          quiesceRun: async () => {
+            quiesced = true;
+          },
+          cleanup: async () => ({}),
+        },
+      }),
+    });
+    await manager.create(managerSpec(RUN, "plan_only"));
+    const stepPromise = runtime.step();
+    void stepPromise.catch(() => undefined);
+    const enteredDeadline = Date.now() + 10000;
+    while (!entered && Date.now() < enteredDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(entered, true, "the step blocks inside the Architect turn");
+    const pausePromise = manager.pause(RUN, "user", "pause:c3a-blocked-v1");
+    const winner = await Promise.race([
+      pausePromise.then(() => "pause" as const),
+      new Promise((resolve) => setTimeout(() => resolve("timeout" as const), 3000)),
+    ]);
+    // Always end the blocked step before asserting: a red run must
+    // still settle the step and the pause so cleanup cannot hang
+    // behind them.
+    releaseTurn();
+    await stepPromise.catch(() => undefined);
+    assert.equal(winner, "pause", "pause() resolves within a bounded time while a step is blocked");
+    const paused = await pausePromise;
+    assert.equal(paused.status, "paused", "the stop proceeds");
+    assert.equal(quiesced, true, "quiesce ran before the pause returned");
+    await assert.rejects(stepPromise, /killed by quiesce/);
+    await runtime.commitStopSnapshotIfStopped();
+    const events = manager.events(RUN);
+    assert.equal(snapshotCommits(events).length, 0, "a docs-v1 pause writes no snapshot");
+    assert.equal(skipRecords(events).length, 0, "a docs-v1 pause records no skip either");
+    assert.equal(await revCount(fixture), "0", "a docs-v1 pause leaves no commit behind");
+  } finally {
+    await manager?.close();
+    store.close();
+    await fixture.close();
+  }
+});
+
+test("C3a/R2-1c: a step that ends progressed after a mid-step owner pause still snapshots at that step's end", async () => {
+  const RUN = "run-c3a-progressed-pause";
+  // A finish run whose next step integrates a task: the integrate call
+  // blocks, the owner pause lands mid-step, quiesce ends the blocked
+  // integrate, and the step ends "progressed" with the run paused -- so
+  // only the step-end call (R2-1c) can take the snapshot.
+  const seed = (runId: string, baselineRevision: string): NewSchedulerEvent[] => [
+    ...v2PlanOnlySeed(runId).map((event) =>
+      event.type === "run.policy_configured"
+        ? { ...event, payload: { ...(event.payload as Record<string, unknown>), runPolicy: "finish" } }
+        : event),
+    e(runId, "plan.created", "plan-overlay", "architect", "architect", {
+      revision: 1,
+      tasks: [{
+        id: "implementation",
+        objective: "Implement the requested behavior.",
+        dependencies: [],
+        status: "integrating",
+        requiredCapabilities: ["code"],
+        acceptanceCriteria: [{ id: "done", text: "The behavior is implemented." }],
+        acceptanceCriteriaVersion: 1,
+        attempt: 1,
+        changeSetId: "cs-c3a-progressed",
+      }],
+    }),
+    e(runId, "integration.revision_advanced", "integration-revision", "runner", "integration", {
+      integrationRevision: baselineRevision,
+    }),
+  ];
+  const fixture = await openFactoryPort("stop-progressed-pause", RUN, seed, "finish");
+  let manager: NativeBuildManager | undefined;
+  const store = openHandoffStore(fixture, RUN);
+  try {
+    let entered = false;
+    let releaseIntegrate!: () => void;
+    const integrateGate = new Promise<void>((resolve) => { releaseIntegrate = resolve; });
+    const runtime = new BuildRuntime({
+      runId: RUN,
+      runPolicy: "finish",
+      store,
+      workerDriver: { run: async () => ({ type: "failed" as const, reason: "unused" }) },
+      architectDriver: throwingArchitect().driver,
+      integrationDriver: {
+        integrate: async () => {
+          entered = true;
+          await integrateGate;
+          return { status: "integrated" as const, integrationRevision: fixture.baselineRevision };
+        },
+      },
+      maxConcurrency: 1,
+      workspaceFor: async () => "C:/unused",
+      clock: advancingClock(),
+      projectDocs: fixture.port,
+      evidenceStore: fixture.evidence,
+    });
+    let quiesced = false;
+    manager = new NativeBuildManager({
+      specs: new SqliteBuildSpecStore(join(fixture.state, "progressed-builds.sqlite")),
+      createRuntime: async (): Promise<NativeBuildRuntimeHandle> => ({
+        ...(managedHandle(
+          runtime,
+          async () => ({
+            integrationRevision: fixture.baselineRevision,
+            integrationBranch: "aiboard/run/integration",
+            appliedToProject: false,
+          }),
+          RUN,
+        ) as unknown as NativeBuildRuntimeHandle),
+        finalVerificationCleanup: {
+          quiesceRun: async () => {
+            quiesced = true;
+            releaseIntegrate();
+          },
+          cleanup: async () => ({}),
+        },
+      }),
+    });
+    await manager.create(managerSpec(RUN, "finish"));
+    const stepPromise = runtime.step();
+    const enteredDeadline = Date.now() + 10000;
+    while (!entered && Date.now() < enteredDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(entered, true, "the step blocks inside the integrate call");
+    const pausePromise = manager.pause(RUN, "user", "pause:c3a-progressed");
+    const winner = await Promise.race([
+      pausePromise.then(() => "pause" as const),
+      new Promise((resolve) => setTimeout(() => resolve("timeout" as const), 3000)),
+    ]);
+    assert.equal(winner, "pause", "pause() resolves within a bounded time while a step is blocked");
+    const paused = await pausePromise;
+    assert.equal(paused.status, "paused", "the stop proceeds");
+    assert.equal(quiesced, true, "quiesce ran before the pause returned");
+    // Quiesce ended the blocked integrate; the step ends "progressed"
+    // while the run stays paused -- and that same step takes the snapshot.
+    const stepResult = await stepPromise;
+    assert.equal(stepResult.status, "progressed", "the mid-step pause does not change the step result");
+    const events = manager.events(RUN);
+    const stop = events.find((event) => event.type === "run.paused")!;
+    const found = snapshotCommits(events);
+    assert.equal(found.length, 1, "the progressed step snapshots the mid-step pause at its end");
+    const payload = found[0]!.payload as Record<string, unknown>;
+    assert.equal(payload.stopKind, "paused");
+    assert.equal(payload.stopSequence, stop.sequence);
+    const body = await stateBody(fixture, payload.commit as string);
+    assert.ok(body.includes("stop: paused \u2014 user"));
+    assert.equal(await revCount(fixture), "1");
+  } finally {
+    await manager?.close();
+    store.close();
     await fixture.close();
   }
 });

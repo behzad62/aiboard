@@ -738,6 +738,14 @@ export class BuildRuntime {
   private readonly coverageSuspendedRetryLimit: number;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
+  /**
+   * C3a repair cycle 2 (R2-1b): synchronous in-flight flag, set by
+   * step() around stepOnce() and cleared in its finally. Lets
+   * commitStopSnapshotIfStopped() return at once while a step runs
+   * instead of queueing behind it (the step boundary takes the
+   * snapshot), so an owner pause/cancel never blocks on a step.
+   */
+  private stepInFlight = false;
   private recordingFailureContext: {
     taskId?: string;
     attempt?: number;
@@ -1206,19 +1214,41 @@ export class BuildRuntime {
       release = resolve;
     });
     await previous;
+    this.stepInFlight = true;
     try {
       const result = await this.stepOnce();
       // C3a repair cycle 1 (B-1): a step that ends with the run stopped
-      // (paused or failed) commits the stop snapshot from this same step --
-      // an in-step pause (delivery gate, repair issue or cycle limit, the
-      // recording failure or abort) never waits for another step, and the
+      // commits the stop snapshot from this same step -- an in-step pause
+      // (delivery gate, repair issue or cycle limit, the recording
+      // failure or abort) never waits for another step, and the
       // top-of-dispatchStep call above stays as the harmless idempotent
       // backstop for stops recorded outside any step.
+      // C3a repair cycle 2 (R2-1c): decide on the run projection after
+      // the step, not only on the step result -- an owner pause that
+      // lands mid-step is snapshotted at that step's end even when the
+      // step returns "progressed".
+      // C3a repair cycle 2 (R2-2): a snapshot failure (readRun,
+      // rebuild, classify) never turns a returned paused/failed result
+      // into an exception; the stop proceeds.
+      let stopProjection: SchedulerProjection | undefined;
       if (result.status === "paused" || result.status === "failed") {
-        await this.maybeCommitStopSnapshot(this.projection());
+        stopProjection = this.projection();
+      } else {
+        const after = this.projection();
+        if (after.status === "paused" || after.status === "failed" || after.status === "stopped") {
+          stopProjection = after;
+        }
+      }
+      if (stopProjection) {
+        try {
+          await this.maybeCommitStopSnapshot(stopProjection);
+        } catch {
+          // The stop proceeds; the snapshot never blocks it.
+        }
       }
       return result;
     } finally {
+      this.stepInFlight = false;
       release();
     }
   }
@@ -1244,8 +1274,15 @@ export class BuildRuntime {
    * a step of the same run is mid-flight: an owner pause that lands
    * mid-step takes its snapshot at the step boundary instead. Never
    * throws: the commit never blocks or changes the stop.
+   * C3a repair cycle 2 (R2-1b): returns at once, without waiting on
+   * the step queue, when a step is in flight (that step's end, or the
+   * next step's top-of-dispatchStep call, takes the snapshot) and when
+   * the run is not docs policy v2 (nothing to snapshot). Otherwise it
+   * keeps the step-queue serialization it has now.
    */
   async commitStopSnapshotIfStopped(): Promise<void> {
+    if (this.stepInFlight) return;
+    if (this.projection().projectDocsPolicyVersion !== 2) return;
     const previous = this.stepQueue;
     let release!: () => void;
     this.stepQueue = new Promise<void>((resolve) => {
@@ -1290,7 +1327,14 @@ export class BuildRuntime {
     // requested this stands down, otherwise that call is a no-op. Never
     // blocks or changes the stop; the paused/failed returns below read the
     // same projection values as before (a stop record never touches them).
-    await this.maybeCommitStopSnapshot(projection);
+    // C3a repair cycle 2 (R2-2): a snapshot failure (readRun, rebuild,
+    // classify) never turns a dispatch into an exception; the stop
+    // proceeds.
+    try {
+      await this.maybeCommitStopSnapshot(projection);
+    } catch {
+      // The stop proceeds; the snapshot never blocks it.
+    }
     const handoffSnapshot = await this.maybeCommitHandoffSnapshot(projection);
     if (handoffSnapshot) return handoffSnapshot;
     if (projection.status === "failed") {
