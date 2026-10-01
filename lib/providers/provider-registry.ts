@@ -17,6 +17,7 @@ export type ProviderId = (typeof PROVIDER_IDS)[number];
 export interface ProviderSetupField {
   label: string;
   placeholder: string;
+  suggestedValue?: string;
   hint: string;
 }
 
@@ -88,6 +89,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "gpt-5.7",
+      suggestedValue: "gpt-5.7",
       hint: "Browse the live provider catalog or add a model id manually when the built-in catalog has not caught up yet.",
     },
     reasoningEffort: true,
@@ -109,6 +111,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "claude-opus-5",
+      suggestedValue: "claude-opus-5",
       hint: "Browse the live Anthropic model catalog or add a model id manually.",
     },
     reasoningEffort: (modelId: string) =>
@@ -136,6 +139,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Model ids (one per line)",
       placeholder: "claude-opus-4-5",
+      suggestedValue: "claude-opus-4-5",
       hint: "The Anthropic model ids your Foundry deployment exposes - enter exactly what your resource calls them.",
     },
     reasoningEffort: true,
@@ -157,6 +161,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "gemini-3.8-flash",
+      suggestedValue: "gemini-3.8-flash",
       hint: "Browse the live Gemini model catalog or add a model id manually.",
     },
     reasoningEffort: true,
@@ -178,6 +183,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "qwen/qwen3-coder",
+      suggestedValue: "qwen/qwen3-coder",
       hint: "Built-in OpenRouter models stay available automatically. Add any newer OpenRouter model ids here, one per line, when the catalog has not caught up yet.",
     },
     reasoningEffort: true,
@@ -201,6 +207,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "grok-4.7",
+      suggestedValue: "grok-4.7",
       hint: "Browse the live xAI language-model catalog or add a model id manually.",
     },
     reasoningEffort: (modelId: string) => !isXAINonReasoningModel(modelId),
@@ -222,6 +229,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "muse-spark-1.3",
+      suggestedValue: "muse-spark-1.3",
       hint: "Browse Meta's live Model API catalog or add a model id manually.",
     },
     reasoningEffort: (modelId: string) => /^muse-spark-/i.test(modelId.trim()),
@@ -241,6 +249,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "gpt-5.7",
+      suggestedValue: "gpt-5.7",
       hint: "Browse the models currently exposed to the signed-in ChatGPT account or add a model id manually.",
     },
     credentialLabel: "Runner session token",
@@ -251,6 +260,7 @@ export const PROVIDER_DEFINITIONS = {
     baseURLField: {
       label: "Account runner URL",
       placeholder: "http://127.0.0.1:1455",
+      suggestedValue: "http://127.0.0.1:1455",
       hint: "Run node account-provider-runner.mjs, then paste its printed local URL here. ChatGPT OAuth uses port 1455, or 1457 if 1455 is busy.",
     },
     baseURLRequiredMessage: "This provider needs the account runner URL",
@@ -287,6 +297,7 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "Additional model ids (optional)",
       placeholder: "gemini-3.8-flash",
+      suggestedValue: "gemini-3.8-flash",
       hint: "Browse the models available to the signed-in Copilot account or add a model id manually.",
     },
     credentialLabel: "Runner session token",
@@ -297,6 +308,7 @@ export const PROVIDER_DEFINITIONS = {
     baseURLField: {
       label: "Account runner URL",
       placeholder: "http://127.0.0.1:1455",
+      suggestedValue: "http://127.0.0.1:1455",
       hint: "Extract the downloaded runner ZIP, run npm install and npm start, then paste its printed local URL here.",
     },
     baseURLRequiredMessage: "This provider needs the account runner URL",
@@ -341,6 +353,7 @@ export const PROVIDER_DEFINITIONS = {
     baseURLField: {
       label: "Local provider runner URL",
       placeholder: "http://127.0.0.1:1455",
+      suggestedValue: "http://127.0.0.1:1455",
       hint: "Run account-provider-runner.mjs locally, then paste its printed URL here. NVIDIA requests are proxied through the runner because the browser cannot call the NVIDIA API directly.",
     },
     baseURLRequiredMessage: "This provider needs the local provider runner URL",
@@ -359,6 +372,8 @@ export const PROVIDER_DEFINITIONS = {
     modelIdsField: {
       label: "NVIDIA model ids (one per line)",
       placeholder:
+        "z-ai/glm-5.2\nminimaxai/minimax-m3\ndeepseek-ai/deepseek-v4-flash\ndeepseek-ai/deepseek-v4-pro\nnvidia/nemotron-3-ultra-550b-a55b",
+      suggestedValue:
         "z-ai/glm-5.2\nminimaxai/minimax-m3\ndeepseek-ai/deepseek-v4-flash\ndeepseek-ai/deepseek-v4-pro\nnvidia/nemotron-3-ultra-550b-a55b",
       hint: "Enter OpenAI-compatible NVIDIA NIM model ids from build.nvidia.com/models. Mistral models are intentionally omitted from this preset.",
     },

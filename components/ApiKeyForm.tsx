@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import { Copy } from "lucide-react";
 import { ProviderCapabilityTable } from "@/components/ProviderCapabilityTable";
 import { TOOL_RUNTIME_CHANGED_EVENT } from "@/lib/client/tool-runtime";
+import { completeSuggestedValue } from "@/lib/client/suggestion-completion";
 import type { ModelInfo } from "@/lib/providers/base";
 import type { ProviderCapabilityStatusRow } from "@/lib/providers/capability-status";
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
@@ -30,6 +31,47 @@ import {
   validateProvider,
 } from "@/lib/client/settings-api";
 import { getProviderKey } from "@/lib/client/store";
+
+function acceptSuggestionFromKey(
+  event: ReactKeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+  value: string,
+  suggestion: string | undefined,
+  onAccept: (value: string) => void,
+  multiline = false,
+) {
+  if (!suggestion) return;
+  const next = completeSuggestedValue({
+    value,
+    suggestion,
+    key: event.key,
+    selectionStart: event.currentTarget.selectionStart,
+    selectionEnd: event.currentTarget.selectionEnd,
+    multiline,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    ctrlKey: event.ctrlKey,
+    metaKey: event.metaKey,
+  });
+  if (next == null) return;
+  event.preventDefault();
+  onAccept(next);
+}
+
+function suggestionAtEnd(
+  value: string,
+  suggestion: string | undefined,
+  multiline = false,
+): string | null {
+  if (!suggestion) return null;
+  return completeSuggestedValue({
+    value,
+    suggestion,
+    key: "ArrowRight",
+    selectionStart: value.length,
+    selectionEnd: value.length,
+    multiline,
+  });
+}
 
 export interface ProviderConfig {
   providerId: string;
@@ -542,8 +584,32 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
             placeholder={baseUrlField.placeholder}
             value={baseURL}
             onChange={(e) => setBaseURL(e.target.value)}
+            onKeyDown={(event) =>
+              acceptSuggestionFromKey(
+                event,
+                baseURL,
+                baseUrlField.suggestedValue,
+                setBaseURL,
+              )
+            }
           />
-          <p className="text-xs text-muted-foreground">{baseUrlField.hint}</p>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span>{baseUrlField.hint}</span>
+            {suggestionAtEnd(baseURL, baseUrlField.suggestedValue) && (
+              <>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-xs"
+                  onClick={() => setBaseURL(suggestionAtEnd(baseURL, baseUrlField.suggestedValue) ?? baseURL)}
+                >
+                  Use suggestion
+                </Button>
+                <span aria-hidden="true">· → or Tab</span>
+              </>
+            )}
+          </div>
         </div>
       )}
 
@@ -649,8 +715,37 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
             placeholder={modelIdsField.placeholder}
             value={modelIdsText}
             onChange={(e) => setModelIdsText(e.target.value)}
+            onKeyDown={(event) =>
+              acceptSuggestionFromKey(
+                event,
+                modelIdsText,
+                modelIdsField.suggestedValue,
+                setModelIdsText,
+                true,
+              )
+            }
           />
-          <p className="text-xs text-muted-foreground">{modelIdsField.hint}</p>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+            <span>{modelIdsField.hint}</span>
+            {suggestionAtEnd(modelIdsText, modelIdsField.suggestedValue, true) && (
+              <>
+                <Button
+                  type="button"
+                  variant="link"
+                  size="sm"
+                  className="h-auto p-0 text-xs"
+                  onClick={() =>
+                    setModelIdsText(
+                      suggestionAtEnd(modelIdsText, modelIdsField.suggestedValue, true) ?? modelIdsText,
+                    )
+                  }
+                >
+                  Use suggestion
+                </Button>
+                <span aria-hidden="true">· → or Tab</span>
+              </>
+            )}
+          </div>
           {hasModelDiscovery && (
             <div className="rounded-md border bg-muted/20 p-3">
               <div className="flex flex-wrap items-center gap-2">

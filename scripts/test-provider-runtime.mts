@@ -27,6 +27,7 @@ const tests = [
   "scripts/test-provider-capability-discovery.mts",
   "scripts/test-provider-model-discovery.mts",
   "scripts/test-openai-provider-settings.mts",
+  "scripts/test-suggestion-completion.mts",
   "scripts/test-chatgpt-live-model-discovery.mts",
   "scripts/test-custom-provider-capabilities.mts",
   "scripts/test-custom-provider-capability-ui.tsx",
