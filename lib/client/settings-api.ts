@@ -217,6 +217,8 @@ interface OpenRouterModelsResponse {
     id?: string;
     name?: string;
     description?: string;
+    created?: number;
+    pricing?: { prompt?: string; completion?: string };
     supported_parameters?: string[];
     architecture?: {
       input_modalities?: string[];
@@ -228,6 +230,9 @@ export interface OpenRouterCatalogModel {
   id: string;
   name: string;
   description?: string;
+  createdAtMs?: number;
+  inputUsdPer1M?: number;
+  outputUsdPer1M?: number;
   inputModalities: string[];
   supportedParameters: string[];
   supportsImageInput: boolean;
@@ -283,10 +288,18 @@ export function buildOpenRouterCatalogModel(
   const modalitySet = normalizeOpenRouterInputModalities(inputModalities);
   const supportedParameters = [...(entry.supported_parameters ?? [])];
   const parameterSet = normalizeOpenRouterSupportedParameters(supportedParameters);
+  const createdAtMs = Number.isFinite(entry.created) ? Number(entry.created) * 1_000 : undefined;
+  const inputPerToken = Number(entry.pricing?.prompt);
+  const outputPerToken = Number(entry.pricing?.completion);
+  const inputUsdPer1M = Number.isFinite(inputPerToken) && inputPerToken >= 0 ? inputPerToken * 1_000_000 : undefined;
+  const outputUsdPer1M = Number.isFinite(outputPerToken) && outputPerToken >= 0 ? outputPerToken * 1_000_000 : undefined;
   return {
     id: entry.id,
     name: entry.name?.trim() || entry.id,
     description: entry.description?.trim() || undefined,
+    createdAtMs,
+    inputUsdPer1M,
+    outputUsdPer1M,
     inputModalities,
     supportedParameters,
     supportsImageInput: modalitySet.has("image"),
@@ -329,6 +342,9 @@ function basicCatalogModel(
   name = id,
   options: {
     description?: string;
+    createdAtMs?: number;
+    inputUsdPer1M?: number;
+    outputUsdPer1M?: number;
     image?: boolean;
     reasoningEffort?: boolean;
   } = {}
@@ -337,6 +353,9 @@ function basicCatalogModel(
     id,
     name,
     description: options.description,
+    createdAtMs: options.createdAtMs,
+    inputUsdPer1M: options.inputUsdPer1M,
+    outputUsdPer1M: options.outputUsdPer1M,
     inputModalities: options.image ? ["text", "image"] : ["text"],
     supportedParameters: [],
     supportsImageInput: options.image === true,
@@ -396,7 +415,9 @@ async function fetchOpenAICompatibleModelCatalog(
   }).models.list();
   return page.data
     .filter((model) => typeof model.id === "string" && model.id.length > 0)
-    .map((model) => basicCatalogModel(model.id))
+    .map((model) => basicCatalogModel(model.id, model.id, {
+      createdAtMs: Number.isFinite(model.created) ? model.created * 1_000 : undefined,
+    }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -408,7 +429,9 @@ async function fetchAnthropicModelCatalog(
   });
   return page.data
     .filter((model) => typeof model.id === "string" && model.id.length > 0)
-    .map((model) => basicCatalogModel(model.id, model.display_name || model.id))
+    .map((model) => basicCatalogModel(model.id, model.display_name || model.id, {
+      createdAtMs: Number.isFinite(Date.parse(model.created_at)) ? Date.parse(model.created_at) : undefined,
+    }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 

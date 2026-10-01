@@ -23,7 +23,7 @@ import type { ProviderCapabilityStatusRow } from "@/lib/providers/capability-sta
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
 import {
-  MODEL_CATALOG_SORT_OPTIONS,
+  availableModelCatalogSortOptions,
   sortModelCatalog,
   type ModelCatalogSortId,
 } from "@/lib/client/model-catalog-sort";
@@ -263,6 +263,10 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       cancelled = true;
     };
   }, [provider.providerId, defaultModel, provider.lastValidatedAt, provider.baseURL, provider.runnerTokenHint, toolRuntimeRevision]);
+  const catalogSortOptions = availableModelCatalogSortOptions(openRouterCatalog);
+  const effectiveCatalogSort = catalogSortOptions.some((option) => option.id === openRouterCatalogSort)
+    ? openRouterCatalogSort
+    : "name-asc";
   const filteredOpenRouterCatalog = sortModelCatalog(
     openRouterCatalog
       .filter((model) => {
@@ -283,7 +287,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
           (filter) => !openRouterCatalogFilters[filter.id] || filter.match(model)
         )
       ),
-    openRouterCatalogSort,
+    effectiveCatalogSort,
   ).slice(0, 40);
 
   const addOpenRouterModelId = (modelId: string) => {
@@ -795,14 +799,14 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                     <div className="space-y-1">
                       <Label htmlFor={`model-catalog-sort-${provider.providerId}`}>Sort catalogue</Label>
                       <Select
-                        value={openRouterCatalogSort}
+                        value={effectiveCatalogSort}
                         onValueChange={(value) => setOpenRouterCatalogSort(value as ModelCatalogSortId)}
                       >
                         <SelectTrigger id={`model-catalog-sort-${provider.providerId}`}>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {MODEL_CATALOG_SORT_OPTIONS.map((option) => (
+                          {catalogSortOptions.map((option) => (
                             <SelectItem key={option.id} value={option.id}>
                               {option.label}
                             </SelectItem>
@@ -858,6 +862,15 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
                               {model.description && (
                                 <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
                                   {model.description}
+                                </p>
+                              )}
+                              {(model.createdAtMs !== undefined || model.inputUsdPer1M !== undefined || model.outputUsdPer1M !== undefined) && (
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {model.createdAtMs !== undefined ? `Released ${new Date(model.createdAtMs).toLocaleDateString()}` : ""}
+                                  {model.createdAtMs !== undefined && (model.inputUsdPer1M !== undefined || model.outputUsdPer1M !== undefined) ? " · " : ""}
+                                  {model.inputUsdPer1M !== undefined ? `$${model.inputUsdPer1M.toLocaleString(undefined, { maximumFractionDigits: 6 })}/1M input` : ""}
+                                  {model.inputUsdPer1M !== undefined && model.outputUsdPer1M !== undefined ? " · " : ""}
+                                  {model.outputUsdPer1M !== undefined ? `$${model.outputUsdPer1M.toLocaleString(undefined, { maximumFractionDigits: 6 })}/1M output` : ""}
                                 </p>
                               )}
                               <div className="mt-2 flex flex-wrap gap-1">
