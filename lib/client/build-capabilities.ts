@@ -38,7 +38,7 @@ function actionProtocolStatusForId(
 ): BuildActionProtocolStatus {
   const profile = fresh(profiles?.[modelId]);
   if (!profile) return "untested";
-  const result = profile.results.find((item) => item.id === "toolCalls");
+  const result = profile.results.find((item) => item.id === "buildProtocol");
   if (!result) return "untested";
   return result.status === "pass" ? "passed" : "not_passed";
 }
@@ -64,7 +64,7 @@ export function selectBuildModelIdsByCapabilities(
   if (passed.length > 0) {
     if (notPassed.length > 0 || untested.length > 0) {
       diagnostics.push(
-        `Build capability routing selected ${passed.length} model(s) that passed the Build action-protocol probe; ` +
+        `Build capability routing selected ${passed.length} model(s) that passed the AI Board Build Protocol probe; ` +
           `${notPassed.length} not-passed and ${untested.length} untested model(s) were not selected.`
       );
     }
@@ -126,7 +126,7 @@ export function selectBuildWorkersByCapabilities(
   if (passed.length > 0) {
     if (notPassed.length > 0 || untested.length > 0) {
       diagnostics.push(
-        `Build capability routing: using ${passed.length} model(s) that passed the Build action-protocol probe; ` +
+        `Build capability routing: using ${passed.length} model(s) that passed the AI Board Build Protocol probe; ` +
           `${notPassed.length} not-passed and ${untested.length} untested model(s) are benched for this Build run.`
       );
     }
@@ -135,7 +135,7 @@ export function selectBuildWorkersByCapabilities(
 
   if (notPassed.length > 0 && untested.length > 0) {
     diagnostics.push(
-      `Build capability routing: ${notPassed.length} model(s) did not pass the Build action-protocol probe; ` +
+      `Build capability routing: ${notPassed.length} model(s) did not pass the AI Board Build Protocol probe; ` +
         `${untested.length} untested model(s) remain active.`
     );
     return { workers: untested, diagnostics };
@@ -143,14 +143,14 @@ export function selectBuildWorkersByCapabilities(
 
   if (notPassed.length === workers.length) {
     diagnostics.push(
-      "Build capability routing: all selected workers are marked not-passed for the Build action-protocol probe, so Build mode keeps them active rather than leaving no worker. Retest or choose different models."
+      "Build capability routing: all selected workers are marked not-passed for the AI Board Build Protocol probe, so Build mode keeps them active rather than leaving no worker. Retest or choose different models."
     );
     return { workers, diagnostics };
   }
 
   if (untested.length === workers.length) {
     diagnostics.push(
-      "Build capability routing: no selected worker has a fresh Build action-protocol probe. Run Provider Capability Lab for safer Build worker selection."
+      "Build capability routing: no selected worker has a fresh AI Board Build Protocol probe. Run Provider Capability Lab for safer Build worker selection."
     );
   }
 

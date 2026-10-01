@@ -148,6 +148,7 @@ interface AccountRunnerResponse {
 type AccountRunnerEvent =
   | { type: "token"; content?: string }
   | { type: "tool_call"; toolCall?: StreamChunk["toolCall"] }
+  | { type: "provider_tool_event"; providerToolEvent?: StreamChunk["providerToolEvent"] }
   | { type: "usage"; usage?: StreamChunk["usage"] }
   | { type: "error"; error?: string; errorMetadata?: CertifiedProviderErrorMetadata }
   | { type: "done" };
@@ -274,6 +275,8 @@ async function* streamRunnerEvents(response: Response): AsyncIterable<StreamChun
           yield { type: "token", content: event.content };
         } else if (event.type === "tool_call" && event.toolCall) {
           yield { type: "tool_call", toolCall: event.toolCall };
+        } else if (event.type === "provider_tool_event" && event.providerToolEvent) {
+          yield { type: "provider_tool_event", providerToolEvent: event.providerToolEvent };
         } else if (event.type === "usage" && event.usage) {
           yield { type: "usage", usage: event.usage };
         } else if (event.type === "error") {
@@ -294,6 +297,8 @@ async function* streamRunnerEvents(response: Response): AsyncIterable<StreamChun
       yield { type: "token", content: tail.content };
     } else if (tail?.type === "tool_call" && tail.toolCall) {
       yield { type: "tool_call", toolCall: tail.toolCall };
+    } else if (tail?.type === "provider_tool_event" && tail.providerToolEvent) {
+      yield { type: "provider_tool_event", providerToolEvent: tail.providerToolEvent };
     } else if (tail?.type === "usage" && tail.usage) {
       yield { type: "usage", usage: tail.usage };
     } else if (tail?.type === "error") {

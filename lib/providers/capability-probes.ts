@@ -1,27 +1,48 @@
 import type { CertifiedProviderErrorMetadata, ChatMessage, JsonSchemaObject, ModelInfo, StructuredOutputFormat } from "./base";
-import type { CapabilityEvidence, ProviderTransportId } from "./tool-capabilities";
+import type { ResolvedCapabilityProfile } from "./capability-resolution";
+import {
+  isToolCapabilityId,
+  type CapabilityEvidence,
+  type ProviderTransportId,
+  type ToolCapabilityId,
+  type ToolExecutionLocation,
+  type ToolReadinessStatus,
+} from "./tool-capabilities";
 import type { AttachmentPayload } from "@/lib/attachments/types";
 
-export type CapabilityProbeId =
+export type StaticCapabilityProbeId =
   | "text"
   | "structuredOutput"
   | "streaming"
   | "imageInput"
   | "documentInput"
-  | "toolCalls"
+  | "buildProtocol"
   | "temperature"
   | "maxTokens"
   | "concurrency";
 
-export type CapabilityProbeStatus = "pass" | "fail" | "skipped";
+export type ToolCapabilityProbeId = `tool:${ToolCapabilityId}`;
+export type CapabilityProbeId = StaticCapabilityProbeId | ToolCapabilityProbeId;
+export type StoredCapabilityProbeId = CapabilityProbeId | "toolCalls";
+
+export type CapabilityProbeStatus =
+  | "pass"
+  | "fail"
+  | "skipped"
+  | "setup_required"
+  | "conditional"
+  | "unsupported";
 
 export interface CapabilityProbeResult {
-  id: CapabilityProbeId;
+  id: StoredCapabilityProbeId;
   status: CapabilityProbeStatus;
   detail: string;
   preview?: string;
   failureKind?: "protocol_unsupported" | "transient" | "behavior";
   errorMetadata?: CertifiedProviderErrorMetadata;
+  capabilityId?: ToolCapabilityId;
+  transport?: ProviderTransportId;
+  execution?: ToolExecutionLocation;
 }
 
 
@@ -29,11 +50,16 @@ export function capabilityEvidenceFromToolProbe(input: {
   providerId: string;
   modelId: string;
   transport: ProviderTransportId;
+  execution?: ToolExecutionLocation;
   testedAt: string;
   expiresAt: string;
   result: CapabilityProbeResult;
 }): CapabilityEvidence | undefined {
-  if (input.result.id !== "toolCalls") return undefined;
+  const capabilityId =
+    input.result.id === "toolCalls"
+      ? "function_calling"
+      : parseToolCapabilityProbeId(input.result.id);
+  if (!capabilityId) return undefined;
   const support =
     input.result.status === "pass"
       ? "supported"
@@ -44,10 +70,10 @@ export function capabilityEvidenceFromToolProbe(input: {
   return {
     providerId: input.providerId,
     modelId: input.modelId,
-    capabilityId: "function_calling",
+    capabilityId,
     transport: input.transport,
     support,
-    execution: "client",
+    ...(input.execution ?? input.result.execution ? { execution: input.execution ?? input.result.execution } : {}),
     source: "probed",
     verifiedAt: input.testedAt,
     expiresAt: input.expiresAt,
@@ -69,7 +95,11 @@ export interface ModelCapabilityProbeProfile {
     structuredOutput: boolean;
     imageInput: boolean;
     documentInput: boolean;
+    /** @deprecated Legacy function-call probe field retained for stored-profile compatibility. */
     toolCalls: boolean;
+    functionCalling?: boolean;
+    buildProtocol?: boolean;
+    toolCapabilities?: Partial<Record<ToolCapabilityId, CapabilityProbeStatus>>;
     temperature: boolean;
     reasoningEffort: string[];
     maxTokens: boolean;
@@ -120,9 +150,9 @@ export const CAPABILITY_PROBES: CapabilityProbeDefinition[] = [
     advanced: true,
   },
   {
-    id: "toolCalls",
-    label: "Build action protocol",
-    description: "Checks whether the model can emit and use AI Board's safe JSON build-action protocol.",
+    id: "buildProtocol",
+    label: "AI Board Build Protocol",
+    description: "Checks whether the model can call a real AI Board Build tool and whether AI Board can convert that call into the canonical Build action stream.",
     defaultSelected: false,
     advanced: true,
   },
@@ -148,6 +178,82 @@ export const CAPABILITY_PROBES: CapabilityProbeDefinition[] = [
     advanced: true,
   },
 ];
+
+const TOOL_PROBE_LABELS: Record<ToolCapabilityId, string> = {
+  function_calling: "Function Calling",
+  web_search: "Web Search",
+  web_fetch: "Web Fetch",
+  file_search: "File Search",
+  url_context: "URL Context",
+  maps: "Maps",
+  x_search: "X Search",
+  code_execution: "Code Execution",
+  shell: "Shell",
+  apply_patch: "Apply Patch",
+  computer_use: "Computer Use",
+  browser_use: "Browser Use",
+  image_generation: "Image Generation",
+  remote_mcp: "Remote MCP",
+  tool_search: "Tool Search",
+  advisor: "Advisor",
+  subagent: "Subagent",
+  fusion: "Fusion",
+  datetime: "Date/Time",
+  memory: "Memory",
+};
+
+export interface ToolCapabilityProbeDefinition {
+  id: ToolCapabilityProbeId;
+  capabilityId: ToolCapabilityId;
+  label: string;
+  description: string;
+  readiness: ToolReadinessStatus;
+  execution: ToolExecutionLocation;
+  transports: ProviderTransportId[];
+  missingPrerequisiteIds: string[];
+  supportSource: string;
+  reason?: string;
+}
+
+export function toolCapabilityProbeId(capabilityId: ToolCapabilityId): ToolCapabilityProbeId {
+  return `tool:${capabilityId}`;
+}
+
+export function parseToolCapabilityProbeId(id: StoredCapabilityProbeId | string): ToolCapabilityId | undefined {
+  if (!id.startsWith("tool:")) return undefined;
+  const capabilityId = id.slice("tool:".length);
+  return isToolCapabilityId(capabilityId) ? capabilityId : undefined;
+}
+
+export function buildToolCapabilityProbeDefinitions(
+  profile: ResolvedCapabilityProfile,
+): ToolCapabilityProbeDefinition[] {
+  return Object.values(profile.capabilities).map(({ descriptor, readiness }) => {
+    const missingLabels = readiness.missingPrerequisiteIds.map((id) =>
+      descriptor.prerequisites?.find((item) => item.id === id)?.label ?? id,
+    );
+    const runtimeReasons = readiness.missingPrerequisiteIds
+      .map((id) => profile.resourceState?.prerequisites[id]?.reason)
+      .filter((reason): reason is string => Boolean(reason));
+    const reason = runtimeReasons.length > 0
+      ? runtimeReasons.join(" ")
+      : missingLabels.length > 0
+        ? `Missing: ${missingLabels.join(", ")}.`
+        : undefined;
+    return {
+      id: toolCapabilityProbeId(descriptor.id),
+      capabilityId: descriptor.id,
+      label: TOOL_PROBE_LABELS[descriptor.id],
+      description: `Live-test the observable ${TOOL_PROBE_LABELS[descriptor.id]} invocation through the resolved ${descriptor.execution} route. Provider-managed tools require a completed provider event; client tools require a concrete emitted call plus ready executor preflight.`,
+      readiness: readiness.status,
+      execution: descriptor.execution,
+      transports: [...descriptor.transports],
+      missingPrerequisiteIds: [...readiness.missingPrerequisiteIds],
+      supportSource: descriptor.supportSource,
+      ...(reason ? { reason } : {}),
+    };
+  });
+}
 
 export const CAPABILITY_PROFILE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -265,6 +371,9 @@ export function defaultCapabilityProfile(
       imageInput: false,
       documentInput: false,
       toolCalls: false,
+      functionCalling: false,
+      buildProtocol: false,
+      toolCapabilities: {},
       temperature: false,
       reasoningEffort: [],
       maxTokens: false,
@@ -276,6 +385,15 @@ export function defaultCapabilityProfile(
 export function summarizeCapabilityResults(results: CapabilityProbeResult[]): string {
   const passed = results.filter((r) => r.status === "pass").length;
   const failed = results.filter((r) => r.status === "fail").length;
+  const setup = results.filter((r) => r.status === "setup_required").length;
+  const conditional = results.filter((r) => r.status === "conditional").length;
+  const unsupported = results.filter((r) => r.status === "unsupported").length;
   const skipped = results.filter((r) => r.status === "skipped").length;
-  return `${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ""}`;
+  const extras = [
+    setup ? `${setup} setup required` : "",
+    conditional ? `${conditional} conditional` : "",
+    unsupported ? `${unsupported} unsupported` : "",
+    skipped ? `${skipped} skipped` : "",
+  ].filter(Boolean);
+  return `${passed} passed, ${failed} failed${extras.length ? `, ${extras.join(", ")}` : ""}`;
 }

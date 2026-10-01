@@ -24,9 +24,11 @@ import {
   summarizeCapabilityResults,
   type CapabilityProbeId,
   type ModelCapabilityProbeProfile,
+  type ToolCapabilityProbeDefinition,
 } from "@/lib/providers/capability-probes";
 import {
   clearCapabilityProfile,
+  getCapabilityLabProbeCatalog,
   getCapabilityProfiles,
   runCapabilityProbes,
 } from "@/lib/client/capability-api";
@@ -45,10 +47,10 @@ interface CapabilityLabProps {
   onChanged?: () => Promise<void> | void;
 }
 
-function defaultProbeSelection(): Record<CapabilityProbeId, boolean> {
+function defaultProbeSelection(): Partial<Record<CapabilityProbeId, boolean>> {
   return Object.fromEntries(
     CAPABILITY_PROBES.map((probe) => [probe.id, probe.defaultSelected])
-  ) as Record<CapabilityProbeId, boolean>;
+  ) as Partial<Record<CapabilityProbeId, boolean>>;
 }
 
 function resultVariant(status: string) {
@@ -77,6 +79,9 @@ export function CapabilityLab({
   );
   const [selectedModelId, setSelectedModelId] = useState(models[0]?.fullId ?? "");
   const [selectedProbes, setSelectedProbes] = useState(defaultProbeSelection);
+  const [toolProbes, setToolProbes] = useState<ToolCapabilityProbeDefinition[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [profiles, setProfiles] = useState<Record<string, ModelCapabilityProbeProfile>>(
@@ -93,10 +98,56 @@ export function CapabilityLab({
     setProfiles(capabilityProfiles ?? {});
   }, [capabilityProfiles]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedModelId) {
+      setToolProbes([]);
+      setCatalogError(null);
+      return () => { cancelled = true; };
+    }
+    setCatalogLoading(true);
+    setCatalogError(null);
+    getCapabilityLabProbeCatalog(selectedModelId)
+      .then((catalog) => {
+        if (cancelled) return;
+        setToolProbes(catalog.toolProbes);
+        setSelectedProbes((previous) => {
+          const next: Partial<Record<CapabilityProbeId, boolean>> = {};
+          for (const probe of CAPABILITY_PROBES) {
+            next[probe.id] = previous[probe.id] ?? probe.defaultSelected;
+          }
+          for (const probe of catalog.toolProbes) next[probe.id] = false;
+          return next;
+        });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setToolProbes([]);
+        setCatalogError(error instanceof Error ? error.message : "Failed to resolve tool capabilities");
+      })
+      .finally(() => {
+        if (!cancelled) setCatalogLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [selectedModelId]);
+
   const currentProfile = selectedModelId ? profiles[selectedModelId] : undefined;
-  const enabledProbeIds = CAPABILITY_PROBES.filter((probe) => selectedProbes[probe.id]).map(
-    (probe) => probe.id
-  );
+  const enabledProbeIds: CapabilityProbeId[] = [
+    ...CAPABILITY_PROBES.filter((probe) => selectedProbes[probe.id]).map((probe) => probe.id),
+    ...toolProbes
+      .filter((probe) => probe.readiness === "available" && selectedProbes[probe.id])
+      .map((probe) => probe.id),
+  ];
+  const selectAllAvailableTools = () => {
+    setSelectedProbes((previous) => ({
+      ...previous,
+      ...Object.fromEntries(
+        toolProbes
+          .filter((probe) => probe.readiness === "available")
+          .map((probe) => [probe.id, true]),
+      ),
+    }));
+  };
 
   const runTests = async () => {
     if (!selectedModelId) return;
@@ -164,39 +215,85 @@ export function CapabilityLab({
 
             <div className="space-y-3">
               <div>
-                <Label>Capability tests</Label>
+                <Label>General model tests</Label>
                 <p className="text-xs text-muted-foreground">
-                  Basic tests are selected by default. Select advanced probes only when you want to spend
-                  a few extra account/API requests to verify those features.
+                  Basic text and structured-output checks are selected by default. Advanced tests are opt-in because they consume provider quota or subscription messages.
                 </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 {CAPABILITY_PROBES.map((probe) => (
-                  <label
-                    key={probe.id}
-                    className="flex items-start gap-3 rounded-md border bg-background p-3 text-sm"
-                  >
+                  <label key={probe.id} className="flex items-start gap-3 rounded-md border bg-background p-3 text-sm">
                     <input
                       type="checkbox"
                       className="mt-1"
-                      checked={selectedProbes[probe.id]}
-                      onChange={(event) =>
-                        setSelectedProbes((prev) => ({
-                          ...prev,
-                          [probe.id]: event.target.checked,
-                        }))
-                      }
+                      checked={Boolean(selectedProbes[probe.id])}
+                      onChange={(event) => setSelectedProbes((prev) => ({ ...prev, [probe.id]: event.target.checked }))}
                     />
                     <span>
                       <span className="font-medium text-foreground">
                         {probe.label} {probe.advanced && <span className="text-xs text-muted-foreground">· advanced</span>}
                       </span>
-                      <span className="mt-1 block text-xs text-muted-foreground">
-                        {probe.description}
-                      </span>
+                      <span className="mt-1 block text-xs text-muted-foreground">{probe.description}</span>
                     </span>
                   </label>
                 ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <Label>Tool tests for this provider/model</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Derived from the resolved provider manifest, model evidence, runner handshake, and runtime setup. Only available tools can be live-tested.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={selectAllAvailableTools}
+                  disabled={running || catalogLoading || !toolProbes.some((probe) => probe.readiness === "available")}
+                >
+                  Select all available tools
+                </Button>
+              </div>
+              {catalogLoading && <p className="text-xs text-muted-foreground">Resolving tool capabilities…</p>}
+              {catalogError && <p className="text-xs text-destructive">{catalogError}</p>}
+              {!catalogLoading && !catalogError && toolProbes.length === 0 && (
+                <p className="text-xs text-muted-foreground">No tool capabilities are declared for this provider/model path.</p>
+              )}
+              <div className="grid gap-3 sm:grid-cols-2">
+                {toolProbes.map((probe) => {
+                  const available = probe.readiness === "available";
+                  return (
+                    <label
+                      key={probe.id}
+                      className={`flex items-start gap-3 rounded-md border bg-background p-3 text-sm ${available ? "" : "opacity-75"}`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={available && Boolean(selectedProbes[probe.id])}
+                        disabled={!available || running}
+                        onChange={(event) => setSelectedProbes((prev) => ({ ...prev, [probe.id]: event.target.checked }))}
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium text-foreground">{probe.label}</span>
+                          <Badge variant={available ? "success" : "secondary"}>
+                            {probe.readiness.replaceAll("_", " ")}
+                          </Badge>
+                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {probe.execution} · {probe.transports.join(", ")} · {probe.supportSource}
+                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">{probe.description}</span>
+                        {probe.reason && <span className="mt-1 block text-xs text-muted-foreground">{probe.reason}</span>}
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
             </div>
 
@@ -220,8 +317,8 @@ export function CapabilityLab({
                   {currentProfile.results.map((result) => (
                     <div key={result.id} className="rounded border bg-background p-2">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-medium">{CAPABILITY_PROBES.find((p) => p.id === result.id)?.label ?? result.id}</span>
-                        <Badge variant={resultVariant(result.status)}>{result.status}</Badge>
+                        <span className="font-medium">{CAPABILITY_PROBES.find((p) => p.id === result.id)?.label ?? toolProbes.find((p) => p.id === result.id)?.label ?? (result.id === "toolCalls" ? "Legacy Function Calling" : result.id)}</span>
+                        <Badge variant={resultVariant(result.status)}>{result.status.replaceAll("_", " ")}</Badge>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">{result.detail}</p>
                       {result.preview && (

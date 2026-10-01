@@ -29,7 +29,7 @@ function profile(
     testedAt: "2026-01-01T00:00:00.000Z",
     expiresAt,
     source: "probed",
-    results: [{ id: "toolCalls", status, detail: status }],
+    results: [{ id: "buildProtocol", status, detail: status }],
     capabilities: {
       text: true,
       streaming: true,
@@ -126,4 +126,20 @@ check("expired passing probes are treated as untested", expiredDecision.modelIds
   modelIds: expiredDecision.modelIds,
 });
 
+
+const legacyProfile = profile("openai:legacy-function-pass", "pass");
+legacyProfile.results = [{ id: "toolCalls", status: "pass", detail: "legacy function call" }];
+const modernPass = profile("openai:modern-build-pass", "pass");
+const legacyDecision = selectBuildModelIdsByCapabilities(
+  ["openai:modern-build-pass", "openai:legacy-function-pass"],
+  {
+    "openai:modern-build-pass": modernPass,
+    "openai:legacy-function-pass": legacyProfile,
+  },
+);
+check(
+  "legacy function-call probes are not trusted as AI Board Build Protocol passes",
+  legacyDecision.modelIds.join(",") === "openai:modern-build-pass",
+  legacyDecision,
+);
 process.exit(failed === 0 ? 0 : 1);

@@ -94,9 +94,10 @@ console.log("PASS legacy discovery metadata migrates without generic tool guesse
 const testedAt = "2026-09-30T00:00:00.000Z";
 const expiresAt = "2026-10-07T00:00:00.000Z";
 const pass: CapabilityProbeResult = {
-  id: "toolCalls",
+  id: "tool:function_calling",
   status: "pass",
   detail: "Provider emitted the requested function call",
+  execution: "client",
 };
 assert.deepEqual(
   capabilityEvidenceFromToolProbe({
@@ -123,7 +124,7 @@ assert.deepEqual(
 console.log("PASS positive real tool probe produces scoped expiring evidence");
 
 const protocolUnsupported: CapabilityProbeResult = {
-  id: "toolCalls",
+  id: "tool:function_calling",
   status: "fail",
   detail: "400 unsupported_parameter: tools are not supported for this model",
   failureKind: "protocol_unsupported",
@@ -144,20 +145,20 @@ console.log("PASS genuine protocol-level tool rejection can produce unsupported 
 
 for (const transient of [
   {
-    id: "toolCalls",
+    id: "tool:function_calling",
     status: "fail",
     detail: "401 invalid API key",
     failureKind: "transient" as const,
     errorMetadata: { statusCode: 401 },
   },
   {
-    id: "toolCalls",
+    id: "tool:function_calling",
     status: "fail",
     detail: "fetch failed: ECONNRESET",
     failureKind: "transient" as const,
   },
   {
-    id: "toolCalls",
+    id: "tool:function_calling",
     status: "fail",
     detail: "429 rate limit",
     failureKind: "transient" as const,

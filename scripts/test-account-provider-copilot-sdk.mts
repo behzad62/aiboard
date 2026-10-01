@@ -48,6 +48,18 @@ check(
     JSON.stringify(["builtin:web_search", "builtin:web_fetch"]),
   config.availableTools
 );
+const fetchOnlyConfig = sdk.buildCopilotSdkSessionConfig({
+  model: "gpt-5.4",
+  toolIntents: [{ id: "web_fetch", requirement: "required" }],
+  messages: [{ role: "user", content: "Fetch example.com" }],
+});
+check(
+  "SDK session enables built-in web tools for a Web Fetch-only request",
+  JSON.stringify(fetchOnlyConfig.availableTools?.toArray?.() ?? fetchOnlyConfig.availableTools) ===
+    JSON.stringify(["builtin:web_search", "builtin:web_fetch"]),
+  fetchOnlyConfig.availableTools,
+);
+
 check(
   "SDK session forwards the requested output limit",
   config.modelCapabilities?.limits?.max_output_tokens === 1234,
@@ -65,6 +77,7 @@ check(
 );
 
 const emitted: string[] = [];
+const toolEvents: Array<{ tool: string; phase: string; callId: string }> = [];
 let capturedClientOptions: Record<string, unknown> | undefined;
 let capturedSessionConfig: Record<string, unknown> | undefined;
 
@@ -72,6 +85,12 @@ const fakeSession = {
   on(type: string, handler: (event: unknown) => void) {
     if (type === "assistant.message_delta") {
       queueMicrotask(() => handler({ data: { deltaContent: "SDK result" } }));
+    }
+    if (type === "tool.execution_start") {
+      queueMicrotask(() => handler({ data: { toolCallId: "tool-1", toolName: "builtin:web_search" } }));
+    }
+    if (type === "tool.execution_complete") {
+      queueMicrotask(() => handler({ data: { toolCallId: "tool-1", success: true } }));
     }
     return () => undefined;
   },
@@ -93,6 +112,7 @@ const result = await sdk.runCopilotSdkChat(
   "C:\\aiboard-sdk-test",
   (token: string) => emitted.push(token),
   {
+    onToolEvent(event: { tool: string; phase: string; callId: string }) { toolEvents.push(event); },
     clientFactory(options: Record<string, unknown>) {
       capturedClientOptions = options;
       return {
@@ -109,6 +129,7 @@ const result = await sdk.runCopilotSdkChat(
 
 check("SDK adapter returns final assistant content", result === "SDK result", result);
 check("SDK adapter forwards streaming deltas", emitted.join("") === "SDK result", emitted);
+check("SDK adapter forwards observable built-in tool lifecycle", toolEvents.map((event) => `${event.tool}:${event.phase}`).join(",") === "web_search:started,web_search:completed", toolEvents);
 check("SDK adapter passes the account token to the client", capturedClientOptions?.gitHubToken === "test-token", capturedClientOptions);
 check("SDK adapter creates a web-search session", Boolean(capturedSessionConfig?.availableTools), capturedSessionConfig);
 

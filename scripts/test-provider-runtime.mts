@@ -24,6 +24,10 @@ const tests = [
   "scripts/test-openrouter-capability-upgrades.mts",
   "scripts/test-account-provider-runner-capabilities.mts",
   "scripts/test-account-runner-capability-planning.mts",
+  "scripts/test-capability-lab-tool-coverage.mts",
+  "scripts/test-capability-lab-tool-evaluation.mts",
+  "scripts/test-capability-lab-tool-ui.mts",
+  "scripts/test-build-capability-routing.mts",
   "scripts/test-provider-capability-discovery.mts",
   "scripts/test-provider-model-discovery.mts",
   "scripts/test-openai-provider-settings.mts",
@@ -35,6 +39,8 @@ const tests = [
   "scripts/test-tool-runtime-readiness.mts",
   "scripts/test-provider-legacy-removal.mts",
   "scripts/test-provider-runtime-live-harness.mts",
+  "scripts/test-account-provider-copilot-sdk.mts",
+  "scripts/test-account-runner-provider-tool-events.mts",
   "scripts/test-account-provider-runner-package.mts",
 ] as const;
 
