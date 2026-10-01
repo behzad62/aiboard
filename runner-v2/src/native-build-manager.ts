@@ -445,7 +445,14 @@ export class NativeBuildManager implements BuildControlPlane {
   ): Promise<SchedulerProjection> {
     const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () => {
-      const projection = handle.runtime.pause(reason, idempotencyKey);
+      // C3a repair cycle 1 (B-1): record the owner pause/cancel, then
+      // snapshot the stop. The runtime entry point serializes on the
+      // step queue, so a mid-step pump pass finishes first and the
+      // commit never runs concurrently with a step. The call stays
+      // optional for older test doubles; it never throws.
+      handle.runtime.pause(reason, idempotencyKey);
+      await handle.runtime.commitStopSnapshotIfStopped?.();
+      const projection = handle.runtime.projection();
       await handle.finalVerificationCleanup?.quiesceRun();
       return projection;
     });
@@ -768,6 +775,9 @@ export class NativeBuildManager implements BuildControlPlane {
           await handle.finalVerificationCleanup?.quiesceRun();
         }
         result = { status: "paused", action: "no_mechanical_progress" };
+        // C3a repair cycle 1 (B-1): snapshot the pump's own pause. No
+        // step is in flight (runUntilBlocked returned); never throws.
+        await handle.runtime.commitStopSnapshotIfStopped?.();
       }
       if (
         result.status === "blocked" &&
@@ -782,6 +792,10 @@ export class NativeBuildManager implements BuildControlPlane {
       );
       result = finalized.result;
       compaction = finalized.compaction;
+      // C3a repair cycle 1 (B-1): snapshot any stop the steps left
+      // behind -- the recording-abort failure resolves in the pump, not
+      // in a step. Runs after finalization; never throws.
+      await handle.runtime.commitStopSnapshotIfStopped?.();
       this.options.onPumpResult?.(runId, result);
     } catch (error) {
       const projection = handle.runtime.projection();
@@ -796,6 +810,9 @@ export class NativeBuildManager implements BuildControlPlane {
       catch (quiesceError) {
         reported = new AggregateError([error, quiesceError], `Build ${runId} failed and could not quiesce owned resources.`);
       }
+      // C3a repair cycle 1 (B-1): snapshot the pump-error pause (or the
+      // step stop, when the pause never recorded). Never throws.
+      await handle.runtime.commitStopSnapshotIfStopped?.();
       this.options.onPumpError?.(runId, reported);
       this.options.onPumpResult?.(runId, {
         status: "paused",

@@ -9184,6 +9184,10 @@ export const STOP_SNAPSHOT_TABLE: readonly StopSnapshotTableEntry[] = [
   { stop: "answer_reviewer_unavailable", site: "build-runtime.ts pauseForAnswerReviewGate (run.paused)", stopKind: "paused", notes: "denied", note: "Provider failure: no reviewer runtime could be reached." },
   { stop: "owner pause (run.paused, actor user, any other reason)", site: "build-runtime.ts pause", stopKind: "paused", notes: "allowed", note: "Owner pause: the owner is present, model calls still work." },
   { stop: "owner_cancelled (run.paused)", site: "build-runtime.ts pause", stopKind: "cancelled", notes: "denied", note: "Cancel: the run is over, notes are pointless." },
+  { stop: "verifier.selection_required", site: "scheduler-store.ts verifier.selection_required (build-runtime.ts driveIndependentVerifier)", stopKind: "paused", notes: "denied", note: "No verifier runtime is selected; fail closed until the owner selects one." },
+  { stop: "architect.handoff_required", site: "scheduler-store.ts architect.handoff_required (native-architect-runtime.ts requireArchitectHandoff)", stopKind: "paused", notes: "denied", note: "No Architect runtime is active; a notes call cannot run." },
+  { stop: "no_mechanical_progress", site: "native-build-manager.ts pump (run.paused, actor user)", stopKind: "paused", notes: "denied", note: "Runner-originated idle pause: a notes call cannot help." },
+  { stop: "autonomous_pump_error", site: "native-build-manager.ts pump (run.paused, actor user)", stopKind: "paused", notes: "denied", note: "Runner-originated pump error: fail closed." },
   { stop: "budget_exhausted:<scope> (run.paused)", site: "build-runtime.ts pause", stopKind: "paused", notes: "denied", note: "Budget window exhausted: no budget remains for a notes call." },
   { stop: "<reason mentioning a provider or credit failure>", site: "any run.paused", stopKind: "paused", notes: "denied", note: "Provider or credit failure: a notes call cannot run." },
   { stop: "Exceptional process recovery requires an exact decision or cleanup proof.", site: "scheduler-store.ts process.recovery_updated", stopKind: "paused", notes: "allowed", note: "Recovery needs an exact decision; model calls still work." },
@@ -9236,6 +9240,15 @@ export function classifyStopSnapshot(options: {
   }
   if (reason === EXCEPTIONAL_RECOVERY_PAUSE_REASON) return { stopKind: "paused", notes: "allowed" };
   if (reason === "handoff_snapshot_failed") return { stopKind: "paused", notes: "denied" };
+  // C3a repair cycle 1 (M-2, M-3): reason first. The selection/handoff
+  // gates and the pump's own pauses are denied even when the stop event
+  // carries the owner actor (the pump records through pause(), actor
+  // `user`); the owner actor makes an unknown reason allowed only when it
+  // is not one of these known runner reasons.
+  if (reason === "verifier.selection_required") return { stopKind: "paused", notes: "denied" };
+  if (reason === "architect.handoff_required") return { stopKind: "paused", notes: "denied" };
+  if (reason === "no_mechanical_progress") return { stopKind: "paused", notes: "denied" };
+  if (reason === "autonomous_pump_error") return { stopKind: "paused", notes: "denied" };
   if (options.ownerInitiated) return { stopKind: "paused", notes: "allowed" };
   return { stopKind: "paused", notes: "denied" };
 }
@@ -9270,7 +9283,8 @@ export function isAcceptedSnapshotStopSequence(
 /**
  * C3a (AR-R08 skip rule, CD-9/CD-5): why a stop has no snapshot commit.
  * A commit failure is recorded here too, as `commit_failed: <cause>` --
- * the finding that lets the stop proceed -- so one record per stop
+ * the finding that lets the stop proceed -- and a landed-but-unrecorded
+ * commit as `record_failed: <commit>: <cause>` -- so one record per stop
  * sequence covers every no-commit outcome and no stop is ever retried.
  */
 export type StopSnapshotSkipReason =
@@ -9280,7 +9294,7 @@ export type StopSnapshotSkipReason =
   | "export_only"
   | "handoff_snapshot_failed";
 
-/** C3a: the skip-rule reasons (commit failures travel as `commit_failed: <cause>`). */
+/** C3a: the skip-rule reasons (commit failures travel as `commit_failed: <cause>`, landed-but-unrecorded commits as `record_failed: <commit>: <cause>`). */
 export function isStopSnapshotSkipReason(value: unknown): value is StopSnapshotSkipReason {
   return value === "pre_triage" ||
     value === "clarify_pending" ||
@@ -9319,7 +9333,7 @@ function applyStopSnapshotSkipped(
   if (!reason.trim() || reason.length > STOP_SNAPSHOT_SKIP_REASON_MAX_LENGTH) {
     throw new Error("Stop snapshot skip reason is invalid.");
   }
-  if (!isStopSnapshotSkipReason(reason) && !reason.startsWith("commit_failed")) {
+  if (!isStopSnapshotSkipReason(reason) && !reason.startsWith("commit_failed") && !reason.startsWith("record_failed")) {
     throw new Error(`Stop snapshot skip reason ${reason} is invalid.`);
   }
   const skips = projection.projectDocs?.stopSnapshotSkips ?? [];

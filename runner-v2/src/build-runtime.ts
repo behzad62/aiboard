@@ -439,7 +439,8 @@ const STOP_SNAPSHOT_NO_NOTES_REASON = "stop notes are added in C3b";
  * Terminal failure is the abort resolution; an exceptional-recovery pause
  * carries its fixed reason; every other stop is the latest pause-typed
  * event (`run.paused`, `repair.issue_paused`, `repair.cycle_limit_reached`,
- * or the recording failure's own `run.paused`).
+ * `verifier.selection_required`, `architect.handoff_required` (both pause
+ * with no `pauseReason`), or the recording failure's own `run.paused`).
  */
 function findCurrentStopEvent(
   events: SchedulerEvent[],
@@ -463,12 +464,32 @@ function findCurrentStopEvent(
       type === "run.paused" ||
       type === "repair.issue_paused" ||
       type === "repair.cycle_limit_reached" ||
-      type === "context_manifest.recording_failed"
+      type === "context_manifest.recording_failed" ||
+      type === "verifier.selection_required" ||
+      type === "architect.handoff_required"
     ) {
       return events[index]!;
     }
   }
   return undefined;
+}
+
+/**
+ * C3a repair cycle 1 (M-4): the stop-snapshot commit landed on the
+ * integration branch but its record step (read-back, verification, or the
+ * committed event) failed. Carries the landed commit so the caller records
+ * `record_failed: <commit>: <cause>` -- never `commit_failed` for a commit
+ * that exists.
+ */
+class StopSnapshotRecordError extends Error {
+  readonly commit: string;
+  readonly detail: string;
+  constructor(commit: string, detail: string) {
+    super(`stop snapshot record failed for commit ${commit} (${detail})`);
+    this.name = "StopSnapshotRecordError";
+    this.commit = commit;
+    this.detail = detail;
+  }
 }
 
 function snapshotFailureDetail(cause: unknown): string {
@@ -1186,7 +1207,17 @@ export class BuildRuntime {
     });
     await previous;
     try {
-      return await this.stepOnce();
+      const result = await this.stepOnce();
+      // C3a repair cycle 1 (B-1): a step that ends with the run stopped
+      // (paused or failed) commits the stop snapshot from this same step --
+      // an in-step pause (delivery gate, repair issue or cycle limit, the
+      // recording failure or abort) never waits for another step, and the
+      // top-of-dispatchStep call above stays as the harmless idempotent
+      // backstop for stops recorded outside any step.
+      if (result.status === "paused" || result.status === "failed") {
+        await this.maybeCommitStopSnapshot(this.projection());
+      }
+      return result;
     } finally {
       release();
     }
@@ -1202,6 +1233,32 @@ export class BuildRuntime {
       if (latest.status !== "progressed") return latest;
     }
     return { status: "progressed", action: "step_allowance_yielded" };
+  }
+
+  /**
+   * C3a repair cycle 1 (B-1): the one public, idempotent stop-snapshot
+   * entry point. Commits the stop snapshot when the run is stopped
+   * (paused, failed or stopped) and the stop is not C2's handoff wait;
+   * otherwise a no-op. Serialized on the step queue, so a manager-side
+   * call (owner pause/cancel, the pump's own pauses) never commits while
+   * a step of the same run is mid-flight: an owner pause that lands
+   * mid-step takes its snapshot at the step boundary instead. Never
+   * throws: the commit never blocks or changes the stop.
+   */
+  async commitStopSnapshotIfStopped(): Promise<void> {
+    const previous = this.stepQueue;
+    let release!: () => void;
+    this.stepQueue = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      await this.maybeCommitStopSnapshot(this.projection());
+    } catch {
+      // The stop proceeds; the snapshot never blocks it.
+    } finally {
+      release();
+    }
   }
 
   private async stepOnce(): Promise<BuildStepResult> {
@@ -2776,9 +2833,12 @@ export class BuildRuntime {
    * stop is not C2's handoff wait, render C1 with the stop kind and commit
    * STATE.md (plus the entry lines when missing) on the integration branch
    * through C2's kernel-commit method and event, with "no notes" (C3b adds
-   * notes). Never blocks or changes the stop: skips record the CD-9/CD-5
-   * reason durably, and a commit failure records a `commit_failed` finding
-   * while the stop proceeds. Idempotent per stop event: a recorded stop is
+   * notes). Never blocks or changes the stop (repair cycle 1: the skip
+   * append never throws, so even a reducer rejection is tolerated). Skips
+   * record the CD-9/CD-5 reason durably, a commit failure records a
+   * `commit_failed` finding, and a landed-but-unrecorded commit records
+   * `record_failed` with its commit id --
+   * while the stop proceeds. Idempotent per stop: a recorded stop is
    * never retried, so replay and resume create no duplicate commit.
    */
   private async maybeCommitStopSnapshot(projection: SchedulerProjection): Promise<void> {
@@ -2799,7 +2859,13 @@ export class BuildRuntime {
     const stopProjection = rebuildSchedulerProjection(events.filter((event) => event.sequence <= stop.sequence));
     const classified = classifyStopSnapshot({
       status: stopProjection.status === "failed" ? "failed" : stopProjection.status === "stopped" ? "stopped" : "paused",
-      ...(stopProjection.pauseReason?.reason !== undefined ? { reason: stopProjection.pauseReason.reason } : {}),
+      // C3a repair cycle 1 (M-2): the selection/handoff gates pause with
+      // no pauseReason -- the stop event itself names the stop.
+      ...(stopProjection.pauseReason?.reason !== undefined
+        ? { reason: stopProjection.pauseReason.reason }
+        : stop.type === "verifier.selection_required" || stop.type === "architect.handoff_required"
+          ? { reason: stop.type }
+          : {}),
       ...(stopProjection.pauseReason?.detail !== undefined ? { detail: stopProjection.pauseReason.detail } : {}),
       ownerInitiated: stop.actor.role === "user",
     });
@@ -2818,17 +2884,55 @@ export class BuildRuntime {
           ? "handoff_snapshot_failed"
           : undefined;
     if (skipReason !== undefined) {
-      this.appendStopSnapshotSkipped({ stopSequence: stop.sequence, stopKind: classified.stopKind, reason: skipReason });
+      this.appendStopSnapshotSkippedTolerated({ stopSequence: stop.sequence, stopKind: classified.stopKind, reason: skipReason });
       return;
     }
     try {
       await this.commitStopSnapshot({ stop, stopProjection, stopKind: classified.stopKind });
     } catch (error) {
-      this.appendStopSnapshotSkipped({
+      this.appendStopSnapshotSkippedTolerated({
         stopSequence: stop.sequence,
         stopKind: classified.stopKind,
-        reason: `commit_failed: ${snapshotFailureDetail(error)}`,
+        // C3a repair cycle 1 (M-4): nothing is recorded as performed
+        // unless it was performed, and the reverse -- a landed commit
+        // whose record step failed is `record_failed` with its commit id,
+        // never `commit_failed`.
+        reason: error instanceof StopSnapshotRecordError
+          ? `record_failed: ${error.commit}: ${error.detail}`
+          : `commit_failed: ${snapshotFailureDetail(error)}`,
       });
+    }
+  }
+
+  /**
+   * C3a repair cycle 1 (M-4): the skip append never throws out of step()
+   * or pause() -- a reducer rejection such as "already recorded" is
+   * tolerated and the stop proceeds.
+   */
+  private appendStopSnapshotSkippedTolerated(input: {
+    stopSequence: number;
+    stopKind: StopSnapshotStopKind;
+    reason: string;
+  }): void {
+    try {
+      this.appendStopSnapshotSkipped(input);
+    } catch {
+      // Tolerated: the stop proceeds with whatever the log already holds.
+    }
+  }
+
+  /**
+   * C3a repair cycle 1 (M-4): the stop path's record step. A reducer
+   * rejection after the commit landed is a landed-but-unrecorded commit,
+   * never a commit failure.
+   */
+  private appendStopSnapshotCommitted(
+    input: Parameters<BuildRuntime["appendHandoffSnapshotCommitted"]>[0],
+  ): void {
+    try {
+      this.appendHandoffSnapshotCommitted(input);
+    } catch (error) {
+      throw new StopSnapshotRecordError(input.commit, snapshotFailureDetail(error));
     }
   }
 
@@ -2843,7 +2947,9 @@ export class BuildRuntime {
       type: "project_docs.stop_snapshot_skipped",
       occurredAt: this.clock(),
       actor: { role: "runner", id: "build-runtime" },
-      idempotencyKey: `stop-snapshot-skip:${input.stopSequence}:${input.reason}`,
+      // C3a repair cycle 1 (M-4): keyed per stop only, so two runners
+      // cannot record two different skips for one stop.
+      idempotencyKey: `stop-snapshot-skip:${input.stopSequence}`,
       payload: {
         stopSequence: input.stopSequence,
         stopKind: input.stopKind,
@@ -2917,7 +3023,7 @@ export class BuildRuntime {
     try {
       stored = await port.readHandoffSnapshotFile({ commit: result.commit, path: "docs/project/STATE.md" });
     } catch (error) {
-      throw new Error(`stop snapshot read-back failed (${snapshotFailureDetail(error)})`);
+      throw new StopSnapshotRecordError(result.commit, `stop snapshot read-back failed (${snapshotFailureDetail(error)})`);
     }
     const described = describeSnapshotCommitFacts({
       entryPoint: result.entryPoint,
@@ -2932,16 +3038,16 @@ export class BuildRuntime {
     let committedDigest = "";
     if (stateChanged || stateSkippedReason === undefined) {
       if (stored.content === null || !verifyHandoffSnapshotDigest(stored.content)) {
-        throw new Error(stored.content === null
+        throw new StopSnapshotRecordError(result.commit, stored.content === null
           ? `commit ${result.commit} holds no docs/project/STATE.md`
           : `commit ${result.commit} holds a STATE.md that failed its digest check`);
       }
       committedDigest = /body_sha256: ([a-f0-9]{64})/.exec(stored.content.split("\n")[0] ?? "")?.[1] ?? "";
       if (!committedDigest) {
-        throw new Error("the committed stop snapshot carries no digest");
+        throw new StopSnapshotRecordError(result.commit, "the committed stop snapshot carries no digest");
       }
       if (!stateChanged) {
-        throw new Error(`commit ${result.commit} lists no docs/project/STATE.md path`);
+        throw new StopSnapshotRecordError(result.commit, `commit ${result.commit} lists no docs/project/STATE.md path`);
       }
     }
     const entryStatus = handoffEntryFileStatus(result.entryPoint, {
@@ -2952,9 +3058,9 @@ export class BuildRuntime {
       ...(described.claudeSkip !== undefined ? { claudeSkip: described.claudeSkip } : {}),
     });
     if (entryStatus === null) {
-      throw new Error(`commit ${result.commit} lacks the v2 AGENTS.md section or the CLAUDE.md line`);
+      throw new StopSnapshotRecordError(result.commit, `commit ${result.commit} lacks the v2 AGENTS.md section or the CLAUDE.md line`);
     }
-    this.appendHandoffSnapshotCommitted({
+    this.appendStopSnapshotCommitted({
       stopSequence,
       stopKind,
       revision,
