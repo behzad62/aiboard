@@ -225,7 +225,7 @@ async function checkAccountRunnerArchive(path: string): Promise<void> {
         `${path} account runner matches source after normalized line endings`,
         normalizeLf(archivedRunner) === normalizeLf(read(sourceAccountRunner))
       );
-      check(`${path} account runner publishes protocol version 21`, /const VERSION = 21;/.test(archivedRunner));
+      check(`${path} account runner publishes protocol version 22`, /const VERSION = 22;/.test(archivedRunner));
       check(`${path} account runner publishes capability schema v1`, /const RUNNER_CAPABILITY_SCHEMA_VERSION = 1;/.test(archivedRunner));
       check(`${path} account runner exposes provider capability endpoint`, /action === "capabilities"/.test(archivedRunner));
       check(`${path} account runner includes ChatGPT capability handler`, /chatGptRunnerCapabilities\(\)/.test(archivedRunner));
