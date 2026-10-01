@@ -23,6 +23,11 @@ import type { ProviderCapabilityStatusRow } from "@/lib/providers/capability-sta
 import { getProviderDefinition } from "@/lib/providers/provider-registry";
 import { getModelRuntimeBehavior } from "@/lib/providers/runtime-behavior";
 import {
+  MODEL_CATALOG_SORT_OPTIONS,
+  sortModelCatalog,
+  type ModelCatalogSortId,
+} from "@/lib/client/model-catalog-sort";
+import {
   fetchProviderModelCatalog,
   type OpenRouterCatalogModel,
   refreshProviderModelCapabilities,
@@ -159,6 +164,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
   const [deviceLoginPrompt, setDeviceLoginPrompt] = useState<DeviceLoginPrompt | null>(null);
   const [openRouterCatalog, setOpenRouterCatalog] = useState<OpenRouterCatalogModel[]>([]);
   const [openRouterCatalogQuery, setOpenRouterCatalogQuery] = useState("");
+  const [openRouterCatalogSort, setOpenRouterCatalogSort] = useState<ModelCatalogSortId>("name-asc");
   const [loadingOpenRouterCatalog, setLoadingOpenRouterCatalog] = useState(false);
   const [openRouterCatalogError, setOpenRouterCatalogError] = useState<string | null>(null);
   const [capabilityRows, setCapabilityRows] = useState<ProviderCapabilityStatusRow[]>([]);
@@ -210,6 +216,7 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
     setModelIdsText((provider.modelIds ?? []).join("\n"));
     setOpenRouterCatalog([]);
     setOpenRouterCatalogQuery("");
+    setOpenRouterCatalogSort("name-asc");
     setOpenRouterCatalogError(null);
     setOpenRouterCatalogFilters({
         structuredOutputs: false,
@@ -256,26 +263,28 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
       cancelled = true;
     };
   }, [provider.providerId, defaultModel, provider.lastValidatedAt, provider.baseURL, provider.runnerTokenHint, toolRuntimeRevision]);
-  const filteredOpenRouterCatalog = openRouterCatalog
-    .filter((model) => {
-      const query = openRouterCatalogQuery.trim().toLowerCase();
-      if (!query) return true;
-      const haystack = [
-        model.id,
-        model.name,
-        model.description ?? "",
-        model.inputModalities.join(" "),
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(query);
-    })
-    .filter((model) =>
-      OPENROUTER_CATALOG_FILTERS.every(
-        (filter) => !openRouterCatalogFilters[filter.id] || filter.match(model)
-      )
-    )
-    .slice(0, 40);
+  const filteredOpenRouterCatalog = sortModelCatalog(
+    openRouterCatalog
+      .filter((model) => {
+        const query = openRouterCatalogQuery.trim().toLowerCase();
+        if (!query) return true;
+        const haystack = [
+          model.id,
+          model.name,
+          model.description ?? "",
+          model.inputModalities.join(" "),
+        ]
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(query);
+      })
+      .filter((model) =>
+        OPENROUTER_CATALOG_FILTERS.every(
+          (filter) => !openRouterCatalogFilters[filter.id] || filter.match(model)
+        )
+      ),
+    openRouterCatalogSort,
+  ).slice(0, 40);
 
   const addOpenRouterModelId = (modelId: string) => {
     setModelIdsText((prev) => {
@@ -773,14 +782,34 @@ export function ApiKeyForm({ provider, onSaved, onDraftChange }: ApiKeyFormProps
               )}
               {openRouterCatalog.length > 0 && (
                 <div className="mt-3 space-y-3">
-                  <div className="space-y-1">
-                    <Label htmlFor={`openrouter-search-${provider.providerId}`}>Filter live catalog</Label>
-                    <Input
-                      id={`openrouter-search-${provider.providerId}`}
-                      value={openRouterCatalogQuery}
-                      onChange={(e) => setOpenRouterCatalogQuery(e.target.value)}
-                      placeholder="Search by model id, name, or modality"
-                    />
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
+                    <div className="space-y-1">
+                      <Label htmlFor={`openrouter-search-${provider.providerId}`}>Filter live catalog</Label>
+                      <Input
+                        id={`openrouter-search-${provider.providerId}`}
+                        value={openRouterCatalogQuery}
+                        onChange={(e) => setOpenRouterCatalogQuery(e.target.value)}
+                        placeholder="Search by model id, name, or modality"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`model-catalog-sort-${provider.providerId}`}>Sort catalogue</Label>
+                      <Select
+                        value={openRouterCatalogSort}
+                        onValueChange={(value) => setOpenRouterCatalogSort(value as ModelCatalogSortId)}
+                      >
+                        <SelectTrigger id={`model-catalog-sort-${provider.providerId}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {MODEL_CATALOG_SORT_OPTIONS.map((option) => (
+                            <SelectItem key={option.id} value={option.id}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </div>
                   {isOpenRouter && (
                     <div className="flex flex-wrap gap-2">
