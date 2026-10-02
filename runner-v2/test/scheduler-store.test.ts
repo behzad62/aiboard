@@ -1535,7 +1535,7 @@ test("projection records the most recently integrated revision", () => {
       taskId: "T1",
       status: "integrated",
       patch: { integrationRevision: "a".repeat(40) },
-    }));
+    }, { role: "runner", id: "integration-manager" }));
     assert.equal(
       rebuildSchedulerProjection(store.readRun("run_revision")).integrationRevision,
       "a".repeat(40)
@@ -1728,6 +1728,10 @@ test("completion and handoff are refused while a context recording note is unres
       }),
       message,
     );
+    // C2b repair m6: the structural checks (actor, requested) precede the
+    // shared acceptance rule, so a selection with no requested handoff is
+    // refused before the note is even reached. The note refusal on a
+    // requested selection is covered through the shared predicate.
     assert.throws(
       () => store.append({
         ...event("run_recording_completion", "project.handoff_selected", "selected-unresolved", {
@@ -1738,7 +1742,7 @@ test("completion and handoff are refused while a context recording note is unres
         }),
         actor: { role: "user", id: "local-user" },
       }),
-      message,
+      /Final project handoff is not awaiting user selection\./,
     );
     assert.equal(store.readRun("run_recording_completion").length, before);
     const projection = rebuildSchedulerProjection(store.readRun("run_recording_completion"));
@@ -1802,13 +1806,14 @@ function event(
   runId: string,
   type: NewSchedulerEvent["type"],
   idempotencyKey: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  actorOverride?: NewSchedulerEvent["actor"],
 ): NewSchedulerEvent {
   return {
     runId,
     type,
     occurredAt: "2026-07-12T00:00:00.000Z",
-    actor: {
+    actor: actorOverride ?? {
       role:
         type === "plan.created" || type === "plan.reconciled"
           ? "architect"

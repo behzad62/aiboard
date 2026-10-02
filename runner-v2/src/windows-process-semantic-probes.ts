@@ -15,6 +15,7 @@ import {
   type ProcessLaunchRequest,
 } from "./process-backend.js";
 import type { ProcessHostSemanticProbeSource } from "./process-host-semantic-probes.js";
+import { recordTempCreation } from "./cleanup-ownership.js";
 import { WindowsProcessBackend } from "./windows-process-backend.js";
 
 const PROBE_DEADLINE_MS = 15_000;
@@ -192,6 +193,11 @@ async function withPortableProbe<T>(name: string, operationDeadline: number, cle
   }
   remainingProbeDeadlineMs(operationDeadline);
   const root = mkdtempSync(join(tmpdir(), `aiboard-windows-semantic-${name}-`));
+  // T6b repair (OA-17): probe roots self-clean with an exact verified
+  // proof below (rmSync on release, preserved evidence otherwise). The
+  // creation is validated synchronously; no shared registry is written,
+  // so executed workloads cannot forge ownership.
+  recordTempCreation({ path: root, ownerRunId: `semantic-${name}`, ownerProjectId: "runner-state", createdAt: new Date().toISOString(), kind: "directory" });
   const stateDirectory = join(root, "state");
   const workspace = join(root, "workspace");
   mkdirSync(workspace);

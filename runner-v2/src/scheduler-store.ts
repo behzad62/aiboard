@@ -1,6 +1,44 @@
+import {
+  DELIVERY_ACCEPTANCE_RUNNER_ID,
+  DELIVERY_REVIEW_RUNNER_ID,
+  assertContractTaskRevisionAllowed,
+  assertTestsOutcome,
+  assessDeliveryRisk,
+  taskAcceptedFailuresUsed,
+  boundaryNeedsArchitect,
+  boundaryResolutionGeneration,
+  deliveryBoundaryAction,
+  deliveryBoundaryId,
+  deliveryReviewApprovalIssues,
+  deliveryReviewDepthForTier,
+  deliveryReviewId,
+  emptyDeliveryState,
+  evaluatePhaseAcceptance,
+  finalReadyCoverageIssues,
+  finalReadyRequirementIssues,
+  latestBoundary,
+  latestCompletedReview,
+  openBlockingFindings,
+  phaseAcceptanceKey,
+  unverifiedClaims,
+  validateDeliveryFindings,
+  validateDeliveryObligations,
+  type DeliveryAffectedTestsRecord,
+  type DeliveryBoundaryCheck,
+  type DeliveryBoundaryRecord,
+  type DeliveryClaim,
+  type DeliveryClaimVerdict,
+  type DeliveryDepthRecord,
+  type DeliveryPriorFindingCheck,
+  type DeliveryProbeRecord,
+  type DeliveryReviewRecord,
+  type DeliveryState,
+  type DeliveryTestReport,
+} from "./delivery-acceptance.js";
 import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
 import { createHash } from "node:crypto";
 import { PROJECT_DOC_MAX_BYTES, validateProjectDocPath } from "./project-docs.js";
+import { isDiagnosticRepairCycle } from "./repair-budget-contracts.js";
 
 import {
   isFinalVerificationTask,
@@ -13,6 +51,7 @@ import {
   type ReplanRequest,
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
+import type { ExecutionTaskContract } from "./planning-contracts.js";
 import {
   planFinalVerification,
   validateFinalVerificationPlan,
@@ -56,6 +95,7 @@ import {
   type ArchitectActionReason,
   type ArchitectQuestionItem,
   type UserGuidanceAcknowledgementResolution,
+  type UserGuidanceFoldedIntoPlanningResolution,
   type UserGuidanceItem,
 } from "./user-steering-contracts.js";
 import {
@@ -65,6 +105,7 @@ import {
 } from "./worker-identity.js";
 import {
   assertExactVerifierCriteria,
+  canonicalModelIdentity,
   cloneVerifierProjection,
   cloneVerifierReview,
   expectedVerifierCriteria,
@@ -97,6 +138,12 @@ import {
   type BuildRiskAssessment,
   type BuildRiskAssessmentInput,
 } from "./risk-policy.js";
+import {
+  isPlanningEventType,
+  reducePlanningProjection,
+  type PlanningEventType,
+  type PlanningProjection,
+} from "./planning-projection.js";
 
 export type SchedulerActorRole =
   | "architect"
@@ -163,6 +210,18 @@ export type SchedulerEventType =
   | "verifier.verdict_submitted"
   | "verifier.repairs_planned"
   | "repair.policy_configured"
+  | "repair.issue_recorded"
+  | "repair.approach_decided"
+  | "repair.cycle_recorded"
+  | "repair.approach_failed"
+  | "repair.external_blocker_recorded"
+  | "repair.flaky_isolated"
+  | "repair.issue_budget_extended"
+  | "repair.issue_paused"
+  | "repair.external_blocker_cleared"
+  | "temp.creation_recorded"
+  | "temp.record_cleared"
+  | "cleanup.checked"
   | "repair.cycle_limit_reached"
   | "repair.cycle_limit_extended"
   | "plan_critique.policy_configured"
@@ -176,7 +235,31 @@ export type SchedulerEventType =
   | "project_doc.requested"
   | "project_doc.committed"
   | "project_doc.abandoned"
-  | "project_docs.policy_configured";
+  | "project_docs.policy_configured"
+  | "project_docs.handoff_snapshot_committed"
+  | "delivery.review_started"
+  | "delivery.review_requested"
+  | "delivery.obligations_recorded"
+  | "delivery.criteria_and_diff_delivered"
+  | "delivery.findings_recorded"
+  | "delivery.report_delivered"
+  | "delivery.review_recorded"
+  | "delivery.boundary_started"
+  | "delivery.boundary_checked"
+  | "delivery.boundary_failure_resolved"
+  | "task.acceptance_recorded"
+  | "phase.acceptance_recorded"
+  | "planning.policy_configured"
+  | "request.triaged"
+  | "request.answered"
+  | "request.converted_to_build"
+  | "answer.review_opted_in"
+  | "answer.review_opted_out"
+  | "answer.review_findings_recorded"
+  | "answer.review_prior_findings_released"
+  | "answer.review_recorded"
+  | "answer.review_unavailable"
+  | PlanningEventType;
 
 export interface SchedulerEvent {
   eventId: string;
@@ -301,6 +384,63 @@ export interface ProjectDocsProjection {
   /** Document-only commits ahead of the canonical integration revision. */
   documentTip?: string;
   abandoned?: ProjectDocAbandonmentProjection[];
+  /** Kernel handoff snapshots (docs policy v2) in append order. */
+  snapshots?: HandoffSnapshotRecord[];
+}
+
+/**
+ * A kernel-committed handoff snapshot (docs policy v2; C2a: STATE.md only,
+ * C2b: plus the v2 entry lines and the optional spec copy).
+ */
+export interface HandoffSnapshotRecord {
+  stopSequence: number;
+  stopKind: string;
+  revision: string;
+  commit: string;
+  parent: string;
+  head: string;
+  /**
+   * The committed STATE.md body digest (C2c repair CD-17: "" when
+   * stateSkippedReason carries the skip instead -- no STATE.md was
+   * committed, so there is no digest to record).
+   */
+  bodyDigest: string;
+  paths: string[];
+  /**
+   * C2c repair CD-17: why no STATE.md was committed (a linked directory
+   * above it). The AR-R05 gate accepts the recorded reason the way it
+   * accepts export_only. Absent means STATE.md committed.
+   */
+  stateSkippedReason?: string;
+  sequence: number;
+  /**
+   * The tip STATE.md was hand-edited before this snapshot (AR-R07): the new
+   * snapshot names it. False for the first snapshot and for clean chains.
+   */
+  previousSnapshotEdited: boolean;
+  /**
+   * Read back from the commit's own tree (never the checkout): the commit
+   * holds the marked v2 AGENTS.md section and the marked `@AGENTS.md` line.
+   * The AR-R05 gate requires both.
+   */
+  agentsSectionCommitted: boolean;
+  claudeLineCommitted: boolean;
+  /** Spec-copy outcome (CD-5): the committed copy path, or the repo path of the approved source when it was already a repository file. Absent when no copy was written. */
+  specPath?: string;
+  /** True when this snapshot committed a verbatim spec copy. Absent means none was written. */
+  specCopied?: boolean;
+  /** C2b repair m4: bounded reason the spec copy was skipped. Absent means not skipped. */
+  specCopySkipped?: string;
+  /** C2b repair m5: why the CLAUDE.md line counts as satisfied although the blob holds none. Absent means the blob holds it. */
+  claudeLineViaLink?: string;
+  /**
+   * C2c (NF-2/CD-15): why the AGENTS.md section counts as satisfied although
+   * the blob holds none -- the runner wrote it into the link target path
+   * directly (redirect), or skipped the link to a missing or outside target
+   * with a recorded reason. Absent means the blob holds it. The AR-R05 gate
+   * accepts the recorded reason for that file; STATE.md stays required.
+   */
+  agentsSectionViaLink?: string;
 }
 
 export interface ProjectDocCommitProjection {
@@ -318,6 +458,8 @@ export interface ProjectDocCommitProjection {
 export interface ProjectHandoffProjection {
   status: "requested" | "selected";
   summary: string;
+  /** Log sequence of the `project.handoff_requested` event (C2a repair: binds the v2 gate to the latest stop). Absent only on hand-built projections; the reducer always records it. */
+  requestedSequence?: number;
   options: ProjectHandoffChoice[];
   choice?: ProjectHandoffChoice;
   integrationRevision?: string;
@@ -560,6 +702,14 @@ export interface RepairCyclesProjection {
   limit: number;
   used: number;
   extensions: number;
+  /**
+   * Owner decision 2026-09-26 ("Scale with tasks"): true when the run cap
+   * came from an explicit `repairPlanLimit` option / project policy and must
+   * not scale with the ready plan. Absent on rows written before the flag
+   * existed; the effective-limit helper infers explicitness there (a stored
+   * limit other than the flat default had to be chosen explicitly).
+   */
+  explicitLimit?: boolean;
   pause?: {
     source: "final_verification" | "verifier";
     targetRevision: string;
@@ -568,12 +718,171 @@ export interface RepairCyclesProjection {
   };
 }
 
+export interface RepairIssueProjection {
+  issueId: string;
+  rootCause: string;
+  limit: number;
+  used: number;
+  hypotheses: string[];
+  outcomes: string[];
+  approaches: Array<{
+    approachId: string;
+    repeat: boolean;
+    failed: boolean;
+    /** T6b repair (R3-B2): true once this decision authorized a dispatch. */
+    dispatched: boolean;
+    hypothesis: string;
+    diagnosticSet: string[];
+    evidenceIds: string[];
+    failureEvidenceIds: string[];
+  }>;
+  externalBlocker?: {
+    acceptanceCondition: string;
+    evidence: string[];
+    attemptedResolutions: string[];
+    requiredOwnerAction: string;
+  };
+}
+
+/**
+ * T6b (OA-14): durable outcome of the single failing-test rerun for one
+ * final-verification check. Keyed `${generationId}:${category}`; the rerun
+ * executes at most once per key and the original failing check still blocks
+ * acceptance until it passes on its own run.
+ */
+export interface RepairFlakyProjection {
+  category: string;
+  generationId: string;
+  taskId: string;
+  targetRevision: string;
+  failingTestIds: string[];
+  rerunGreen: boolean;
+  rerunEvidenceIds: string[];
+  finding: string;
+}
+
+/**
+ * T6b repair (OA-17): Runner-private durable creation record for one
+ * directory or file the runner created outside the workspace. Stored as
+ * scheduler events in the Runner-private SQLite store under the runner
+ * state directory — never in a shared or worker-writable file — so an
+ * executed workload cannot forge ownership (probe F).
+ */
+export interface TempRecordProjection {
+  path: string;
+  ownerRunId: string;
+  ownerProjectId: string;
+  createdAt: string;
+  kind: "directory" | "file";
+  retained: boolean;
+}
+
+/**
+ * Durable request-triage decision. T9 owns the triage events that set this;
+ * T3a defines the field and the planning-state predicate that reads it.
+ * Until T9 lands this is always undefined ("no decision yet"), which counts
+ * as planning state.
+ */
+export type PlanningTriageDecision = "answer" | "build" | "clarify";
+
+/** T9 (EP39): the durable request-triage record for a new-policy run. */
+export interface RequestTriageRecord {
+  decision: PlanningTriageDecision;
+  rationale: string;
+  decidedAt: string;
+  sequence: number;
+  conversions: { from: PlanningTriageDecision; to: PlanningTriageDecision; reason: string; sequence: number }[];
+}
+
+/** T9 (EP39): the recorded answer for a triage-`answer` run (latest wins). */
+export interface RequestAnswerRecord {
+  answerText: string;
+  /** Question parts the answer addresses, listed in the same turn. */
+  addressedParts: string[];
+  evidenceIds: string[];
+  recordedAt: string;
+  sequence: number;
+}
+
+/** T9 (OA-5): per-run user opt-in for the independent answer review. */
+export interface AnswerReviewOptInRecord {
+  optedInAt: string;
+  sequence: number;
+}
+
+/** T9 (OA-10 #2): one answer-review finding recorded before any verdict. */
+export interface AnswerReviewFinding {
+  id: string;
+  statement: string;
+  severity: "blocking" | "non_blocking";
+}
+
+/** T9: the reviewer's own findings, recorded before it may see prior findings. */
+export interface AnswerReviewFindingsRecord {
+  reviewId: string;
+  findings: AnswerReviewFinding[];
+  /**
+   * T9 repair cycle 2 (N-A): the answer sequence the findings were formed
+   * on. Findings are bound to the answer the reviewer saw — a verdict for a
+   * later answer needs fresh findings, never a reused record.
+   */
+  answerSequence: number;
+  priorReviewId?: string;
+  recordedAt: string;
+  sequence: number;
+}
+
+/** T9: release of prior findings after the own findings are durable. */
+export interface AnswerReviewReleaseRecord {
+  reviewId: string;
+  priorReviewId: string;
+  sequence: number;
+}
+
+/** T9: one prior-finding resolution check by a re-review. */
+export interface AnswerReviewFindingCheck {
+  findingId: string;
+  resolution: "resolved" | "outstanding";
+  rationale: string;
+}
+
+/** T9: a recorded opt-in answer review verdict (advisory evidence). */
+export interface AnswerReviewRecord {
+  id: string;
+  reviewerRuntimeId: string;
+  independence: "distinct_model" | "fresh_context";
+  answerSequence: number;
+  findings: AnswerReviewFinding[];
+  summary: string;
+  answerAccurate: boolean;
+  priorReviewId?: string;
+  priorFindingChecks?: AnswerReviewFindingCheck[];
+  recordedAt: string;
+  sequence: number;
+}
+
+/** T9: latest answer-review unavailability gate (owner-visible, retryable). */
+export interface AnswerReviewUnavailableRecord {
+  reviewId?: string;
+  reason: string;
+  detail?: string;
+  recordedAt: string;
+  sequence: number;
+}
+
 export interface SchedulerProjection {
   processRecovery?: Record<string, RecoveryAuditRecord>;
   runId: string;
   /** Optional for event-log compatibility with runs created before P3.1. */
   initialObjective?: string;
   runPolicy?: NativeBuildRunPolicy;
+  /**
+   * C2b run options (CD-5), recorded durably by `run.policy_configured`.
+   * Absent on every log written before C2b (and on legacy runs): the
+   * accessors below apply the defaults, so old logs replay unchanged.
+   */
+  specCopy?: boolean;
+  handoffFiles?: HandoffFilesOption;
   /**
    * Live scheduler events use running/paused/completed. Terminal historical
    * readers additionally project the authoritative RunSupervisor failed or
@@ -595,6 +904,7 @@ export interface SchedulerProjection {
   pauseReason?: {
     reason: string;
     taskId?: string;
+    detail?: string;
   };
   planRevision: number;
   tasks: Record<string, BuildTask>;
@@ -604,6 +914,26 @@ export interface SchedulerProjection {
   architectQuestions: Record<string, ArchitectQuestionItem>;
   architectQuestionVersion: number;
   blockingArchitectQuestionId?: string;
+  /**
+   * T9 repair cycle 1 (N1): sequence of the latest `architect.question_answered`
+   * event. Bounds the clarify loop: re-triaging clarify without a user reply
+   * after the last triage is refused.
+   */
+  lastAnsweredArchitectQuestionSequence?: number;
+  /**
+   * T9 repair cycle 3 (B4-r3/N-C): the latest acknowledgement with resolution
+   * `folded_into_planning`, stamped at its event sequence. `plan_ready` is
+   * refused while the bound coverage review was requested at or before this
+   * sequence, or while no Architect planning turn postdates it; answered-run
+   * completion requires an answer recorded after it. Monotonic: only a newer
+   * folded acknowledgement replaces it. Copied by the `...current` spread;
+   * only the acknowledgement case sets it.
+   */
+  latestFoldedIntoPlanningAck?: {
+    guidanceId: string;
+    version: number;
+    sequence: number;
+  };
   reviews: Record<string, ReviewProjection>;
   /** Completed submissions retained as immutable attempt/version history. */
   submissionHistory?: Record<string, CriterionSubmissionProjection[]>;
@@ -616,6 +946,9 @@ export interface SchedulerProjection {
   buildRisk?: BuildRiskProjection;
   verifierSelection?: VerifierSelectionProjection;
   repairCycles?: RepairCyclesProjection;
+  repairIssues?: Record<string, RepairIssueProjection>;
+  repairFlaky?: Record<string, RepairFlakyProjection>;
+  tempRecords?: Record<string, TempRecordProjection>;
   verifier?: VerifierProjection;
   planRiskDeclaration?: {
     risk: PlanRiskLevel;
@@ -628,6 +961,37 @@ export interface SchedulerProjection {
   projectDocs?: ProjectDocsProjection;
   /** Set when this run was stamped `project_docs.policy_configured`. Legacy runs omit it. */
   projectDocsPolicyVersion?: number;
+  planningPolicyVersion?: 1;
+  /**
+   * T6a: mandatory deliverable review, integrated-boundary checks, and
+   * task/phase acceptance. New-policy runs only; legacy runs omit it.
+   */
+  delivery?: DeliveryState;
+  planning?: PlanningProjection;
+  /** Durable triage decision (T9 `request.triaged`); undefined ("no decision yet") until then. */
+  planningTriageDecision?: PlanningTriageDecision;
+  /** T9 (EP39): durable triage rationale plus the conversion history. */
+  requestTriage?: RequestTriageRecord;
+  /** T9 (EP39): the recorded answer for a triage-`answer` run. */
+  requestAnswer?: RequestAnswerRecord;
+  /** T9 (OA-5): per-run user opt-in for the independent answer review. */
+  answerReviewOptIn?: AnswerReviewOptInRecord;
+  /** T9: own-findings records by answer review id. */
+  answerReviewFindings?: Record<string, AnswerReviewFindingsRecord>;
+  /** T9 (OA-10 #2): prior-findings releases by answer review id. */
+  answerReviewReleases?: Record<string, AnswerReviewReleaseRecord>;
+  /** T9: recorded answer review verdicts by review id. */
+  answerReviews?: Record<string, AnswerReviewRecord>;
+  /** T9: latest answer-review unavailability gate. */
+  answerReviewUnavailable?: AnswerReviewUnavailableRecord;
+  /**
+   * T3a repair (B1/C): ready-plan binding per scheduler task id, new-policy
+   * runs only. Stamped by the reducer when tasks are created (plan.created /
+   * plan.reconciled newTasks) with the then-current ready plan identity;
+   * admission requires the binding to equal the current ready identity.
+   * Legacy runs omit it. Derived from the event log on rebuild.
+   */
+  readyPlanTaskBindings?: Record<string, ReadyPlanTaskBinding>;
   /** Sequence of the latest integration that advanced the canonical revision. */
   latestIntegratedTaskSequence?: number;
   lastArchitectActionEvent?: {
@@ -645,9 +1009,53 @@ export interface SchedulerStore {
   close(): void;
 }
 
+/**
+ * Owner decision 2026-09-26 ("Scale with tasks"): tasks in the current ready
+ * plan revision. Zero when the run has no ready plan (legacy runs never do).
+ */
+export function readyPlanTaskCount(projection: SchedulerProjection): number {
+  const plan = projection.planning?.plan;
+  if (projection.planningPolicyVersion !== 1 || !plan) return 0;
+  return plan.revisionsById[plan.currentRevisionId]?.tasks.length ?? 0;
+}
+
+/**
+ * Owner decision 2026-09-26 ("Scale with tasks"): true when the run-level
+ * repair-plan limit scales with the ready plan (new-policy runs without an
+ * explicit cap). An explicit `repairPlanLimit` wins; legacy runs never scale.
+ */
+export function repairPlanLimitScales(projection: SchedulerProjection): boolean {
+  const cycles = projection.repairCycles;
+  if (!cycles || projection.planningPolicyVersion !== 1) return false;
+  // Scale only when the runtime recorded the default as non-explicit. Policy
+  // rows without the flag were written before the scaled limit existed; they
+  // keep their stored flat limit so old logs replay unchanged and an owner
+  // extension never shrinks the effective limit (review T6b r5 B-1/B-2).
+  return cycles.explicitLimit === false;
+}
+
+/**
+ * Owner decision 2026-09-26 ("Scale with tasks"): the effective run-level
+ * repair-plan limit, derived from durable state at every read so replay is
+ * deterministic. New-policy runs without an explicit cap run with
+ * 3 + (tasks in the current ready plan) instead of the flat 3: a later plan
+ * revision that adds tasks grows the limit, and the stored base already
+ * covers extensions and everything consumed, so the value never drops below
+ * `used`. Undefined while the run has no repair policy (in-flight pre-P6.5
+ * runs stay uncapped).
+ */
+export function effectiveRepairPlanLimit(projection: SchedulerProjection): number | undefined {
+  const cycles = projection.repairCycles;
+  if (!cycles) return undefined;
+  if (!repairPlanLimitScales(projection)) return cycles.limit;
+  return Math.max(cycles.used, cycles.limit + readyPlanTaskCount(projection));
+}
+
 export function repairCyclesExhausted(projection: SchedulerProjection): boolean {
   const cycles = projection.repairCycles;
-  return cycles !== undefined && cycles.used >= cycles.limit;
+  if (cycles === undefined) return false;
+  const effective = effectiveRepairPlanLimit(projection);
+  return effective !== undefined && cycles.used >= effective;
 }
 
 export function planCritiquePending(projection: SchedulerProjection): boolean {
@@ -659,12 +1067,581 @@ export function planCritiquePending(projection: SchedulerProjection): boolean {
   return state.current?.status !== "resolved";
 }
 
+/**
+ * T3a (OA-7/EP41): kernel predicate over the durable projection. A new-policy
+ * run is in planning state while it has no ready plan and its durable triage
+ * decision is anything other than `answer` (no decision yet, `build`, or
+ * `clarify`). Legacy runs are never in planning state. T9 populates the
+ * triage decision and reuses this predicate for the answer path.
+ */
+export function isPlanningState(projection: SchedulerProjection): boolean {
+  if (projection.planningPolicyVersion !== 1) return false;
+  if (projection.planning?.readiness === "ready") return false;
+  return projection.planningTriageDecision !== "answer";
+}
+
+/**
+ * T9 (EP39/OA-5): a new-policy run on the answer path. Answered runs complete
+ * without a plan, workers, integration, or final verification; the kernel
+ * refuses every task, dispatch, integration, and plan-progressing event while
+ * this holds. Conversion (`request.converted_to_build`) flips the decision to
+ * `build`, which clears this predicate and returns the run to planning state.
+ */
+export function isAnsweredRun(projection: SchedulerProjection): boolean {
+  return projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer";
+}
+
+/**
+ * T9 triage-first ordering: planning events that make plan progress require a
+ * durable triage decision of `build`. Source registration/amendment and
+ * durable section reads are exempt (provisioning plus read-only inspection
+ * the triage and answer turns may use). Everything else — ledger,
+ * checkpoints, drafts, revisions, coverage, readiness, assignments,
+ * validation, references, acceptance — is refused before triage, under
+ * `clarify`, and on the answer path.
+ */
+const TRIAGE_GATED_PLANNING_EVENTS: ReadonlySet<string> = new Set([
+  "planning.ledger_persisted",
+  "planning.checkpoint_recorded",
+  "planning.plan_drafted",
+  "planning.plan_revised",
+  "planning.coverage_review_requested",
+  "planning.coverage_obligations_recorded",
+  "planning.coverage_plan_delivered",
+  "planning.coverage_correction_view_recorded",
+  "planning.coverage_prior_findings_released",
+  "planning.coverage_review_recorded",
+  "planning.coverage_review_unavailable",
+  "planning.coverage_review_suspended",
+  "planning.coverage_review_retry_authorized",
+  "planning.plan_ready",
+  "planning.assignment_claimed",
+  "planning.assignment_released",
+  "planning.validation_intent_recorded",
+  "planning.validation_observed",
+  "planning.validation_interrupted",
+  "planning.validation_reconciled",
+  "planning.recovery_reconciled",
+  "planning.reference_recorded",
+  "planning.acceptance_recorded",
+  "planning.acceptance_reopened",
+]);
+
+export function hasAnswerReviewVerdict(projection: SchedulerProjection): boolean {
+  return projection.answerReviews !== undefined && Object.keys(projection.answerReviews).length > 0;
+}
+
+/**
+ * T9 repair cycle 1 (B1): the latest recorded answer-review verdict by
+ * sequence, regardless of which answer it covers. The pump attaches it as
+ * the prior review when a re-review is driven (OA-10 #2 / EP42).
+ */
+export function latestAnswerReviewVerdict(
+  projection: SchedulerProjection,
+): AnswerReviewRecord | undefined {
+  return Object.values(projection.answerReviews ?? {})
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1);
+}
+
+/**
+ * T9 repair cycle 1 (B1): the verdict bound to the CURRENT answer — the one
+ * the user receives. A verdict for a superseded answer stays durable
+ * evidence but never satisfies the opt-in; the pump must re-review the new
+ * answer with the prior review attached.
+ */
+export function currentAnswerReviewVerdict(
+  projection: SchedulerProjection,
+): AnswerReviewRecord | undefined {
+  const answer = projection.requestAnswer;
+  if (!answer) return undefined;
+  return Object.values(projection.answerReviews ?? {})
+    .filter((verdict) => verdict.answerSequence === answer.sequence)
+    .sort((left, right) => left.sequence - right.sequence)
+    .at(-1);
+}
+
+/**
+ * T9 repair cycle 1 (B1): the next answer-review id the pump drives —
+ * `answer_review_{n}` past every recorded verdict. A findings record without
+ * a verdict (crash between passes) keeps its id, so the retry resumes into
+ * the verdict pass instead of orphaning the durable own view.
+ */
+export function nextAnswerReviewId(projection: SchedulerProjection): string {
+  let ordinal = Object.keys(projection.answerReviews ?? {}).length + 1;
+  while (projection.answerReviews?.[`answer_review_${ordinal}`]) {
+    ordinal += 1;
+  }
+  // T9 repair cycle 2 (N-A): skip an id whose recorded findings were bound
+  // to a superseded answer. Findings without a verdict keep their id only
+  // while they still describe the current answer (a crash between passes
+  // resumes into the verdict pass); once the answer moved on, the next
+  // review starts fresh instead of inheriting a stale own view.
+  const answerSequence = projection.requestAnswer?.sequence;
+  while (
+    answerSequence !== undefined &&
+    (projection.answerReviewFindings?.[`answer_review_${ordinal}`]?.answerSequence ??
+      answerSequence) !== answerSequence
+  ) {
+    ordinal += 1;
+  }
+  return `answer_review_${ordinal}`;
+}
+
+/**
+ * T9 (EP39): completion issues for an answered run, beside (never bypassing)
+ * `projectDocumentationReadiness` (G-3). A pure answer still needs the
+ * STATE.md docs gate: the capability program's AC-25 requires it even of
+ * `plan_only` runs, whose whole product changes nothing in the project.
+ */
+function answeredRunReadiness(projection: SchedulerProjection): string[] {
+  const issues: string[] = [];
+  if (!projection.requestAnswer) {
+    issues.push("The run answer has not been recorded.");
+  }
+  const taskCount = Object.keys(projection.tasks).length;
+  if (taskCount > 0) {
+    issues.push(`Answered runs must not create tasks (found ${taskCount}).`);
+  }
+  if (projection.integrationRevision?.trim()) {
+    issues.push("Answered runs must not advance integration.");
+  }
+  if (projection.finalVerification) {
+    issues.push("Answered runs have no final verification.");
+  }
+  // T9 repair cycle 3 (N-C): guidance acknowledged as folded_into_planning
+  // after the recorded answer is not reflected in that answer. Completion
+  // requires a new answer recorded after the acknowledgement, so the folded
+  // guidance must be folded into answer text the user actually receives.
+  const foldedAnswer = projection.latestFoldedIntoPlanningAck;
+  if (
+    foldedAnswer &&
+    (projection.requestAnswer === undefined ||
+      projection.requestAnswer.sequence <= foldedAnswer.sequence)
+  ) {
+    issues.push(
+      `User guidance ${foldedAnswer.guidanceId} acknowledged as folded_into_planning ` +
+        "after the recorded answer requires a new answer recorded after the acknowledgement.",
+    );
+  }
+  // T9 repair cycle 1 (B1): the opt-in is satisfied only by a verdict bound
+  // to the CURRENT answer. A re-recorded answer after a verdict is not
+  // covered by it — the pump must drive a re-review.
+  if (projection.answerReviewOptIn && !currentAnswerReviewVerdict(projection)) {
+    if (hasAnswerReviewVerdict(projection)) {
+      issues.push("The opted-in answer review does not cover the current answer.");
+    } else {
+      issues.push("The opted-in answer review has not been recorded.");
+    }
+    const gate = projection.answerReviewUnavailable;
+    if (gate) {
+      issues.push(`Answer review is unavailable: ${gate.reason}${gate.detail ? ` (${gate.detail})` : ""}.`);
+    }
+  }
+  return issues;
+}
+
+/**
+ * T9 repair cycle 3 (B4-r3): the folded-guidance readiness block. Guidance
+ * acknowledged as `folded_into_planning` must be SEEN by the plan and by the
+ * coverage review that makes it ready — otherwise a passing review recorded
+ * before the guidance, plus an evidence-free ack, would ready an unchanged
+ * plan that never reflects it. Returns the refusal reason, or undefined when
+ * no folded acknowledgement exists (legacy and pre-T9 runs are untouched) or
+ * when the bound review was requested after the acknowledgement and an
+ * Architect planning turn (draft, revision, or checkpoint) postdates it too.
+ * The same gate covers the re-planning window after a ready plan drops back
+ * to not-ready: any stale binding or missing post-fold turn refuses again.
+ */
+function foldedGuidancePlanReadyBlocked(current: SchedulerProjection): string | undefined {
+  const folded = current.latestFoldedIntoPlanningAck;
+  if (!folded || current.planningPolicyVersion !== 1) return undefined;
+  const planning = current.planning;
+  const review = planning?.coverageReview;
+  if (!review) return undefined;
+  const requestedSequence = planning?.coverageRequests[review.id]?.requestedSequence ?? 0;
+  if (requestedSequence <= folded.sequence) {
+    return `Plan readiness is refused: coverage review ${review.id} was requested before ` +
+      `user guidance ${folded.guidanceId} was acknowledged as folded_into_planning; ` +
+      "the Architect must request a new coverage review after the acknowledgement " +
+      "so the review snapshot contains the guidance.";
+  }
+  const turnSequence = planning?.lastPlanningTurnSequence ?? 0;
+  if (turnSequence <= folded.sequence) {
+    return "Plan readiness is refused: no Architect planning turn (plan draft, plan revision, " +
+      `or planning checkpoint) was recorded after user guidance ${folded.guidanceId} ` +
+      "was acknowledged as folded_into_planning; revise the plan or record a checkpoint " +
+      "reviewed against the guidance, then request a new coverage review.";
+  }
+  return undefined;
+}
+
+export interface ReadyPlanIdentity {
+  readonly revisionId: string;
+  readonly digest: string;
+}
+
+/**
+ * T3a (EP32/EP23): the READY plan identity — the ready plan revision digest —
+ * or undefined when this run has no ready plan. Worker admission (scheduler
+ * and reducer) and plan-only completion both require this identity; a changed
+ * source or plan flips the durable readiness back (T2 reducer), which removes
+ * the identity until re-readiness. T3b produces the coverage verdict that
+ * makes readiness possible; until then this is always undefined.
+ */
+export function readyPlanIdentity(
+  projection: SchedulerProjection,
+): ReadyPlanIdentity | undefined {
+  if (projection.planningPolicyVersion !== 1) return undefined;
+  const planning = projection.planning;
+  if (planning?.readiness !== "ready" || !planning.plan) return undefined;
+  if (!planning.plan.currentRevisionId || !planning.plan.currentDigest) return undefined;
+  return {
+    revisionId: planning.plan.currentRevisionId,
+    digest: planning.plan.currentDigest,
+  };
+}
+
+/**
+ * T3a repair (B1c): the ready plan identity stamped on a scheduler task at
+ * creation time. A task is admitted only while its binding equals the run's
+ * current ready plan identity.
+ */
+export interface ReadyPlanTaskBinding {
+  readonly revisionId: string;
+  readonly digest: string;
+  /**
+   * T4 (N-A true membership): the ready-plan contract this scheduler task
+   * was bridged from, or the parent contract for kernel-created repair
+   * tasks. Absent on bindings stamped before T4 (membership then falls
+   * back to the scheduler task id) and on rogue tasks that map to no
+   * ready contract.
+   */
+  readonly contractId?: string;
+}
+
+/**
+ * T3a repair (B1c): single source of truth for new-policy worker admission.
+ * Returns the blocking reason, or undefined when the task may be admitted.
+ * Legacy runs are never blocked here. The `task.transitioned` reducer gate
+ * and `TaskScheduler.tick` both use this predicate.
+ */
+export function newPolicyTaskAdmissionBlocked(
+  projection: SchedulerProjection,
+  taskId: string,
+): string | undefined {
+  if (projection.planningPolicyVersion !== 1) return undefined;
+  // T9 (EP39/OA-5): answered runs admit no workers, even if a ready plan
+  // identity were somehow present — the zero-mutation guarantee is enforced
+  // here as well as at task creation, not only in the prompt.
+  if (projection.planningTriageDecision === "answer") {
+    return "Answered runs admit no workers.";
+  }
+  if (projection.runPolicy === "plan_only") {
+    return "Plan-only runs never admit workers.";
+  }
+  const ready = readyPlanIdentity(projection);
+  if (!ready) {
+    return "Worker admission requires a ready plan revision.";
+  }
+  const binding = projection.readyPlanTaskBindings?.[taskId];
+  if (
+    !binding ||
+    binding.revisionId !== ready.revisionId ||
+    binding.digest !== ready.digest
+  ) {
+    return `Task ${taskId} is not bound to the current ready plan revision ${ready.revisionId}.`;
+  }
+  // T4 (N-A true membership): kernel-created repair tasks stay admissible
+  // while bound to the ready identity (their parent contract is recorded
+  // when resolvable); every other task must map to a contract in the
+  // CURRENT ready revision. A dropped contract is surfaced to the
+  // Architect, never silently lost; a rogue post-ready task is never
+  // admitted. Legacy runs never reach here.
+  const membership = taskPlanMembership(projection, taskId);
+  if (
+    projection.tasks[taskId]?.kind === "verification_repair" &&
+    binding.contractId === undefined
+  ) {
+    return undefined;
+  }
+  if (membership.status === "dropped") {
+    return (
+      `Task ${taskId} is not admissible: its contract ${membership.contractId} ` +
+      `is not in the current ready plan revision ${ready.revisionId}; ` +
+      `surfaced to the Architect, never silently lost.`
+    );
+  }
+  if (membership.status === "unmapped") {
+    return (
+      `Task ${taskId} is not admissible: it does not map to a contract in ` +
+      `the current ready plan revision ${ready.revisionId}.`
+    );
+  }
+  return undefined;
+}
+
+/**
+ * T4 (N-A true membership): where a new-policy scheduler task stands
+ * relative to the CURRENT ready plan revision.
+ * - `member`: its contract is in the current revision (or, for bindings
+ *   stamped before T4 that carry no contract id, its scheduler id is).
+ * - `dropped`: its contract was removed by a later revision — the task is
+ *   non-admissible and surfaced to the Architect, never silently lost.
+ * - `unmapped`: no ready contract (for example a post-ready rogue
+ *   `plan_tasks` task) — never admissible.
+ * Kernel-created repair tasks carry no revision contract of their own and
+ * classify `unmapped` here; admission exempts them explicitly while they
+ * stay bound to the ready identity.
+ */
+export type TaskPlanMembershipStatus = "member" | "dropped" | "unmapped";
+
+export interface TaskPlanMembership {
+  readonly status: TaskPlanMembershipStatus;
+  readonly contractId?: string;
+}
+
+export function taskPlanMembership(
+  projection: SchedulerProjection,
+  taskId: string,
+): TaskPlanMembership {
+  const plan = projection.planning?.plan;
+  const revision = plan?.revisionsById[plan.currentRevisionId];
+  const revisionContractIds = new Set(
+    (revision?.tasks ?? []).map((contract) => contract.id),
+  );
+  const contractId = projection.readyPlanTaskBindings?.[taskId]?.contractId;
+  if (contractId !== undefined) {
+    return revisionContractIds.has(contractId)
+      ? { status: "member", contractId }
+      : { status: "dropped", contractId };
+  }
+  if (
+    projection.readyPlanTaskBindings?.[taskId] !== undefined &&
+    revisionContractIds.has(taskId)
+  ) {
+    return { status: "member", contractId: taskId };
+  }
+  return { status: "unmapped" };
+}
+
+/**
+ * T4: non-terminal tasks whose contract left the current ready revision.
+ * Non-admissible; the pump surfaces them to the Architect through the
+ * stale-task wake instead of idling.
+ */
+export function droppedReadyContractTasks(
+  projection: SchedulerProjection,
+): string[] {
+  return Object.values(projection.tasks)
+    .filter(
+      (task) =>
+        task.kind !== "final_verification" &&
+        task.status !== "integrated" &&
+        task.status !== "cancelled" &&
+        taskPlanMembership(projection, task.id).status === "dropped",
+    )
+    .map((task) => task.id)
+    .sort();
+}
+
+/**
+ * T4: the ready-plan contract a kernel-created repair task is bound to.
+ * Verifier repairs cite their parent task directly; final-verification
+ * repairs resolve through their first dependency that maps to a ready
+ * contract (repair-of-repair resolves transitively). Undefined when the
+ * parent has no contract (legacy-seeded parents) — the repair then stays
+ * identity-bound and admissible.
+ */
+export function repairParentContractId(
+  projection: SchedulerProjection,
+  task: BuildTask,
+): string | undefined {
+  const retainedContractId = projection.readyPlanTaskBindings?.[task.id]?.contractId;
+  if (retainedContractId !== undefined) return retainedContractId;
+  // T6a: a boundary-failure repair cites the integrated task it repairs.
+  const verifierParent = task.verifierRepair?.criteria[0]?.taskId ??
+    task.deliveryRepair?.sourceTaskId;
+  const candidates = verifierParent !== undefined
+    ? [verifierParent]
+    : task.dependencies;
+  for (const parentId of candidates) {
+    const parent = projection.tasks[parentId];
+    if (!parent) continue;
+    if (parent.kind === "verification_repair") {
+      const nested = repairParentContractId(projection, parent);
+      if (nested !== undefined) return nested;
+      continue;
+    }
+    const membership = taskPlanMembership(projection, parentId);
+    if (membership.contractId !== undefined) {
+      return membership.contractId;
+    }
+  }
+  return undefined;
+}
+
+function schedulerTaskFromContract(contract: ExecutionTaskContract): BuildTask {
+  return {
+    id: contract.id,
+    objective: contract.outcome.user,
+    dependencies: [...contract.dependencies],
+    status: "planned",
+    requiredCapabilities: [],
+    acceptanceCriteria: contract.acceptance.criteria.map((criterion) => ({
+      id: criterion.id,
+      text: criterion.text,
+    })),
+    acceptanceCriteriaVersion: 1,
+    attempt: 0,
+  };
+}
+
+/**
+ * T4 bridge (carry-forward): when a new-policy plan becomes ready, its
+ * task contracts become scheduler tasks through the kernel — one
+ * authority, deterministic ids derived from contract ids (the scheduler
+ * id IS the contract id), replay-safe (rebuilding the same log
+ * materializes the same tasks; pre-existing tasks win and are adopted
+ * into membership). Each task carries its contract id in its ready-plan
+ * binding. Legacy runs are untouched.
+ */
+function materializeReadyPlanTasks(projection: SchedulerProjection): void {
+  if (projection.planningPolicyVersion !== 1) return;
+  const ready = readyPlanIdentity(projection);
+  const plan = projection.planning?.plan;
+  const revision = plan?.revisionsById[plan.currentRevisionId];
+  if (!ready || !revision) return;
+  const bindings = { ...(projection.readyPlanTaskBindings ?? {}) };
+  const knownIds = new Set(Object.keys(projection.tasks));
+  for (const contract of revision.tasks) {
+    const missing = contract.dependencies.filter(
+      (dependency) =>
+        !knownIds.has(dependency) &&
+        !revision.tasks.some((candidate) => candidate.id === dependency),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `Ready plan contract ${contract.id} depends on unknown tasks: ${missing.join(", ")}.`,
+      );
+    }
+    const existing = projection.tasks[contract.id];
+    if (existing && existing.kind === "verification_repair") {
+      throw new Error(`Ready plan contract ${contract.id} collides with a kernel repair task.`);
+    }
+    if (!existing) {
+      projection.tasks[contract.id] = schedulerTaskFromContract(contract);
+      knownIds.add(contract.id);
+    } else if (
+      existing.status !== "assigned" &&
+      existing.status !== "running" &&
+      existing.status !== "waiting_guidance" &&
+      existing.status !== "integrated" &&
+      existing.status !== "cancelled"
+    ) {
+      projection.tasks[contract.id] = {
+        ...existing,
+        dependencies: [...contract.dependencies],
+      };
+    }
+    bindings[contract.id] = {
+      revisionId: ready.revisionId,
+      digest: ready.digest,
+      contractId: contract.id,
+    };
+  }
+  projection.readyPlanTaskBindings = bindings;
+  projection.planRevision = Math.max(projection.planRevision, 1);
+  if (projection.acceptanceContractStatus !== "legacy_completed") {
+    projection.acceptanceContractStatus = acceptanceContractStatusForTasks(
+      Object.values(projection.tasks),
+    );
+  }
+}
+
+/**
+ * T4: replaces T3a rebind-all rule with true membership. At re-readiness,
+ * only tasks whose contract is STILL in the current revision are rebound;
+ * a revision that drops a contract leaves that task on its stale binding
+ * — non-admissible and surfaced, never silently re-admitted. Repair tasks
+ * keep their ready-identity binding (parent contract recorded when
+ * resolvable). Pure function of the post-event projection: deterministic
+ * and replay-safe.
+ */
+function rebindMemberTasksToReadyPlan(projection: SchedulerProjection): void {
+  if (projection.planningPolicyVersion !== 1) return;
+  const ready = readyPlanIdentity(projection);
+  if (!ready) return;
+  const current = projection.readyPlanTaskBindings;
+  if (!current) return;
+  let rebound: Record<string, ReadyPlanTaskBinding> | undefined;
+  for (const [taskId, task] of Object.entries(projection.tasks)) {
+    if (task.status === "integrated" || task.status === "cancelled") continue;
+    const binding = current[taskId];
+    if (!binding) continue;
+    const membershipBeforeRebind = taskPlanMembership(projection, taskId);
+    if (binding.revisionId === ready.revisionId && binding.digest === ready.digest) {
+      if (binding.contractId !== undefined) continue;
+      if (membershipBeforeRebind.status === "unmapped") continue;
+      rebound ??= { ...current };
+      rebound[taskId] = {
+        revisionId: ready.revisionId,
+        digest: ready.digest,
+        ...(membershipBeforeRebind.contractId !== undefined
+          ? { contractId: membershipBeforeRebind.contractId }
+          : {}),
+      };
+      continue;
+    }
+    if (task.kind === "verification_repair") {
+      rebound ??= { ...current };
+      const parent = repairParentContractId(projection, task);
+      rebound[taskId] = parent !== undefined
+        ? { revisionId: ready.revisionId, digest: ready.digest, contractId: parent }
+        : { revisionId: ready.revisionId, digest: ready.digest };
+      continue;
+    }
+    if (membershipBeforeRebind.status === "unmapped") continue;
+    rebound ??= { ...current };
+    rebound[taskId] = {
+      revisionId: ready.revisionId,
+      digest: ready.digest,
+      ...(membershipBeforeRebind.contractId !== undefined
+        ? { contractId: membershipBeforeRebind.contractId }
+        : {}),
+    };
+  }
+  if (rebound) projection.readyPlanTaskBindings = rebound;
+}
+
+/**
+ * T3a repair cycle 2 (B2): true when a new-policy run has pending
+ * non-terminal work but admission blocks every piece of it — the run would
+ * otherwise idle forever with zero Architect calls. The kernel final
+ * verification task is never worker-dispatched (the tick skips it), so it
+ * never counts as pending here. Legacy runs are never stalled.
+ * BuildRuntime.step wakes the Architect (plan_required) instead of idling
+ * when this holds after a tick made no progress.
+ */
+export function newPolicyStaleTasksRequireArchitect(projection: SchedulerProjection): boolean {
+  if (projection.planningPolicyVersion !== 1) return false;
+  const pending = Object.values(projection.tasks).filter(
+    (task) => task.kind !== "final_verification" && task.status !== "integrated" && task.status !== "cancelled",
+  );
+  if (pending.length === 0) return false;
+  return droppedReadyContractTasks(projection).length > 0 ||
+    pending.every(
+      (task) => newPolicyTaskAdmissionBlocked(projection, task.id) !== undefined,
+    );
+}
+
 export function consumeRepairCycle(projection: SchedulerProjection): void {
   const cycles = projection.repairCycles;
   if (!cycles) return;
-  if (cycles.used >= cycles.limit) {
+  const effective = effectiveRepairPlanLimit(projection) ?? cycles.limit;
+  if (cycles.used >= effective) {
     throw new Error(
-      `Repair plan limit reached: ${cycles.used} of ${cycles.limit} repair plans used; the user must extend the repair-cycle budget.`,
+      `Repair plan limit reached: ${cycles.used} of ${effective} repair plans used; the user must extend the repair-cycle budget.`,
     );
   }
   projection.repairCycles = { ...cycles, used: cycles.used + 1 };
@@ -720,10 +1697,12 @@ export function assertPendingUserGuidanceAllowsEvent(
     initialPlanQuestionResume ||
     guidanceQuestionResume ||
     event.type === "integration.revision_advanced" ||
+    event.type === "planning.assignment_released" ||
     event.type === "final_verification.cleanup_started" ||
     event.type === "final_verification.cleanup_succeeded" ||
     event.type === "final_verification.cleanup_failed" ||
     (event.type === "project_doc.committed" && event.actor.role === "runner") ||
+    (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     (event.type === "plan.created" && current.planRevision === 0) ||
     (event.type === "task.transitioned" &&
@@ -754,7 +1733,9 @@ export function assertOpenArchitectQuestionAllowsEvent(
     event.type === "architect.handoff_required" ||
     event.type === "architect.handoff_selected" ||
     (event.type === "project_doc.committed" && event.actor.role === "runner") ||
-    (event.type === "project_doc.abandoned" && event.actor.role === "runner");
+    (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
+    (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
+    event.type === "planning.assignment_released";
   if (!allowed) {
     throw new Error(
       `Blocking Architect question ${current.blockingArchitectQuestionId} must be answered before ${event.type} may advance the run.`
@@ -775,7 +1756,24 @@ export function architectLifecycleEventMatchesReason(
   }
   switch (reason.type) {
     case "plan_required":
-      return event.actor.role === "architect" && event.type === "plan.created";
+      // T9 (clarify resume + new-policy question resume, the T3a seam):
+      // `plan_required` on a new-policy run is satisfied by the Architect's
+      // triage progress or planning progress, not only by the legacy
+      // `plan.created` (which never fires there — planRevision stays 0).
+      // Legacy runs emit none of the added types, so matching is unchanged
+      // for them.
+      return event.actor.role === "architect" && (
+        event.type === "plan.created" ||
+        event.type === "request.triaged" ||
+        event.type === "request.answered" ||
+        event.type === "request.converted_to_build" ||
+        event.type === "planning.source_section_read" ||
+        event.type === "planning.ledger_persisted" ||
+        event.type === "planning.checkpoint_recorded" ||
+        event.type === "planning.plan_drafted" ||
+        event.type === "planning.plan_revised" ||
+        event.type === "planning.coverage_review_requested"
+      );
     case "acceptance_contract_upgrade_required":
       return event.actor.role === "architect" && event.type === "acceptance_contract.upgraded";
     case "user_guidance_required":
@@ -834,6 +1832,12 @@ export function architectLifecycleEventMatchesReason(
       return event.type === "context_manifest.recording_resolved" &&
         (event.actor.role === "architect" || event.actor.role === "user") &&
         event.payload.noteSequence === reason.noteSequence;
+    case "delivery_boundary_failed":
+      return event.actor.role === "architect" &&
+        event.type === "delivery.boundary_failure_resolved" &&
+        event.payload.taskId === reason.taskId &&
+        event.payload.boundaryId === reason.boundaryId &&
+        event.payload.resolutionGeneration === reason.resolutionGeneration;
   }
 }
 
@@ -841,6 +1845,15 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
   return [
     "architect.question_requested",
     "plan.created",
+    "request.triaged",
+    "request.answered",
+    "request.converted_to_build",
+    "planning.source_section_read",
+    "planning.ledger_persisted",
+    "planning.checkpoint_recorded",
+    "planning.plan_drafted",
+    "planning.plan_revised",
+    "planning.coverage_review_requested",
     "plan.reconciled",
     "acceptance_contract.upgraded",
     "user.guidance_acknowledged",
@@ -855,6 +1868,7 @@ function isArchitectLifecycleEvent(event: SchedulerEvent): boolean {
     "task.revised",
     "plan_critique.resolved",
     "context_manifest.recording_resolved",
+    "delivery.boundary_failure_resolved",
   ].includes(event.type) ||
     (event.type === "task.transitioned" &&
       event.actor.role === "architect" && event.payload.status === "integrating");
@@ -962,7 +1976,67 @@ function architectActionReasonIsApplicable(
       return projection.status === "paused" &&
         projection.pauseReason?.reason === "context_recording_failed" &&
         latestUnresolvedContextRecordingNote(projection)?.sequence === reason.noteSequence;
+    case "delivery_boundary_failed": {
+      const boundary = latestBoundary(projection.delivery, reason.taskId);
+      return projection.tasks[reason.taskId]?.status === "integrated" &&
+        projection.delivery?.taskAcceptances[reason.taskId] === undefined &&
+        boundary?.boundaryId === reason.boundaryId &&
+        boundaryNeedsArchitect(boundary, (id) => projection.tasks[id]?.status) &&
+        boundaryResolutionGeneration(boundary) === reason.resolutionGeneration &&
+        boundary.integrationRevision === reason.integrationRevision &&
+        projection.integrationRevision === reason.integrationRevision;
+    }
   }
+}
+
+/**
+ * T6a: a new-policy submission is approved or integrated only after its
+ * mandatory deliverable review completed with no open blocking finding and
+ * no unverified worker claim (the Architect may dispose of either).
+ */
+function assertDeliveryReviewAllowsTask(projection: SchedulerProjection, task: BuildTask): void {
+  if (projection.planningPolicyVersion !== 1 || task.kind === "final_verification") return;
+  const issues = deliveryReviewApprovalIssues(projection.delivery, task);
+  if (issues.length > 0) {
+    throw new Error(`Deliverable review blocks approval or integration: ${issues.join(" ")}`);
+  }
+}
+
+/** T6a: completion issues for new-policy delivery acceptance. */
+function deliveryCompletionIssues(projection: SchedulerProjection): string[] {
+  const issues: string[] = [];
+  const plan = projection.planning?.plan;
+  const currentRevision = plan?.revisionsById[plan.currentRevisionId];
+  if (!currentRevision) {
+    issues.push("Delivery acceptance requires the current plan revision.");
+    return issues;
+  }
+  const statuses = new Map(Object.entries(projection.tasks).map(([taskId, task]) => [taskId, task.status]));
+  for (const phase of currentRevision.phases) {
+    const acceptance = projection.delivery?.phaseAcceptances[
+      phaseAcceptanceKey(currentRevision.revisionId, phase.id)
+    ];
+    if (acceptance) continue;
+    issues.push(`Phase ${phase.id} lacks durable acceptance for plan revision ${currentRevision.revisionId}.`);
+    // R4-B2: say why, with the exact blocking words.
+    issues.push(...evaluatePhaseAcceptance({
+      phase,
+      requirements: currentRevision.requirements,
+      taskStatuses: statuses,
+      state: projection.delivery,
+      integrationRevision: projection.integrationRevision,
+    }).issues);
+  }
+  const taskStatuses = new Map(Object.entries(projection.tasks).map(([taskId, task]) => [taskId, task.status]));
+  issues.push(...finalReadyRequirementIssues(currentRevision.requirements));
+  issues.push(...finalReadyCoverageIssues(currentRevision.requirements, taskStatuses));
+  for (const task of Object.values(projection.tasks).sort((left, right) => left.id.localeCompare(right.id))) {
+    if (task.kind === "final_verification" || task.status === "cancelled") continue;
+    if (!projection.delivery?.taskAcceptances[task.id]) {
+      issues.push(`Task ${task.id} lacks durable post-integration acceptance.`);
+    }
+  }
+  return issues;
 }
 
 export interface BuildCompletionReadiness {
@@ -980,10 +2054,37 @@ export function buildCompletionReadiness(
   const issues: string[] = [];
   if (projection.runPolicy === "plan_only") {
     issues.push(...projectDocumentationReadiness(projection));
-    if (projection.planRevision <= 0) issues.push("Plan-only completion requires a valid plan.");
+    if (projection.planningPolicyVersion === 1) {
+      // T3a (EP32): a new-policy plan-only run completes only with the READY
+      // plan identity. T9 (EP39): a plan_only run given a pure question is
+      // answered instead — the answer path completes without a plan. The
+      // documentation gate above is unchanged (G-3).
+      if (isAnsweredRun(projection)) {
+        issues.push(...answeredRunReadiness(projection));
+      } else if (!readyPlanIdentity(projection)) {
+        issues.push("Plan-only completion requires a ready plan revision (evidence-gated planning is not ready).");
+      }
+    } else if (projection.planRevision <= 0) {
+      issues.push("Plan-only completion requires a valid plan.");
+    }
     return { ready: issues.length === 0, issues };
   }
 
+  // T9 (EP39/OA-5): an answered run completes with no plan, no workers, no
+  // integration, and no final verification. The documentation gate still
+  // applies beside the answer checks (G-3) — see answeredRunReadiness.
+  if (isAnsweredRun(projection)) {
+    issues.push(...answeredRunReadiness(projection));
+    issues.push(...projectDocumentationReadiness(projection));
+    return { ready: issues.length === 0, issues };
+  }
+
+  // T6a: new-policy final-ready needs every phase accepted for the current
+  // plan revision, every ordinary task accepted after its integrated
+  // boundary, and no pending/unauthorized requirement.
+  if (projection.planningPolicyVersion === 1) {
+    issues.push(...deliveryCompletionIssues(projection));
+  }
   const nonterminal = Object.values(projection.tasks).find(
     (task) => task.kind !== "final_verification" &&
       task.status !== "integrated" && task.status !== "cancelled",
@@ -1186,6 +2287,7 @@ function revisionMatchesIntegrationOrDocumentTip(
 }
 
 function projectDocumentationReadiness(projection: SchedulerProjection): string[] {
+  // Docs v2 (C2a): the kernel snapshot replaces the model-written docs gate.
   if (projection.projectDocsPolicyVersion !== 1) return [];
   const issues: string[] = [];
   const stateCommit = latestProjectStateCommit(projection);
@@ -1223,6 +2325,65 @@ function latestProjectStateCommit(
   return latest;
 }
 
+/**
+ * T6a: every command outcome a deliverable review or boundary check records
+ * must resolve to durable command evidence in this run, and the last cited
+ * command's exit code must be the recorded exit code (exit code governs).
+ */
+function validateDeliveryCommandEvidence(
+  event: SchedulerEvent,
+  evidenceStore: EvidenceStore,
+): void {
+  const commandOutcomes: Array<{ label: string; evidenceIds: string[]; exitCode: unknown }> = [];
+  if (event.type === "delivery.findings_recorded") {
+    const depth = event.payload.depth;
+    if (!isRecord(depth)) return;
+    if (isRecord(depth.affectedTests)) {
+      commandOutcomes.push({
+        label: "affected-test command",
+        evidenceIds: stringArray(depth.affectedTests, "evidenceIds"),
+        exitCode: depth.affectedTests.exitCode,
+      });
+    }
+    if (isRecord(depth.probe)) {
+      commandOutcomes.push({
+        label: "OA-11 probe",
+        evidenceIds: stringArray(depth.probe, "evidenceIds"),
+        exitCode: undefined,
+      });
+    }
+  } else if (Array.isArray(event.payload.checks)) {
+    for (const check of event.payload.checks) {
+      if (!isRecord(check)) continue;
+      commandOutcomes.push({
+        label: `boundary check ${String(check.checkId)}`,
+        evidenceIds: stringArray(check, "evidenceIds"),
+        exitCode: check.exitCode,
+      });
+    }
+  }
+  for (const outcome of commandOutcomes) {
+    if (outcome.evidenceIds.length === 0) continue;
+    const unique = [...new Set(outcome.evidenceIds)];
+    const records = evidenceStore.getByIds({ runId: event.runId, ids: unique });
+    if (records.length !== unique.length) {
+      throw new Error(`The ${outcome.label} cites missing or foreign evidence.`);
+    }
+    const byId = new Map(records.map((record) => [record.id, record]));
+    for (const id of unique) {
+      if (byId.get(id)?.fact.kind !== "command") {
+        throw new Error(`The ${outcome.label} evidence ${id} is not command evidence.`);
+      }
+    }
+    if (outcome.exitCode !== undefined) {
+      const last = byId.get(outcome.evidenceIds.at(-1)!)!.fact as { exitCode: number | null };
+      if (last.exitCode !== outcome.exitCode) {
+        throw new Error(`The ${outcome.label} exit code does not match its command evidence.`);
+      }
+    }
+  }
+}
+
 export function rebuildSchedulerProjection(
   events: readonly SchedulerEvent[]
 ): SchedulerProjection {
@@ -1243,6 +2404,10 @@ export function validateSchedulerEvidenceEvent(
   evidenceStore: EvidenceStore
 ): void {
   if (!projection) return;
+  if (event.type === "delivery.findings_recorded" || event.type === "delivery.boundary_checked") {
+    validateDeliveryCommandEvidence(event, evidenceStore);
+    return;
+  }
   if (event.type === "user.guidance_acknowledged") {
     const resolution = event.payload.resolution;
     if (isRecord(resolution) && resolution.type === "no_plan_change") {
@@ -1587,6 +2752,14 @@ function validateFinalVerificationEvidenceSet(input: {
 }
 
 export function finalVerificationEventArtifactHashes(event: SchedulerEvent): string[] {
+  // T6a (real counts): the test report a delivery record read must exist as
+  // a durable artifact.
+  if (event.type === "delivery.findings_recorded" || event.type === "delivery.boundary_checked") {
+    const reports: unknown[] = event.type === "delivery.findings_recorded"
+      ? [isRecord(event.payload.depth) && isRecord(event.payload.depth.affectedTests) ? event.payload.depth.affectedTests.report : undefined]
+      : (Array.isArray(event.payload.checks) ? event.payload.checks : []).map((check) => isRecord(check) ? check.report : undefined);
+    return reports.flatMap((report) => isRecord(report) && typeof report.artifactHash === "string" ? [report.artifactHash] : []);
+  }
   const checks: unknown[] = [];
   if (event.type === "final_verification.check_completed") checks.push(event.payload.result);
   if (event.type === "final_verification.submitted" && isRecord(event.payload.submissionResult)) {
@@ -1753,18 +2926,19 @@ export function reduceSchedulerEvent(
       return {
         ...emptySchedulerProjection(event),
         runPolicy: requiredRunPolicy(event.payload),
+        ...parseRunPolicyOptions(event.payload),
       };
     }
     if (event.type === "project_docs.policy_configured") {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may configure project document policy.");
       }
-      if (event.payload.version !== 1) {
+      if (event.payload.version !== 1 && event.payload.version !== 2) {
         throw new Error("Project document policy version is invalid.");
       }
       return {
         ...emptySchedulerProjection(event),
-        projectDocsPolicyVersion: 1,
+        projectDocsPolicyVersion: event.payload.version === 2 ? 2 : 1,
       };
     }
     if (event.type !== "plan.created") {
@@ -1793,7 +2967,15 @@ export function reduceSchedulerEvent(
     event.actor.role === "verifier" &&
     event.type !== "verifier.verdict_submitted" &&
     event.type !== "verifier.expectations_recorded" &&
-    event.type !== "plan_critique.submitted"
+    event.type !== "plan_critique.submitted" &&
+    event.type !== "planning.coverage_obligations_recorded" &&
+    event.type !== "planning.coverage_correction_view_recorded" &&
+    event.type !== "planning.coverage_review_recorded" &&
+    event.type !== "answer.review_findings_recorded" &&
+    event.type !== "answer.review_recorded" &&
+    event.type !== "delivery.obligations_recorded" &&
+    event.type !== "delivery.findings_recorded" &&
+    event.type !== "delivery.review_recorded"
   ) {
     throw new Error("The verifier has no scheduler lifecycle authority.");
   }
@@ -1846,6 +3028,15 @@ export function reduceSchedulerEvent(
     ...(current.repairCycles
       ? { repairCycles: cloneRepairCyclesProjection(current.repairCycles) }
       : {}),
+    ...(current.repairIssues
+      ? { repairIssues: cloneRepairIssuesProjection(current.repairIssues) }
+      : {}),
+    ...(current.repairFlaky
+      ? { repairFlaky: Object.fromEntries(Object.entries(current.repairFlaky).map(([key, record]) => [key, { ...record, failingTestIds: [...record.failingTestIds], rerunEvidenceIds: [...record.rerunEvidenceIds] }])) }
+      : {}),
+    ...(current.tempRecords
+      ? { tempRecords: Object.fromEntries(Object.entries(current.tempRecords).map(([key, record]) => [key, { ...record }])) }
+      : {}),
     ...(current.contextRecording
       ? { contextRecording: cloneContextRecording(current.contextRecording) }
       : {}),
@@ -1870,6 +3061,21 @@ export function reduceSchedulerEvent(
           projectDocs: cloneProjectDocs(current.projectDocs),
         }
       : {}),
+    ...(current.planning
+      ? {
+          planning: structuredClone(current.planning),
+        }
+      : {}),
+    // T9: triage/answer single records are always replaced wholesale by
+    // their cases; the per-review maps are copied here and extended by copy.
+    ...(current.answerReviewFindings
+      ? { answerReviewFindings: { ...current.answerReviewFindings } }
+      : {}),
+    ...(current.answerReviewReleases
+      ? { answerReviewReleases: { ...current.answerReviewReleases } }
+      : {}),
+    ...(current.answerReviews ? { answerReviews: { ...current.answerReviews } } : {}),
+    ...(current.delivery ? { delivery: structuredClone(current.delivery) } : {}),
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
@@ -1886,6 +3092,89 @@ export function reduceSchedulerEvent(
     )
   ) {
     throw new Error("A failed Build cannot be resumed or dispatched.");
+  }
+  if (isPlanningEventType(event.type)) {
+    if (["completed", "failed", "stopped"].includes(current.status)) {
+      throw new Error("A terminal Build cannot accept planning events.");
+    }
+    if (next.planningPolicyVersion !== 1) {
+      throw new Error("Planning events require a durable planning policy stamp.");
+    }
+    // T9 triage-first ordering: plan-progressing planning events require a
+    // durable triage decision of `build`. Source registration/amendment and
+    // durable reads stay available (provisioning plus answer-path inspection).
+    if (
+      TRIAGE_GATED_PLANNING_EVENTS.has(event.type) &&
+      current.planningTriageDecision !== "build"
+    ) {
+      throw new Error(
+        `Planning progress (${event.type}) requires a durable triage decision of build; ` +
+          `the current triage decision is ${current.planningTriageDecision ?? "none"}.`
+      );
+    }
+    if (event.type === "planning.plan_ready") {
+      // T9 repair cycle 3 (B4-r3): a bound review — or a plan — that predates
+      // the latest folded acknowledgement never readies. Checked pre-event on
+      // the current projection; the reducer below then decides readiness on
+      // the merits.
+      const foldedBlocker = foldedGuidancePlanReadyBlocked(current);
+      if (foldedBlocker) throw new Error(foldedBlocker);
+    }
+    next.planning = reducePlanningProjection(current.planning, {
+      runId: event.runId,
+      type: event.type,
+      occurredAt: event.occurredAt,
+      actor: event.actor,
+      idempotencyKey: event.idempotencyKey,
+      payload: event.payload,
+      sequence: event.sequence,
+    }, {
+      taskStatuses: new Map(Object.entries(current.tasks).map(([taskId, task]) => [taskId, task.status])),
+    });
+    if (event.type === "planning.plan_ready") {
+      // T4: the bridge materializes the ready revision contracts as
+      // scheduler tasks, then true membership rebinds only current
+      // members (EP23 still holds for members: blocked only "until
+      // re-readiness"; dropped contracts stay non-admissible, surfaced).
+      materializeReadyPlanTasks(next);
+      rebindMemberTasksToReadyPlan(next);
+    }
+    return next;
+  }
+  if (event.type === "planning.policy_configured") {
+    if (["completed", "failed", "stopped"].includes(current.status)) {
+      throw new Error("A terminal Build cannot configure planning policy.");
+    }
+    if (event.actor.role !== "runner") {
+      throw new Error("Only the runner may configure planning policy.");
+    }
+    if (
+      current.lastSequence > 3 ||
+      current.planRevision !== 0 ||
+      Object.keys(current.tasks).length > 0 ||
+      current.lastArchitectActionEvent !== undefined ||
+      Object.keys(current.guidance).length > 0 ||
+      Object.keys(current.userGuidance).length > 0 ||
+      Object.keys(current.architectQuestions).length > 0 ||
+      Object.keys(current.reviews).length > 0 ||
+      Object.keys(current.runtime.providerHealth).length > 0 ||
+      Object.keys(current.runtime.workerAssignments).length > 0 ||
+      current.runtime.architect.runtimeId !== undefined ||
+      current.integrationRevision !== undefined ||
+      current.finalVerification !== undefined ||
+      current.processRecovery !== undefined ||
+      current.contextRecording !== undefined
+    ) {
+      throw new Error("Planning policy can only be configured during run creation.");
+    }
+    if (event.payload.version !== 1 || Object.keys(event.payload).length !== 1) {
+      throw new Error("Planning policy version is invalid.");
+    }
+    if (next.planningPolicyVersion !== undefined) {
+      throw new Error("Planning policy is already configured.");
+    }
+    next.planningPolicyVersion = 1;
+    return next;
   }
   switch (event.type) {
     case "process.recovery_updated": {
@@ -1910,7 +3199,7 @@ export function reduceSchedulerEvent(
       }
       // The new-run document stamp is sequence 1. run.initialized follows it once.
       if (
-        current.projectDocsPolicyVersion === 1 &&
+        (current.projectDocsPolicyVersion === 1 || current.projectDocsPolicyVersion === 2) &&
         current.lastSequence === 1 &&
         current.planRevision === 0 &&
         current.runPolicy === undefined
@@ -1932,16 +3221,431 @@ export function reduceSchedulerEvent(
         );
       }
       next.runPolicy = runPolicy;
+      // C2b (CD-5): the run options ride the run policy additively. A
+      // conflicting restamp is refused like a conflicting run policy; logs
+      // written before C2b carry neither field and keep the defaults.
+      const runOptions = parseRunPolicyOptions(event.payload);
+      if (
+        runOptions.specCopy !== undefined &&
+        next.specCopy !== undefined &&
+        next.specCopy !== runOptions.specCopy
+      ) {
+        throw new Error(
+          `Scheduler run specCopy is already configured as ${next.specCopy}.`
+        );
+      }
+      if (
+        runOptions.handoffFiles !== undefined &&
+        next.handoffFiles !== undefined &&
+        next.handoffFiles !== runOptions.handoffFiles
+      ) {
+        throw new Error(
+          `Scheduler run handoffFiles is already configured as ${next.handoffFiles}.`
+        );
+      }
+      if (runOptions.specCopy !== undefined) next.specCopy = runOptions.specCopy;
+      if (runOptions.handoffFiles !== undefined) next.handoffFiles = runOptions.handoffFiles;
+      break;
+    }
+    case "request.triaged": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record triage.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Request triage requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may record triage.");
+      }
+      const triage = parseRequestTriage(event.payload);
+      const prior = current.planningTriageDecision;
+      // T9 (EP39): triage runs once; only `clarify` re-triages (after the
+      // ask_user resume). An answered run converts explicitly to build; a
+      // build run never flips back (tasks may already exist — fail closed).
+      if (prior === "answer") {
+        throw new Error("An answered run cannot be re-triaged; convert to build first.");
+      }
+      if (prior === "build") {
+        throw new Error("A run already triaged to build cannot be re-triaged.");
+      }
+      // T9 repair cycle 1 (N1): a `clarify` triage must ask the user —
+      // re-triaging clarify to clarify without a user reply after the last
+      // triage is refused, so the loop is bounded by real user replies.
+      if (prior === "clarify" && triage.decision === "clarify") {
+        const lastTriage = current.requestTriage?.sequence ?? 0;
+        const answeredAfterTriage = (current.lastAnsweredArchitectQuestionSequence ?? 0) > lastTriage;
+        if (!answeredAfterTriage) {
+          throw new Error(
+            "A clarify triage must ask the user: re-triaging clarify without an answered user reply is refused."
+          );
+        }
+      }
+      next.planningTriageDecision = triage.decision;
+      next.requestTriage = {
+        decision: triage.decision,
+        rationale: triage.rationale,
+        decidedAt: event.occurredAt,
+        sequence: event.sequence,
+        conversions: current.requestTriage ? [...current.requestTriage.conversions] : [],
+      };
+      break;
+    }
+    case "request.answered": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record an answer.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Request answers require a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may record an answer.");
+      }
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("An answer requires a durable triage decision of answer.");
+      }
+      const answer = parseRequestAnswer(event.payload);
+      next.requestAnswer = {
+        answerText: answer.answerText,
+        addressedParts: answer.addressedParts,
+        evidenceIds: answer.evidenceIds,
+        recordedAt: event.occurredAt,
+        sequence: event.sequence,
+      };
+      break;
+    }
+    case "request.converted_to_build": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot convert to build.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Conversion to build requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "architect") {
+        throw new Error("Only the Architect may convert to build.");
+      }
+      // T9 (EP39): explicit durable conversion when answering discovers a
+      // needed change. Afterwards the run follows the normal planning flow:
+      // the decision flips to `build`, so the run is in planning state again.
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("Only an answered run converts to build.");
+      }
+      assertExactTriageKeys(event.payload, ["reason"]);
+      const reason = requiredNonBlank(event.payload, "reason");
+      const priorRecord = current.requestTriage;
+      next.planningTriageDecision = "build";
+      next.requestTriage = {
+        decision: "build",
+        rationale: priorRecord?.rationale ?? "",
+        decidedAt: priorRecord?.decidedAt ?? event.occurredAt,
+        sequence: priorRecord?.sequence ?? event.sequence,
+        conversions: [
+          ...(priorRecord?.conversions ?? []),
+          { from: "answer", to: "build", reason, sequence: event.sequence },
+        ],
+      };
+      break;
+    }
+    case "answer.review_opted_in": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot opt in to answer review.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review opt-in requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "user") {
+        throw new Error("Only the user may opt in to answer review.");
+      }
+      // T9 repair cycle 1 (B2): the opt-in is accepted on any non-terminal
+      // new-policy run — including at creation, before triage exists. The
+      // review runs only if and when the run is answered; on build runs the
+      // opt-in stays inert. A terminal run and a duplicate opt-in stay refused.
+      if (current.answerReviewOptIn) {
+        throw new Error("Answer review is already opted in for this run.");
+      }
+      assertExactTriageKeys(event.payload, []);
+      next.answerReviewOptIn = { optedInAt: event.occurredAt, sequence: event.sequence };
+      break;
+    }
+    case "answer.review_opted_out": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot opt out of answer review.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review opt-out requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "user") {
+        throw new Error("Only the user may opt out of answer review.");
+      }
+      // T9 repair cycle 1 (N2): the owner can withdraw the opt-in, so an
+      // unavailable reviewer never traps the run. Withdrawing clears the
+      // pending unavailability gate (the owner resolved it); the events stay
+      // durable history. A later opt-in starts clean, never stale-gated.
+      if (!current.answerReviewOptIn) {
+        throw new Error("Answer review is not opted in for this run.");
+      }
+      assertExactTriageKeys(event.payload, []);
+      next.answerReviewOptIn = undefined;
+      next.answerReviewUnavailable = undefined;
+      break;
+    }
+    case "answer.review_findings_recorded": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record answer review findings.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review findings require a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "verifier") {
+        throw new Error("Only the answer reviewer may record findings.");
+      }
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("Answer review findings require a triage decision of answer.");
+      }
+      // T9 opt-in-only (OA-5): no opt-in, no review — refused here, not only
+      // by the runtime driver.
+      if (!current.answerReviewOptIn) {
+        throw new Error("Answer review findings require the user's opt-in for this run.");
+      }
+      if (!current.requestAnswer) {
+        throw new Error("Answer review findings require a recorded answer.");
+      }
+      const findings = parseAnswerReviewFindings(event.payload);
+      if (current.answerReviewFindings?.[findings.reviewId]) {
+        throw new Error(`Answer review ${findings.reviewId} already recorded findings.`);
+      }
+      if (
+        findings.priorReviewId !== undefined &&
+        !current.answerReviews?.[findings.priorReviewId]
+      ) {
+        throw new Error(
+          `Answer review ${findings.reviewId} references an unknown prior review ${findings.priorReviewId}.`
+        );
+      }
+      next.answerReviewFindings = {
+        ...(current.answerReviewFindings ?? {}),
+        [findings.reviewId]: {
+          reviewId: findings.reviewId,
+          findings: findings.findings,
+          // T9 repair cycle 2 (N-A): bind the findings to the answer the
+          // reviewer saw. Stamped by the kernel from the current answer, not
+          // the payload, so it cannot be forged.
+          answerSequence: current.requestAnswer!.sequence,
+          ...(findings.priorReviewId !== undefined ? { priorReviewId: findings.priorReviewId } : {}),
+          recordedAt: event.occurredAt,
+          sequence: event.sequence,
+        },
+      };
+      next.answerReviewUnavailable = undefined;
+      break;
+    }
+    case "answer.review_prior_findings_released": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot release prior answer findings.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review releases require a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may release prior answer findings.");
+      }
+      assertExactTriageKeys(event.payload, ["reviewId", "priorReviewId"]);
+      const reviewId = requiredNonBlank(event.payload, "reviewId");
+      const priorReviewId = requiredNonBlank(event.payload, "priorReviewId");
+      // T9 (OA-10 #2): a re-review records its own view of the answer before
+      // it may see another reviewer's findings on it.
+      const recorded = current.answerReviewFindings?.[reviewId];
+      if (!recorded || recorded.priorReviewId !== priorReviewId) {
+        throw new Error(
+          `Answer review ${reviewId} must record its own findings before prior findings are released.`
+        );
+      }
+      if (current.answerReviewReleases?.[reviewId]) {
+        throw new Error(`Answer review ${reviewId} already released prior findings.`);
+      }
+      next.answerReviewReleases = {
+        ...(current.answerReviewReleases ?? {}),
+        [reviewId]: { reviewId, priorReviewId, sequence: event.sequence },
+      };
+      break;
+    }
+    case "answer.review_recorded": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record an answer review.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer reviews require a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "verifier") {
+        throw new Error("Only the answer reviewer may record a verdict.");
+      }
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("Answer reviews require a triage decision of answer.");
+      }
+      if (!current.answerReviewOptIn) {
+        throw new Error("Answer reviews require the user's opt-in for this run.");
+      }
+      if (!current.requestAnswer) {
+        throw new Error("Answer reviews require a recorded answer.");
+      }
+      const review = parseAnswerReview(event.payload);
+      if (current.answerReviews?.[review.id]) {
+        throw new Error(`Answer review ${review.id} is already recorded.`);
+      }
+      // Record-before-verdict (the RG-6 device, reused): the verdict's
+      // findings must equal the durably recorded own findings — no swap
+      // between the findings pass and the verdict pass.
+      const recorded = current.answerReviewFindings?.[review.id];
+      if (!recorded) {
+        throw new Error(`Answer review ${review.id} has no durably recorded findings.`);
+      }
+      if (!sameValue(recorded.findings, review.findings)) {
+        throw new Error(`Answer review ${review.id} verdict findings differ from its recorded findings.`);
+      }
+      // T9 repair cycle 2 (N-A): the verdict judges the CURRENT answer, and
+      // the findings behind it were formed on that same answer. A verdict
+      // stamped with another answer's sequence, or findings reused across a
+      // re-answer, are refused here — not only by the review driver.
+      if (review.answerSequence !== current.requestAnswer!.sequence) {
+        throw new Error(
+          `Answer review ${review.id} verdict binds answer sequence ${review.answerSequence}, not the current answer ${current.requestAnswer!.sequence}.`
+        );
+      }
+      if (recorded.answerSequence !== current.requestAnswer!.sequence) {
+        throw new Error(
+          `Answer review ${review.id} findings were recorded for superseded answer sequence ${recorded.answerSequence}, not the current answer ${current.requestAnswer!.sequence}.`
+        );
+      }
+      if ((recorded.priorReviewId ?? undefined) !== (review.priorReviewId ?? undefined)) {
+        throw new Error(`Answer review ${review.id} verdict drops or changes its prior review binding.`);
+      }
+      if (review.priorReviewId !== undefined) {
+        const release = current.answerReviewReleases?.[review.id];
+        if (!release || release.priorReviewId !== review.priorReviewId) {
+          throw new Error(
+            `Answer review ${review.id} must release prior findings before its verdict.`
+          );
+        }
+        const prior = current.answerReviews?.[review.priorReviewId];
+        if (!prior) {
+          throw new Error(
+            `Answer review ${review.id} references an unknown prior review ${review.priorReviewId}.`
+          );
+        }
+        // OA-10 #2: the re-review checks each prior finding exactly once.
+        const checks = review.priorFindingChecks ?? [];
+        const priorIds = prior.findings.map((finding) => finding.id).sort();
+        const checkIds = checks.map((check) => check.findingId).sort();
+        if (!sameValue(priorIds, checkIds) || new Set(checkIds).size !== checkIds.length) {
+          throw new Error(
+            `Answer review ${review.id} must check each prior finding exactly once.`
+          );
+        }
+      } else if (review.priorFindingChecks !== undefined && review.priorFindingChecks.length > 0) {
+        throw new Error(`Answer review ${review.id} checks findings without a prior review.`);
+      }
+      next.answerReviews = {
+        ...(current.answerReviews ?? {}),
+        [review.id]: {
+          id: review.id,
+          reviewerRuntimeId: review.reviewerRuntimeId,
+          independence: review.independence,
+          answerSequence: review.answerSequence,
+          findings: review.findings,
+          summary: review.summary,
+          answerAccurate: review.answerAccurate,
+          ...(review.priorReviewId !== undefined ? { priorReviewId: review.priorReviewId } : {}),
+          ...(review.priorFindingChecks !== undefined ? { priorFindingChecks: review.priorFindingChecks } : {}),
+          recordedAt: event.occurredAt,
+          sequence: event.sequence,
+        },
+      };
+      next.answerReviewUnavailable = undefined;
+      break;
+    }
+    case "answer.review_unavailable": {
+      if (["completed", "failed", "stopped"].includes(current.status)) {
+        throw new Error("A terminal Build cannot record answer review unavailability.");
+      }
+      if (current.planningPolicyVersion !== 1) {
+        throw new Error("Answer review unavailability requires a durable planning policy stamp.");
+      }
+      if (event.actor.role !== "runner") {
+        throw new Error("Only the runner may record answer review unavailability.");
+      }
+      if (current.planningTriageDecision !== "answer") {
+        throw new Error("Answer review unavailability requires a triage decision of answer.");
+      }
+      if (!current.answerReviewOptIn) {
+        throw new Error("Answer review unavailability requires the user's opt-in for this run.");
+      }
+      assertExactTriageKeys(event.payload, ["reviewId", "reason", "detail"]);
+      const detail = event.payload.detail;
+      if (detail !== undefined && (typeof detail !== "string" || !detail.trim())) {
+        throw new Error("Answer review unavailability detail is invalid.");
+      }
+      const reviewId = event.payload.reviewId;
+      if (reviewId !== undefined && (typeof reviewId !== "string" || !reviewId.trim())) {
+        throw new Error("Answer review unavailability reviewId is invalid.");
+      }
+      next.answerReviewUnavailable = {
+        ...(typeof reviewId === "string" ? { reviewId } : {}),
+        reason: requiredNonBlank(event.payload, "reason"),
+        ...(typeof detail === "string" ? { detail } : {}),
+        recordedAt: event.occurredAt,
+        sequence: event.sequence,
+      };
       break;
     }
     case "plan.created": {
-      if (current.planRevision !== 0 || Object.keys(current.tasks).length > 0) {
+      const readyForLegacyOverlay = current.planningPolicyVersion === 1
+        ? readyPlanIdentity(current)
+        : undefined;
+      if (
+        !readyForLegacyOverlay &&
+        (current.planRevision !== 0 || Object.keys(current.tasks).length > 0)
+      ) {
         throw new Error("A scheduler run cannot create a second initial plan.");
       }
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may create a plan.");
       }
+      // T9 (EP39/OA-5): answered runs create no tasks — refused here even
+      // before the readiness gate, so the zero-mutation guarantee never
+      // depends on planning state. Legacy runs are untouched.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs cannot create tasks; convert to build first."
+        );
+      }
+      // T3a repair (B1a): on a new-policy run, scheduler tasks materialise
+      // only from a ready plan — which is necessarily after the ledger — so a
+      // legacy plan_tasks call before readiness is refused. Legacy runs are
+      // untouched.
+      const planReady = readyForLegacyOverlay;
+      if (current.planningPolicyVersion === 1 && !planReady) {
+        throw new Error(
+          "Scheduler tasks on a new-policy run require a ready plan revision."
+        );
+      }
       const tasks = event.payload.tasks as BuildTask[];
+      if (planReady) {
+        const currentContractIds = new Set(
+          current.planning!.plan!.revisionsById[
+            current.planning!.plan!.currentRevisionId
+          ].tasks.map((contract) => contract.id),
+        );
+        const reusedContract = tasks.find((task) => currentContractIds.has(task.id));
+        if (reusedContract) {
+          throw new Error(
+            `Plan task ${reusedContract.id} reuses a bridged ready-plan contract id.`,
+          );
+        }
+        if (tasks.some((task) => task.status === "integrated")) {
+          throw new Error(
+            "A direct plan event cannot set a task to integrated.",
+          );
+        }
+      }
       const validation = validateTaskGraph(tasks);
       if (!validation.valid) {
         throw new Error(
@@ -1949,8 +3653,39 @@ export function reduceSchedulerEvent(
         );
       }
       next.planRevision = requiredNumber(event.payload, "revision");
-      next.tasks = Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)]));
-      next.acceptanceContractStatus = acceptanceContractStatusForTasks(tasks);
+      if (!planReady) {
+        next.tasks = Object.fromEntries(tasks.map((task) => [task.id, cloneBuildTask(task)]));
+      } else {
+        const bridged = { ...current.tasks };
+        for (const task of tasks) {
+          if (!bridged[task.id]) bridged[task.id] = cloneBuildTask(task);
+        }
+        next.tasks = bridged;
+      }
+      if (planReady) {
+        // T3a repair (B1c): bind every created task to the ready plan that
+        // authorised it. Admission compares this stamp to the current ready
+        // identity, so tasks from a superseded revision are never admitted.
+        // T4: tasks mapping to a ready contract carry it; rogue tasks stay
+        // identity-bound and non-admissible (true membership).
+        const plan = current.planning?.plan;
+        const revision = plan?.revisionsById[plan.currentRevisionId];
+        const memberIds = new Set(
+          (revision?.tasks ?? []).map((contract) => contract.id),
+        );
+        const bindings = { ...current.readyPlanTaskBindings };
+        for (const task of tasks) {
+          bindings[task.id] = {
+            revisionId: planReady.revisionId,
+            digest: planReady.digest,
+            ...(memberIds.has(task.id) ? { contractId: task.id } : {}),
+          };
+        }
+        next.readyPlanTaskBindings = bindings;
+      }
+      next.acceptanceContractStatus = acceptanceContractStatusForTasks(
+        Object.values(next.tasks),
+      );
       next.planRiskDeclaration = parsePlanRiskDeclaration(event.payload);
       break;
     }
@@ -1985,6 +3720,19 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may upgrade an acceptance contract.");
       }
+      // T9 (EP39/OA-5): answered runs revise nothing.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs cannot upgrade the acceptance contract; convert to build first."
+        );
+      }
+      // T3a repair (B1a): task-revising events on a new-policy run require a
+      // ready plan. Legacy runs are untouched.
+      if (current.planningPolicyVersion === 1 && !readyPlanIdentity(current)) {
+        throw new Error(
+          "Acceptance-contract upgrade on a new-policy run requires a ready plan revision."
+        );
+      }
       applyAcceptanceContractUpgrade(
         next,
         parseAcceptanceContractUpgrade(event.payload)
@@ -2002,6 +3750,13 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may advance the integration revision.");
       }
+      // T9 (EP39/OA-5): answered runs never integrate. This is the only gate
+      // on this event, so it is load-bearing for the zero-mutation proof.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs cannot advance integration; convert to build first."
+        );
+      }
       advanceIntegrationRevision(
         next,
         requiredString(event.payload, "integrationRevision"),
@@ -2012,6 +3767,12 @@ export function reduceSchedulerEvent(
     case "final_verification.generation_created": {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may create a final verification generation.");
+      }
+      // T9 (EP39/OA-5): answered runs have no final verification.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs have no final verification; convert to build first."
+        );
       }
       createFinalVerificationGeneration(next, event.payload);
       break;
@@ -2180,10 +3941,283 @@ export function reduceSchedulerEvent(
       if (!Number.isSafeInteger(limit) || (limit as number) < 0) {
         throw new Error("repairPlanLimit must be a non-negative integer.");
       }
-      if (current.repairCycles && current.repairCycles.limit !== limit) {
+      const explicit = event.payload.explicit;
+      if (explicit !== undefined && typeof explicit !== "boolean") {
+        throw new Error("repairPlanLimit explicit flag must be a boolean.");
+      }
+      const explicitLimit = explicit === true ? true : explicit === false ? false : undefined;
+      if (current.repairCycles &&
+        (current.repairCycles.limit !== limit ||
+          (current.repairCycles.explicitLimit ?? false) !== (explicitLimit ?? false))) {
         throw new Error("Repair policy is already configured differently.");
       }
-      next.repairCycles = current.repairCycles ?? { limit: limit as number, used: 0, extensions: 0 };
+      next.repairCycles = current.repairCycles ?? {
+        limit: limit as number,
+        used: 0,
+        extensions: 0,
+        ...(explicitLimit !== undefined ? { explicitLimit } : {}),
+      };
+      break;
+    }
+    case "repair.issue_recorded": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record a repair issue.");
+      const issueId = requiredString(event.payload, "issueId");
+      const rootCause = requiredString(event.payload, "rootCause");
+      const limit = requiredPositiveInteger(event.payload, "limit");
+      const issues = { ...(next.repairIssues ?? {}) };
+      const existing = issues[issueId];
+      if (existing && (existing.rootCause !== rootCause || existing.limit !== limit)) {
+        throw new Error("Repair issue identity or allowance conflicts with its durable record.");
+      }
+      issues[issueId] ??= { issueId, rootCause, limit, used: 0, hypotheses: [], outcomes: [], approaches: [] };
+      next.repairIssues = issues;
+      break;
+    }
+    case "repair.approach_decided": {
+      if (event.actor.role !== "architect") throw new Error("Only the Architect may decide a repair approach.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Repair approach requires its durable issue.");
+      const approachId = requiredString(event.payload, "approachId");
+      const repeat = event.payload.repeat === true;
+      const hypothesis = requiredString(event.payload, "hypothesis");
+      const diagnosticSet = stringArray(event.payload, "diagnosticSet");
+      const evidenceIds = stringArray(event.payload, "evidenceIds");
+      const prior = issue.approaches.find((entry) => entry.approachId === approachId);
+      const known = new Set(issue.approaches.flatMap((entry) => entry.diagnosticSet));
+      const decided = new Set(issue.approaches.flatMap((entry) => entry.evidenceIds));
+      const failedEvidence = new Set(issue.approaches.flatMap((entry) => entry.failureEvidenceIds ?? []));
+      const excluded = new Set([...known, ...decided, ...failedEvidence]);
+      const superseded = issue.approaches.at(-1);
+      if (superseded && !superseded.failed) superseded.failed = true;
+      if (!repeat && prior?.failed) {
+        throw new Error("A failed repair approach cannot be relabelled or resubmitted without an explicit repeat and new evidence.");
+      }
+      if (prior?.failed || repeat) {
+        if (evidenceIds.some((id) => failedEvidence.has(id))) {
+          throw new Error("A repeated repair approach must not cite the failure's own evidence.");
+        }
+        if (!evidenceIds.some((id) => !excluded.has(id))) {
+          throw new Error("A repeated failed repair approach requires evidence NEW to its diagnostic set.");
+        }
+      }
+      if (prior && !sameValue(prior.diagnosticSet, diagnosticSet) && !prior.failed) {
+        throw new Error("A prior repair approach's diagnostic set is immutable.");
+      }
+      if (prior && repeat && sameValue(prior.evidenceIds, evidenceIds)) {
+        throw new Error("Replaying reused evidence cannot authorize a repeated failed approach.");
+      }
+      // T6b repair (R2-B3): with prior approaches a new decision needs NON-EMPTY evidence outside every prior excluded set.
+      if (issue.approaches.length > 0 && !evidenceIds.some((id) => !excluded.has(id))) {
+        throw new Error("A renamed repair approach with identical evidence cannot pass as a new approach; empty evidence never passes.");
+      }
+      // T6b repair (R2-B3): a new id with a failed approach's hypothesis and diagnostic set is a relabel.
+      if (issue.approaches.length > 0 && issue.approaches.some((entry) =>
+        entry.failed &&
+        entry.hypothesis === hypothesis &&
+        entry.diagnosticSet.length === diagnosticSet.length &&
+        entry.diagnosticSet.every((id) => diagnosticSet.includes(id)))) {
+        throw new Error("A new repair approach id with a failed approach's hypothesis and diagnostic set is a relabel, not a new approach.");
+      }
+      issue.approaches.push({ approachId, repeat, failed: false, dispatched: false, hypothesis, diagnosticSet, evidenceIds, failureEvidenceIds: [] });
+      break;
+    }
+    case "repair.cycle_recorded": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record a charged repair cycle.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Repair cycle requires its durable issue.");
+      const hypothesis = requiredString(event.payload, "hypothesis");
+      const outcome = requiredString(event.payload, "outcome");
+      const evidenceIds = stringArray(event.payload, "evidenceIds");
+      if (evidenceIds.length === 0) throw new Error("A repair cycle requires evidence.");
+      if (issue.externalBlocker) throw new Error("A proven external blocker does not consume futile attempts.");
+      // T6b repair (B5): an approach-bound cycle dispatched repair tasks,
+      // so it is always substantive no matter the hypothesis label.
+      // The diagnostic exemption covers approach-free investigations only.
+      if (event.payload.approachId === undefined && isDiagnosticRepairCycle(hypothesis, outcome)) {
+        issue.hypotheses.push(hypothesis);
+        issue.outcomes.push(outcome);
+        break;
+      }
+      if (outcome === "resolved" && event.payload.approachId !== undefined) {
+        const resolvedId = requiredString(event.payload, "approachId");
+        const resolved = issue.approaches.at(-1);
+        if (!resolved || resolved.approachId !== resolvedId) throw new Error("Repair cycle must follow its recorded approach decision.");
+        resolved.failed = false;
+        issue.hypotheses.push(hypothesis);
+        issue.outcomes.push(outcome);
+        break;
+      }
+      if (issue.used >= issue.limit) throw new Error("Issue repair budget is exhausted.");
+      issue.used += 1;
+      issue.hypotheses.push(hypothesis);
+      issue.outcomes.push(outcome);
+      if (event.payload.approachId === undefined) break;
+      const approachId = requiredString(event.payload, "approachId");
+      const approach = issue.approaches.at(-1);
+      if (!approach || approach.approachId !== approachId) throw new Error("Repair cycle must follow its recorded approach decision.");
+      // T6b repair (R3-B2): a decision authorizes exactly one dispatch;
+      // the consumption is marked here in the kernel, durably.
+      if (outcome === "dispatched") approach.dispatched = true;
+      approach.failed = outcome !== "resolved" && outcome !== "dispatched";
+      if (approach.failed) {
+        const knownFailure = new Set(approach.failureEvidenceIds ?? []);
+        for (const id of evidenceIds) {
+          if (!knownFailure.has(id)) {
+            approach.failureEvidenceIds.push(id);
+            knownFailure.add(id);
+          }
+        }
+      }
+      break;
+    }
+    case "repair.approach_failed": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record a failed repair approach.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Failed repair approach requires its durable issue.");
+      const approachId = requiredString(event.payload, "approachId");
+      const approach = issue.approaches.at(-1);
+      if (!approach || approach.approachId !== approachId) throw new Error("Failed repair approach must follow its recorded approach decision.");
+      // T6b repair (R3-B2): a dispatched repair whose next validation
+      // failed is durably failed here. No cycle is charged (an
+      // observation is not an attempt) and no failure evidence is
+      // absorbed, so the next decision still cites fresh evidence; a
+      // repeat of the same approach still needs evidence NEW to its sets.
+      if (approach.failed) break;
+      if (!approach.dispatched) throw new Error("Only a dispatched repair approach fails on its next validation.");
+      approach.failed = true;
+      break;
+    }
+    case "repair.flaky_isolated": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record flaky isolation.");
+      const category = requiredString(event.payload, "category");
+      const generationId = requiredString(event.payload, "generationId");
+      const taskId = requiredString(event.payload, "taskId");
+      const targetRevision = requiredString(event.payload, "targetRevision");
+      const failingTestIds = stringArray(event.payload, "failingTestIds");
+      if (failingTestIds.length === 0 && !(event.payload.rerunGreen === false && typeof event.payload.finding === "string" && (event.payload.finding as string).startsWith("not_performed"))) throw new Error("Flaky isolation requires the first run's failing test ids, or a not_performed finding when no test ids exist to narrow.");
+      if (typeof event.payload.rerunGreen !== "boolean") throw new Error("Flaky isolation requires the rerun result.");
+      const rerunEvidenceIds = stringArray(event.payload, "rerunEvidenceIds");
+      const finding = requiredString(event.payload, "finding");
+      const key = `${generationId}:${category}`;
+      const record = { category, generationId, taskId, targetRevision, failingTestIds: [...failingTestIds], rerunGreen: event.payload.rerunGreen as boolean, rerunEvidenceIds: [...rerunEvidenceIds], finding };
+      const existing = next.repairFlaky?.[key];
+      if (existing) {
+        if (!sameValue(existing, record)) throw new Error(`Flaky isolation for ${key} conflicts with its durable record.`);
+        break;
+      }
+      next.repairFlaky = { ...(next.repairFlaky ?? {}), [key]: record };
+      break;
+    }
+    case "repair.external_blocker_recorded": {
+      if (event.actor.role !== "architect") throw new Error("Only the Architect may record an external blocker.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("External blocker requires its durable issue.");
+      const acceptanceCondition = requiredString(event.payload, "acceptanceCondition");
+      const evidence = stringArray(event.payload, "evidence");
+      const attemptedResolutions = stringArray(event.payload, "attemptedResolutions");
+      const requiredOwnerAction = requiredString(event.payload, "requiredOwnerAction");
+      if (evidence.length === 0 || attemptedResolutions.length === 0) {
+        throw new Error("A blocker record requires evidence and attempted resolutions.");
+      }
+      if (issue.externalBlocker) throw new Error("This repair issue already has an external blocker.");
+      issue.externalBlocker = { acceptanceCondition, evidence, attemptedResolutions, requiredOwnerAction };
+      break;
+    }
+    case "repair.issue_budget_extended": {
+      if (event.actor.role !== "user") throw new Error("Issue-budget extension requires the owner.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Issue-budget extension requires its durable issue.");
+      const additional = event.payload.additionalCycles;
+      if (!Number.isSafeInteger(additional) || (additional as number) < 1 || (additional as number) > MAX_REPAIR_CYCLE_EXTENSION) {
+        throw new Error(`additionalCycles must be an integer between 1 and ${MAX_REPAIR_CYCLE_EXTENSION}.`);
+      }
+      issue.limit += additional as number;
+      if (current.pauseReason?.reason === `repair_issue_paused:${issueId}`) {
+        next.status = "running";
+        delete next.pauseReason;
+      }
+      break;
+    }
+    case "repair.issue_paused": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may pause on a repair issue.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("Repair-issue pause requires its durable issue.");
+      const cause = requiredString(event.payload, "cause");
+      if (cause !== "budget_exhausted" && cause !== "external_blocker" && cause !== "approach_failed") {
+        throw new Error("Repair-issue pause cause is invalid.");
+      }
+      const detail = requiredString(event.payload, "detail");
+      next.status = "paused";
+      next.pauseReason = { reason: `repair_issue_paused:${issueId}`, detail: `repair:${cause}:${detail}` };
+      break;
+    }
+    case "repair.external_blocker_cleared": {
+      if (event.actor.role !== "user") throw new Error("External-blocker clearance requires the owner.");
+      const issueId = requiredString(event.payload, "issueId");
+      const issue = next.repairIssues?.[issueId];
+      if (!issue) throw new Error("External-blocker clearance requires its durable issue.");
+      if (!issue.externalBlocker) throw new Error("This repair issue has no external blocker to clear.");
+      delete issue.externalBlocker;
+      if (current.pauseReason?.reason === `repair_issue_paused:${issueId}`) {
+        next.status = "running";
+        delete next.pauseReason;
+      }
+      break;
+    }
+    case "temp.creation_recorded": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record temp creation.");
+      const path = requiredString(event.payload, "path");
+      const ownerRunId = requiredString(event.payload, "ownerRunId");
+      const ownerProjectId = requiredString(event.payload, "ownerProjectId");
+      const createdAt = requiredString(event.payload, "createdAt");
+      const kind: "directory" | "file" | undefined = event.payload.kind === "directory" ? "directory" : event.payload.kind === "file" ? "file" : undefined;
+      if (!kind) throw new Error("Temp creation kind is invalid.");
+      const retained = event.payload.retained === true;
+      const key = createHash("sha256").update(path).digest("hex").slice(0, 24);
+      const records = { ...(next.tempRecords ?? {}) };
+      const existing = records[key];
+      const record = { path, ownerRunId, ownerProjectId, createdAt, kind, retained: (existing?.retained ?? false) || retained };
+      if (existing && (existing.path !== path || existing.ownerRunId !== ownerRunId || existing.ownerProjectId !== ownerProjectId || existing.kind !== kind)) {
+        throw new Error("Temp creation record conflicts with its durable record.");
+      }
+      records[key] = existing ?? record;
+      if (existing && retained && !existing.retained) records[key] = record;
+      next.tempRecords = records;
+      break;
+    }
+    case "temp.record_cleared": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may clear temp records.");
+      const path = requiredString(event.payload, "path");
+      const key = createHash("sha256").update(path).digest("hex").slice(0, 24);
+      if (next.tempRecords?.[key]) {
+        const records = { ...next.tempRecords };
+        delete records[key];
+        next.tempRecords = records;
+      }
+      break;
+    }
+    case "cleanup.checked": {
+      if (event.actor.role !== "runner") throw new Error("Only the runner may record cleanup searches.");
+      const trigger = requiredString(event.payload, "trigger");
+      if (trigger !== "task_attempt" && trigger !== "verification") {
+        throw new Error("Cleanup search trigger is invalid.");
+      }
+      if (!Array.isArray(event.payload.findings)) {
+        throw new Error("Cleanup search requires findings.");
+      }
+      for (const finding of event.payload.findings as Record<string, unknown>[]) {
+        const ownership = finding.ownership;
+        const action = finding.action;
+        if (ownership !== "proven" && ownership !== "unproven") throw new Error("Cleanup ownership must be proven or unproven.");
+        if (ownership === "unproven" && action !== "retained") throw new Error("Unproven cleanup ownership must retain the resource.");
+        if (action !== "cleaned" && action !== "retained") throw new Error("Cleanup action is invalid.");
+      }
       break;
     }
     case "repair.cycle_limit_reached": {
@@ -2198,7 +4232,8 @@ export function reduceSchedulerEvent(
       }
       const used = requiredNumber(event.payload, "used");
       const limit = requiredNumber(event.payload, "limit");
-      if (used !== cycles.used || limit !== cycles.limit || used < limit) {
+      const effective = effectiveRepairPlanLimit(current) ?? cycles.limit;
+      if (used !== cycles.used || limit !== effective || used < effective) {
         throw new Error("Repair-cycle limit event does not match the kernel repair-cycle count.");
       }
       next.repairCycles = {
@@ -2206,7 +4241,12 @@ export function reduceSchedulerEvent(
         pause: { source, targetRevision: requiredString(event.payload, "targetRevision"), used, limit },
       };
       next.status = "paused";
-      next.pauseReason = { reason: "repair_cycle_limit" };
+      next.pauseReason = {
+        reason: "repair_cycle_limit",
+        ...(current.planningPolicyVersion === 1
+          ? { detail: `Run-level repair-plan budget exhausted: used ${used} of ${effective} repair plans${repairPlanLimitScales(current) ? ` (scales as 3 + ${readyPlanTaskCount(current)} ready-plan tasks)` : " (explicit cap)"}; the user must extend the repair-cycle budget.` }
+          : {}),
+      };
       break;
     }
     case "repair.cycle_limit_extended": {
@@ -2227,6 +4267,7 @@ export function reduceSchedulerEvent(
         limit: cycles.limit + (additional as number),
         used: cycles.used,
         extensions: cycles.extensions + 1,
+        ...(cycles.explicitLimit !== undefined ? { explicitLimit: cycles.explicitLimit } : {}),
       };
       next.status = "running";
       delete next.pauseReason;
@@ -2235,6 +4276,20 @@ export function reduceSchedulerEvent(
     case "task.revised": {
       if (event.actor.role !== "architect") {
         throw new Error("Only the Architect may revise a task.");
+      }
+      // T3a repair (B1a): task-revising events on a new-policy run require a
+      // ready plan. The task keeps its original ready-plan binding (fail
+      // closed): a revision is not a re-review. Legacy runs are untouched.
+      // T9 (EP39/OA-5): answered runs revise nothing.
+      if (current.planningPolicyVersion === 1 && current.planningTriageDecision === "answer") {
+        throw new Error(
+          "Answered runs cannot revise tasks; convert to build first."
+        );
+      }
+      if (current.planningPolicyVersion === 1 && !readyPlanIdentity(current)) {
+        throw new Error(
+          "Task revision on a new-policy run requires a ready plan revision."
+        );
       }
       const taskId = requiredString(event.payload, "taskId");
       const task = next.tasks[taskId];
@@ -2250,11 +4305,25 @@ export function reduceSchedulerEvent(
         throw new Error(`Task ${taskId} must be planned, failed, or rejected before revision.`);
       }
       const patch = (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+      const revisionMembership = taskPlanMembership(current, taskId);
+      const revisionContract = revisionMembership.contractId
+        ? current.planning?.plan?.revisionsById[current.planning.plan.currentRevisionId]?.tasks.find((candidate) => candidate.id === revisionMembership.contractId)
+        : undefined;
+      assertContractTaskRevisionAllowed({
+        taskId,
+        patch: {
+          ...(Object.hasOwn(patch, "dependencies") ? { dependencies: patch.dependencies } : {}),
+          ...(Object.hasOwn(patch, "acceptanceCriteria") ? { acceptanceCriteria: patch.acceptanceCriteria } : {}),
+          ...(Object.hasOwn(patch, "requiredCapabilities") ? { requiredCapabilities: patch.requiredCapabilities } : {}),
+        },
+        ...(revisionContract ? { contract: revisionContract } : {}),
+      });
       if (
         task.kind === "verification_repair" &&
         (
           Object.hasOwn(patch, "verificationRepair") ||
           Object.hasOwn(patch, "verifierRepair") ||
+          Object.hasOwn(patch, "deliveryRepair") ||
           Object.hasOwn(patch, "kind")
         )
       ) {
@@ -2325,7 +4394,21 @@ export function reduceSchedulerEvent(
       const task = next.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
       const status = requiredString(event.payload, "status") as BuildTask["status"];
-      assertTransitionAuthority(status, event.actor.role);
+      assertTransitionAuthority(status, event.actor);
+      if (status === "integrating") assertDeliveryReviewAllowsTask(current, task);
+      if (
+        current.planningPolicyVersion === 1 &&
+        (status === "assigned" || status === "running")
+      ) {
+        // T3a (EP32/EP23) + repair (B1c): direct-event worker admission for a
+        // new-policy run requires the READY plan identity AND that the task
+        // be bound to that exact ready revision; plan-only runs never admit
+        // workers. Legacy runs are untouched.
+        const blocked = newPolicyTaskAdmissionBlocked(current, taskId);
+        if (blocked) {
+          throw new Error(blocked);
+        }
+      }
       if (
         status === "cancelled" &&
         task.kind === "verification_repair" &&
@@ -2417,7 +4500,7 @@ export function reduceSchedulerEvent(
               const { documentTip: _tip, ...remaining } = next.projectDocs;
               next.projectDocs = remaining;
             }
-            if (next.projectDocsPolicyVersion === 1) {
+            if (next.projectDocsPolicyVersion === 1 || next.projectDocsPolicyVersion === 2) {
               next.latestIntegratedTaskSequence = event.sequence;
             }
           }
@@ -2512,10 +4595,12 @@ export function reduceSchedulerEvent(
                 acknowledgement.resolution.planReconciliation,
               ),
             }
-          : {
-              ...acknowledgement.resolution,
-              evidenceIds: [...acknowledgement.resolution.evidenceIds],
-            };
+          : acknowledgement.resolution.type === "folded_into_planning"
+            ? acceptFoldedIntoPlanningAcknowledgement(current, acknowledgement.resolution)
+            : {
+                ...acknowledgement.resolution,
+                evidenceIds: [...acknowledgement.resolution.evidenceIds],
+              };
       if (resolution.type === "plan_reconciled") {
         applyPlanReconciliation(next, resolution.planReconciliation, {
           allowSteeringCheckpoints: true,
@@ -2541,6 +4626,16 @@ export function reduceSchedulerEvent(
             supersededRationale: resolution.rationale,
           };
         }
+      }
+      if (resolution.type === "folded_into_planning") {
+        // T9 repair cycle 3 (B4-r3/N-C): stamp the latest fold durably. The
+        // readiness gates (plan_ready, answered completion) compare against
+        // this sequence.
+        next.latestFoldedIntoPlanningAck = {
+          guidanceId: acknowledgement.guidanceId,
+          version: guidance.version,
+          sequence: event.sequence,
+        };
       }
       next.userGuidance[guidance.guidanceId] = {
         ...guidance,
@@ -2596,6 +4691,8 @@ export function reduceSchedulerEvent(
         answer: answer.answer,
         ...(question.checkpoint ? { resumeStatus: "pending" } : {}),
       };
+      // T9 repair cycle 1 (N1): the clarify-loop bound reads this.
+      next.lastAnsweredArchitectQuestionSequence = event.sequence;
       delete next.blockingArchitectQuestionId;
       break;
     }
@@ -2842,6 +4939,10 @@ export function reduceSchedulerEvent(
         task = applyTaskTransition(task, "architect_review");
       }
       const decision = requiredString(event.payload, "decision");
+      // T6a (B7): the Architect disposes of open blocking findings and
+      // unverified claims independently; approval then needs neither left.
+      applyDeliveryDispositions(next, task, event);
+      if (decision === "approved") assertDeliveryReviewAllowsTask(next, task);
       if (decision !== "approved" && decision !== "rejected") {
         throw new Error(`Review decision ${decision} is invalid.`);
       }
@@ -2927,6 +5028,9 @@ export function reduceSchedulerEvent(
           ...(typeof event.payload.taskId === "string"
             ? { taskId: event.payload.taskId }
             : {}),
+          ...(typeof event.payload.detail === "string" && event.payload.detail
+            ? { detail: event.payload.detail }
+            : {}),
         };
       } else {
         delete next.pauseReason;
@@ -2958,6 +5062,7 @@ export function reduceSchedulerEvent(
         );
       }
       assertBuildCompletionReady(current);
+      assertHandoffSnapshotGate(current, current.integrationRevision);
       next.status = "completed";
       if (current.acceptanceContractStatus === "acceptance_contract_upgrade_required") {
         next.acceptanceContractStatus = "legacy_completed";
@@ -2973,7 +5078,13 @@ export function reduceSchedulerEvent(
         throw new Error("Final project handoff was already requested.");
       }
       if (current.runPolicy === "plan_only") {
-        if (current.planRevision <= 0) {
+        if (current.planningPolicyVersion === 1) {
+          // T9 (EP39): a plan_only run given a pure question is answered —
+          // the answer path completes without the ready plan identity.
+          if (!readyPlanIdentity(current) && !isAnsweredRun(current)) {
+            throw new Error("Plan-only final project handoff requires a ready plan revision.");
+          }
+        } else if (current.planRevision <= 0) {
           throw new Error("Plan-only final project handoff requires a valid plan.");
         }
         assertBuildCompletionReady(current);
@@ -2983,6 +5094,7 @@ export function reduceSchedulerEvent(
       next.projectHandoff = {
         status: "requested",
         summary: requiredString(event.payload, "summary"),
+        requestedSequence: event.sequence,
         options: ["keep_integration_branch", "apply_to_project"],
       };
       next.status = "paused";
@@ -2990,22 +5102,12 @@ export function reduceSchedulerEvent(
       break;
     }
     case "project.handoff_selected": {
-      rejectCompletionWhileContextRecordingUnresolved(current);
       if (event.actor.role !== "user" && event.actor.role !== "runner") {
         throw new Error("Final project handoff selection requires the user or runner.");
-      }
-      if (
-        current.acceptanceContractStatus === "acceptance_contract_upgrade_required" &&
-        current.acceptanceUpgradeRequiredEventRecorded
-      ) {
-        throw new Error(
-          "Final project handoff is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
-        );
       }
       if (current.projectHandoff?.status !== "requested") {
         throw new Error("Final project handoff is not awaiting user selection.");
       }
-      assertBuildCompletionReady(current);
       const choice = requiredString(event.payload, "choice");
       if (choice !== "keep_integration_branch" && choice !== "apply_to_project") {
         throw new Error(`Final project handoff choice ${choice} is invalid.`);
@@ -3018,14 +5120,10 @@ export function reduceSchedulerEvent(
         event.payload,
         "integrationRevision",
       );
-      if (
-        current.runPolicy !== "plan_only" &&
-        !revisionMatchesIntegrationOrDocumentTip(current, selectedIntegrationRevision)
-      ) {
-        throw new Error(
-          "Final project handoff selection does not match the verified integration revision.",
-        );
-      }
+      // C2b repair m6: the kernel acceptance for a selection is the one
+      // shared predicate -- the whole rule, same as the manager pre-check
+      // applies before any project mutation.
+      assertProjectHandoffSelectionAccepted(current, selectedIntegrationRevision);
       if (
         projectRevision !== undefined &&
         (typeof projectRevision !== "string" || !projectRevision.trim())
@@ -3216,24 +5314,48 @@ export function reduceSchedulerEvent(
       applyProjectDocCommitted(next, event);
       break;
     }
+    case "project_docs.handoff_snapshot_committed": {
+      applyHandoffSnapshotCommitted(next, event);
+      break;
+    }
     case "project_doc.abandoned": {
       applyProjectDocAbandoned(next, event);
       break;
     }
+    case "delivery.review_started":
+    case "delivery.review_requested":
+    case "delivery.obligations_recorded":
+    case "delivery.criteria_and_diff_delivered":
+    case "delivery.findings_recorded":
+    case "delivery.report_delivered":
+    case "delivery.review_recorded":
+    case "delivery.boundary_started":
+    case "delivery.boundary_checked":
+    case "delivery.boundary_failure_resolved":
+    case "task.acceptance_recorded":
+    case "phase.acceptance_recorded":
+      reduceDeliveryEvent(current, next, event);
+      break;
     case "project_docs.policy_configured": {
       if (event.actor.role !== "runner") {
         throw new Error("Only the runner may configure project document policy.");
       }
-      if (event.payload.version !== 1) {
+      if (event.payload.version !== 1 && event.payload.version !== 2) {
         throw new Error("Project document policy version is invalid.");
       }
       if (
         next.projectDocsPolicyVersion !== undefined &&
-        next.projectDocsPolicyVersion !== 1
+        next.projectDocsPolicyVersion !== event.payload.version
       ) {
         throw new Error("Project document policy is already configured differently.");
       }
-      next.projectDocsPolicyVersion = 1;
+      // C2b repair CD-14: the reducer does NOT enforce the docs-v2 /
+      // planning-v1 pairing -- T7a remains the only owner of production
+      // stamping and stamps both together at creation (CD-1). A docs-v2 run
+      // without a plan revision hands off the integration revision (or the
+      // recorded baseline) instead of pausing forever (N6, closed in the
+      // runtime, not here). Legacy-planning runs keep docs v1 unchanged.
+      next.projectDocsPolicyVersion = event.payload.version === 2 ? 2 : 1;
       break;
     }
   }
@@ -4013,6 +6135,26 @@ function createVerifierRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
 ): void {
+  // T3a repair cycle 2 (B3): repair tasks are ordinary worker tasks, so on
+  // a new-policy run they are planned only under a ready plan (like every
+  // other task-adding path) and stamped with its identity below. Checked
+  // before the repair cycle is consumed so a refusal spends nothing.
+  // T9 (EP39/OA-5): answered runs plan no repairs. Checked before the
+  // budget is consumed, like the readiness refusal below.
+  if (projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer") {
+    throw new Error(
+      "Answered runs cannot plan repairs; convert to build first."
+    );
+  }
+  // Legacy runs are untouched.
+  const repairReady = projection.planningPolicyVersion === 1
+    ? readyPlanIdentity(projection)
+    : undefined;
+  if (projection.planningPolicyVersion === 1 && !repairReady) {
+    throw new Error(
+      "Verifier repairs on a new-policy run require a ready plan revision."
+    );
+  }
   consumeRepairCycle(projection);
   const current = projection.verifier?.current;
   if (
@@ -4133,8 +6275,978 @@ function createVerifierRepairTasks(
     );
   }
   for (const task of tasks) projection.tasks[task.id] = task;
+  if (repairReady) {
+    // T4: kernel-created repairs stay admissible under the ready plan;
+    // the parent contract is recorded when resolvable, otherwise the
+    // repair stays identity-bound (legacy-seeded parents).
+    const bindings = { ...projection.readyPlanTaskBindings };
+    for (const task of tasks) {
+      const parent = repairParentContractId(projection, task);
+      bindings[task.id] = parent !== undefined
+        ? { revisionId: repairReady.revisionId, digest: repairReady.digest, contractId: parent }
+        : { revisionId: repairReady.revisionId, digest: repairReady.digest };
+    }
+    projection.readyPlanTaskBindings = bindings;
+  }
   current.repairTaskIds = tasks.map((task) => task.id);
   projection.planRevision = revision;
+}
+
+// ---------------------------------------------------------------------------
+// T6a: mandatory deliverable review and post-integration acceptance kernel.
+// The pure record shapes and shared rules live in delivery-acceptance.ts.
+// ---------------------------------------------------------------------------
+
+function reduceDeliveryEvent(
+  current: SchedulerProjection,
+  next: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (current.planningPolicyVersion !== 1) {
+    throw new Error("Deliverable review and acceptance events apply only to new-policy runs.");
+  }
+  const state = next.delivery ?? emptyDeliveryState();
+  next.delivery = state;
+  switch (event.type) {
+    case "delivery.review_started":
+      deliveryReviewStarted(current, state, event);
+      return;
+    case "delivery.review_requested":
+      deliveryReviewRequested(current, state, event);
+      return;
+    case "delivery.obligations_recorded":
+      deliveryObligationsRecorded(state, event);
+      return;
+    case "delivery.criteria_and_diff_delivered":
+      deliveryDiffDelivered(state, event);
+      return;
+    case "delivery.findings_recorded":
+      deliveryFindingsRecorded(state, event);
+      return;
+    case "delivery.report_delivered":
+      deliveryReportDelivered(state, event);
+      return;
+    case "delivery.review_recorded":
+      deliveryReviewRecorded(state, event);
+      return;
+    case "delivery.boundary_started":
+      deliveryBoundaryStarted(current, state, event);
+      return;
+    case "delivery.boundary_checked":
+      deliveryBoundaryChecked(current, state, event);
+      return;
+    case "delivery.boundary_failure_resolved":
+      deliveryBoundaryFailureResolved(current, next, state, event);
+      return;
+    case "task.acceptance_recorded":
+      deliveryTaskAccepted(current, state, event);
+      return;
+    case "phase.acceptance_recorded":
+      deliveryPhaseAccepted(current, state, event);
+      return;
+    default:
+      throw new Error(`Unhandled delivery event ${event.type}.`);
+  }
+}
+
+function requireDeliveryRunner(event: SchedulerEvent, runnerId: string): void {
+  if (event.actor.role !== "runner" || event.actor.id !== runnerId) {
+    throw new Error(`Only the ${runnerId} authority may record ${event.type}.`);
+  }
+}
+
+function requireDeliveryReview(
+  state: DeliveryState,
+  event: SchedulerEvent,
+  stages: readonly DeliveryReviewRecord["stage"][],
+): DeliveryReviewRecord {
+  const taskId = requiredString(event.payload, "taskId");
+  const reviewId = requiredString(event.payload, "reviewId");
+  const review = state.reviews[taskId];
+  if (!review || review.reviewId !== reviewId) {
+    throw new Error(`Deliverable review ${reviewId} is not the current review of task ${taskId}.`);
+  }
+  if (!stages.includes(review.stage)) {
+    throw new Error(
+      `Deliverable review ${reviewId} is at stage ${review.stage}; ${event.type} is out of order.`,
+    );
+  }
+  return review;
+}
+
+function requireDeliveryReviewer(event: SchedulerEvent, review: DeliveryReviewRecord): void {
+  if (event.actor.role !== "verifier" || event.actor.id !== review.reviewerRuntimeId) {
+    throw new Error(`Only the bound reviewer runtime may record ${event.type}.`);
+  }
+}
+
+/**
+ * Every reviewer pass runs in its own new session (fresh-context device).
+ * A session id may never serve two passes or two reviews.
+ */
+function requireFreshDeliverySession(state: DeliveryState, event: SchedulerEvent): string {
+  const sessionId = requiredString(event.payload, "sessionId");
+  const used = [
+    ...Object.values(state.reviews),
+    ...Object.values(state.reviewHistory).flat(),
+  ].some((review) => review.sessionIds.includes(sessionId));
+  if (used) throw new Error(`Reviewer session ${sessionId} was already used; each pass needs a fresh session.`);
+  return sessionId;
+}
+
+function canonicalIdentity(payload: Record<string, unknown>, key: string): string {
+  const value = requiredString(payload, key);
+  if (canonicalModelIdentity(value) !== value) {
+    throw new Error(`${key} must be a canonical model identity.`);
+  }
+  return value;
+}
+
+function deliveryReviewStarted(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "submitted" || !task.changeSetId) {
+    throw new Error(`Deliverable review requires submitted task ${taskId}.`);
+  }
+  const attempt = requiredPositiveInteger(event.payload, "attempt");
+  const changeSetId = requiredString(event.payload, "changeSetId");
+  if (attempt !== task.attempt || changeSetId !== task.changeSetId) {
+    throw new Error("Deliverable review must bind the current submission.");
+  }
+  const criteriaIds = stringArray(event.payload, "criteriaIds");
+  const expectedCriteria = (task.acceptanceCriteria ?? []).map((criterion) => criterion.id).sort();
+  if (expectedCriteria.length === 0 || !sameValue([...criteriaIds].sort(), expectedCriteria)) {
+    throw new Error("Deliverable review must bind the task's exact acceptance criteria.");
+  }
+  const diffArtifactHash = requiredString(event.payload, "diffArtifactHash");
+  if (!/^[a-f0-9]{64}$/.test(diffArtifactHash)) {
+    throw new Error("Deliverable review requires the submitted diff artifact hash.");
+  }
+  const authorRuntimeId = requiredString(event.payload, "authorRuntimeId");
+  const assignment = current.runtime.workerAssignments[`${taskId}:${attempt}`];
+  if (!assignment || assignment.runtimeId !== authorRuntimeId) {
+    throw new Error("Deliverable review must record the submission's recorded author runtime.");
+  }
+  const architectRuntimeId = requiredString(event.payload, "architectRuntimeId");
+  if (
+    current.runtime.architect.runtimeId !== undefined &&
+    current.runtime.architect.runtimeId !== architectRuntimeId
+  ) {
+    throw new Error("Deliverable review must record the current Architect runtime.");
+  }
+  const authorModelIdentity = canonicalIdentity(event.payload, "authorModelIdentity");
+  const architectModelIdentity = canonicalIdentity(event.payload, "architectModelIdentity");
+  const existing = state.reviews[taskId];
+  if (
+    existing?.stage === "completed" &&
+    existing.submissionAttempt === attempt &&
+    existing.changeSetId === changeSetId
+  ) {
+    throw new Error(`Task ${taskId} submission already has a completed deliverable review.`);
+  }
+  const history = state.reviewHistory[taskId] ?? [];
+  const expectedGeneration = Math.max(
+    0,
+    ...history.map((review) => review.generation),
+    existing?.generation ?? 0,
+  ) + 1;
+  const generation = requiredPositiveInteger(event.payload, "generation");
+  if (generation !== expectedGeneration) {
+    throw new Error(`Deliverable review generation must be ${expectedGeneration}.`);
+  }
+  const reviewId = requiredString(event.payload, "reviewId");
+  if (reviewId !== deliveryReviewId(taskId, attempt, generation)) {
+    throw new Error("Deliverable review id does not match its task, attempt, and generation.");
+  }
+  if (existing) {
+    // An unfinished generation is abandoned, never resumed: its sessions
+    // stay recorded as used, so a fresh-context retry opens new sessions.
+    state.reviewHistory[taskId] = [
+      ...history,
+      existing.stage === "completed" ? existing : { ...existing, stage: "abandoned" },
+    ];
+  }
+  state.authorModelIdentities[authorRuntimeId] = authorModelIdentity;
+  state.reviews[taskId] = {
+    taskId,
+    reviewId,
+    generation,
+    submissionAttempt: attempt,
+    changeSetId,
+    diffArtifactHash,
+    criteriaIds: [...criteriaIds],
+    authorRuntimeId,
+    authorModelIdentity,
+    architectRuntimeId,
+    architectModelIdentity,
+    stage: "started",
+    startedSequence: event.sequence,
+    sessionIds: [],
+  };
+}
+
+function reviewsOfTask(projection: SchedulerProjection, taskId: string): ReviewProjection[] {
+  return [
+    ...(projection.reviewHistory?.[taskId] ?? []),
+    ...(projection.reviews[taskId] ? [projection.reviews[taskId]!] : []),
+  ];
+}
+
+function deliveryReviewRequested(current: SchedulerProjection, state: DeliveryState, event: SchedulerEvent): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const review = requireDeliveryReview(state, event, ["started"]);
+  const reviewerRuntimeId = requiredString(event.payload, "reviewerRuntimeId");
+  const reviewerModelIdentity = canonicalIdentity(event.payload, "reviewerModelIdentity");
+  const independence = event.payload.independence;
+  if (independence !== "distinct_model" && independence !== "fresh_context") {
+    throw new Error("Deliverable review independence must be distinct_model or fresh_context.");
+  }
+  // B6: distinct_model must not match any recorded change-author runtime or
+  // model identity, nor the Architect's. fresh_context may reuse the author
+  // or Architect model, but only in new sessions (requireFreshDeliverySession).
+  if (independence === "distinct_model") {
+    const authorRuntimeIds = new Set(Object.keys(state.authorModelIdentities));
+    const excludedIdentities = new Set([
+      ...Object.values(state.authorModelIdentities),
+      review.architectModelIdentity,
+    ]);
+    if (
+      authorRuntimeIds.has(reviewerRuntimeId) ||
+      reviewerRuntimeId === review.architectRuntimeId ||
+      excludedIdentities.has(reviewerModelIdentity)
+    ) {
+      throw new Error(
+        "Self-review is impossible: a distinct_model reviewer must differ from every change author and the Architect.",
+      );
+    }
+  }
+  const tier = event.payload.reviewTier;
+  if (tier !== "low" && tier !== "medium" && tier !== "high") {
+    throw new Error("Deliverable review tier is invalid.");
+  }
+  // B8: the tier is recorded on the request and recomputed here from the
+  // recorded T5 risk inputs of the real change.
+  const riskInput = event.payload.riskInput;
+  if (!isRecord(riskInput)) throw new Error("Deliverable review requires its T5 risk input.");
+  const changedFiles = stringArray(riskInput, "changedFiles");
+  const linesAdded = requiredNumber(riskInput, "linesAdded");
+  const linesRemoved = requiredNumber(riskInput, "linesRemoved");
+  const attempts = requiredPositiveInteger(riskInput, "attempts");
+  const authorModelId = requiredString(riskInput, "authorModelId");
+  if (typeof riskInput.acceptedFailuresUsed !== "boolean") {
+    throw new Error("Deliverable review risk input requires acceptedFailuresUsed.");
+  }
+  if (attempts !== review.submissionAttempt || authorModelId !== review.authorModelIdentity) {
+    throw new Error("Deliverable review risk input must describe the recorded submission.");
+  }
+  if (riskInput.acceptedFailuresUsed !== taskAcceptedFailuresUsed(reviewsOfTask(current, review.taskId))) {
+    throw new Error("Deliverable review risk input must state whether an accepted evidence failure was used.");
+  }
+  if (
+    changedFiles.length === 0 ||
+    !Number.isSafeInteger(linesAdded) || !Number.isSafeInteger(linesRemoved) ||
+    linesAdded < 0 || linesRemoved < 0
+  ) {
+    throw new Error("Deliverable review risk input requires the real changed files and line counts.");
+  }
+  // T6b repair (EP50): the recorded OA-16 track-record snapshot replays
+  // here so the deterministic recompute matches the request-time tier.
+  const risk = assessDeliveryRisk({
+    authorModelId,
+    changedFiles,
+    linesAdded,
+    linesRemoved,
+    attempts,
+    acceptedFailuresUsed: riskInput.acceptedFailuresUsed,
+    ...(riskInput.trackRecord !== undefined ? { trackRecord: readTrackRecordSnapshot(riskInput.trackRecord) } : {}),
+  });
+  if (risk.tier !== tier || risk.digest !== requiredString(event.payload, "riskDigest")) {
+    throw new Error("Deliverable review tier must equal the deterministic T5 risk tier of the recorded change.");
+  }
+  const prior = latestCompletedReview(state, review.taskId);
+  const priorReviewId = event.payload.priorReviewId;
+  if (prior ? priorReviewId !== prior.reviewId : priorReviewId !== undefined) {
+    throw new Error("A fix re-review must name exactly the latest completed review of the task.");
+  }
+  review.reviewerRuntimeId = reviewerRuntimeId;
+  review.reviewerModelIdentity = reviewerModelIdentity;
+  review.independence = independence;
+  review.risk = risk;
+  if (prior) review.priorReviewId = prior.reviewId;
+  review.stage = "requested";
+}
+
+function deliveryObligationsRecorded(state: DeliveryState, event: SchedulerEvent): void {
+  const review = requireDeliveryReview(state, event, ["requested"]);
+  requireDeliveryReviewer(event, review);
+  if (review.risk?.tier !== "high") {
+    throw new Error("Only a high-tier review records obligations before the diff.");
+  }
+  const sessionId = requireFreshDeliverySession(state, event);
+  review.obligations = validateDeliveryObligations(event.payload.obligations, event.occurredAt);
+  review.sessionIds.push(sessionId);
+  review.stage = "obligations_recorded";
+}
+
+function deliveryDiffDelivered(state: DeliveryState, event: SchedulerEvent): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const review = requireDeliveryReview(state, event, ["requested", "obligations_recorded"]);
+  const depth = deliveryReviewDepthForTier(review.risk!.tier);
+  if (depth.obligationsFirst && review.stage !== "obligations_recorded") {
+    throw new Error("High-tier obligations must be recorded before the diff is delivered.");
+  }
+  if (!depth.obligationsFirst && review.stage !== "requested") {
+    throw new Error("Criteria and diff delivery is out of order.");
+  }
+  if (requiredString(event.payload, "diffArtifactHash") !== review.diffArtifactHash) {
+    throw new Error("The delivered diff must be the submitted change's diff artifact.");
+  }
+  review.stage = "diff_delivered";
+}
+
+function deliveryFindingsRecorded(state: DeliveryState, event: SchedulerEvent): void {
+  const review = requireDeliveryReview(state, event, ["diff_delivered"]);
+  requireDeliveryReviewer(event, review);
+  const sessionId = requireFreshDeliverySession(state, event);
+  const findings = validateDeliveryFindings(event.payload.findings);
+  const depth = parseDeliveryDepth(event.payload.depth);
+  const required = deliveryReviewDepthForTier(review.risk!.tier);
+  if (required.repositoryInspection && depth.inspectionToolCalls < 1) {
+    throw new Error("A medium/high deliverable review requires at least one real inspection tool call.");
+  }
+  if (required.affectedTests && !depth.affectedTests) {
+    throw new Error("A high-tier deliverable review requires the affected-test run.");
+  }
+  if (required.probe && !depth.probe) {
+    throw new Error("A high-tier deliverable review requires the OA-11 probe result.");
+  }
+  review.findings = findings;
+  review.depth = depth;
+  review.sessionIds.push(sessionId);
+  review.stage = "findings_recorded";
+}
+
+function deliveryReportDelivered(state: DeliveryState, event: SchedulerEvent): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const review = requireDeliveryReview(state, event, ["findings_recorded"]);
+  if (!Array.isArray(event.payload.claims) || event.payload.claims.length === 0) {
+    throw new Error("The worker report must carry the worker's claims.");
+  }
+  const seen = new Set<string>();
+  const claims: DeliveryClaim[] = event.payload.claims.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Worker claim is invalid.");
+    const id = requiredString(candidate, "id");
+    if (seen.has(id)) throw new Error(`Duplicate worker claim ${id}.`);
+    seen.add(id);
+    return { id, text: requiredString(candidate, "text"), evidenceIds: stringArray(candidate, "evidenceIds") };
+  });
+  for (const criterionId of review.criteriaIds) {
+    if (!seen.has(`claim:${criterionId}`)) {
+      throw new Error(`The worker report must carry the claim for criterion ${criterionId}.`);
+    }
+  }
+  review.claims = claims;
+  review.stage = "report_delivered";
+}
+
+function deliveryReviewRecorded(state: DeliveryState, event: SchedulerEvent): void {
+  const review = requireDeliveryReview(state, event, ["report_delivered"]);
+  requireDeliveryReviewer(event, review);
+  const sessionId = requireFreshDeliverySession(state, event);
+  const summary = requiredString(event.payload, "summary");
+  if (typeof event.payload.satisfied !== "boolean") {
+    throw new Error("Deliverable review verdict requires satisfied.");
+  }
+  const claims = review.claims ?? [];
+  if (!Array.isArray(event.payload.claimVerdicts)) {
+    throw new Error("Deliverable review verdict requires a verdict per worker claim.");
+  }
+  const verdicts: DeliveryClaimVerdict[] = event.payload.claimVerdicts.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Worker claim verdict is invalid.");
+    const claimId = requiredString(candidate, "claimId");
+    const claim = claims.find((item) => item.id === claimId);
+    if (!claim) throw new Error(`Unknown worker claim ${claimId}.`);
+    if (candidate.status !== "verified" && candidate.status !== "unverified") {
+      throw new Error(`Worker claim ${claimId} verdict status is invalid.`);
+    }
+    return { claimId, claim: claim.text, status: candidate.status, rationale: requiredString(candidate, "rationale") };
+  });
+  if (!sameValue(verdicts.map((verdict) => verdict.claimId).sort(), claims.map((claim) => claim.id).sort())) {
+    throw new Error("Deliverable review verdict must judge every worker claim exactly once.");
+  }
+  const findings = [...(review.findings ?? [])];
+  if (review.priorReviewId !== undefined) {
+    const prior = (state.reviewHistory[review.taskId] ?? []).find((item) => item.reviewId === review.priorReviewId);
+    if (!prior) throw new Error("A fix re-review requires its durable prior review.");
+    if (!Array.isArray(event.payload.priorFindingChecks)) {
+      throw new Error("A fix re-review must check every prior finding.");
+    }
+    const checks: DeliveryPriorFindingCheck[] = event.payload.priorFindingChecks.map((candidate) => {
+      if (!isRecord(candidate)) throw new Error("Prior finding check is invalid.");
+      if (candidate.resolution !== "resolved" && candidate.resolution !== "outstanding") {
+        throw new Error("Prior finding check resolution is invalid.");
+      }
+      return {
+        findingId: requiredString(candidate, "findingId"),
+        resolution: candidate.resolution,
+        rationale: requiredString(candidate, "rationale"),
+      };
+    });
+    if (!sameValue(checks.map((check) => check.findingId).sort(), (prior.findings ?? []).map((finding) => finding.id).sort())) {
+      throw new Error("A fix re-review must check every prior finding exactly once.");
+    }
+    // An outstanding prior blocking finding that nobody disposed carries
+    // forward as an open blocking finding of this review.
+    for (const check of checks) {
+      if (check.resolution !== "outstanding") continue;
+      const priorFinding = prior.findings?.find((finding) => finding.id === check.findingId);
+      if (!priorFinding || priorFinding.severity !== "blocking" || priorFinding.disposition) continue;
+      findings.push({
+        id: `carried:${priorFinding.id}`,
+        category: priorFinding.category,
+        severity: "blocking",
+        ...(priorFinding.requirementId ? { requirementId: priorFinding.requirementId } : {}),
+        ...(priorFinding.location ? { location: priorFinding.location } : {}),
+        claim: `Outstanding from ${prior.reviewId}: ${priorFinding.claim}`,
+        evidenceRefs: [...priorFinding.evidenceRefs],
+      });
+    }
+    review.priorFindingChecks = checks;
+  } else if (event.payload.priorFindingChecks !== undefined) {
+    throw new Error("Only a fix re-review checks prior findings.");
+  }
+  const blocked = findings.some((finding) => finding.severity === "blocking") ||
+    verdicts.some((verdict) => verdict.status === "unverified");
+  if (event.payload.satisfied === blocked) {
+    throw new Error(
+      "Deliverable review verdict must be unsatisfied exactly when a blocking finding or unverified claim exists.",
+    );
+  }
+  review.findings = findings;
+  review.claimVerdicts = verdicts;
+  review.summary = summary;
+  review.satisfied = event.payload.satisfied;
+  review.sessionIds.push(sessionId);
+  review.stage = "completed";
+  review.completedSequence = event.sequence;
+}
+
+function parseDeliveryTestReport(value: unknown, label: string): DeliveryTestReport {
+  if (!isRecord(value) || (value.status !== "passed" && value.status !== "failed" && value.status !== "unknown")) {
+    throw new Error(`${label} is invalid.`);
+  }
+  const counts = value.counts;
+  if (counts !== undefined && (!isRecord(counts) || !["selected", "passed", "failed", "skipped"].every((key) => Number.isSafeInteger(counts[key]) && (counts[key] as number) >= 0))) {
+    throw new Error(`${label} counts are invalid.`);
+  }
+  return {
+    status: value.status,
+    runner: requiredString(value, "runner"),
+    ...(value.format === "junit" || value.format === "trx" ? { format: value.format } : {}),
+    ...(typeof value.path === "string" ? { path: value.path } : {}),
+    ...(typeof value.artifactHash === "string" ? { artifactHash: value.artifactHash } : {}),
+    ...(isRecord(counts) ? { counts: { selected: counts.selected as number, passed: counts.passed as number, failed: counts.failed as number, skipped: counts.skipped as number } } : {}),
+    ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
+    ...(value.reporterUnsupported === true ? { reporterUnsupported: true } : {}),
+  };
+}
+
+function parseDeliveryDepth(value: unknown): DeliveryDepthRecord {
+  if (!isRecord(value)) throw new Error("Deliverable findings require the review depth record.");
+  const inspectionToolCalls = value.inspectionToolCalls;
+  if (!Number.isSafeInteger(inspectionToolCalls) || (inspectionToolCalls as number) < 0) {
+    throw new Error("Deliverable review depth requires the inspection tool call count.");
+  }
+  const depth: DeliveryDepthRecord = { inspectionToolCalls: inspectionToolCalls as number };
+  if (value.affectedTests !== undefined) {
+    const record = value.affectedTests;
+    if (!isRecord(record)) throw new Error("Affected-test record is invalid.");
+    const exitCode = record.exitCode;
+    if (exitCode !== null && !Number.isSafeInteger(exitCode)) {
+      throw new Error("Affected-test exit code is invalid.");
+    }
+    const outcome = record.outcome;
+    const evidenceIds = stringArray(record, "evidenceIds");
+    if (exitCode !== null && evidenceIds.length === 0) {
+      throw new Error("An executed affected-test command requires its evidence.");
+    }
+    const report = parseDeliveryTestReport(record.report, "Affected-test report");
+    assertTestsOutcome("Affected-test", exitCode as number | null, outcome, report);
+    if (record.executedScope !== "full_test_script") {
+      throw new Error("Affected-test record must state that the whole project test script ran.");
+    }
+    const affectedTests: DeliveryAffectedTestsRecord = {
+      executedScope: "full_test_script",
+      selectionRung: requiredString(record, "selectionRung"),
+      changedFiles: stringArray(record, "changedFiles"),
+      selectedTests: stringArray(record, "selectedTests"),
+      fullSuiteCount: requiredNumber(record, "fullSuiteCount"),
+      command: requiredString(record, "command"),
+      args: stringArray(record, "args"),
+      evidenceIds,
+      exitCode: exitCode as number | null,
+      outcome: outcome as DeliveryAffectedTestsRecord["outcome"],
+      report,
+    };
+    if (affectedTests.changedFiles.length === 0) {
+      throw new Error("Affected-test selection requires the real changed files.");
+    }
+    depth.affectedTests = affectedTests;
+  }
+  if (value.probe !== undefined) {
+    const record = value.probe;
+    if (!isRecord(record)) throw new Error("Probe record is invalid.");
+    const probe: DeliveryProbeRecord = {
+      rung: requiredString(record, "rung"),
+      mutantsGenerated: requiredNumber(record, "mutantsGenerated"),
+      mutantsExecuted: requiredNumber(record, "mutantsExecuted"),
+      mutantsCaught: requiredNumber(record, "mutantsCaught"),
+      survivors: stringArray(record, "survivors"),
+      partial: record.partial === true,
+      evidenceIds: stringArray(record, "evidenceIds"),
+      notes: stringArray(record, "notes"),
+    };
+    if (probe.mutantsExecuted > 0 && probe.evidenceIds.length === 0) {
+      throw new Error("An executed OA-11 probe requires its command evidence.");
+    }
+    depth.probe = probe;
+  }
+  return depth;
+}
+
+/**
+ * T6a (B7): `review.decided` may carry the Architect's dispositions of
+ * blocking deliverable findings and of unverified worker claims. Each list
+ * is applied on its own; an unknown or already-disposed id is refused.
+ */
+function applyDeliveryDispositions(
+  next: SchedulerProjection,
+  task: BuildTask,
+  event: SchedulerEvent,
+): void {
+  const findingDispositions = event.payload.findingDispositions;
+  const claimDispositions = event.payload.claimDispositions;
+  if (findingDispositions === undefined && claimDispositions === undefined) return;
+  if (next.planningPolicyVersion !== 1) {
+    throw new Error("Deliverable dispositions apply only to new-policy runs.");
+  }
+  const review = next.delivery?.reviews[task.id];
+  if (
+    !review || review.stage !== "completed" ||
+    review.submissionAttempt !== task.attempt || review.changeSetId !== task.changeSetId
+  ) {
+    throw new Error("Dispositions require the completed deliverable review of the current submission.");
+  }
+  if (findingDispositions !== undefined) {
+    if (!Array.isArray(findingDispositions)) throw new Error("findingDispositions must be an array.");
+    const open = new Set(openBlockingFindings(review).map((finding) => finding.id));
+    for (const raw of findingDispositions) {
+      if (!isRecord(raw)) throw new Error("Deliverable finding disposition is invalid.");
+      const findingId = requiredString(raw, "findingId");
+      if (!open.has(findingId)) {
+        throw new Error(`Deliverable finding ${findingId} is not an open blocking finding.`);
+      }
+      open.delete(findingId);
+      const resolution = raw.resolution;
+      if (resolution !== "plan_reconciled" && resolution !== "rejected" && resolution !== "deferred") {
+        throw new Error("Deliverable finding disposition resolution is invalid.");
+      }
+      const rationale = requiredString(raw, "rationale");
+      review.findings = (review.findings ?? []).map((finding) => finding.id === findingId
+        ? {
+            ...finding,
+            disposition: {
+              resolution,
+              rationale,
+              resolvedAt: event.occurredAt,
+              resolvedByReviewId: review.reviewId,
+            },
+          }
+        : finding);
+    }
+  }
+  if (claimDispositions !== undefined) {
+    if (!Array.isArray(claimDispositions)) throw new Error("claimDispositions must be an array.");
+    const open = new Set(unverifiedClaims(review).map((claim) => claim.claimId));
+    for (const raw of claimDispositions) {
+      if (!isRecord(raw)) throw new Error("Worker claim disposition is invalid.");
+      const claimId = requiredString(raw, "claimId");
+      if (!open.has(claimId)) throw new Error(`Worker claim ${claimId} is not an unverified claim.`);
+      open.delete(claimId);
+      if (raw.status !== "verified") {
+        throw new Error("The Architect disposes of an unverified claim only by verifying it.");
+      }
+      const rationale = requiredString(raw, "rationale");
+      review.claimVerdicts = (review.claimVerdicts ?? []).map((verdict) => verdict.claimId === claimId
+        ? { ...verdict, disposition: { status: "verified" as const, rationale, resolvedAt: event.occurredAt } }
+        : verdict);
+    }
+  }
+}
+
+/**
+ * N-R4-3: every boundary run is durably started before any command runs, so
+ * a retry after an interruption gets a fresh attempt id (fresh process and
+ * evidence keys) instead of colliding with the interrupted run.
+ */
+function deliveryBoundaryStarted(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "integrated" || state.taskAcceptances[taskId]) {
+    throw new Error(`Boundary runs require integrated, unaccepted task ${taskId}.`);
+  }
+  const integrationRevision = requiredString(event.payload, "integrationRevision");
+  if (integrationRevision !== current.integrationRevision) {
+    throw new Error("Boundary runs must target the current integration revision.");
+  }
+  if (deliveryBoundaryAction(state, taskId, integrationRevision, (id) => current.tasks[id]?.status).type !== "run") {
+    throw new Error(`Task ${taskId} boundary on ${integrationRevision} may not run again.`);
+  }
+  const boundaryId = requiredString(event.payload, "boundaryId");
+  if (boundaryId !== deliveryBoundaryId(taskId, (state.boundaries[taskId]?.length ?? 0) + 1)) {
+    throw new Error("Boundary run id does not match the next boundary generation.");
+  }
+  const starts = state.boundaryStarts ?? {};
+  const attempt = requiredPositiveInteger(event.payload, "attempt");
+  if (attempt !== (starts[boundaryId] ?? 0) + 1) {
+    throw new Error(`Boundary run attempt must be ${(starts[boundaryId] ?? 0) + 1}.`);
+  }
+  state.boundaryStarts = { ...starts, [boundaryId]: attempt };
+}
+
+function deliveryBoundaryChecked(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "integrated") {
+    throw new Error(`Boundary checks require integrated task ${taskId}.`);
+  }
+  if (state.taskAcceptances[taskId]) throw new Error(`Task ${taskId} is already accepted.`);
+  const integrationRevision = requiredString(event.payload, "integrationRevision");
+  if (integrationRevision !== current.integrationRevision) {
+    throw new Error("Boundary checks must run on the current integration revision.");
+  }
+  // B4: a failed boundary is never re-run on the same revision without a
+  // state change (a new revision, or one Architect recheck grant).
+  const action = deliveryBoundaryAction(state, taskId, integrationRevision, (id) => current.tasks[id]?.status);
+  if (action.type !== "run") {
+    throw new Error(`Task ${taskId} boundary on ${integrationRevision} may not run again (${action.type}).`);
+  }
+  const previous = state.boundaries[taskId] ?? [];
+  const generation = requiredPositiveInteger(event.payload, "generation");
+  const attempt = requiredPositiveInteger(event.payload, "attempt");
+  if (attempt !== state.boundaryStarts?.[deliveryBoundaryId(taskId, generation)]) {
+    throw new Error("Boundary checks must record the latest durably started attempt.");
+  }
+  if (event.payload.executedScope !== "full_test_script") {
+    throw new Error("Boundary checks must state that the whole project scripts ran.");
+  }
+  if (generation !== previous.length + 1) {
+    throw new Error(`Boundary generation must be ${previous.length + 1}.`);
+  }
+  const boundaryId = requiredString(event.payload, "boundaryId");
+  if (boundaryId !== deliveryBoundaryId(taskId, generation)) {
+    throw new Error("Boundary id does not match its task and generation.");
+  }
+  if (!Array.isArray(event.payload.checks) || event.payload.checks.length === 0) {
+    throw new Error("Boundary checks require real check outcomes.");
+  }
+  const checkIds = new Set<string>();
+  const checks: DeliveryBoundaryCheck[] = event.payload.checks.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Boundary check is invalid.");
+    const checkId = requiredString(candidate, "checkId");
+    if (checkIds.has(checkId)) throw new Error(`Duplicate boundary check ${checkId}.`);
+    checkIds.add(checkId);
+    const exitCode = candidate.exitCode;
+    if (exitCode !== null && !Number.isSafeInteger(exitCode)) throw new Error("Boundary check exit code is invalid.");
+    const outcome = candidate.outcome;
+    if (outcome !== "passed" && outcome !== "failed" && outcome !== "unknown") {
+      throw new Error("Boundary check outcome is invalid.");
+    }
+    const evidenceIds = stringArray(candidate, "evidenceIds");
+    if (outcome === "passed" && (exitCode !== 0 || evidenceIds.length === 0)) {
+      throw new Error("A passed boundary check requires exit code 0 and its evidence.");
+    }
+    const report = candidate.report === undefined ? undefined : parseDeliveryTestReport(candidate.report, "Boundary test report");
+    if (checkId === "tests") {
+      // Owner decision "real counts": tests pass only on this run's report.
+      if (!report) throw new Error("The boundary tests check requires this run's test report reading.");
+      assertTestsOutcome("Boundary tests", exitCode as number | null, outcome, report);
+    }
+    if (outcome === "failed" && evidenceIds.length === 0 && typeof candidate.reason !== "string") {
+      throw new Error("A failed boundary check requires its evidence or reason.");
+    }
+    return {
+      checkId,
+      ...(typeof candidate.command === "string" ? { command: candidate.command } : {}),
+      ...(Array.isArray(candidate.args) ? { args: stringArray(candidate, "args") } : {}),
+      evidenceIds,
+      exitCode: exitCode as number | null,
+      outcome,
+      ...(typeof candidate.reason === "string" ? { reason: candidate.reason } : {}),
+      ...(report ? { report } : {}),
+    };
+  });
+  const passed = event.payload.passed;
+  if (typeof passed !== "boolean" || passed !== checks.every((check) => check.outcome === "passed")) {
+    throw new Error("Boundary passed must equal every check passing.");
+  }
+  const selection = event.payload.selection;
+  if (!isRecord(selection)) throw new Error("Boundary checks require the affected-test selection.");
+  const last = previous.at(-1);
+  if (last?.resolution?.resolution === "recheck" && last.integrationRevision === integrationRevision) {
+    last.resolution = { ...last.resolution, consumed: true };
+  }
+  state.boundaries[taskId] = [...previous, {
+    taskId,
+    boundaryId,
+    generation,
+    attempt,
+    integrationRevision,
+    changedFiles: stringArray(event.payload, "changedFiles"),
+    executedScope: "full_test_script",
+    selection: { rung: requiredString(selection, "rung"), selectedTests: stringArray(selection, "selectedTests") },
+    checks,
+    passed,
+    sequence: event.sequence,
+  }];
+}
+
+function deliveryBoundaryFailureResolved(
+  current: SchedulerProjection,
+  next: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "architect") {
+    throw new Error("Only the Architect may resolve a failed boundary check.");
+  }
+  const taskId = requiredString(event.payload, "taskId");
+  const boundaryId = requiredString(event.payload, "boundaryId");
+  const boundary = latestBoundary(state, taskId);
+  if (
+    !boundary || boundary.boundaryId !== boundaryId ||
+    !boundaryNeedsArchitect(boundary, (id) => current.tasks[id]?.status) ||
+    boundary.integrationRevision !== current.integrationRevision ||
+    current.tasks[taskId]?.status !== "integrated" || state.taskAcceptances[taskId]
+  ) {
+    throw new Error("Only the current failed boundary awaiting the Architect can be resolved.");
+  }
+  if (requiredPositiveInteger(event.payload, "resolutionGeneration") !== boundaryResolutionGeneration(boundary)) {
+    throw new Error(`Boundary resolution generation must be ${boundaryResolutionGeneration(boundary)}.`);
+  }
+  const rationale = requiredString(event.payload, "rationale");
+  const resolution = event.payload.resolution;
+  // N-R4-2: repairs that ended without re-running the boundary are
+  // superseded by this new resolution, kept durably in the history.
+  const supersede = () => {
+    if (boundary.resolution) {
+      boundary.resolutionHistory = [...(boundary.resolutionHistory ?? []), boundary.resolution];
+    }
+  };
+  if (resolution === "recheck") {
+    const rechecked = (state.boundaries[taskId] ?? []).some((candidate) =>
+      candidate.integrationRevision === boundary.integrationRevision &&
+      [candidate.resolution, ...(candidate.resolutionHistory ?? [])].some((item) => item?.resolution === "recheck"));
+    if (rechecked) {
+      throw new Error("A failed boundary may be rechecked once per integration revision; plan a repair instead.");
+    }
+    supersede();
+    boundary.resolution = { resolution, rationale, sequence: event.sequence };
+    return;
+  }
+  if (resolution !== "repair_planned") {
+    throw new Error("Boundary failure resolution must be recheck or repair_planned.");
+  }
+  const repairTaskIds = createDeliveryRepairTasks(next, event.payload, taskId, boundary);
+  supersede();
+  boundary.resolution = { resolution, rationale, repairTaskIds, sequence: event.sequence };
+}
+
+/**
+ * T6a: repairs for a failed boundary are ordinary worker tasks bound to the
+ * failed task's parent contract, created like verifier repairs (ready plan,
+ * one repair cycle, validated graph). T6b adds the repair-approach decision
+ * and budget at the repair-approach decision tool and issue budget gate.
+ */
+function createDeliveryRepairTasks(
+  projection: SchedulerProjection,
+  payload: Record<string, unknown>,
+  sourceTaskId: string,
+  boundary: DeliveryBoundaryRecord,
+): string[] {
+  const ready = readyPlanIdentity(projection);
+  if (!ready) throw new Error("Boundary repairs on a new-policy run require a ready plan revision.");
+  const revision = requiredNumber(payload, "revision");
+  if (revision !== projection.planRevision + 1) throw new Error("Boundary repair plan revision is stale.");
+  if (!Array.isArray(payload.tasks) || payload.tasks.length === 0) {
+    throw new Error("Boundary repairs require at least one task.");
+  }
+  consumeRepairCycle(projection);
+  const evidenceIds = [...new Set(boundary.checks
+    .filter((check) => check.outcome !== "passed")
+    .flatMap((check) => check.evidenceIds))].sort();
+  const tasks = payload.tasks.map((candidate) => {
+    if (!isRecord(candidate)) throw new Error("Boundary repair task is invalid.");
+    if (!Array.isArray(candidate.acceptanceCriteria)) {
+      throw new Error("Boundary repair task requires acceptance criteria.");
+    }
+    const acceptanceCriteria = candidate.acceptanceCriteria as AcceptanceCriterion[];
+    const criteriaValidation = validateAcceptanceCriteria(acceptanceCriteria);
+    if (!criteriaValidation.valid) {
+      throw new Error(`Boundary repair acceptance criteria are invalid: ${criteriaValidation.issues.join(" ")}`);
+    }
+    const requiredCapabilities = stringArray(candidate, "requiredCapabilities");
+    if (requiredCapabilities.length === 0 || requiredCapabilities.some((capability) => !capability.trim())) {
+      throw new Error("Boundary repair task requires non-empty capabilities.");
+    }
+    return {
+      id: requiredString(candidate, "id"),
+      kind: "verification_repair" as const,
+      objective: requiredString(candidate, "objective"),
+      dependencies: stringArray(candidate, "dependencies"),
+      status: "planned" as const,
+      requiredCapabilities,
+      acceptanceCriteria: acceptanceCriteria.map((criterion) => ({ ...criterion })),
+      acceptanceCriteriaVersion: 1,
+      attempt: 0,
+      deliveryRepair: {
+        sourceTaskId,
+        boundaryId: boundary.boundaryId,
+        integrationRevision: boundary.integrationRevision,
+        evidenceIds,
+      },
+    } satisfies BuildTask;
+  });
+  for (const task of tasks) {
+    if (projection.tasks[task.id]) throw new Error(`Duplicate task ${task.id}.`);
+  }
+  const validation = validateTaskGraph(
+    [...Object.values(projection.tasks), ...tasks],
+    { requireAcceptanceCriteria: true },
+  );
+  if (!validation.valid) {
+    throw new Error(`Boundary repair plan is invalid: ${validation.issues.map((issue) => issue.message).join(" ")}`);
+  }
+  for (const task of tasks) projection.tasks[task.id] = task;
+  const bindings = { ...projection.readyPlanTaskBindings };
+  for (const task of tasks) {
+    const parent = repairParentContractId(projection, task);
+    bindings[task.id] = parent !== undefined
+      ? { revisionId: ready.revisionId, digest: ready.digest, contractId: parent }
+      : { revisionId: ready.revisionId, digest: ready.digest };
+  }
+  projection.readyPlanTaskBindings = bindings;
+  projection.planRevision = revision;
+  return tasks.map((task) => task.id);
+}
+
+function deliveryTaskAccepted(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "integrated") {
+    throw new Error(`Task acceptance requires integrated task ${taskId}.`);
+  }
+  if (state.taskAcceptances[taskId]) throw new Error(`Task ${taskId} is already accepted.`);
+  const issues = deliveryReviewApprovalIssues(state, task);
+  if (issues.length > 0) throw new Error(`Task acceptance is blocked: ${issues.join(" ")}`);
+  const review = state.reviews[taskId]!;
+  if (requiredString(event.payload, "reviewId") !== review.reviewId) {
+    throw new Error("Task acceptance must cite the completed review of the current submission.");
+  }
+  const boundary = latestBoundary(state, taskId);
+  if (
+    !boundary || !boundary.passed ||
+    boundary.boundaryId !== requiredString(event.payload, "boundaryId") ||
+    boundary.integrationRevision !== current.integrationRevision
+  ) {
+    throw new Error("Task acceptance requires a passed boundary check on the current integration revision.");
+  }
+  const requiredChecks = [
+    ...review.criteriaIds.map((criterionId) => {
+      const verdict = review.claimVerdicts?.find((candidate) => candidate.claimId === `claim:${criterionId}`);
+      if (!verdict || (verdict.status !== "verified" && verdict.disposition?.status !== "verified")) {
+        throw new Error(`Criterion ${criterionId} has no verified claim.`);
+      }
+      return { kind: "criterion", refId: criterionId, outcome: "passed" as const };
+    }),
+    ...boundary.checks.map((check) => ({ kind: "integration_check", refId: check.checkId, outcome: "passed" as const })),
+  ];
+  state.taskAcceptances[taskId] = {
+    taskId,
+    reviewId: review.reviewId,
+    submissionAttempt: review.submissionAttempt,
+    changeSetId: review.changeSetId,
+    boundaryId: boundary.boundaryId,
+    integrationRevision: boundary.integrationRevision,
+    requiredChecks,
+    acceptedAt: event.occurredAt,
+    sequence: event.sequence,
+  };
+}
+
+function deliveryPhaseAccepted(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+  const plan = current.planning?.plan;
+  const revision = plan?.revisionsById[plan.currentRevisionId];
+  const planRevisionId = requiredString(event.payload, "planRevisionId");
+  if (!revision || revision.revisionId !== planRevisionId || !readyPlanIdentity(current)) {
+    throw new Error("Phase acceptance must bind the current ready plan revision.");
+  }
+  const phaseId = requiredString(event.payload, "phaseId");
+  const phase = revision.phases.find((candidate) => candidate.id === phaseId);
+  if (!phase) throw new Error(`Unknown phase ${phaseId}.`);
+  const key = phaseAcceptanceKey(planRevisionId, phaseId);
+  if (state.phaseAcceptances[key]) throw new Error(`Phase ${phaseId} is already accepted for ${planRevisionId}.`);
+  const evaluation = evaluatePhaseAcceptance({
+    phase,
+    requirements: revision.requirements,
+    taskStatuses: new Map(Object.entries(current.tasks).map(([id, task]) => [id, task.status])),
+    state,
+    integrationRevision: current.integrationRevision,
+  });
+  if (!evaluation.ready) {
+    throw new Error(`Phase ${phaseId} is not acceptable: ${evaluation.issues.join(" ")}`);
+  }
+  if (
+    !sameValue(stringArray(event.payload, "taskAcceptanceRefs"), evaluation.taskAcceptanceRefs) ||
+    !sameValue(event.payload.exitChecks, evaluation.exitChecks)
+  ) {
+    throw new Error("Phase acceptance must record exactly the kernel-evaluated task acceptances and exit checks.");
+  }
+  state.phaseAcceptances[key] = {
+    phaseId,
+    planRevisionId,
+    integrationRevision: current.integrationRevision!,
+    requirementIds: [...phase.requirementIds],
+    taskAcceptanceRefs: evaluation.taskAcceptanceRefs,
+    exitChecks: evaluation.exitChecks,
+    acceptedAt: event.occurredAt,
+    sequence: event.sequence,
+  };
 }
 
 function verifierCriterionKey(criterion: VerifierCriterionReference): string {
@@ -4182,6 +7294,26 @@ function createFinalVerificationRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
 ): void {
+  // T3a repair cycle 2 (B3): repair tasks are ordinary worker tasks, so on
+  // a new-policy run they are planned only under a ready plan (like every
+  // other task-adding path) and stamped with its identity below. Checked
+  // before the repair cycle is consumed so a refusal spends nothing.
+  // T9 (EP39/OA-5): answered runs plan no repairs. Checked before the
+  // budget is consumed, like the readiness refusal below.
+  if (projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer") {
+    throw new Error(
+      "Answered runs cannot plan repairs; convert to build first."
+    );
+  }
+  // Legacy runs are untouched.
+  const repairReady = projection.planningPolicyVersion === 1
+    ? readyPlanIdentity(projection)
+    : undefined;
+  if (projection.planningPolicyVersion === 1 && !repairReady) {
+    throw new Error(
+      "Final verification repairs on a new-policy run require a ready plan revision."
+    );
+  }
   consumeRepairCycle(projection);
   const current = requireCurrentFinalVerification(projection, {
     ...payload,
@@ -4280,6 +7412,19 @@ function createFinalVerificationRepairTasks(
     throw new Error(`Final verification repair plan is invalid: ${validation.issues.map((issue) => issue.message).join(" ")}`);
   }
   for (const task of tasks) projection.tasks[task.id] = task;
+  if (repairReady) {
+    // T4: kernel-created repairs stay admissible under the ready plan;
+    // the parent contract is recorded when resolvable, otherwise the
+    // repair stays identity-bound (legacy-seeded parents).
+    const bindings = { ...projection.readyPlanTaskBindings };
+    for (const task of tasks) {
+      const parent = repairParentContractId(projection, task);
+      bindings[task.id] = parent !== undefined
+        ? { revisionId: repairReady.revisionId, digest: repairReady.digest, contractId: parent }
+        : { revisionId: repairReady.revisionId, digest: repairReady.digest };
+    }
+    projection.readyPlanTaskBindings = bindings;
+  }
   current.repairTaskIds = tasks.map((task) => task.id);
   projection.planRevision = revision;
 }
@@ -5259,6 +8404,32 @@ function parseAcceptanceCriteria(
   return criteria;
 }
 
+/**
+ * T9 repair cycle 2 (B3-r2): the planning-state acknowledgement. A
+ * new-policy run with no ready plan has no plan to prove unchanged and no
+ * ready plan to reconcile, so the guidance folds into the plan or answer
+ * still being drafted — no evidence, no mutation. Accepted only while the
+ * run has no ready plan (planning state, or an answered/pre-triage
+ * new-policy run): once a ready plan exists, `no_plan_change` (with
+ * evidence) and `plan_reconciled` apply unchanged. Legacy runs are refused.
+ */
+function acceptFoldedIntoPlanningAcknowledgement(
+  current: SchedulerProjection,
+  resolution: UserGuidanceFoldedIntoPlanningResolution,
+): UserGuidanceFoldedIntoPlanningResolution {
+  if (current.planningPolicyVersion !== 1) {
+    throw new Error(
+      "Folded-into-planning acknowledgement requires a new-policy run."
+    );
+  }
+  if (readyPlanIdentity(current)) {
+    throw new Error(
+      "Folded-into-planning acknowledgement requires no ready plan; cite evidence with no_plan_change or reconcile the plan."
+    );
+  }
+  return { ...resolution };
+}
+
 function applyPlanReconciliation(
   projection: SchedulerProjection,
   reconciliation: PlanReconciliation,
@@ -5270,6 +8441,22 @@ function applyPlanReconciliation(
   if (reconciliation.revision !== projection.planRevision + 1) {
     throw new Error(
       `Plan reconciliation must advance plan revision ${projection.planRevision} by one.`
+    );
+  }
+  // T3a repair (B1a): every reconciliation path (plan.reconciled, review or
+  // guidance or critique resolutions carrying one) adds or revises tasks, so
+  // on a new-policy run each requires a ready plan. This single choke point
+  // covers all four callers; none of them mutates planning first, so the
+  // identity read here is the pre-event one. Legacy runs are untouched.
+  // T9 (EP39/OA-5): answered runs reconcile nothing.
+  if (projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer") {
+    throw new Error(
+      "Answered runs cannot reconcile the plan; convert to build first."
+    );
+  }
+  if (projection.planningPolicyVersion === 1 && !readyPlanIdentity(projection)) {
+    throw new Error(
+      "Plan reconciliation on a new-policy run requires a ready plan revision."
     );
   }
   const duplicate = reconciliation.taskUpdates.find(
@@ -5320,6 +8507,35 @@ function applyPlanReconciliation(
   for (const update of reconciliation.taskUpdates) {
     const task = candidateTasks[update.taskId];
     if (!task) throw new Error(`Unknown task ${update.taskId}.`);
+    const membership = taskPlanMembership(projection, update.taskId);
+    const contract = membership.contractId
+      ? projection.planning?.plan?.revisionsById[
+          projection.planning.plan.currentRevisionId
+        ]?.tasks.find((candidate) => candidate.id === membership.contractId)
+      : undefined;
+    if (contract) {
+      if (
+        update.dependencies !== undefined &&
+        (
+          update.dependencies.length !== contract.dependencies.length ||
+          update.dependencies.some(
+            (dependency, index) => dependency !== contract.dependencies[index],
+          )
+        )
+      ) {
+        throw new Error(
+          `Task ${update.taskId} contract dependencies change only through a new ready plan revision.`,
+        );
+      }
+      if (
+        update.requiredCapabilities !== undefined ||
+        update.acceptanceCriteria !== undefined
+      ) {
+        throw new Error(
+          `Task ${update.taskId} contract fields change only through a new ready plan revision.`,
+        );
+      }
+    }
     if (isFinalVerificationTask(task)) {
       throw new Error("Kernel-owned final verification task cannot be reconciled.");
     }
@@ -5509,6 +8725,33 @@ function applyPlanReconciliation(
   }
 
   projection.tasks = candidateTasks;
+  if (projection.planningPolicyVersion === 1) {
+    // T3a repair (B1c): bind tasks added by this reconciliation to the ready
+    // plan that authorised it (the entry gate guarantees one exists). Revised
+    // tasks keep their original binding: a revision is not a re-review.
+    // T4: tasks mapping to a ready contract carry it; the rest stay
+    // identity-bound and non-admissible (true membership).
+    const ready = readyPlanIdentity(projection);
+    const added = reconciliation.newTasks ?? [];
+    if (ready && added.length > 0) {
+      const plan = projection.planning?.plan;
+      const revision = plan?.revisionsById[plan.currentRevisionId];
+      const memberIds = new Set(
+        (revision?.tasks ?? []).map((contract) => contract.id),
+      );
+      const bindings = { ...projection.readyPlanTaskBindings };
+      for (const task of added) {
+        bindings[task.id] = memberIds.has(task.id)
+          ? {
+              revisionId: ready.revisionId,
+              digest: ready.digest,
+              contractId: task.id,
+            }
+          : { revisionId: ready.revisionId, digest: ready.digest };
+      }
+      projection.readyPlanTaskBindings = bindings;
+    }
+  }
   for (const taskId of reviewsToClear) {
     delete projection.reviews[taskId];
   }
@@ -5878,6 +9121,271 @@ function applyProjectDocCommitted(
   };
 }
 
+/**
+ * C2a: the v2 handoff gate. A docs-v2 run that is not answered cannot record
+ * `project.handoff_selected` or `run.completed` until the kernel committed
+ * docs/project/STATE.md for the handed-off revision. The writer guarantees
+ * the tree holds STATE.md; the reducer checks the recorded paths.
+ *
+ * C2a repair (M1): the gate binds to the latest `project.handoff_requested`
+ * stop (`projectHandoff.requestedSequence`), never to an earlier snapshot:
+ * after a withdrawal and re-request, only a snapshot for the current stop
+ * satisfies it.
+ *
+ * C2b (AR-R05): the current-stop record must also carry the commit-tree
+ * proof that the commit holds the marked v2 AGENTS.md section and the
+ * marked `@AGENTS.md` line (read back from the commit by the writer, never
+ * the checkout). README is not required under v2.
+ */
+export function handoffSnapshotAtCurrentStop(
+  projection: SchedulerProjection,
+): HandoffSnapshotRecord | undefined {
+  const snapshots = projection.projectDocs?.snapshots ?? [];
+  const latestRequest = projection.projectHandoff?.requestedSequence;
+  // C2b repair N-7: without a request there is no current stop, so the
+  // fallback never selects a record -- not even a history one.
+  if (latestRequest === undefined) return undefined;
+  const current = snapshots.filter((record) => record.stopSequence === latestRequest).reverse();
+  // C2c (NF-2/CD-15): each entry file counts as satisfied by its committed
+  // flag or by its recorded link reason; STATE.md stays required.
+  // C2c repair CD-17: a recorded STATE.md link reason satisfies STATE.md
+  // the way export_only satisfies the whole gate.
+  return current.find((record) =>
+    (record.paths.includes("docs/project/STATE.md") || typeof record.stateSkippedReason === "string") &&
+    (record.agentsSectionCommitted === true || typeof record.agentsSectionViaLink === "string") &&
+    (record.claudeLineCommitted === true || typeof record.claudeLineViaLink === "string"),
+  );
+}
+
+export function handoffSnapshotCoversRevision(
+  projection: SchedulerProjection,
+  revision: string,
+): boolean {
+  const record = handoffSnapshotAtCurrentStop(projection);
+  if (!record) return false;
+  // Production selects the post-snapshot head (CD-11): it matches the
+  // snapshot commit/head, while the described revision matches revision.
+  return record.revision === revision || record.commit === revision || record.head === revision;
+}
+
+export function handoffSnapshotRecorded(projection: SchedulerProjection): boolean {
+  return handoffSnapshotAtCurrentStop(projection) !== undefined;
+}
+
+export function assertHandoffSnapshotGate(
+  projection: SchedulerProjection,
+  revision: string | undefined,
+): void {
+  if (isAnsweredRun(projection) || projection.projectDocsPolicyVersion !== 2) return;
+  // C2b (CD-5): an `export_only` run writes no handoff file at any stop; the
+  // gate is satisfied by the recorded run option itself.
+  if (handoffFilesOf(projection) === "export_only") return;
+  const covered = projection.runPolicy === "plan_only" || revision === undefined
+    ? handoffSnapshotRecorded(projection)
+    : handoffSnapshotCoversRevision(projection, revision);
+  if (!covered) {
+    throw new Error("The kernel handoff snapshot is required for the handed-off revision.");
+  }
+}
+
+/**
+ * C2b (N1): the ONE kernel acceptance rule for a handoff selection. The
+ * `project.handoff_selected` reducer and the manager pre-check call this
+ * same predicate with the same revision, so a selection the manager lets
+ * through can never be refused after the project was mutated: the revision
+ * must still be the verified integration revision or the document tip
+ * (continuing the chain), and the v2 snapshot gate must hold for it.
+ */
+export function assertProjectHandoffSelectionAccepted(
+  projection: SchedulerProjection,
+  selectedIntegrationRevision: string | undefined,
+): void {
+  // C2b repair m6: the pre-check IS the whole acceptance rule, so the
+  // context-recording and acceptance-contract refusals live here -- not
+  // beside the reducer case -- and the manager refuses them before any
+  // project mutation too.
+  rejectCompletionWhileContextRecordingUnresolved(projection);
+  if (
+    projection.acceptanceContractStatus === "acceptance_contract_upgrade_required" &&
+    projection.acceptanceUpgradeRequiredEventRecorded
+  ) {
+    throw new Error(
+      "Final project handoff is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
+    );
+  }
+  assertBuildCompletionReady(projection);
+  // T9 (EP39): answered runs have no integration revision to match —
+  // exempt like plan_only (the field stays required, the match is off).
+  if (
+    projection.runPolicy !== "plan_only" &&
+    !isAnsweredRun(projection) &&
+    (typeof selectedIntegrationRevision !== "string" ||
+      !revisionMatchesIntegrationOrDocumentTip(projection, selectedIntegrationRevision))
+  ) {
+    throw new Error(
+      "Final project handoff selection does not match the verified integration revision.",
+    );
+  }
+  assertHandoffSnapshotGate(projection, selectedIntegrationRevision);
+}
+
+function applyHandoffSnapshotCommitted(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may commit a handoff snapshot.");
+  }
+  if (projection.projectDocsPolicyVersion !== 2) {
+    throw new Error("Handoff snapshots require project document policy version 2.");
+  }
+  const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
+  // C2b (N1 probe F): a kernel snapshot commit that landed is always
+  // recorded -- it moves the document tip -- even when user guidance
+  // withdrew the handoff while the commit was in flight. The withdrawn
+  // stop is recognized through the handoff history; such a record never
+  // satisfies a later gate (the gate binds to the latest request), but the
+  // chain stays continuous.
+  // C2b repair N-3: a record is accepted only for the current request's
+  // stop or a withdrawn stop's requestedSequence. A sequence that is no
+  // stop at all (probe R) is refused even while a handoff is requested.
+  const requestedSequence = projection.projectHandoff?.status === "requested"
+    ? projection.projectHandoff.requestedSequence
+    : undefined;
+  const withdrawnStop = (projection.projectHandoffHistory ?? []).some(
+    (handoff) => handoff.requestedSequence === stopSequence,
+  );
+  if (stopSequence !== requestedSequence && !withdrawnStop) {
+    throw new Error("Handoff snapshots require a requested project handoff.");
+  }
+  const stopKind = requiredString(event.payload, "stopKind");
+  if (stopKind !== "completed" && stopKind !== "plan_only") {
+    throw new Error(`Handoff snapshot stop kind ${stopKind} is invalid.`);
+  }
+  const revision = requiredString(event.payload, "revision");
+  const commit = requiredString(event.payload, "commit");
+  const parent = requiredString(event.payload, "parent");
+  const head = requiredString(event.payload, "head");
+  if (!revision.trim() || !commit.trim() || !parent.trim() || !head.trim()) {
+    throw new Error("Handoff snapshot revision and commit references are required.");
+  }
+  // C2c repair CD-17: a linked directory above STATE.md skips the file
+  // with a recorded reason; the gate accepts it the way it accepts
+  // export_only. With the reason present the paths may omit STATE.md and
+  // there is no body digest to record ("").
+  const stateSkipped = event.payload.stateSkippedReason;
+  if (stateSkipped !== undefined && (typeof stateSkipped !== "string" || !stateSkipped.trim())) {
+    throw new Error("Handoff snapshot stateSkippedReason is invalid.");
+  }
+  let bodyDigest: string;
+  if (typeof stateSkipped === "string") {
+    const rawDigest = event.payload.bodyDigest;
+    if (rawDigest !== undefined && rawDigest !== "" && (typeof rawDigest !== "string" || !/^[a-f0-9]{64}$/.test(rawDigest))) {
+      throw new Error("Handoff snapshot body digest is invalid.");
+    }
+    bodyDigest = typeof rawDigest === "string" ? rawDigest : "";
+  } else {
+    bodyDigest = requiredString(event.payload, "bodyDigest");
+    if (!/^[a-f0-9]{64}$/.test(bodyDigest)) {
+      throw new Error("Handoff snapshot body digest is invalid.");
+    }
+  }
+  const paths = stringArray(event.payload, "paths");
+  // C2c round 3 (NB-4): with STATE.md skipped for a recorded reason and the
+  // entry files already holding their sections, the kernel commit is empty
+  // and records no paths; that is valid. Without a skip reason STATE.md must
+  // be among the committed paths.
+  if (typeof stateSkipped !== "string" && !paths.includes("docs/project/STATE.md")) {
+    throw new Error("Handoff snapshots must include docs/project/STATE.md.");
+  }
+  // C2b (AR-R05): the writer proves the commit's tree holds the v2 entry
+  // lines (read back from the commit, never the checkout); the reducer
+  // requires that proof. Fail closed: no proof, no record.
+  // C2c (NF-2/CD-15): each entry file proves itself by its committed flag
+  // or by its recorded link reason (a redirect into the target path, or a
+  // skip of a missing or outside link target). STATE.md stays required.
+  const agentsViaLink = event.payload.agentsSectionViaLink;
+  if (agentsViaLink !== undefined && (typeof agentsViaLink !== "string" || !agentsViaLink.trim())) {
+    throw new Error("Handoff snapshot agentsSectionViaLink is invalid.");
+  }
+  if (
+    (event.payload.agentsSectionCommitted !== true && agentsViaLink === undefined) ||
+    (event.payload.claudeLineCommitted !== true && event.payload.claudeLineViaLink === undefined)
+  ) {
+    throw new Error("Handoff snapshots must prove the committed tree holds the v2 AGENTS.md section and the CLAUDE.md line.");
+  }
+  const specPath = event.payload.specPath;
+  if (specPath !== undefined && (typeof specPath !== "string" || !specPath.trim())) {
+    throw new Error("Handoff snapshot specPath is invalid.");
+  }
+  const specCopySkipped = event.payload.specCopySkipped;
+  if (specCopySkipped !== undefined && (typeof specCopySkipped !== "string" || !specCopySkipped.trim())) {
+    throw new Error("Handoff snapshot specCopySkipped is invalid.");
+  }
+  const claudeLineViaLink = event.payload.claudeLineViaLink;
+  if (claudeLineViaLink !== undefined && (typeof claudeLineViaLink !== "string" || !claudeLineViaLink.trim())) {
+    throw new Error("Handoff snapshot claudeLineViaLink is invalid.");
+  }
+  const snapshots = projection.projectDocs?.snapshots ?? [];
+  if (snapshots.some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Handoff snapshot for stop ${stopSequence} is already recorded.`);
+  }
+  const record: HandoffSnapshotRecord = {
+    stopSequence,
+    stopKind,
+    revision,
+    commit,
+    parent,
+    head,
+    bodyDigest,
+    paths: [...paths],
+    sequence: event.sequence,
+    ...(typeof stateSkipped === "string" ? { stateSkippedReason: stateSkipped } : {}),
+    previousSnapshotEdited: event.payload.previousSnapshotEdited === true,
+    agentsSectionCommitted: event.payload.agentsSectionCommitted !== false,
+    claudeLineCommitted: event.payload.claudeLineCommitted !== false,
+    ...(typeof specPath === "string" ? { specPath } : {}),
+    ...(event.payload.specCopied === true ? { specCopied: true as const } : {}),
+    ...(typeof specCopySkipped === "string" ? { specCopySkipped } : {}),
+    ...(typeof claudeLineViaLink === "string" ? { claudeLineViaLink } : {}),
+    ...(typeof agentsViaLink === "string" ? { agentsSectionViaLink: agentsViaLink } : {}),
+  };
+  const canonical = projection.integrationRevision;
+  const currentTip = projection.projectDocs?.documentTip;
+  const continuesDocuments =
+    (typeof canonical === "string" && parent === canonical) ||
+    (typeof currentTip === "string" && parent === currentTip);
+  projection.projectDocs = {
+    pending: projection.projectDocs?.pending ?? [],
+    ...carriedProjectDocs(projection.projectDocs),
+    snapshots: [...snapshots, record],
+    ...(continuesDocuments
+      ? { documentTip: commit }
+      : currentTip
+        ? { documentTip: currentTip }
+        : {}),
+  };
+  // A non-current stop's record is pure history: it moves the tip above
+  // but never touches the run state. Only the current stop's snapshot
+  // clears its failure pause and returns the run to the handoff wait. In
+  // particular a withdrawn stop reconciled after a later stop was
+  // requested (C2b repair B1, probe G2) stays history while requested --
+  // an old stop's late record can never disturb the current one.
+  const isCurrentStop = requestedSequence !== undefined && stopSequence === requestedSequence;
+  if (!isCurrentStop) {
+    return;
+  }
+  if (projection.pauseReason?.reason === "handoff_snapshot_failed") {
+    delete projection.pauseReason;
+  }
+  // C2a repair (B2): a resume retried the snapshot while `running`; the
+  // committed snapshot returns the run to the handoff wait, never
+  // `running`, so no Architect call follows until the owner selects.
+  if (projection.status === "running") {
+    projection.status = "paused";
+  }
+}
+
 function applyProjectDocAbandoned(
   projection: SchedulerProjection,
   event: SchedulerEvent,
@@ -5931,7 +9439,7 @@ function cloneProjectDocs(docs: ProjectDocsProjection): ProjectDocsProjection {
 
 function carriedProjectDocs(
   docs: ProjectDocsProjection | undefined,
-): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned"> {
+): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned" | "snapshots"> {
   if (!docs) return {};
   return {
     ...(docs.committed
@@ -5940,6 +9448,9 @@ function carriedProjectDocs(
     ...(docs.documentTip ? { documentTip: docs.documentTip } : {}),
     ...(docs.abandoned
       ? { abandoned: docs.abandoned.map((item) => ({ ...item })) }
+      : {}),
+    ...(docs.snapshots
+      ? { snapshots: docs.snapshots.map((record) => ({ ...record, paths: [...record.paths] })) }
       : {}),
   };
 }
@@ -6060,8 +9571,32 @@ function cloneRepairCyclesProjection(
     limit: cycles.limit,
     used: cycles.used,
     extensions: cycles.extensions,
+    ...(cycles.explicitLimit !== undefined ? { explicitLimit: cycles.explicitLimit } : {}),
     ...(cycles.pause ? { pause: { ...cycles.pause } } : {}),
   };
+}
+
+function cloneRepairIssuesProjection(issues: Record<string, RepairIssueProjection>): Record<string, RepairIssueProjection> {
+  return Object.fromEntries(Object.entries(issues).map(([issueId, issue]) => [issueId, {
+    ...issue,
+    hypotheses: [...issue.hypotheses],
+    outcomes: [...issue.outcomes],
+    approaches: issue.approaches.map((approach) => ({
+      ...approach,
+      diagnosticSet: [...approach.diagnosticSet],
+      evidenceIds: [...approach.evidenceIds],
+      failureEvidenceIds: [...(approach.failureEvidenceIds ?? [])],
+    })),
+    ...(issue.externalBlocker
+      ? {
+          externalBlocker: {
+            ...issue.externalBlocker,
+            evidence: [...issue.externalBlocker.evidence],
+            attemptedResolutions: [...issue.externalBlocker.attemptedResolutions],
+          },
+        }
+      : {}),
+  }]));
 }
 
 function cloneUserGuidanceItem(guidance: UserGuidanceItem): UserGuidanceItem {
@@ -6078,6 +9613,9 @@ function cloneUserGuidanceResolution(
 ): UserGuidanceAcknowledgementResolution {
   if (resolution.type === "no_plan_change") {
     return { ...resolution, evidenceIds: [...resolution.evidenceIds] };
+  }
+  if (resolution.type === "folded_into_planning") {
+    return { ...resolution };
   }
   return {
     ...resolution,
@@ -6159,8 +9697,9 @@ function planProjection(
 
 function assertTransitionAuthority(
   status: BuildTask["status"],
-  role: SchedulerActorRole
+  actor: SchedulerActor,
 ): void {
+  const role = actor.role;
   const architectStatuses: BuildTask["status"][] = [
     "architect_review",
     "approved",
@@ -6170,11 +9709,15 @@ function assertTransitionAuthority(
   if (architectStatuses.includes(status) && role !== "architect") {
     throw new Error(`Only the Architect may transition a task to ${status}.`);
   }
-  if (
-    (status === "integrated" || status === "integration_resolution") &&
-    role !== "runner"
-  ) {
-    throw new Error(`Only the runner may transition a task to ${status}.`);
+  if (status === "integrated" || status === "integration_resolution") {
+    if (
+      role !== "runner" ||
+      !["integration-manager", "integration_manager"].includes(actor.id)
+    ) {
+      throw new Error(
+        `Only the integration authority may transition a task to ${status}.`,
+      );
+    }
   }
 }
 
@@ -6310,6 +9853,9 @@ function cloneBuildTask(task: BuildTask): BuildTask {
           },
         }
       : {}),
+    ...(task.deliveryRepair
+      ? { deliveryRepair: { ...task.deliveryRepair, evidenceIds: [...task.deliveryRepair.evidenceIds] } }
+      : {}),
     ...(task.conflictPaths ? { conflictPaths: [...task.conflictPaths] } : {}),
   };
 }
@@ -6393,6 +9939,179 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** T6b repair (EP50): the recorded OA-16 track-record snapshot, validated for deterministic recompute. */
+function readTrackRecordSnapshot(value: unknown): { records: Record<string, { tasksReviewed: number; defectsFound: number }>; snapshotId: string } {
+  if (!isRecord(value) || !isRecord(value.records) || typeof value.snapshotId !== "string") {
+    throw new Error("Deliverable review track record requires model records and a snapshot id.");
+  }
+  const records: Record<string, { tasksReviewed: number; defectsFound: number }> = {};
+  for (const [modelId, entry] of Object.entries(value.records)) {
+    if (!isRecord(entry) || !Number.isSafeInteger(entry.tasksReviewed) || !Number.isSafeInteger(entry.defectsFound)) {
+      throw new Error("Deliverable review track record requires integer task and defect counts.");
+    }
+    records[modelId] = { tasksReviewed: entry.tasksReviewed as number, defectsFound: entry.defectsFound as number };
+  }
+  return { records, snapshotId: value.snapshotId };
+}
+
+// ---------------------------------------------------------------------------
+// T9 (EP39/OA-5/OA-10 #2): request-triage and answer-review payload parsers.
+// Payloads are closed: unknown fields are refused, never ignored.
+// ---------------------------------------------------------------------------
+
+function assertExactTriageKeys(payload: Record<string, unknown>, allowed: readonly string[]): void {
+  const unknown = Object.keys(payload).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    throw new Error(`Unknown triage payload field(s): ${unknown.join(", ")}.`);
+  }
+}
+
+function requiredNonBlank(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be nonblank.`);
+  return value;
+}
+
+function parseRequestTriage(payload: Record<string, unknown>): {
+  decision: PlanningTriageDecision;
+  rationale: string;
+} {
+  assertExactTriageKeys(payload, ["decision", "rationale"]);
+  const decision = payload.decision;
+  if (decision !== "answer" && decision !== "build" && decision !== "clarify") {
+    throw new Error("Triage decision must be answer, build, or clarify.");
+  }
+  return { decision, rationale: requiredNonBlank(payload, "rationale") };
+}
+
+function parseRequestAnswer(payload: Record<string, unknown>): {
+  answerText: string;
+  addressedParts: string[];
+  evidenceIds: string[];
+} {
+  assertExactTriageKeys(payload, ["answerText", "addressedParts", "evidenceIds"]);
+  const answerText = requiredNonBlank(payload, "answerText");
+  const addressedParts = payload.addressedParts;
+  if (
+    !Array.isArray(addressedParts) ||
+    addressedParts.length === 0 ||
+    !addressedParts.every((part): part is string => typeof part === "string" && part.trim().length > 0)
+  ) {
+    throw new Error("The answer must list at least one addressed question part.");
+  }
+  const evidenceIds = payload.evidenceIds ?? [];
+  if (!Array.isArray(evidenceIds) || !evidenceIds.every((id): id is string => typeof id === "string" && id.length > 0)) {
+    throw new Error("Answer evidenceIds must be a string array.");
+  }
+  return { answerText, addressedParts: [...addressedParts], evidenceIds: [...evidenceIds] };
+}
+
+function parseAnswerReviewFinding(value: unknown): AnswerReviewFinding {
+  if (!isRecord(value)) throw new Error("Answer review finding is invalid.");
+  assertExactTriageKeys(value, ["id", "statement", "severity"]);
+  const severity = value.severity;
+  if (severity !== "blocking" && severity !== "non_blocking") {
+    throw new Error("Answer review finding severity must be blocking or non_blocking.");
+  }
+  return {
+    id: requiredNonBlank(value, "id"),
+    statement: requiredNonBlank(value, "statement"),
+    severity,
+  };
+}
+
+function parseAnswerReviewFindings(payload: Record<string, unknown>): {
+  reviewId: string;
+  findings: AnswerReviewFinding[];
+  priorReviewId?: string;
+} {
+  assertExactTriageKeys(payload, ["reviewId", "findings", "priorReviewId"]);
+  const reviewId = requiredNonBlank(payload, "reviewId");
+  const raw = payload.findings;
+  if (!Array.isArray(raw)) throw new Error("Answer review findings must be an array.");
+  const findings = raw.map(parseAnswerReviewFinding);
+  if (new Set(findings.map((finding) => finding.id)).size !== findings.length) {
+    throw new Error("Answer review finding ids must be unique.");
+  }
+  const priorReviewId = payload.priorReviewId;
+  if (priorReviewId !== undefined && (typeof priorReviewId !== "string" || !priorReviewId.trim())) {
+    throw new Error("Answer review priorReviewId is invalid.");
+  }
+  return {
+    reviewId,
+    findings,
+    ...(priorReviewId !== undefined ? { priorReviewId: priorReviewId as string } : {}),
+  };
+}
+
+function parseAnswerReviewFindingCheck(value: unknown): AnswerReviewFindingCheck {
+  if (!isRecord(value)) throw new Error("Answer review finding check is invalid.");
+  assertExactTriageKeys(value, ["findingId", "resolution", "rationale"]);
+  const resolution = value.resolution;
+  if (resolution !== "resolved" && resolution !== "outstanding") {
+    throw new Error("Answer review finding check resolution must be resolved or outstanding.");
+  }
+  return {
+    findingId: requiredNonBlank(value, "findingId"),
+    resolution,
+    rationale: requiredNonBlank(value, "rationale"),
+  };
+}
+
+function parseAnswerReview(payload: Record<string, unknown>): {
+  id: string;
+  reviewerRuntimeId: string;
+  independence: "distinct_model" | "fresh_context";
+  answerSequence: number;
+  findings: AnswerReviewFinding[];
+  summary: string;
+  answerAccurate: boolean;
+  priorReviewId?: string;
+  priorFindingChecks?: AnswerReviewFindingCheck[];
+} {
+  assertExactTriageKeys(payload, [
+    "id",
+    "reviewerRuntimeId",
+    "independence",
+    "answerSequence",
+    "findings",
+    "summary",
+    "answerAccurate",
+    "priorReviewId",
+    "priorFindingChecks",
+  ]);
+  const rawFindings = payload.findings;
+  if (!Array.isArray(rawFindings)) throw new Error("Answer review findings must be an array.");
+  const findings = rawFindings.map(parseAnswerReviewFinding);
+  if (new Set(findings.map((finding) => finding.id)).size !== findings.length) {
+    throw new Error("Answer review finding ids must be unique.");
+  }
+  const priorReviewId = payload.priorReviewId;
+  if (priorReviewId !== undefined && (typeof priorReviewId !== "string" || !priorReviewId.trim())) {
+    throw new Error("Answer review priorReviewId is invalid.");
+  }
+  const rawChecks = payload.priorFindingChecks;
+  const priorFindingChecks = rawChecks === undefined
+    ? undefined
+    : (() => {
+      if (!Array.isArray(rawChecks)) throw new Error("Answer review priorFindingChecks must be an array.");
+      return rawChecks.map(parseAnswerReviewFindingCheck);
+    })();
+  const answerAccurate = payload.answerAccurate;
+  if (typeof answerAccurate !== "boolean") throw new Error("Answer review answerAccurate must be a boolean.");
+  return {
+    id: requiredNonBlank(payload, "id"),
+    reviewerRuntimeId: requiredNonBlank(payload, "reviewerRuntimeId"),
+    independence: parseReviewerIndependence(payload.independence),
+    answerSequence: requiredPositiveInteger(payload, "answerSequence"),
+    findings,
+    summary: requiredNonBlank(payload, "summary"),
+    answerAccurate,
+    ...(priorReviewId !== undefined ? { priorReviewId: priorReviewId as string } : {}),
+    ...(priorFindingChecks !== undefined ? { priorFindingChecks } : {}),
+  };
+}
+
 function requiredRunPolicy(
   payload: Record<string, unknown>
 ): NativeBuildRunPolicy {
@@ -6401,4 +10120,59 @@ function requiredRunPolicy(
     throw new Error("Missing runPolicy.");
   }
   return value;
+}
+
+/** C2b run option (CD-5): commit the handoff files, or write nothing. */
+export type HandoffFilesOption = "commit" | "export_only";
+
+/**
+ * Additive C2b run options on `run.policy_configured`. Only present fields
+ * are returned, so logs written before C2b (which carry none) replay with
+ * the defaults from the accessors below.
+ */
+export function parseRunPolicyOptions(
+  payload: Record<string, unknown>
+): { specCopy?: boolean; handoffFiles?: HandoffFilesOption } {
+  const options: { specCopy?: boolean; handoffFiles?: HandoffFilesOption } = {};
+  if (payload.specCopy !== undefined) {
+    if (typeof payload.specCopy !== "boolean") {
+      throw new Error("Run policy specCopy must be a boolean.");
+    }
+    options.specCopy = payload.specCopy;
+  }
+  if (payload.handoffFiles !== undefined) {
+    if (payload.handoffFiles !== "commit" && payload.handoffFiles !== "export_only") {
+      throw new Error("Run policy handoffFiles must be commit or export_only.");
+    }
+    options.handoffFiles = payload.handoffFiles;
+  }
+  return options;
+}
+
+/** Recorded `specCopy` run option (CD-5); absent means the default true. */
+export function specCopyOf(projection: SchedulerProjection): boolean {
+  return projection.specCopy ?? true;
+}
+
+/** Recorded `handoffFiles` run option (CD-5); absent means the default commit. */
+export function handoffFilesOf(projection: SchedulerProjection): HandoffFilesOption {
+  return projection.handoffFiles ?? "commit";
+}
+
+/**
+ * C2b (N2): a kernel snapshot retry is pending -- docs v2, handoff
+ * requested, `export_only` off, and no snapshot recorded for the current
+ * stop. Resume is allowed exactly then (not by the current pause reason
+ * alone, so an owner pause stacked on a snapshot failure still retries).
+ */
+export function handoffSnapshotRetryPending(projection: SchedulerProjection): boolean {
+  if (projection.projectDocsPolicyVersion !== 2) return false;
+  if (isAnsweredRun(projection)) return false;
+  if (projection.projectHandoff?.status !== "requested") return false;
+  if (handoffFilesOf(projection) !== "commit") return false;
+  const stopSequence = projection.projectHandoff.requestedSequence;
+  if (stopSequence === undefined) return false;
+  return !(projection.projectDocs?.snapshots ?? []).some(
+    (record) => record.stopSequence === stopSequence,
+  );
 }

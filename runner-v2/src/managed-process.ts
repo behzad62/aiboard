@@ -166,6 +166,13 @@ export class ManagedProcessService {
   async stopRun(runId: string): Promise<void> {
     await this.stopMatching(record => record.runId === runId);
   }
+
+  /** T6b repair (N-6): stop exactly the listed processes; the run-wide stopRun is not attempt-scoped. */
+  async stopProcesses(processIds: readonly string[]): Promise<void> {
+    const targets = new Set(processIds);
+    await this.stopMatching(record => targets.has(record.processId));
+  }
+
   async closeAgent(owner: ManagedProcessOwner): Promise<void> {
     await this.stopMatching(record => sameOwner(record, owner));
   }

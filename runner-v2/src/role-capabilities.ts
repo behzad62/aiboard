@@ -10,7 +10,7 @@ import type { ToolEffect } from "./agent-contracts.js";
  */
 export type RoleCapabilityRole = "architect" | "verifier" | "plan-critic" | "worker";
 
-export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "task";
+export type RoleCapabilityBroker = "inspection" | "planOnly" | "expectations" | "coverage" | "answer" | "delivery_obligations" | "delivery" | "delivery_commands" | "task";
 
 /**
  * `all` registers every MCP tool the manager exposes (the worker).
@@ -40,6 +40,11 @@ export const ROLE_CAPABILITY_BROKERS = [
   { role: "architect", broker: "planOnly" },
   { role: "verifier", broker: "inspection" },
   { role: "verifier", broker: "expectations" },
+  { role: "verifier", broker: "coverage" },
+  { role: "verifier", broker: "answer" },
+  { role: "verifier", broker: "delivery_obligations" },
+  { role: "verifier", broker: "delivery" },
+  { role: "verifier", broker: "delivery_commands" },
   { role: "plan-critic", broker: "inspection" },
   { role: "worker", broker: "task" },
 ] as const satisfies readonly { role: RoleCapabilityRole; broker: RoleCapabilityBroker }[];
@@ -93,7 +98,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "repo.map",
     "research.fetch",
     "search_session_history",
-  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, "run_evidence_command"]),
+  ], [...ARCHITECT_INSPECTION_BROWSER_TOOLS, "record_external_blocker", "record_repair_approach_decision", "run_evidence_command"]),
   "architect:planOnly": surface("architect", "planOnly", "read-only-class", [
     "artifact.read",
     "code.definition",
@@ -118,7 +123,7 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "repo.map",
     "research.fetch",
     "search_session_history",
-  ], ARCHITECT_PLAN_ONLY_BROWSER_TOOLS),
+  ], [...ARCHITECT_PLAN_ONLY_BROWSER_TOOLS, "record_external_blocker", "record_repair_approach_decision"]),
   "verifier:inspection": surface("verifier", "inspection", "none", [
     "artifact.read",
     "fs.list",
@@ -142,6 +147,75 @@ const SURFACES: Readonly<Record<string, RoleToolSurface>> = {
     "inspect_evidence",
     "record_verification_expectations",
   ], []),
+  // T3b (OA-1) repair cycle 1 (B2): the independent source-coverage
+  // reviewer. Read-only inspection only: no run_evidence_command, no process
+  // control, no filesystem mutation, no MCP. The blind deriving pass
+  // registers record_coverage_obligations, the re-review own-view pass
+  // record_coverage_correction_view, the verdict pass submit_coverage_verdict
+  // — each pass registers exactly one of the three optional tools.
+  "verifier:coverage": surface("verifier", "coverage", "none", [
+    "artifact.read",
+    "fs.list",
+    "fs.read",
+    "fs.search",
+    "fs.stat",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "inspect_evidence",
+  ], ["record_coverage_correction_view", "record_coverage_obligations", "submit_coverage_verdict"]),
+  // T9 (OA-5/OA-10 #2): the opt-in independent answer reviewer. Read-only
+  // inspection only: no run_evidence_command, no process control, no
+  // filesystem mutation, no MCP. The findings pass registers
+  // record_answer_review_findings, the verdict pass
+  // submit_answer_review_verdict — each pass registers exactly one.
+  "verifier:answer": surface("verifier", "answer", "none", [
+    "artifact.read",
+    "fs.list",
+    "fs.read",
+    "fs.search",
+    "fs.stat",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "inspect_evidence",
+  ], ["record_answer_review_findings", "submit_answer_review_verdict"]),
+  // T6a (OA-3/OA-4/OA-10): the mandatory deliverable reviewer, one broker per
+  // kernel-ordered pass. The high-tier obligations pass sees criteria only and
+  // has no inspection tools. The findings pass inspects the task-revision
+  // checkout read-only; at high tier it may also run audited evidence
+  // commands. The verdict pass is read-only. No filesystem mutation, process
+  // control, or MCP; each pass registers exactly one optional lifecycle tool.
+  "verifier:delivery_obligations": surface("verifier", "delivery_obligations", "none", [], [
+    "record_deliverable_obligations",
+  ]),
+  "verifier:delivery": surface("verifier", "delivery", "none", [
+    "artifact.read",
+    "fs.list",
+    "fs.read",
+    "fs.search",
+    "fs.stat",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "inspect_evidence",
+  ], ["record_deliverable_findings", "submit_deliverable_verdict"]),
+  "verifier:delivery_commands": surface("verifier", "delivery_commands", "none", [
+    "artifact.read",
+    "fs.list",
+    "fs.read",
+    "fs.search",
+    "fs.stat",
+    "git.diff",
+    "git.log",
+    "git.show",
+    "git.status",
+    "inspect_evidence",
+    "run_evidence_command",
+  ], ["record_deliverable_findings"]),
   "plan-critic:inspection": surface("plan-critic", "inspection", "none", [
     "artifact.read",
     "fs.list",
@@ -239,6 +313,19 @@ export const ARCHITECT_LIFECYCLE_TOOLS = Object.freeze([
   "complete_run",
   "request_integration",
   "review_task",
+]);
+
+/**
+ * T9 (EP39): the required lifecycle core on triage-`answer` turns, which
+ * omit the mutation tools by design. Every answer turn offers questions,
+ * completion, and the triage tools.
+ */
+export const ANSWER_PATH_LIFECYCLE_TOOLS = Object.freeze([
+  "ask_user",
+  "complete_run",
+  "convert_to_build",
+  "record_answer",
+  "record_triage",
 ]);
 
 export function roleToolSurface(

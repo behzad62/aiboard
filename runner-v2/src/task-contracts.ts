@@ -61,6 +61,17 @@ export interface VerifierRepairProvenance {
   evidenceIds: string[];
 }
 
+/**
+ * T6a: provenance of a repair task planned for a failed integrated-boundary
+ * check; it cites the integrated task it repairs.
+ */
+export interface DeliveryRepairProvenance {
+  sourceTaskId: string;
+  boundaryId: string;
+  integrationRevision: string;
+  evidenceIds: string[];
+}
+
 export interface BuildTask {
   id: string;
   /** Legacy implementation tasks omit this field; final verification is explicit. */
@@ -96,6 +107,7 @@ export interface BuildTask {
   verificationReviewId?: string;
   verificationRepair?: VerificationRepairProvenance;
   verifierRepair?: VerifierRepairProvenance;
+  deliveryRepair?: DeliveryRepairProvenance;
 }
 
 export type FinalVerificationTask = Omit<

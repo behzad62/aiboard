@@ -96,6 +96,9 @@ export interface NativeWorkerDriverOptions {
   executionGrants?: ExecutionGrantAuthority;
   contextManifests?: ContextManifestStore;
   recordContextPackText?: boolean;
+  defectClasses?: readonly string[];
+  /** T6b repair (N-5): fresh top defect-class labels per worker turn; wins over defectClasses. */
+  defectClassesFor?: () => readonly string[];
 }
 
 export function buildWorkerSystemPrompt(criterionIds: readonly string[] = []): string {
@@ -128,6 +131,10 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       maxBytes: 256 * 1024,
       maxEstimatedTokens: 64 * 1024,
     };
+  }
+
+  private resolveDefectClasses(): readonly string[] {
+    return this.options.defectClassesFor?.() ?? this.options.defectClasses ?? [];
   }
 
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
@@ -522,6 +529,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         summary: evidenceFactSummary(record.fact),
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
+    const defectClasses = this.resolveDefectClasses();
     const input = {
       limits: this.contextLimits,
       task: projection.tasks[assignment.task.id],
@@ -532,6 +540,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
       repositorySnapshot,
       evidence,
       recentHistory: [],
+      ...(defectClasses.length > 0 ? { defectClasses: [...defectClasses] } : {}),
     };
     if (!this.options.capabilityRegistry) {
       return { pack: buildWorkerContext(input), repositorySnapshot };

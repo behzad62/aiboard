@@ -17,6 +17,7 @@ import {
   type AgentProviderRetryEvent,
 } from "./agent-loop.js";
 import {
+  REPAIR_APPROACH_DECISION_INSTRUCTIONS,
   buildArchitectContext,
   architectContextSections,
   type ArchitectReviewSubmission,
@@ -59,8 +60,8 @@ import {
   type ProviderHealthRegistry,
 } from "./provider-health.js";
 import type { AgentRuntimeCandidate, RuntimeRouter } from "./runtime-router.js";
-import type { SchedulerStore } from "./scheduler-store.js";
-import { rebuildSchedulerProjection } from "./scheduler-store.js";
+import type { SchedulerProjection, SchedulerStore } from "./scheduler-store.js";
+import { isPlanningState, rebuildSchedulerProjection } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import type { SkillCatalog } from "./skill-catalog.js";
 import { rankSkillsForTask } from "./skill-routing.js";
@@ -135,6 +136,13 @@ export interface NativeArchitectRuntimeOptions {
   recordContextPackText?: boolean;
   /** Disposable copy for `run_evidence_command`. Absent means the tool is absent. */
   commandWorkspace?: ArchitectCommandWorkspaceProvider;
+  /**
+   * T9 (EP41): the base revision for Architect command execution on the
+   * answer path, where no integration revision exists yet. Production wires
+   * the integration baseline; without it answer turns list no command tool.
+   * Never used for plan_only runs (no execution there, before or after T9).
+   */
+  answerCommandRevision?: string;
   execution?: OneShotCommandExecutor;
 }
 
@@ -211,6 +219,12 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       pack: context,
       recordedAt: this.clock(),
     });
+    // T9 repair cycle 3 (NOTE-1): folded_into_planning exists only on
+    // new-policy runs. Legacy runs keep the legacy sentence, so a legacy
+    // Architect never wastes a call on a resolution the kernel refuses.
+    const userGuidanceSentence = projection.planningPolicyVersion === 1
+      ? "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. While the run has no ready plan (planning state or the answer path), use folded_into_planning so the guidance folds into the plan or answer still being drafted. Once a ready plan exists, use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope."
+      : "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.";
     let messages: AgentMessage[] = [
       {
         id: "architect-system",
@@ -219,7 +233,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           "You are the AIBoard Architect. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool.",
           "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision.",
           "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
-          "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.",
+          userGuidanceSentence,
           "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
           "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",
           "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
@@ -230,6 +244,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           "When final verification planning is requested, inspect the canonical repository state and use plan_final_verification with an explicit build, tests, runtime_smoke, and browser plan.",
           "When final verification review is requested, inspect the exact current submission and persisted category evidence, then use review_final_verification with one semantic rationale per category plus an explicit low/high Architect risk declaration and rationale. Require repair when the evidence does not support approval, and declare high risk whenever semantic concerns exceed the kernel-observed paths and effects.",
           "When final verification repairs are requested, use plan_verification_repairs to create narrowly scoped ordinary tasks whose provenance and acceptance criteria cover every failed category exactly once.",
+          REPAIR_APPROACH_DECISION_INSTRUCTIONS,
           "When plan critique resolution is requested, read every blocking finding, inspect the baseline repository where a finding cites files, then call resolve_plan_critique exactly once: reconcile the plan for findings you accept (cancel, revise, or add tasks in one planReconciliation) and reject the rest with evidence-based rationale.",
         ].join("\n"),
       },
@@ -298,26 +313,42 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
           tool.definition.readOnly === true && tool.definition.effect === "none",
       });
     }
-    const inspectionTools = this.options.runPolicy === "plan_only"
-      ? new PlanOnlyInspectionRuntime(extras)
-      : commandRevision
-        ? composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
-            () => this.openArchitectCommandCopy(commandRevision),
-            {
-              projectRoot: this.options.projectRoot,
-              permissionProfile: this.options.permissionProfile ?? "project",
-              artifacts: this.options.artifacts,
-              evidenceStore: this.options.evidenceStore,
-              clock: this.clock,
-              ...(this.options.git ? { git: this.options.git } : {}),
-              ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
-              ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
-              ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
-              ...(this.options.execution ? { execution: this.options.execution } : {}),
-              ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
-            },
-          ))
-        : extras;
+    // T3a (OA-7/EP41): a new-policy run in planning state — no ready plan and
+    // no triage `answer` — is refused Architect command execution at the tool
+    // boundary, not only in the prompt. Legacy runs behave as today.
+    let inspectionTools: AgentToolRuntime;
+    if (this.options.runPolicy === "plan_only") {
+      inspectionTools = new PlanOnlyInspectionRuntime(extras);
+    } else if (isPlanningState(projection)) {
+      inspectionTools = new PlanningStateInspectionRuntime(extras);
+    } else if (commandRevision) {
+      // T3a repair (N4): the command tool stays listed for the turn, but
+      // every invoke re-reads the projection — losing readiness mid-turn
+      // refuses run_evidence_command from that point on.
+      inspectionTools = new PlanningStateCommandGuard(
+        composeArchitectInspection(extras, new LazyArchitectCommandRuntime(
+          () => this.openArchitectCommandCopy(commandRevision),
+          {
+            projectRoot: this.options.projectRoot,
+            permissionProfile: this.options.permissionProfile ?? "project",
+            artifacts: this.options.artifacts,
+            evidenceStore: this.options.evidenceStore,
+            clock: this.clock,
+            ...(this.options.git ? { git: this.options.git } : {}),
+            ...(this.options.executionGrants ? { executionGrants: this.options.executionGrants } : {}),
+            ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+            ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+            ...(this.options.execution ? { execution: this.options.execution } : {}),
+            ...(this.options.allowedCommands ? { allowedCommands: this.options.allowedCommands } : {}),
+          },
+        )),
+        () => rebuildSchedulerProjection(
+          this.options.schedulerStore.readRun(request.runId),
+        ),
+      );
+    } else {
+      inspectionTools = extras;
+    }
     const layeredTools = new LayeredToolRuntime(request.tools, inspectionTools);
     const tools = this.options.budgetLedger
       ? new BudgetedToolRuntime({
@@ -432,7 +463,25 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     request: ArchitectActionRequest,
     projection: ReturnType<typeof rebuildSchedulerProjection>,
   ): Promise<string | undefined> {
-    if (request.reason.type !== "review_required") return projection.integrationRevision;
+    if (request.reason.type !== "review_required") {
+      if (projection.integrationRevision) return projection.integrationRevision;
+      // T9 (EP41 positive half): once triage is `answer` (not a planning
+      // state), command execution is admitted against the answer-path base
+      // revision — in a lazily created disposable copy only. Under `build`
+      // without a ready plan and under `clarify` the run is in planning
+      // state, so the inspection runtime refuses commands before this
+      // matters; plan_only never reaches execution (architectCommandRevision
+      // returns undefined there, before and after T9).
+      if (
+        projection.planningPolicyVersion === 1 &&
+        projection.planningTriageDecision === "answer"
+      ) {
+        return this.options.answerCommandRevision?.trim()
+          ? this.options.answerCommandRevision
+          : undefined;
+      }
+      return undefined;
+    }
     const submission = await loadArchitectReviewSubmission(
       this.options.sessions,
       request.runId,
@@ -749,7 +798,9 @@ export function architectInspectionWorkspace(
     reason.type === "final_verification_review_required" ||
     reason.type === "final_verification_repair_plan_required" ||
     reason.type === "verifier_repair_plan_required" ||
-    reason.type === "plan_critique_resolution_required"
+    reason.type === "plan_critique_resolution_required" ||
+    // T6a: a failed boundary is judged on the integrated revision.
+    reason.type === "delivery_boundary_failed"
   ) {
     return canonicalProjectRoot?.trim() || projectRoot;
   }
@@ -1089,6 +1140,91 @@ export class PlanOnlyInspectionRuntime implements AgentToolRuntime {
       },
     };
   }
+}
+
+/**
+ * T3a (OA-7/EP41): the inspection surface for a new-policy run in planning
+ * state. Full read-only inspection stays available; `run_evidence_command` is
+ * neither listed nor invokable — forged calls are refused with
+ * `planning_state_command_refused`, and no disposable copy is ever created.
+ */
+export class PlanningStateInspectionRuntime implements AgentToolRuntime {
+  constructor(private readonly runtime: AgentToolRuntime) {}
+
+  definitions() {
+    return this.runtime.definitions().filter(
+      (definition) => definition.name !== "run_evidence_command",
+    );
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return name !== "run_evidence_command" && this.runtime.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return name !== "run_evidence_command" && this.runtime.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.runtime.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    if (call.name === "run_evidence_command") {
+      return planningStateCommandRefused(call);
+    }
+    return await this.runtime.invoke(call, context);
+  }
+}
+
+/**
+ * T3a repair (N4): per-invoke planning-state gate for Architect turns that
+ * started outside planning state. The command tool stays listed, but every
+ * `run_evidence_command` invoke re-reads the durable projection and is
+ * refused once the run has returned to planning state (e.g. readiness lost
+ * mid-turn). All other tools delegate untouched.
+ */
+export class PlanningStateCommandGuard implements AgentToolRuntime {
+  constructor(
+    private readonly runtime: AgentToolRuntime,
+    private readonly readProjection: () => SchedulerProjection,
+  ) {}
+
+  definitions() {
+    return this.runtime.definitions();
+  }
+
+  isLifecycleTool(name: string): boolean {
+    return this.runtime.isLifecycleTool(name);
+  }
+
+  isReadOnlyTool(name: string): boolean {
+    return this.runtime.isReadOnlyTool(name);
+  }
+
+  assertUniqueCallIds(calls: readonly ToolCallBlock[], seen: ReadonlySet<string>): void {
+    this.runtime.assertUniqueCallIds(calls, seen);
+  }
+
+  async invoke(call: ToolCallBlock, context: ToolExecutionContext): Promise<ToolResult> {
+    if (call.name === "run_evidence_command" && isPlanningState(this.readProjection())) {
+      return planningStateCommandRefused(call);
+    }
+    return await this.runtime.invoke(call, context);
+  }
+}
+
+function planningStateCommandRefused(call: ToolCallBlock): ToolResult {
+  const message =
+    "Architect command execution is refused while the run is in planning state: " +
+    "no ready plan exists and the triage decision is not answer.";
+  return {
+    callId: call.callId,
+    toolName: call.name,
+    content: [{ type: "text", text: message }],
+    isError: true,
+    error: { code: "planning_state_command_refused", message },
+  };
 }
 
 class LayeredToolRuntime implements AgentToolRuntime {

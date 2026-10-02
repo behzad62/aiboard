@@ -7,7 +7,7 @@ import type {
   ValidationResult,
 } from "./agent-contracts.js";
 import type { ArtifactStore } from "./artifact-store.js";
-import type { CommandEvidenceFact, EvidenceStore } from "./evidence-store.js";
+import type { CommandEvidenceFact, EvidenceStore, ExtendedEvidenceStore } from "./evidence-store.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import type { GitRunner } from "./git-repository.js";
 import { isBenchmarkCommandAllowed } from "./benchmark-command-policy.js";
@@ -40,6 +40,78 @@ export interface EvidenceToolsOptions {
 
 export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
   return [runEvidenceTool(options), inspectEvidenceTool(options)];
+}
+
+/**
+ * T5 (P6.6): inspect tools for durable validation observations and
+ * applicability decisions. Separate from createEvidenceTools so the existing
+ * two-tool surface (and its tests) stays byte-identical; later tasks wire
+ * these into role surfaces. Both tools are read-only with no verdict.
+ */
+export function createValidationEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
+  return [inspectObservationsTool(options), inspectApplicabilityTool(options)];
+}
+
+function extendedStore(store: EvidenceStore): ExtendedEvidenceStore | undefined {
+  const candidate = store as Partial<ExtendedEvidenceStore>;
+  return typeof candidate.recordObservation === "function" &&
+    typeof candidate.listObservations === "function" &&
+    typeof candidate.recordApplicability === "function" &&
+    typeof candidate.listApplicability === "function"
+    ? (candidate as ExtendedEvidenceStore)
+    : undefined;
+}
+
+function inspectObservationsTool(options: EvidenceToolsOptions): NativeTool<Record<string, never>> {
+  return {
+    definition: {
+      name: "inspect_validation_observations",
+      description: "Inspect durable validation observations (outcomes/counts/snapshots); no semantic verdict is provided",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      effect: "none",
+    },
+    validate: (input) => {
+      if (typeof input !== "object" || input === null || Array.isArray(input)) {
+        return { ok: false, issues: ["arguments must be an object"] };
+      }
+      return { ok: true, value: {} };
+    },
+    execute: async (_input, context) => {
+      const store = extendedStore(options.store);
+      if (!store) return failure("validation_store_unavailable", "This evidence store does not support validation observations.");
+      return {
+        content: [{ type: "json", value: store.listObservations({ runId: context.runId }) }],
+        isError: false,
+      };
+    },
+  };
+}
+
+function inspectApplicabilityTool(options: EvidenceToolsOptions): NativeTool<Record<string, never>> {
+  return {
+    definition: {
+      name: "inspect_applicability_decisions",
+      description: "Inspect durable evidence applicability decisions (reusable/invalidated); no semantic verdict is provided",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      readOnly: true,
+      effect: "none",
+    },
+    validate: (input) => {
+      if (typeof input !== "object" || input === null || Array.isArray(input)) {
+        return { ok: false, issues: ["arguments must be an object"] };
+      }
+      return { ok: true, value: {} };
+    },
+    execute: async (_input, context) => {
+      const store = extendedStore(options.store);
+      if (!store) return failure("validation_store_unavailable", "This evidence store does not support applicability decisions.");
+      return {
+        content: [{ type: "json", value: store.listApplicability({ runId: context.runId }) }],
+        isError: false,
+      };
+    },
+  };
 }
 
 function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceInput> {

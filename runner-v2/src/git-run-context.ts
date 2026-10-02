@@ -182,8 +182,18 @@ export function gitWorkingRootsForRun(projectRoot: string, stateDirectory: strin
     join(resolve(stateDirectory), "integration", segment(40, "item")),
     join(resolve(stateDirectory), "verification-workspaces", segment(12, "run")),
     join(resolve(stateDirectory), "verifier-workspaces", segment(12, "run")),
+    // T6a: the deliverable-review and integrated-boundary checkouts
+    // (VerificationWorkspaceManager suffixes "delivery-review"/"delivery-boundary").
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("delivery-review")}`),
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("delivery-boundary")}`),
     join(resolve(stateDirectory), "git-baselines", segment(40, "run")),
   ]);
+}
+
+/** Mirrors verification-workspace.ts safeName for a workspace suffix. */
+function suffixSegment(suffix: string): string {
+  const readable = suffix.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 12) || "run";
+  return `${readable}-${createHash("sha256").update(suffix).digest("hex").slice(0, 10)}`;
 }
 
 async function ownedDirectory(path: string, roots: readonly string[]): Promise<string> {

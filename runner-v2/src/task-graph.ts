@@ -70,6 +70,7 @@ export function validateTaskGraph(
       const hasFinalProvenance = Boolean(
         task.verificationRepair &&
         !task.verifierRepair &&
+        !task.deliveryRepair &&
         task.verificationRepair.sourceGenerationId.trim() &&
         task.verificationRepair.finalVerificationTaskId.trim() &&
         validVerificationRepairSource(task.verificationRepair.source) &&
@@ -81,9 +82,20 @@ export function validateTaskGraph(
       const hasVerifierProvenance = Boolean(
         task.verifierRepair &&
         !task.verificationRepair &&
+        !task.deliveryRepair &&
         validVerifierRepairProvenance(task.verifierRepair),
       );
-      if (!hasFinalProvenance && !hasVerifierProvenance) {
+      // T6a: a boundary-failure repair cites its integrated source task.
+      const hasDeliveryProvenance = Boolean(
+        task.deliveryRepair &&
+        !task.verificationRepair &&
+        !task.verifierRepair &&
+        task.deliveryRepair.sourceTaskId.trim() &&
+        task.deliveryRepair.boundaryId.trim() &&
+        task.deliveryRepair.integrationRevision.trim() &&
+        Array.isArray(task.deliveryRepair.evidenceIds),
+      );
+      if (!hasFinalProvenance && !hasVerifierProvenance && !hasDeliveryProvenance) {
         issues.push({
           code: "invalid_final_verification_task",
           taskId: task.id,
@@ -92,7 +104,8 @@ export function validateTaskGraph(
       }
     } else if (
       task.verificationRepair !== undefined ||
-      task.verifierRepair !== undefined
+      task.verifierRepair !== undefined ||
+      task.deliveryRepair !== undefined
     ) {
       issues.push({
         code: "invalid_final_verification_task",
@@ -183,6 +196,35 @@ export function readyTaskIds(tasks: readonly BuildTask[]): string[] {
     .map((task) => task.id);
 }
 
+/**
+ * T4 (EP08/EP13): why a task is not dependency-eligible, or undefined when
+ * its dependencies are complete. A missing reference and an incomplete
+ * dependency both block; phase labels never do — two unrelated complete
+ * tasks need no phase-order dependency, and eligibility never follows
+ * from unconditional phase completion.
+ */
+export function dependencyBlockReason(
+  tasks: readonly BuildTask[],
+  taskId: string,
+): string | undefined {
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const task = byId.get(taskId);
+  if (!task) return `Unknown task ${taskId}.`;
+  for (const dependency of task.dependencies) {
+    const parent = byId.get(dependency);
+    if (!parent) {
+      return `Task ${taskId} depends on missing task ${dependency}.`;
+    }
+    if (parent.status !== "integrated") {
+      return (
+        `Task ${taskId} waits for dependency ${dependency} ` +
+        `(status ${parent.status}).`
+      );
+    }
+  }
+  return undefined;
+}
+
 export function applyTaskTransition(
   task: BuildTask,
   status: TaskStatus,
@@ -193,6 +235,7 @@ export function applyTaskTransition(
     (
       Object.hasOwn(patch, "verificationRepair") ||
       Object.hasOwn(patch, "verifierRepair") ||
+      Object.hasOwn(patch, "deliveryRepair") ||
       Object.hasOwn(patch, "kind")
     )
   ) {

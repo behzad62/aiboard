@@ -2,14 +2,15 @@ import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports }
 import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
 import type { LspTransportFactory } from "./lsp-transport.js";
 import type { McpDiscoveryResult } from "./runner-internal-execution-context.js";
-import { requireGitRunner } from "./git-command.js";
+import { requireGitRunner, unavailableGitRunner } from "./git-command.js";
 import type { RunGitExecutionContext } from "./git-run-context.js";
 import { createHash, randomBytes } from "node:crypto";
 import { AUTHORIZED_STOP_CLEANUP_TIMEOUT_MS } from "./cleanup-timeouts.js";
-import { statSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { createSchedulerTempRecorders, decideRecordedTempCleanup, filterRecordsForOwner, recordTempCreation, searchOwnedProcesses, type LeftoverCleanupRecord, type TempCreationRecord } from "./cleanup-ownership.js";
 import { homedir, tmpdir } from "node:os";
-import { basename, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,13 +23,27 @@ import {
   type ModelCostBasisSnapshot,
 } from "./budget-ledger.js";
 import { ArtifactStore } from "./artifact-store.js";
+import {
+  createDeliveryBoundaryDriver,
+  createDeliveryDepthRunner,
+  createDeliveryWorkspaceSlot,
+  currentWorkerAuthor,
+  loadDeliverableReviewInputs,
+  submitTaskSummary,
+  type DurableSubmission,
+} from "./delivery-execution.js";
+import { NativeDeliverableReviewRuntime } from "./native-deliverable-review.js";
+import type { MutationFileSystem } from "./mutation-probe.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
 import { CapabilityRegistry } from "./capability-registry.js";
 import {
   BuildRuntime,
   type FinalVerificationCheckDriver,
+  type FlakyIsolationDriver,
   type IndependentVerifierDriver,
   type IntegrationRuntimeDriver,
+  type DeliveryBoundaryDriver,
+  type DeliveryReviewDriver,
   type PlanCriticDriver,
 } from "./build-runtime.js";
 import type { AgentSessionProjection } from "./agent-session-store.js";
@@ -47,7 +62,9 @@ import {
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import { cloneBuildSpec, type NativeBuildSpec } from "./build-spec.js";
 import { IntegrationManager } from "./integration-manager.js";
-import { FinalVerificationRuntime } from "./final-verification-runtime.js";
+import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
+import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNodeTestCommand } from "./flaky-rerun.js";
+import { topDefectClasses } from "./defect-history.js";
 import {
   finalVerificationProfileDigest,
   FinalVerificationProfileAuthority,
@@ -75,6 +92,17 @@ import {
   type NativeModelUsageRuntime,
 } from "./model-usage-projection.js";
 import { NativeArchitectRuntime } from "./native-architect-runtime.js";
+import {
+  buildCoverageHostCapabilities,
+  NativeCoverageReviewRuntime,
+  SchedulerCoverageReviewAuthority,
+  type CoverageReviewDriver,
+} from "./planning-review.js";
+import {
+  NativeAnswerReviewRuntime,
+  SchedulerAnswerReviewAuthority,
+  type AnswerReviewDriver,
+} from "./request-triage.js";
 import {
   NativePlanCriticRuntime,
   type NativePlanCritiqueRequest,
@@ -572,6 +600,11 @@ export class NativeBuildFactory {
     await this.options.runtimeConstructionHooks?.afterAcquire?.("scheduler_store");
     const schedulerEvents = schedulerStore.readRun(spec.runId);
     initializationStage = "session_store";
+    // T6b repair (OA-17): Runner-private durable creation records for
+    // this run, keyed to the real run and project ids. The temp-path
+    // search below reads these same records, so writers and the search
+    // always agree on keys.
+    const tempRecorders = createSchedulerTempRecorders(schedulerStore, { runId: spec.runId, projectId: spec.projectId }, () => new Date().toISOString());
     const sessions = new SqliteAgentSessionStore(
       join(runRoot, "sessions.sqlite"),
       this.artifacts,
@@ -654,13 +687,33 @@ export class NativeBuildFactory {
       kind: "independent-verifier",
       workspaceSuffix: "architect-commands",
     });
+    const deliveryWorkspaceFor = (suffix: string) => (targetRevision?: string) => new VerificationWorkspaceManager({
+      execute: requireGitRunner(gitContext).lifecycle("verification").run,
+      repositoryRoot: integrationManager.path,
+      stateDirectory: this.options.stateDirectory,
+      runId: spec.runId,
+      kind: "independent-verifier",
+      workspaceSuffix: suffix,
+      // Pinned to the exact task or integration revision under check.
+      ...(targetRevision ? { targetRevision } : { integrationManager }),
+    });
+    const deliveryReviewWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-review"));
+    const deliveryBoundaryWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-boundary"));
     constructionResources.add(
       "independent_verifier_workspace",
       async () => {
         try {
           await verifierWorkspace.cleanup();
         } finally {
-          await architectCommandWorkspace.cleanup();
+          try {
+            await architectCommandWorkspace.cleanup();
+          } finally {
+            try {
+              await deliveryReviewWorkspace.cleanup();
+            } finally {
+              await deliveryBoundaryWorkspace.cleanup();
+            }
+          }
         }
       },
     );
@@ -680,6 +733,17 @@ export class NativeBuildFactory {
       () => verifierBaselineWorkspace.cleanup(),
     );
     await this.options.runtimeConstructionHooks?.afterAcquire?.("independent_verifier_baseline_workspace");
+    // T6b repair (R3 N-6): the disposable verification checkouts are
+    // creation-recorded here at creation time — not at the first cleanup
+    // search — so a crash before the first search still leaves an
+    // owner-visible record. Retained: their own manager removes them; the
+    // policy-gated search only reads these records. Bookkeeping never
+    // breaks creation (and re-creation is an idempotent no-op).
+    for (const workspacePath of nativeBuildCleanupRoots(this.options.stateDirectory, spec.runId)) {
+      try {
+        tempRecorders.recorded({ path: workspacePath, ownerRunId: spec.runId, kind: "directory", createdAt: new Date().toISOString(), retained: true });
+      } catch { /* bookkeeping never breaks workspace creation */ }
+    }
     if (
       schedulerEvents.length > 0 &&
       rebuildSchedulerProjection(schedulerEvents).verifier?.current?.status ===
@@ -892,6 +956,7 @@ export class NativeBuildFactory {
       executionGrants,
       contextManifests,
       recordContextPackText: spec.contextRecording === "full",
+      defectClassesFor: () => topDefectClasses(this.liveMemoryStore().defectClasses(spec.projectId)),
       ...(spec.benchmark
         ? {
             allowedCommands: spec.benchmark.allowedCommands,
@@ -943,6 +1008,9 @@ export class NativeBuildFactory {
         create: (targetRevision: string) => architectCommandWorkspace.create(targetRevision),
         cleanup: () => architectCommandWorkspace.cleanup(),
       },
+      // T9 (EP41): answer-path command base revision — the integration
+      // baseline, since answered runs have no integration revision yet.
+      answerCommandRevision: integrationManager.revision,
       execution: commandExecution,
     });
     const verifierWorkspaceProvider = {
@@ -1096,6 +1164,231 @@ export class NativeBuildFactory {
         };
       },
     };
+    // T3b: the independent source-coverage reviewer. Reuses the verifier
+    // candidate pool (the OA-3 selector picks a distinct model when one
+    // exists), the shared sessions/artifacts/evidence/manifests, and the
+    // project root for read-only inspection. Source bytes still come from the
+    // artifact store by digest until T7 provisions the planning source reader.
+    const nativeCoverageReview = new NativeCoverageReviewRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      coverageRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      projectRoot: this.options.projectRoot,
+      authority: new SchedulerCoverageReviewAuthority(schedulerStore),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const coverageReviewDriver: CoverageReviewDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      review: async (input) => {
+        const result = await nativeCoverageReview.review({
+          ...input,
+          providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+            spec.budgetLimits.maxActiveMs,
+            budgetLedger.snapshot(spec.runId).effective.activeMs,
+            Date.now(),
+          ),
+        });
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find(
+            (item) => item.runtimeId === result.runtimeId,
+          );
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `coverage:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
+    // T9 (OA-5): the opt-in independent answer review, a sibling of the
+    // coverage reviewer with the same model/router/session/budget wiring.
+    // The BuildRuntime consults it only for triage-`answer` runs with a
+    // recorded user opt-in and no verdict yet.
+    const nativeAnswerReview = new NativeAnswerReviewRuntime({
+      git: gitContext,
+      executionGrants,
+      router: verifierRouter,
+      candidates,
+      models,
+      answerRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      projectRoot: this.options.projectRoot,
+      authority: new SchedulerAnswerReviewAuthority(schedulerStore),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+    });
+    const answerReviewDriver: AnswerReviewDriver = {
+      candidateRuntimeIds: [...spec.verifierRuntimeIds],
+      review: async (input) => {
+        const result = await nativeAnswerReview.review({
+          ...input,
+          providerRetryDeadlineMs: runnerProviderRetryDeadlineMs(
+            spec.budgetLimits.maxActiveMs,
+            budgetLedger.snapshot(spec.runId).effective.activeMs,
+            Date.now(),
+          ),
+        });
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find(
+            (item) => item.runtimeId === result.runtimeId,
+          );
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `answer:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
+    // T6a: the mandatory deliverable reviewer (a sibling of the coverage and
+    // answer reviewers with the same router/session/budget wiring) and the
+    // post-integration boundary checks. Reviewer inputs are read from durable
+    // state only (session change set, diff artifact, submit_task summary);
+    // commands run through FinalVerificationRuntime and the audited executor
+    // in disposable checkouts (independent-verifier kind).
+    const durableSubmission = async (projection: SchedulerProjection, taskId: string): Promise<DurableSubmission> => {
+      const task = projection.tasks[taskId];
+      if (!task) throw new Error(`Unknown task ${taskId}.`);
+      const author = currentWorkerAuthor(projection, task);
+      if (!author) throw new Error(`Task ${taskId} has no recorded author runtime.`);
+      const session = await sessions.load(resolveWorkerSessionId(
+        spec.runId,
+        task.id,
+        task.attempt,
+        task.assignedWorkerId ?? standardWorkerId(task.id, task.attempt),
+        projection.runtime.workerAssignments[`${task.id}:${task.attempt}`]?.sessionId,
+      ));
+      if (!session.changeSet || session.changeSet.id !== task.changeSetId) {
+        throw new Error(`Submitted change set ${task.changeSetId} is unavailable.`);
+      }
+      const summary = submitTaskSummary(session.checkpoint?.messages ?? []);
+      if (!summary) throw new Error(`Task ${taskId} submit_task summary is not in its durable session.`);
+      return { changeSet: session.changeSet, summary, authorRuntimeId: author };
+    };
+    const deliveryGit = requireGitRunner(gitContext).lifecycle("verification").run;
+    // The same ambient source the audited executor uses for children, so the
+    // project's own NODE_OPTIONS is kept when the reporter flags are added.
+    const deliveryNodeOptions = () => {
+      const source = this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment();
+      // Windows environment names are case-insensitive.
+      const name = Object.keys(source).find((key) => key.toUpperCase() === "NODE_OPTIONS");
+      return name ? source[name] : undefined;
+    };
+    const nativeDeliverableReview = new NativeDeliverableReviewRuntime({
+      store: schedulerStore,
+      architectRuntimeId: spec.architectRuntimeId,
+      git: gitContext,
+      executionGrants,
+      execution: commandExecution,
+      permissionProfile: spec.permissionProfile,
+      ...(this.options.permissions ? { permissions: this.options.permissions } : {}),
+      router: verifierRouter,
+      candidates,
+      models,
+      reviewerRuntimeIds: spec.verifierRuntimeIds,
+      sessions,
+      artifacts: this.artifacts,
+      evidenceStore,
+      loadInputs: async ({ task, projection }) => await loadDeliverableReviewInputs({
+        task,
+        submission: await durableSubmission(projection, task.id),
+        artifacts: this.artifacts,
+      }),
+      workspace: {
+        create: async (taskRevision) => ({ path: (await deliveryReviewWorkspace.create(taskRevision)).path }),
+        cleanup: () => deliveryReviewWorkspace.cleanup(),
+      },
+      depth: createDeliveryDepthRunner({
+        runId: spec.runId,
+        git: deliveryGit,
+        artifacts: this.artifacts,
+        evidenceStore,
+        execution: commandExecution,
+        reviewWorkspace: deliveryReviewWorkspace,
+        probeFileSystem: deliveryProbeFileSystem,
+        ambientNodeOptions: deliveryNodeOptions,
+      }),
+      budgetLedger,
+      ledger,
+      modelCostEstimators,
+      modelCostBases,
+      contextManifests,
+      recordContextPackText: spec.contextRecording === "full",
+      defectClassesFor: () => topDefectClasses(this.liveMemoryStore().defectClasses(spec.projectId)),
+      // T6b repair (EP50): the review runtime builds the OA-16
+      // track-record snapshot for the T5 change-risk author tier from
+      // these per-model outcomes.
+      defectRecorder: { projectId: spec.projectId, store: this.liveMemoryStore(), modelOutcomes: (projectId: string, runId?: string) => this.liveMemoryStore().modelReviewOutcomes(projectId, runId) },
+    });
+    const deliveryReviewDriver: DeliveryReviewDriver = {
+      review: async (input) => {
+        const result = await nativeDeliverableReview.review(input);
+        if (
+          (result.status === "reviewed" ||
+            (result.status === "suspended" && result.reason === "provider_error")) &&
+          result.runtimeId
+        ) {
+          const candidate = candidates.find((item) => item.runtimeId === result.runtimeId);
+          if (candidate) {
+            persistProviderHealth(
+              schedulerStore,
+              spec.runId,
+              health.get(candidate.providerId),
+              `delivery:${result.runtimeId}`,
+            );
+          }
+        }
+        return result;
+      },
+    };
+    const deliveryBoundaryDriver: DeliveryBoundaryDriver = createDeliveryBoundaryDriver({
+      runId: spec.runId,
+      git: deliveryGit,
+      artifacts: this.artifacts,
+      evidenceStore,
+      execution: commandExecution,
+      boundaryWorkspace: deliveryBoundaryWorkspace,
+      ambientNodeOptions: deliveryNodeOptions,
+      changedFilesFor: async (taskId) => {
+        const projection = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
+        return [...(await durableSubmission(projection, taskId)).changeSet.changedPaths];
+      },
+    });
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
         const projection = rebuildSchedulerProjection(
@@ -1124,6 +1417,19 @@ export class NativeBuildFactory {
             };
       },
     };
+    // T6b repair (B2): the same ambient source the audited executor uses
+    // for children, so the project's own NODE_OPTIONS is kept when the
+    // reporter flags are added (mirrors the T6a delivery boundary).
+    const ambientNodeOptions = (): string | undefined => {
+      const source = this.options.executionHost?.filteredEnvironmentSource() ?? snapshotNativeBuildAmbientEnvironment();
+      // Windows environment names are case-insensitive.
+      const name = Object.keys(source).find((key) => key.toUpperCase() === "NODE_OPTIONS");
+      return name ? source[name] : undefined;
+    };
+    // T6b repair (R2-B6): new-policy runs record the runner-owned junit
+    // report files (OA-17); legacy runs keep P6.5 behavior.
+    const policyTempRecorders = (): { tempRecorders?: typeof tempRecorders } =>
+      rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).planningPolicyVersion === 1 ? { tempRecorders } : {};
     const finalVerificationDriver: FinalVerificationCheckDriver = {
       executeCheck: async (input) => {
         const verification = new FinalVerificationRuntime({
@@ -1135,6 +1441,8 @@ export class NativeBuildFactory {
           taskId: input.taskId,
           attempt: input.attempt,
           generationId: input.generationId,
+          ambientNodeOptions: ambientNodeOptions(),
+          ...policyTempRecorders(),
           checkCategory: input.category,
           currentIntegrationRevision: () => integrationManager.revision,
           managedProcessService: this.liveManagedProcesses(),
@@ -1172,10 +1480,107 @@ export class NativeBuildFactory {
         };
       },
     };
+    // T6b (OA-14): the production failing-test rerun. Only the tests
+    // category with directly invoked node --test commands can be narrowed
+    // mechanically; anything else reports unsupported with its reason, and
+    // the pump charges the cycle instead of claiming an unperformed rerun.
+    const flakyIsolation: FlakyIsolationDriver = {
+      rerunFailingTests: async (input) => {
+        if (input.category !== "tests") {
+          return { status: "unsupported", note: `Flaky rerun supports only the tests category, not ${input.category}.` };
+        }
+        const commands = input.executionProfile.commands?.tests;
+        if (!commands || commands.length === 0) {
+          return { status: "unsupported", note: "Flaky rerun requires recorded tests commands." };
+        }
+        const narrowed: FinalVerificationCommand[] = [];
+        let testNamePattern: string | undefined;
+        for (const command of commands) {
+          const filtered = narrowNodeTestCommand(command, input.failingTestIds);
+          if (filtered) {
+            narrowed.push(filtered);
+            continue;
+          }
+          // T6b repair (R2-B4): the package `run test` command is narrowed
+          // through its node --test NODE_OPTIONS (see FinalVerificationRuntime).
+          if (isPackageRunTestCommand(command)) {
+            narrowed.push(command);
+            testNamePattern = flakyRerunPattern(input.failingTestIds);
+            continue;
+          }
+          return { status: "unsupported", note: `Flaky rerun cannot filter ${command.label}: only node --test commands (direct or the package test script) support failing-test selection.` };
+        }
+        const rerunVerification = new FinalVerificationRuntime({
+          git: requireGitRunner(gitContext).lifecycle("verification").run,
+          workspaceManager: verificationWorkspace,
+          artifacts: this.artifacts,
+          evidenceStore,
+          runId: input.runId,
+          taskId: input.taskId,
+          attempt: input.attempt,
+          generationId: `${input.generationId}:flaky-rerun`,
+          ambientNodeOptions: ambientNodeOptions(),
+          ...(testNamePattern !== undefined ? { testNamePattern } : {}),
+          ...policyTempRecorders(),
+          checkCategory: "tests",
+          currentIntegrationRevision: () => integrationManager.revision,
+          managedProcessService: this.liveManagedProcesses(),
+          managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
+          browserBackend: this.browserBackend,
+          validatePortLease: async (lease) => await finalVerificationPorts.validate(
+            lease,
+            spec.runId,
+            input.targetRevision,
+          ),
+          execution: commandExecution,
+        });
+        const result = await rerunVerification.runCategory(
+          {
+            plan: input.plan,
+            executionProfile: { ...input.executionProfile, commands: { ...input.executionProfile.commands, tests: narrowed } },
+            commands: { ...input.executionProfile.commands, tests: narrowed },
+            ...(input.signal ? { signal: input.signal } : {}),
+          },
+          "tests",
+        );
+        // T6b repair (B2): the owner real-counts verdict (see judgeFlakyRerun).
+        // Flaky requires THIS rerun's report to show the named tests executed
+        // and passed; anything else is a consistent failure or not performed.
+        // (A green exit with no matching tests is not flaky.)
+        const rerunReports = result.check.facts.flatMap((fact) => fact.kind === "command" && fact.report ? [fact.report] : []);
+        const verdict = judgeFlakyRerun({ checkGreen: result.check.green, reports: rerunReports, failingTestIds: [...input.failingTestIds] });
+        if (result.check.green && verdict.flaky) {
+          return {
+            status: "rerun",
+            green: true,
+            evidenceIds: [...result.check.evidenceIds],
+            note: verdict.note,
+          };
+        }
+        if (result.check.green) {
+          return {
+            status: "rerun",
+            green: false,
+            evidenceIds: [...result.check.evidenceIds],
+            note: verdict.note,
+          };
+        }
+        return {
+          status: "rerun",
+          green: false,
+          evidenceIds: [...result.check.evidenceIds],
+          note: verdict.note,
+        };
+      },
+    };
     const runtime = new BuildRuntime({
       runId: spec.runId,
       initialObjective: spec.objective,
       runPolicy: spec.runPolicy,
+      // C2b (CD-5): per-run handoff file options from the spec; recorded
+      // durably in `run.policy_configured` by the runtime.
+      specCopy: spec.specCopy ?? true,
+      handoffFiles: spec.handoffFiles ?? "commit",
       store: schedulerStore,
       workerDriver,
       architectDriver,
@@ -1211,13 +1616,58 @@ export class NativeBuildFactory {
       },
       independentVerifier,
       planCritic: planCriticDriver,
+      coverageReview: coverageReviewDriver,
+      answerReview: answerReviewDriver,
+      deliveryReview: deliveryReviewDriver,
+      deliveryBoundary: deliveryBoundaryDriver,
+      planningHostCapabilities: () => buildCoverageHostCapabilities({
+        coverageCandidateRuntimeIds: spec.verifierRuntimeIds,
+        recordedAt: new Date().toISOString(),
+      }),
       repairPlanLimit: spec.repairPlanLimit,
+      projectId: spec.projectId,
+      flakyIsolation,
+      cleanupAfterAttempt: async (context) => {
+        // T6b repair (N-6): the attempt path scopes the process search to
+        // the attempt's sessions; verification phase boundaries keep the
+        // run-wide search because no worker attempt is active there.
+        const processes = await searchOwnedProcesses(
+          this.liveManagedProcesses(),
+          spec.runId,
+          context.sessionIds === undefined ? undefined : { sessionIds: context.sessionIds },
+        );
+        // T6b repair (R3 N-6): the disposable verification checkouts were
+        // creation-recorded when the build was created (above); the search
+        // here only reads records. Retained: git worktrees are removed only
+        // by their own manager, which owns workspace + metadata together.
+        const cleanupRoots = nativeBuildCleanupRoots(this.options.stateDirectory, spec.runId);
+        const tempPaths = await searchRunnerOwnedTempLeftovers({
+          records: Object.values(rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).tempRecords ?? {}),
+          ownerRunId: spec.runId,
+          ownerProjectId: spec.projectId,
+          runnerRoots: cleanupRoots,
+          excludedRoots: [this.options.projectRoot],
+          cleared: (path) => tempRecorders.cleared(path),
+        });
+        return { processes, tempPaths };
+      },
+      reviewOutcomeRecorder: {
+        projectId: spec.projectId,
+        record: (outcome) => this.liveMemoryStore().recordModelReviewOutcome({ projectId: spec.projectId, ...outcome }),
+      },
       maxConcurrency: spec.maxConcurrency,
       workspaceFor: async (task, attempt) => {
         const workspace = await workspaceManager.createTaskWorkspace(task.id, {
           workspaceId: `${task.id}:attempt:${attempt}`,
           baselineRevision: integrationManager.revision,
         });
+        // T6b repair (OA-17): task workspaces stay live for the whole run
+        // under their own manager lifecycle, so they are recorded retained
+        // for owner visibility and are never deletion candidates while
+        // workers run. Bookkeeping never breaks workspace creation.
+        try {
+          tempRecorders.recorded({ path: workspace.path, ownerRunId: spec.runId, kind: "directory", createdAt: new Date().toISOString(), retained: true });
+        } catch { /* bookkeeping never breaks workspace creation */ }
         return {
           path: workspace.path,
           workspaceId: workspace.workspaceId,
@@ -1243,6 +1693,19 @@ export class NativeBuildFactory {
       artifacts: this.artifacts,
       projectDocs: {
         commit: (input) => integrationManager.commitProjectDocuments(input),
+        commitHandoffSnapshot: (input) => integrationManager.commitHandoffSnapshot(input),
+        readHandoffSnapshotFile: (input) => integrationManager.readHandoffSnapshotFile(input),
+        readIntegrationTipFile: (input) => integrationManager.readIntegrationTipFile(input),
+        findTrackedFileWithDigest: (input) => integrationManager.findTrackedFileWithDigest(input),
+        // C2b repair B1-R: the withdrawn-stop reconciliation lookup and the
+        // baseline revision are production-wired (both required on the
+        // port, so dropping one is a type error, never a silent skip).
+        findHandoffSnapshotCommit: (input) => integrationManager.findHandoffSnapshotCommit(input),
+        readIntegrationBaselineRevision: () => integrationManager.readIntegrationBaselineRevision(),
+        // C2c (NF-1 residual): the pre-render spec stageability check is
+        // production-wired (required on the port, so dropping it is a type
+        // error, never a silently wrong `spec:` line).
+        canStageSpecPath: (input) => integrationManager.canStageSpecPath(input),
         relateRevision: (input) => integrationManager.relateToDocumentTip(input),
       },
     });
@@ -3241,11 +3704,94 @@ function historicalSkillMetadata(value: unknown, index: number): SkillMetadata {
  * sidecars beside the opened file. Historical reads therefore open a private
  * copy outside Runner state, including WAL-visible committed content.
  */
+/**
+ * T6b repair (OA-17): backstop search over Runner-private scheduler
+ * creation records. Deletes only a path whose record this run wrote itself
+ * AND that is still under a runner-owned root and outside the workspace /
+ * project tree. Symlinks and junctions are observed with lstat and never
+ * followed; anything unproven is retained and reported (probe F).
+ */
+export async function searchRunnerOwnedTempLeftovers(input: {
+  records: readonly TempCreationRecord[];
+  ownerRunId: string;
+  ownerProjectId: string;
+  runnerRoots: readonly string[];
+  excludedRoots: readonly string[];
+  cleared: (path: string) => void;
+}): Promise<LeftoverCleanupRecord[]> {
+  const findings: LeftoverCleanupRecord[] = [];
+  const expected = { ownerRunId: input.ownerRunId, ownerProjectId: input.ownerProjectId };
+  for (const record of filterRecordsForOwner(input.records, expected)) {
+    let observation: { exists: boolean; isSymbolicLink: boolean; kindMatches: boolean };
+    try {
+      const entry = await lstat(record.path);
+      observation = { exists: true, isSymbolicLink: entry.isSymbolicLink(), kindMatches: record.kind === "file" ? entry.isFile() : entry.isDirectory() };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        observation = { exists: false, isSymbolicLink: false, kindMatches: true };
+      } else {
+        findings.push({ path: record.path, ownership: "proven", action: "retained", reason: `Recorded path could not be inspected (${(error as Error).message}); retained and reported.` });
+        continue;
+      }
+    }
+    const decision = decideRecordedTempCleanup(record, expected, input.runnerRoots, observation, input.excludedRoots);
+    if (decision.ownership === "proven" && decision.action === "cleaned") {
+      if (observation.exists) {
+        try {
+          await rm(record.path, { recursive: true, force: true });
+        } catch (error) {
+          findings.push({ path: record.path, ownership: "proven", action: "retained", reason: `Owned leftover could not be removed (${(error as Error).message}); retained and reported.` });
+          continue;
+        }
+      }
+      try { input.cleared(record.path); } catch { /* bookkeeping only */ }
+    }
+    findings.push(decision);
+  }
+  return findings;
+}
+
+/**
+ * T6b repair (R2-B6): the exact runner-owned roots the OA-17 temp search
+ * may delete under. Each is one disposable workspace this run's factory
+ * creates under Runner state (verification, independent verifier,
+ * Architect command copy, delivery review/boundary checkouts, verifier
+ * baseline). The system temp directory, the Runner state directory, and
+ * the run root are never roots: a record pointing anywhere else in them
+ * (a user folder, credentials) is retained, never deleted.
+ */
+export function nativeBuildCleanupRoots(stateDirectory: string, runId: string): string[] {
+  // This helper only reads `.path` (pure path math, never git): the owner
+  // is explicitly the unavailable runner, so a stray execution fails
+  // closed instead of running ownerless.
+  const at = (workspaceSuffix?: string, kind?: "independent-verifier") => new VerificationWorkspaceManager({
+    execute: unavailableGitRunner,
+    repositoryRoot: stateDirectory,
+    stateDirectory,
+    runId,
+    ...(kind ? { kind } : {}),
+    ...(workspaceSuffix ? { workspaceSuffix } : {}),
+  }).path;
+  return [
+    at(),
+    at(undefined, "independent-verifier"),
+    at("architect-commands", "independent-verifier"),
+    at("delivery-review", "independent-verifier"),
+    at("delivery-boundary", "independent-verifier"),
+    at("baseline", "independent-verifier"),
+  ];
+}
+
 async function materializeHistoricalSqliteSnapshot(source: string): Promise<{
   directory: string;
   databasePath: string;
 }> {
   const directory = await mkdtemp(join(tmpdir(), "aiboard-historical-sqlite-"));
+  // T6b repair (OA-17): historical snapshots are tracked in the in-memory
+  // ownership list at the call site and removed by closeHistoricalResources
+  // with retry; the creation is validated here and never written to a
+  // shared registry, so executed workloads cannot forge ownership.
+  recordTempCreation({ path: directory, ownerRunId: "historical-read", ownerProjectId: "runner-state", createdAt: new Date().toISOString(), kind: "directory" });
   const databasePath = join(directory, basename(source));
   try {
     await copyFile(source, databasePath);
@@ -3341,4 +3887,20 @@ function assertHistoricalTerminalState(value: unknown): asserts value is Histori
   if (value !== "completed" && value !== "failed" && value !== "stopped") {
     throw new Error("Historical Build requires an authoritative terminal RunSupervisor state.");
   }
+}
+
+/**
+ * T6a: the OA-11 probe's file system on the disposable review checkout. The
+ * probe applies each mutant there and restores the original bytes; this file
+ * is the filesystem-mutation owner for those writes.
+ */
+function deliveryProbeFileSystem(workspacePath: string): MutationFileSystem {
+  return {
+    // The probe reads originals by project-relative path.
+    readFile: (path) => readFileSync(isAbsolute(path) ? path : join(workspacePath, path), "utf8"),
+    writeFile: (path, content) => writeFileSync(path, content, "utf8"),
+    createDisposableCopy: () => workspacePath,
+    cleanupDisposableCopy: () => undefined,
+    join: (root, path) => join(root, path),
+  };
 }

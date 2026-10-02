@@ -122,6 +122,8 @@ const ARCHITECT_INSPECTION_FULL = [
   "propose_project_memory",
   "read_skill",
   "recall_project_memory",
+  "record_external_blocker",
+  "record_repair_approach_decision",
   "repo.manifest",
   "repo.map",
   "research.fetch",
@@ -180,6 +182,8 @@ const ARCHITECT_PLAN_ONLY_FULL = [
   "list_skills",
   "read_skill",
   "recall_project_memory",
+  "record_external_blocker",
+  "record_repair_approach_decision",
   "repo.manifest",
   "repo.map",
   "research.fetch",
@@ -214,6 +218,78 @@ const VERIFIER_EXPECTATIONS = [
   "git.status",
   "inspect_evidence",
   "record_verification_expectations",
+] as const;
+
+const VERIFIER_COVERAGE_REQUIRED = [
+  "artifact.read",
+  "fs.list",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "git.diff",
+  "git.log",
+  "git.show",
+  "git.status",
+  "inspect_evidence",
+] as const;
+
+const VERIFIER_COVERAGE_FULL = [
+  ...VERIFIER_COVERAGE_REQUIRED,
+  "record_coverage_correction_view",
+  "record_coverage_obligations",
+  "submit_coverage_verdict",
+] as const;
+
+// T9 (OA-5): the opt-in answer reviewer — read-only inspection plus exactly
+// the findings and verdict lifecycle tools, one per pass.
+const VERIFIER_ANSWER_REQUIRED = [
+  "artifact.read",
+  "fs.list",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "git.diff",
+  "git.log",
+  "git.show",
+  "git.status",
+  "inspect_evidence",
+] as const;
+
+const VERIFIER_ANSWER_FULL = [
+  ...VERIFIER_ANSWER_REQUIRED,
+  "record_answer_review_findings",
+  "submit_answer_review_verdict",
+] as const;
+
+// T6a (OA-3/OA-4/OA-10): the deliverable reviewer. The findings and verdict
+// passes inspect read-only; only the high-tier findings pass adds
+// run_evidence_command. Each pass registers exactly one lifecycle tool.
+const VERIFIER_DELIVERY_REQUIRED = [...VERIFIER_ANSWER_REQUIRED] as const;
+
+const VERIFIER_DELIVERY_FULL = [
+  ...VERIFIER_DELIVERY_REQUIRED,
+  "record_deliverable_findings",
+  "submit_deliverable_verdict",
+] as const;
+
+const VERIFIER_DELIVERY_COMMANDS_REQUIRED = [
+  ...VERIFIER_DELIVERY_REQUIRED,
+  "run_evidence_command",
+] as const;
+
+const VERIFIER_DELIVERY_COMMANDS_FULL = [
+  "artifact.read",
+  "fs.list",
+  "fs.read",
+  "fs.search",
+  "fs.stat",
+  "git.diff",
+  "git.log",
+  "git.show",
+  "git.status",
+  "inspect_evidence",
+  "record_deliverable_findings",
+  "run_evidence_command",
 ] as const;
 
 const PLAN_CRITIC = [
@@ -327,6 +403,11 @@ const DERIVED: readonly {
   { role: "architect", broker: "planOnly", required: ARCHITECT_PLAN_ONLY_REQUIRED, full: ARCHITECT_PLAN_ONLY_FULL },
   { role: "verifier", broker: "inspection", required: VERIFIER_INSPECTION_REQUIRED, full: VERIFIER_INSPECTION_FULL },
   { role: "verifier", broker: "expectations", required: VERIFIER_EXPECTATIONS, full: VERIFIER_EXPECTATIONS },
+  { role: "verifier", broker: "coverage", required: VERIFIER_COVERAGE_REQUIRED, full: VERIFIER_COVERAGE_FULL },
+  { role: "verifier", broker: "answer", required: VERIFIER_ANSWER_REQUIRED, full: VERIFIER_ANSWER_FULL },
+  { role: "verifier", broker: "delivery_obligations", required: [], full: ["record_deliverable_obligations"] },
+  { role: "verifier", broker: "delivery", required: VERIFIER_DELIVERY_REQUIRED, full: VERIFIER_DELIVERY_FULL },
+  { role: "verifier", broker: "delivery_commands", required: VERIFIER_DELIVERY_COMMANDS_REQUIRED, full: VERIFIER_DELIVERY_COMMANDS_FULL },
   { role: "plan-critic", broker: "inspection", required: PLAN_CRITIC, full: PLAN_CRITIC },
   { role: "worker", broker: "task", required: WORKER_REQUIRED, full: WORKER_FULL },
 ];
@@ -354,6 +435,8 @@ test("assertRoleToolSurface throws when a required tool is removed or an unliste
         `Role ${entry.role} broker ${entry.broker} registered tool unlisted\\.tool is not on the allow-list\\.`,
       ),
     );
+    // The criteria-only obligations pass has no required tools to remove.
+    if (entry.required.length === 0) continue;
     assert.throws(
       () => assertRoleToolSurface(
         entry.role,
@@ -457,12 +540,12 @@ test("constructed brokers match the derived surfaces and an unlisted probe fails
     const withBrowser = createArchitectInspectionBroker({ ...base, browserBackend: browserStub() });
     assert.deepEqual(
       names(withBrowser),
-      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command"),
+      [...ARCHITECT_INSPECTION_FULL].filter((name) => name !== "run_evidence_command" && name !== "record_external_blocker" && name !== "record_repair_approach_decision"),
     );
     assert.equal(names(withBrowser).includes("run_evidence_command"), false);
     assert.deepEqual(
       names(new PlanOnlyInspectionRuntime(withBrowser)),
-      [...ARCHITECT_PLAN_ONLY_FULL],
+      [...ARCHITECT_PLAN_ONLY_FULL].filter((name) => name !== "record_external_blocker" && name !== "record_repair_approach_decision"),
     );
     assert.deepEqual(
       names(new PlanOnlyInspectionRuntime(inspection)),

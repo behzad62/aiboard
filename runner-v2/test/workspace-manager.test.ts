@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   existsSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -15,6 +16,140 @@ import { captureGitBaseline } from "./support/git-fixture.js";
 import { runGit } from "./support/git-fixture.js";
 import { NoTaskChangesError } from "../src/workspace-manager.js";
 import { WorkspaceManager } from "./support/git-fixture.js";
+
+test("T4 exclusive worktree ownership refuses a second task writer", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-exclusive-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_exclusive",
+    });
+    const first = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_exclusive",
+      baselineRevision: baseline.revision,
+    });
+    await first.createTaskWorkspace("task-a", { workspaceId: "shared-attempt" });
+
+    const second = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_exclusive",
+      baselineRevision: baseline.revision,
+    });
+    await assert.rejects(
+      second.createTaskWorkspace("task-b", { workspaceId: "shared-attempt" }),
+      /owned by task task-a|ambiguous task ownership/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("T4 ownership ledger refuses a second task owner without Git config", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-owner-ledger-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  try {
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_owner_ledger",
+      baselineRevision: "a".repeat(40),
+    });
+    const descriptor = {
+      runId: "run_owner_ledger",
+      taskId: "task-a",
+      workspaceId: "shared-attempt",
+      path: join(root, "shared-attempt"),
+      branch: "refs/heads/aiboard/run_owner_ledger/tasks/shared-attempt",
+      baselineRevision: "a".repeat(40),
+    };
+    const privateManager = manager as unknown as {
+      setWorkspaceTaskOwner(workspace: typeof descriptor, taskId: string): Promise<void>;
+    };
+    await privateManager.setWorkspaceTaskOwner(descriptor, "task-a");
+    await assert.rejects(
+      privateManager.setWorkspaceTaskOwner(descriptor, "task-b"),
+      /owned by task task-a/,
+    );
+    const secondManager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_owner_ledger",
+      baselineRevision: "a".repeat(40),
+    });
+    await assert.rejects(
+      (
+        secondManager as unknown as {
+          assertWorkspaceTaskOwner(
+            workspace: typeof descriptor,
+            taskId: string,
+          ): Promise<void>;
+        }
+      ).assertWorkspaceTaskOwner(descriptor, "task-b"),
+      /owned by task task-a/,
+    );
+    const ownershipFiles = readdirSync(join(state, "workspace-owners"));
+    assert.equal(ownershipFiles.length, 1);
+    assert.match(
+      readFileSync(join(state, "workspace-owners", ownershipFiles[0]!), "utf8"),
+      /"taskId": "task-a"/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("T4 runner-private ownership preserves independent task commits and cleanup", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-workspace-private-owner-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  writeFileSync(join(project, "file.txt"), "baseline\n");
+  try {
+    const baseline = await captureGitBaseline({
+      projectPath: project,
+      stateDirectory: state,
+      runId: "run_private_owner",
+    });
+    const manager = new WorkspaceManager({
+      repositoryRoot: project,
+      stateDirectory: state,
+      runId: "run_private_owner",
+      baselineRevision: baseline.revision,
+    });
+    const first = await manager.createTaskWorkspace("task-a");
+    const second = await manager.createTaskWorkspace("task-b");
+    assert.equal(
+      (await runGit({
+        cwd: project,
+        args: ["config", "--local", "--get-all", "aiboard.taskOwner"],
+        allowFailure: true,
+      })).stdout.trim(),
+      "",
+    );
+    writeFileSync(join(first.path, "a.txt"), "a\n");
+    writeFileSync(join(second.path, "b.txt"), "b\n");
+    await manager.commitTask("task-a", "Commit first task");
+    await manager.commitTask("task-b", "Commit second task");
+    await manager.cleanup();
+    assert.equal(existsSync(first.path), false);
+    assert.equal(existsSync(second.path), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("task worktrees isolate concurrent edits and create attributable commits", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-workspaces-"));

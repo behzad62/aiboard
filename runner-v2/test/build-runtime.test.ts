@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +31,9 @@ import {
   DEFAULT_README_TEMPLATE,
   DEFAULT_STATE_TEMPLATE,
   agentsMarkedSectionSatisfies,
+  agentsMarkedSectionSatisfiesV2,
   claudePointerSatisfies,
+  claudePointerSatisfiesV2,
   spliceMarkedArchitectSection,
 } from "../src/project-docs.js";
 import { ProviderHealthRegistry } from "../src/provider-health.js";
@@ -85,10 +88,63 @@ function planOnlyDocumentPort(): ProjectDocsPort {
           readme: tree.has("docs/project/README.md"),
           agentsMarkedSection: agentsMarkedSectionSatisfies(tree.get("AGENTS.md") ?? ""),
           claudePointer: claudePointerSatisfies(tree.get("CLAUDE.md") ?? ""),
+          agentsMarkedSectionV2: agentsMarkedSectionSatisfiesV2(tree.get("AGENTS.md") ?? ""),
+          claudePointerV2: claudePointerSatisfiesV2(tree.get("CLAUDE.md") ?? ""),
         },
       };
     },
     relateRevision: async () => "strict_descendant",
+    readHandoffSnapshotFile: async (input) => ({
+      content: tree.get(input.path) ?? null,
+      paths: [...tree.keys()],
+    }),
+    readIntegrationTipFile: async (input) => ({
+      content: tree.get(input.path) ?? null,
+      commit: head,
+    }),
+    findTrackedFileWithDigest: async (input) => {
+      for (const [path, content] of tree) {
+        if (
+          Buffer.byteLength(content, "utf8") === input.byteLength &&
+          createHash("sha256").update(content, "utf8").digest("hex") === input.digest
+        ) {
+          return { path };
+        }
+      }
+      return null;
+    },
+    commitHandoffSnapshot: async (input) => {
+      const parent = head;
+      // C2b: the in-memory kernel mirrors the real one -- entry files go
+      // through the marked-section splice, never a whole-file overwrite.
+      for (const write of input.writes) {
+        if (write.path === "AGENTS.md" || write.path === "CLAUDE.md") {
+          tree.set(write.path, spliceMarkedArchitectSection(tree.get(write.path) ?? "", write.content));
+        } else {
+          tree.set(write.path, write.content);
+        }
+      }
+      commitCount += 1;
+      const commit = `snapshot-${commitCount}`;
+      head = commit;
+      return {
+        commit,
+        parent,
+        head,
+        entryPoint: {
+          readme: tree.has("docs/project/README.md"),
+          agentsMarkedSection: agentsMarkedSectionSatisfies(tree.get("AGENTS.md") ?? ""),
+          claudePointer: claudePointerSatisfies(tree.get("CLAUDE.md") ?? ""),
+          agentsMarkedSectionV2: agentsMarkedSectionSatisfiesV2(tree.get("AGENTS.md") ?? ""),
+          claudePointerV2: claudePointerSatisfiesV2(tree.get("CLAUDE.md") ?? ""),
+        },
+      };
+    },
+    // C2b repair B1-R: both reconciliation methods are required on the
+    // port; the in-memory kernel has no keyed lookup, so it reports none.
+    findHandoffSnapshotCommit: async () => null,
+    readIntegrationBaselineRevision: async () => ({ revision: "baseline_revision" }),
+    canStageSpecPath: async () => ({ stageable: true }),
   };
 }
 
@@ -300,6 +356,8 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
                 "answer_guidance",
                 "ask_user",
                 "plan_tasks",
+                "record_external_blocker",
+                "record_repair_approach_decision",
                 "revise_task",
                 "upgrade_acceptance_contract",
                 "write_project_doc",
@@ -352,6 +410,8 @@ test("plan-only Builds stay behind the scheduling boundary and require explicit 
               "ask_user",
               "complete_run",
               "plan_tasks",
+              "record_external_blocker",
+              "record_repair_approach_decision",
               "revise_task",
               "upgrade_acceptance_contract",
               "write_project_doc",
@@ -1946,10 +2006,33 @@ test("recovery abandons a recorded multiline project-doc summary and continues",
               readme: input.writes.some((write) => write.path === "docs/project/README.md"),
               agentsMarkedSection: false,
               claudePointer: false,
+              agentsMarkedSectionV2: false,
+              claudePointerV2: false,
             },
           };
         },
         relateRevision: async () => "strict_descendant" as const,
+        commitHandoffSnapshot: async () => {
+          throw new Error("unexpected handoff snapshot commit");
+        },
+        readHandoffSnapshotFile: async () => {
+          throw new Error("unexpected handoff snapshot read");
+        },
+        readIntegrationTipFile: async () => {
+          throw new Error("unexpected integration tip read");
+        },
+        findTrackedFileWithDigest: async () => {
+          throw new Error("unexpected tracked file search");
+        },
+        findHandoffSnapshotCommit: async () => {
+          throw new Error("unexpected handoff snapshot lookup");
+        },
+        readIntegrationBaselineRevision: async () => {
+          throw new Error("unexpected baseline revision read");
+        },
+        canStageSpecPath: async () => {
+          throw new Error("unexpected spec stageability check");
+        },
       },
     };
     const runtime = new BuildRuntime(options);

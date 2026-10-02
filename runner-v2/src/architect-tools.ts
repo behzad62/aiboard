@@ -11,6 +11,7 @@ import {
   assertOpenArchitectQuestionAllowsEvent,
   buildCompletionReadiness,
   latestUnresolvedContextRecordingNote,
+  readyPlanIdentity,
   rebuildSchedulerProjection,
   type SchedulerActor,
   type SchedulerStore,
@@ -55,6 +56,14 @@ import type {
   ArchitectQuestionDecisionKind,
   UserGuidanceAcknowledgementResolution,
 } from "./user-steering-contracts.js";
+import {
+  createPlanningTools,
+  type PlanningSourceReader,
+} from "./planning-tools.js";
+import { createRequestTriageTools } from "./request-triage.js";
+import { boundaryNeedsArchitect, boundaryResolutionGeneration, latestBoundary } from "./delivery-acceptance.js";
+import { deliveryBoundaryRootCause, failingTestIdsByCategory, repairMemberIssues, withFailingIds } from "./repair-budget-contracts.js";
+import { validateRepairApproachDecision } from "./repair-approach-contracts.js";
 
 export interface ArchitectToolsOptions {
   store: SchedulerStore;
@@ -65,12 +74,53 @@ export interface ArchitectToolsOptions {
   finalVerificationReviewAvailable?: boolean;
   finalVerificationRepairPlanAvailable?: boolean;
   verifierRepairPlanAvailable?: boolean;
+  repairApproachAvailable?: boolean;
+  /** T6b repair (B5): project identity for per-root-cause repair issues. */
+  repairProjectId?: string;
+  /** T6a: offered on a `delivery_boundary_failed` turn. */
+  deliveryBoundaryResolutionAvailable?: boolean;
   evidenceStore?: EvidenceStore;
   architectAction?: {
     reason: ArchitectActionReason;
     sequence: number;
   };
   planCritiqueResolutionAvailable?: boolean;
+  /**
+   * New-policy evidence-gated planning tools (T3a). Set for runs whose durable
+   * projection carries planningPolicyVersion 1; legacy runs omit it and keep
+   * today's tools.
+   */
+  planningTools?: {
+    readSource?: PlanningSourceReader;
+  };
+  /**
+   * T3a repair (B1b): set while a new-policy run is in planning state (no
+   * ready plan, triage not `answer`). The legacy plan/task tools
+   * (plan_tasks, revise_task, reconcile_plan) are then not registered at
+   * all; the reducer refuses the matching direct events too. Omit or set
+   * false on every other turn.
+   */
+  planningState?: boolean;
+  /**
+   * T9 (EP39): true on triage-`answer` turns. Mutation lifecycle tools are
+   * not offered (plan/task/review/integration/final-verification/repairs/
+   * critique/acceptance/guidance); ask_user, complete_run, write_project_doc,
+   * and the triage tools stay. The reducer refuses forged invokes as well.
+   */
+  answerPath?: boolean;
+  /**
+   * T9 (EP39): when true, the run is new-policy and triage tools
+   * (record_triage, record_answer, convert_to_build) are registered.
+   */
+  triageTools?: boolean;
+  /**
+   * T9 repair cycle 1 (B3): when true, the turn also offers
+   * `acknowledge_user_guidance` for inline acknowledgement of pending user
+   * guidance. The runner sets it only on new-policy `plan_required` turns
+   * (triage/answer/planning) with guidance pending; the tool re-checks the
+   * policy and targets the exact oldest pending guidance.
+   */
+  acknowledgeGuidanceAvailable?: boolean;
   /** When set, every Architect turn — including plan_only — can request project docs. */
   artifacts?: ArtifactStore;
   finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
@@ -134,6 +184,8 @@ interface ReviewTaskInput {
   evidenceArtifactHashes: string[];
   criterionVerdicts?: CriterionReviewVerdict[];
   planReconciliation?: PlanReconciliation;
+  findingDispositions?: Array<{ findingId: string; resolution: "plan_reconciled" | "rejected" | "deferred"; rationale: string }>;
+  claimDispositions?: Array<{ claimId: string; status: "verified"; rationale: string }>;
 }
 
 interface TaskIdInput { taskId: string }
@@ -461,16 +513,33 @@ export function createArchitectTools(
       askUserTool(options.store, clock, options.architectAction),
     ];
   }
-  const baseCore = [
-    planTasksTool(options.store, clock),
-    reviseTaskTool(options.store, clock),
-    answerGuidanceTool(options.store, clock),
-    upgradeAcceptanceContractTool(options.store, clock),
-  ];
+  // T3a repair (B1b): while a new-policy run is in planning state the
+  // legacy plan/task tools are not offered; the reducer (plus the per-tool
+  // check below) refuses forged invokes as well. T9: same on the answer path.
+  const answerPath = options.answerPath === true;
+  const legacyPlanTools = options.planningState === true || answerPath
+    ? []
+    : [
+        planTasksTool(options.store, clock),
+        reviseTaskTool(options.store, clock),
+      ];
+  const baseCore = answerPath
+    ? [...legacyPlanTools]
+    : [
+        ...legacyPlanTools,
+        answerGuidanceTool(options.store, clock),
+        upgradeAcceptanceContractTool(options.store, clock),
+      ];
   const withQuestion = options.architectAction
     ? [...baseCore, askUserTool(options.store, clock, options.architectAction)]
     : baseCore;
-  const core = options.architectAction?.reason.type === "user_guidance_required"
+  // T9 repair cycle 1 (B3): the dedicated guidance turn offers the
+  // acknowledgement, and so does a new-policy triage/answer/planning turn
+  // with guidance pending — the pending-guidance gate's "must be
+  // acknowledged" refusal is then actionable in the same turn.
+  const core = options.architectAction !== undefined &&
+      (options.architectAction.reason.type === "user_guidance_required" ||
+        options.acknowledgeGuidanceAvailable === true)
     ? [
         ...withQuestion,
         acknowledgeUserGuidanceTool(
@@ -481,7 +550,7 @@ export function createArchitectTools(
         ),
       ]
     : withQuestion;
-  const planning = options.finalVerificationPlanAvailable
+  const planning = options.finalVerificationPlanAvailable && !answerPath
     ? [...core, planFinalVerificationTool(
         options.store,
         clock,
@@ -489,36 +558,68 @@ export function createArchitectTools(
         options.discardFinalVerificationProfile,
       )]
     : core;
-  const verification = options.finalVerificationReviewAvailable
+  const verification = options.finalVerificationReviewAvailable && !answerPath
     ? [...planning, reviewFinalVerificationTool(
         options.store,
         clock,
         options.evidenceStore,
       )]
     : planning;
-  const repairPlanning = options.finalVerificationRepairPlanAvailable
-    ? [...verification, planVerificationRepairsTool(options.store, clock)]
+  const repairPlanning = options.finalVerificationRepairPlanAvailable && !answerPath
+    ? [...verification, planVerificationRepairsTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
     : verification;
-  const verifierRepairPlanning = options.verifierRepairPlanAvailable
-    ? [...repairPlanning, planVerifierRepairsTool(options.store, clock)]
+  const verifierRepairPlanning = options.verifierRepairPlanAvailable && !answerPath
+    ? [...repairPlanning, planVerifierRepairsTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
     : repairPlanning;
-  const critiqueResolution = options.planCritiqueResolutionAvailable
-    ? [...verifierRepairPlanning, resolvePlanCritiqueTool(options.store, clock)]
+  const repairApproach = options.repairApproachAvailable && !answerPath
+    ? [...verifierRepairPlanning, recordRepairApproachDecisionTool(options.store, clock, options.evidenceStore), recordExternalBlockerTool(options.store, clock, options.evidenceStore)]
     : verifierRepairPlanning;
+  const boundaryResolution = options.deliveryBoundaryResolutionAvailable && !answerPath
+    ? [...repairApproach, resolveDeliveryBoundaryFailureTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
+    : repairApproach;
+  const critiqueResolution = options.planCritiqueResolutionAvailable && !answerPath
+    ? [...boundaryResolution, resolvePlanCritiqueTool(options.store, clock)]
+    : boundaryResolution;
   const tools = options.runPolicy === "plan_only"
     ? options.planOnlyCompletionAvailable
       ? [...critiqueResolution, completeRunTool(options.store, clock, "plan_only")]
       : critiqueResolution
     : [
         ...critiqueResolution,
-        reconcilePlanTool(options.store, clock),
-        reviewTaskTool(options.store, clock, options.evidenceStore),
-        requestIntegrationTool(options.store, clock),
+        ...(options.planningState === true || answerPath
+          ? []
+          : [reconcilePlanTool(options.store, clock)]),
+        ...(answerPath
+          ? []
+          : [
+              reviewTaskTool(options.store, clock, options.evidenceStore),
+              requestIntegrationTool(options.store, clock),
+            ]),
         completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
       ];
-  if (!options.artifacts) return tools;
+  const withPlanning = options.planningTools
+    ? [
+        ...tools,
+        ...createPlanningTools({
+          store: options.store,
+          clock,
+          ...(options.artifacts ? { artifacts: options.artifacts } : {}),
+          ...(options.planningTools.readSource
+            ? { readSource: options.planningTools.readSource }
+            : {}),
+          // T9 repair cycle 1 (N5): answer turns keep only the durable
+          // read; the plan-progressing tools always refuse there.
+          ...(answerPath ? { answerPath: true as const } : {}),
+        }),
+      ]
+    : tools;
+  // T9 (EP39): triage tools ride the new-policy turn alongside planning tools.
+  const withTriage = options.triageTools === true
+    ? [...withPlanning, ...createRequestTriageTools({ store: options.store, clock })]
+    : withPlanning;
+  if (!options.artifacts) return withTriage;
   return [
-    ...tools,
+    ...withTriage,
     writeProjectDocTool(
       options.store,
       clock,
@@ -530,6 +631,7 @@ export function createArchitectTools(
 function planVerificationRepairsTool(
   store: SchedulerStore,
   clock: () => string,
+  toolOptions?: RepairPlanningToolOptions,
 ): NativeTool<PlanVerificationRepairsInput> {
   return lifecycleTool({
     name: "plan_verification_repairs",
@@ -608,6 +710,49 @@ function planVerificationRepairsTool(
           "conflicting_verification_repair_plan",
           "Verification repairs already have a conflicting durable plan.",
         );
+      }
+      // T6b repair (B4/B5): require a live recorded decision for every
+      // member issue and charge one cycle per member on dispatch. Legacy
+      // runs bypass the gate and the charge unchanged.
+      if (projection.planningPolicyVersion === 1) {
+        const members = repairMemberIssues(toolProjectId(toolOptions, context.runId), input.tasks.flatMap((task) => task.categories.map((category) => withFailingIds(category, failingTestIdsByCategory(projection.finalVerification?.current?.completedChecks ?? [])))));
+        const taskEvidence = [...new Set(input.tasks.flatMap((task) => task.evidenceIds))];
+        // T6b repair (N7): repair tasks cite durable evidence.
+        if (toolOptions?.evidenceStore) {
+          const known = new Set(toolOptions.evidenceStore.getByIds({ runId: context.runId, ids: taskEvidence }).map((record) => record.id));
+          const fabricated = taskEvidence.find((id) => !known.has(id));
+          if (fabricated !== undefined) return errorOutput("unknown_evidence", `Repair tasks cite unknown evidence id ${fabricated}.`);
+        }
+        // T6b repair (R4-B1): validate EVERY member before charging ANY.
+        // A partial check-and-charge consumes a decision and spends a cycle
+        // on a dispatch that never happens, and the retry then collides on
+        // the charge key forever. The store has no multi-event transaction,
+        // so all validations run before any append.
+        const validated: Array<{ member: (typeof members)[number]; live: { approachId: string; hypothesis: string; evidenceIds: string[] }; evidenceIds: string[] }> = [];
+        for (const member of members) {
+          const issue = projection.repairIssues?.[member.issueId];
+          if (issue?.externalBlocker) {
+            return errorOutput("repair_external_blocker", `Issue ${member.rootCause} has a recorded external blocker; no futile dispatch.`);
+          }
+          if (issue && issue.used >= issue.limit) {
+            return errorOutput("repair_issue_budget_exhausted", `Issue ${member.rootCause} used ${issue.used}/${issue.limit} repair cycles.`);
+          }
+          const live = requireLiveRepairDecision(issue, member.issueId, member.rootCause);
+          if ("isError" in live) return live;
+          const evidenceIds = [...new Set([...live.evidenceIds, ...taskEvidence])];
+          if (evidenceIds.length === 0) {
+            return errorOutput("repair_charge_evidence_required", `Dispatch for ${member.rootCause} requires durable evidence.`);
+          }
+          validated.push({ member, live, evidenceIds });
+        }
+        for (const { member, live, evidenceIds } of validated) {
+          chargeRepairDispatch(store, context.runId, clock(), [member], {
+            hypothesis: live.hypothesis,
+            evidenceIds,
+            approachId: live.approachId,
+            idempotencyKey: current.generationId,
+          });
+        }
       }
       return appendEvent(store, {
         runId: context.runId,
@@ -744,9 +889,250 @@ function repairPlanMatches(
   });
 }
 
+interface RecordRepairApproachDecisionInput {
+  issueId: string;
+  approachId: string;
+  repeat: boolean;
+  hypothesis: string;
+  diagnosticSet: string[];
+  evidenceIds: string[];
+}
+
+/** T6b repair (B4/B5): options shared by the repair planning tools. */
+export interface RepairPlanningToolOptions {
+  readonly projectId?: string;
+  readonly evidenceStore?: EvidenceStore;
+}
+
+/**
+ * T6b repair (B4): the kernel requires a live recorded decision before any
+ * repair dispatch and never synthesizes one. A decision is live while the
+ * latest recorded approach for the issue has not failed; after a failure
+ * the Architect must record a new decision with new evidence first.
+ * T6b repair (R3-B2): one decision authorizes exactly one dispatch — a
+ * consumed (dispatched) approach is no longer live, while context and
+ * display still show it pending (failed=false) until its validation
+ * records it failed or a new decision supersedes it.
+ */
+function liveRepairApproach(issue: NonNullable<ReturnType<typeof rebuildSchedulerProjection>["repairIssues"]>[string]): { approachId: string; hypothesis: string; evidenceIds: string[] } | undefined {
+  const latest = issue.approaches.at(-1);
+  if (!latest || latest.failed || latest.dispatched) return undefined;
+  return { approachId: latest.approachId, hypothesis: latest.hypothesis, evidenceIds: [...latest.evidenceIds] };
+}
+
+function requireLiveRepairDecision(
+  issue: { approaches: { approachId: string; failed: boolean; dispatched: boolean; hypothesis: string; diagnosticSet: string[]; evidenceIds: string[]; failureEvidenceIds?: string[] }[] } | undefined,
+  issueId: string,
+  rootCause: string,
+): { approachId: string; hypothesis: string; evidenceIds: string[] } | ReturnType<typeof errorOutput> {
+  if (!issue) return errorOutput("unknown_repair_issue", `Repair dispatch requires the current durable issue ${issueId}.`);
+  const live = liveRepairApproach(issue as Parameters<typeof liveRepairApproach>[0]);
+  if (!live) {
+    const failed = issue.approaches.filter((entry) => entry.failed).map((entry) => `${entry.approachId} (evidence ${entry.evidenceIds.join(", ") || "none"}; failure evidence ${(entry.failureEvidenceIds ?? []).join(", ") || "none"})`);
+    return errorOutput(
+      "repair_approach_decision_required",
+      `No live repair approach for ${issueId} (${rootCause}). Call record_repair_approach_decision with that issueId first${failed.length > 0 ? `; prior failed approaches: ${failed.join("; ")}` : ""}.`,
+    );
+  }
+  return live;
+}
+
+/**
+ * T6b repair (B5): charge one issue-level cycle per member issue when a
+ * correction is dispatched. The first failure opens the issue; the charge
+ * lands here, so three real fixes are allowed and a fourth is refused by
+ * the reducer guard (the dispatch gate pauses before ever reaching it).
+ */
+function toolProjectId(options: RepairPlanningToolOptions | undefined, runId: string): string {
+  return options?.projectId ?? runId;
+}
+
+function chargeRepairDispatch(
+  store: SchedulerStore,
+  runId: string,
+  occurredAt: string,
+  members: readonly { issueId: string; rootCause: string }[],
+  dispatch: { hypothesis: string; evidenceIds: readonly string[]; approachId: string; idempotencyKey: string },
+): void {
+  for (const member of members) {
+    store.append({
+      runId,
+      type: "repair.cycle_recorded",
+      occurredAt,
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `repair-cycle:${member.issueId}:${dispatch.idempotencyKey}:${dispatch.approachId}`,
+      payload: {
+        issueId: member.issueId,
+        hypothesis: dispatch.hypothesis,
+        outcome: "dispatched",
+        evidenceIds: [...dispatch.evidenceIds],
+        approachId: dispatch.approachId,
+      },
+    });
+  }
+}
+
+function recordRepairApproachDecisionTool(
+  store: SchedulerStore,
+  clock: () => string,
+  evidenceStore?: EvidenceStore,
+): NativeTool<RecordRepairApproachDecisionInput> {
+  return lifecycleTool({
+    name: "record_repair_approach_decision",
+    description: "Persist the Architect repair approach before dispatch; repeats require evidence NEW to the recorded diagnostic set",
+    schema: objectSchema({
+      issueId: { type: "string", minLength: 1 },
+      approachId: { type: "string", minLength: 1 },
+      repeat: { type: "boolean" },
+      hypothesis: { type: "string", minLength: 1 },
+      diagnosticSet: { type: "array", items: { type: "string", minLength: 1 } },
+      evidenceIds: { type: "array", items: { type: "string", minLength: 1 } },
+    }, ["issueId", "approachId", "repeat", "hypothesis", "diagnosticSet", "evidenceIds"]),
+    validate: (input) => validateObject<RecordRepairApproachDecisionInput>(input, (value) => {
+      const diagnosticSet = stringList(value.diagnosticSet);
+      const evidenceIds = stringList(value.evidenceIds);
+      if (!nonEmpty(value.issueId) || !nonEmpty(value.approachId) || typeof value.repeat !== "boolean" ||
+          !nonEmpty(value.hypothesis) || !diagnosticSet || !evidenceIds) return null;
+      return { issueId: value.issueId, approachId: value.approachId, repeat: value.repeat, hypothesis: value.hypothesis, diagnosticSet, evidenceIds };
+    }, "issueId, approachId, repeat, hypothesis, diagnosticSet and evidenceIds are required"),
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const issue = projection.repairIssues?.[input.issueId];
+      if (!issue) return errorOutput("unknown_repair_issue", "Repair approach requires the current durable issue.");
+      // T6b repair (B4): the kernel validates actor, lineage, prior
+      // failure, and immutable evidence references here, where the
+      // evidence store is available. Every cited id must exist; repeats
+      // need evidence NEW to the failed approach's diagnostic set and
+      // must not cite the failure's own evidence.
+      try {
+        const cited = [...new Set([...input.diagnosticSet, ...input.evidenceIds])];
+        const known = evidenceStore
+          ? evidenceStore.getByIds({ runId: context.runId, ids: cited }).map((record) => record.id)
+          : undefined;
+        if (known !== undefined) {
+          const unknownDiagnostic = input.diagnosticSet.find((id) => !known.includes(id));
+          if (unknownDiagnostic) {
+            return errorOutput("unknown_evidence", `Repair approach cites unknown diagnostic evidence ${unknownDiagnostic}.`);
+          }
+        }
+        validateRepairApproachDecision({
+          actorRole: "architect",
+          actorId: context.actor.id,
+          decisionActorRole: "architect",
+          decisionActorId: context.actor.id,
+          priorApproaches: issue.approaches.map((entry) => ({
+            approachId: entry.approachId,
+            failed: entry.failed,
+            hypothesis: entry.hypothesis,
+            diagnosticSet: [...entry.diagnosticSet],
+            evidenceIds: [...entry.evidenceIds],
+            failureEvidenceIds: [...(entry.failureEvidenceIds ?? [])],
+          })),
+          decision: {
+            approachId: input.approachId,
+            repeat: input.repeat,
+            hypothesis: input.hypothesis,
+            diagnosticSet: [...input.diagnosticSet],
+            evidenceIds: [...input.evidenceIds],
+          },
+          ...(known !== undefined ? { knownEvidenceIds: known } : {}),
+        });
+      } catch (error) {
+        return errorOutput("invalid_repair_approach_decision", error instanceof Error ? error.message : String(error));
+      }
+      // T6b repair (B4): recording the decision does NOT end the turn,
+      // so the instructed record-then-plan sequence completes in one
+      // turn. The reducer re-validates as a backstop.
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "repair.approach_decided",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `repair-approach:${input.issueId}:${input.approachId}:${input.repeat ? "repeat" : "new"}:${input.evidenceIds.join(",")}`,
+        payload: {
+          issueId: input.issueId,
+          approachId: input.approachId,
+          repeat: input.repeat,
+          hypothesis: input.hypothesis,
+          diagnosticSet: [...input.diagnosticSet],
+          evidenceIds: [...input.evidenceIds],
+        },
+      });
+    },
+  });
+}
+
+interface RecordExternalBlockerInput {
+  issueId: string;
+  acceptanceCondition: string;
+  evidence: string[];
+  attemptedResolutions: string[];
+  requiredOwnerAction: string;
+}
+
+function recordExternalBlockerTool(
+  store: SchedulerStore,
+  clock: () => string,
+  evidenceStore?: EvidenceStore,
+): NativeTool<RecordExternalBlockerInput> {
+  return lifecycleTool({
+    name: "record_external_blocker",
+    description: "Record a proven external blocker for a repair issue with its exact acceptance condition, evidence, attempted resolutions and required owner action",
+    schema: objectSchema({
+      issueId: { type: "string", minLength: 1 },
+      acceptanceCondition: { type: "string", minLength: 1 },
+      evidence: { type: "array", items: { type: "string", minLength: 1 } },
+      attemptedResolutions: { type: "array", items: { type: "string", minLength: 1 } },
+      requiredOwnerAction: { type: "string", minLength: 1 },
+    }, ["issueId", "acceptanceCondition", "evidence", "attemptedResolutions", "requiredOwnerAction"]),
+    validate: (input) => validateObject<RecordExternalBlockerInput>(input, (value) => {
+      const evidence = stringList(value.evidence);
+      const attemptedResolutions = stringList(value.attemptedResolutions);
+      if (!nonEmpty(value.issueId) || !nonEmpty(value.acceptanceCondition) ||
+          !evidence || evidence.length === 0 || !attemptedResolutions || attemptedResolutions.length === 0 ||
+          !nonEmpty(value.requiredOwnerAction)) return null;
+      return { issueId: value.issueId, acceptanceCondition: value.acceptanceCondition, evidence, attemptedResolutions, requiredOwnerAction: value.requiredOwnerAction };
+    }, "issueId, acceptanceCondition, non-empty evidence and attemptedResolutions, and requiredOwnerAction are required"),
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const issue = projection.repairIssues?.[input.issueId];
+      if (!issue) return errorOutput("unknown_repair_issue", "External blocker requires the current durable issue.");
+      // T6b repair (N7): blocker evidence must exist in the evidence store.
+      if (evidenceStore) {
+        const known = new Set(evidenceStore.getByIds({ runId: context.runId, ids: input.evidence }).map((record) => record.id));
+        const fabricated = input.evidence.find((id) => !known.has(id));
+        if (fabricated !== undefined) return errorOutput("unknown_evidence", `External blocker cites unknown evidence id ${fabricated}.`);
+      }
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "repair.external_blocker_recorded",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `repair-blocker:${input.issueId}`,
+        payload: {
+          issueId: input.issueId,
+          acceptanceCondition: input.acceptanceCondition,
+          evidence: [...input.evidence],
+          attemptedResolutions: [...input.attemptedResolutions],
+          requiredOwnerAction: input.requiredOwnerAction,
+        },
+      }, {
+        type: "architect_action",
+        action: "verification_repairs_planned",
+        referenceId: input.issueId,
+      });
+    },
+  });
+}
+
 function planVerifierRepairsTool(
   store: SchedulerStore,
   clock: () => string,
+  toolOptions?: RepairPlanningToolOptions,
 ): NativeTool<PlanVerifierRepairsInput> {
   return lifecycleTool({
     name: "plan_verifier_repairs",
@@ -834,6 +1220,46 @@ function planVerifierRepairsTool(
           "Verifier repairs already have a conflicting durable plan.",
         );
       }
+      // T6b repair (B4/B5): require a live recorded decision for every
+      // member criterion issue and charge one cycle per member on
+      // dispatch. Legacy runs bypass the gate and the charge unchanged.
+      if (projection.planningPolicyVersion === 1) {
+        const members = repairMemberIssues(toolProjectId(toolOptions, context.runId), input.tasks.flatMap((task) => task.criteria.map((criterion) => `verifier:${criterion.taskId}:${criterion.criterionId}`)));
+        const taskEvidence = [...new Set(input.tasks.flatMap((task) => task.evidenceIds))];
+        // T6b repair (N7): repair tasks cite durable evidence.
+        if (toolOptions?.evidenceStore) {
+          const known = new Set(toolOptions.evidenceStore.getByIds({ runId: context.runId, ids: taskEvidence }).map((record) => record.id));
+          const fabricated = taskEvidence.find((id) => !known.has(id));
+          if (fabricated !== undefined) return errorOutput("unknown_evidence", `Repair tasks cite unknown evidence id ${fabricated}.`);
+        }
+        // T6b repair (R4-B1): validate EVERY member before charging ANY
+        // (same partial-dispatch deadlock as the final-verification loop).
+        const validated: Array<{ member: (typeof members)[number]; live: { approachId: string; hypothesis: string; evidenceIds: string[] }; evidenceIds: string[] }> = [];
+        for (const member of members) {
+          const issue = projection.repairIssues?.[member.issueId];
+          if (issue?.externalBlocker) {
+            return errorOutput("repair_external_blocker", `Issue ${member.rootCause} has a recorded external blocker; no futile dispatch.`);
+          }
+          if (issue && issue.used >= issue.limit) {
+            return errorOutput("repair_issue_budget_exhausted", `Issue ${member.rootCause} used ${issue.used}/${issue.limit} repair cycles.`);
+          }
+          const live = requireLiveRepairDecision(issue, member.issueId, member.rootCause);
+          if ("isError" in live) return live;
+          const evidenceIds = [...new Set([...live.evidenceIds, ...taskEvidence])];
+          if (evidenceIds.length === 0) {
+            return errorOutput("repair_charge_evidence_required", `Dispatch for ${member.rootCause} requires durable evidence.`);
+          }
+          validated.push({ member, live, evidenceIds });
+        }
+        for (const { member, live, evidenceIds } of validated) {
+          chargeRepairDispatch(store, context.runId, clock(), [member], {
+            hypothesis: live.hypothesis,
+            evidenceIds,
+            approachId: live.approachId,
+            idempotencyKey: current.reviewId,
+          });
+        }
+      }
       return appendEvent(store, {
         runId: context.runId,
         type: "verifier.repairs_planned",
@@ -857,6 +1283,169 @@ function planVerifierRepairsTool(
         type: "architect_action",
         action: "verification_repairs_planned",
         referenceId: current.reviewId,
+      });
+    },
+  });
+}
+
+interface ResolveDeliveryBoundaryFailureInput {
+  taskId: string;
+  boundaryId: string;
+  resolution: "recheck" | "repair_planned";
+  rationale: string;
+  tasks?: Array<{
+    id: string;
+    objective: string;
+    dependencies: string[];
+    requiredCapabilities: string[];
+    acceptanceCriteria: AcceptanceCriterion[];
+  }>;
+}
+
+/**
+ * T6a (B3/B4): the Architect's legal responses to a failed or unknown
+ * integrated-boundary check. `recheck` grants one more run on the same
+ * integration revision (once per revision); `repair_planned` creates repair
+ * tasks bound to the failed task's parent contract. The task stays
+ * `integrated` and unaccepted until a later boundary passes.
+ */
+function resolveDeliveryBoundaryFailureTool(
+  store: SchedulerStore,
+  clock: () => string,
+  toolOptions?: RepairPlanningToolOptions,
+): NativeTool<ResolveDeliveryBoundaryFailureInput> {
+  return lifecycleTool({
+    name: "resolve_delivery_boundary_failure",
+    description:
+      "Resolve a failed or unknown post-integration boundary check: recheck once on the same revision, or plan repair tasks",
+    schema: objectSchema({
+      taskId: { type: "string", minLength: 1 },
+      boundaryId: { type: "string", minLength: 1 },
+      resolution: { type: "string", enum: ["recheck", "repair_planned"] },
+      rationale: { type: "string", minLength: 1 },
+      tasks: { type: "array", minItems: 1, items: taskSchema() },
+    }, ["taskId", "boundaryId", "resolution", "rationale"]),
+    validate: (input) => validateObject(input, (value) => {
+      if (!nonEmpty(value.taskId) || !nonEmpty(value.boundaryId) || !nonEmpty(value.rationale)) return null;
+      if (value.resolution !== "recheck" && value.resolution !== "repair_planned") return null;
+      if (value.resolution === "recheck") {
+        if (value.tasks !== undefined) return null;
+        return {
+          taskId: value.taskId,
+          boundaryId: value.boundaryId,
+          resolution: "recheck" as const,
+          rationale: value.rationale,
+        };
+      }
+      if (!Array.isArray(value.tasks) || value.tasks.length === 0) return null;
+      const tasks: NonNullable<ResolveDeliveryBoundaryFailureInput["tasks"]> = [];
+      for (const candidate of value.tasks) {
+        if (!isRecord(candidate) || !nonEmpty(candidate.id) || !nonEmpty(candidate.objective)) return null;
+        const dependencies = stringList(candidate.dependencies);
+        const requiredCapabilities = stringList(candidate.requiredCapabilities);
+        const acceptanceCriteria = parseAcceptanceCriteria(candidate.acceptanceCriteria);
+        if (!dependencies || !requiredCapabilities || !acceptanceCriteria) return null;
+        tasks.push({ id: candidate.id, objective: candidate.objective, dependencies, requiredCapabilities, acceptanceCriteria });
+      }
+      return {
+        taskId: value.taskId,
+        boundaryId: value.boundaryId,
+        resolution: "repair_planned" as const,
+        rationale: value.rationale,
+        tasks,
+      };
+    }, "taskId, boundaryId, resolution, rationale, and repair tasks for repair_planned are required"),
+    execute: async (input, context) => {
+      const denied = architectOnly(context);
+      if (denied) return denied;
+      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      const boundary = latestBoundary(projection.delivery, input.taskId);
+      const resolutionGeneration = boundary?.boundaryId === input.boundaryId
+        ? boundaryResolutionGeneration(boundary)
+        : 1;
+      // T6b repair (B4/B5): a repair_planned resolution is a repair
+      // dispatch: require a live recorded decision per failed check and
+      // charge one cycle per member. Rechecks plan no correction and
+      // charge nothing. Legacy runs bypass the gate and the charge.
+      if (projection.planningPolicyVersion === 1 && input.resolution === "repair_planned" && input.tasks) {
+        // T6b repair (R4-B1/NB-1): validate the resolution itself BEFORE any
+        // charge — a resolve for a stale boundary, a consumed generation, or
+        // an already-resolved boundary must refuse with nothing charged.
+        const resolvable = boundary !== undefined &&
+          boundary.boundaryId === input.boundaryId &&
+          boundaryNeedsArchitect(boundary, (id) => projection.tasks[id]?.status) &&
+          boundary.integrationRevision === projection.integrationRevision &&
+          projection.tasks[input.taskId]?.status === "integrated" &&
+          projection.delivery?.taskAcceptances[input.taskId] === undefined &&
+          resolutionGeneration === boundaryResolutionGeneration(boundary);
+        if (!resolvable) {
+          return errorOutput(
+            "stale_delivery_boundary_resolution",
+            "Only the current failed boundary awaiting the Architect can be resolved.",
+          );
+        }
+        // T6b repair (R3-B1): per-task, per-check keys via the shared
+        // helper — the same identity the kernel opened before this turn.
+        const failedChecks = (boundary?.checks ?? []).filter((check) => check.outcome !== "passed");
+        const failedKeys = failedChecks.length > 0 ? failedChecks.map((check) => deliveryBoundaryRootCause({ taskId: input.taskId, checkId: check.checkId, failingIds: check.report?.failingTestIds })) : [deliveryBoundaryRootCause({ taskId: input.taskId, checkId: input.boundaryId })];
+        const members = repairMemberIssues(toolProjectId(toolOptions, context.runId), failedKeys);
+        const checkEvidence = [...new Set(failedChecks.flatMap((check) => check.evidenceIds))];
+        // T6b repair (R4-B1): validate EVERY member before charging ANY
+        // (same partial-dispatch deadlock as the other two loops).
+        const validated: Array<{ member: (typeof members)[number]; live: { approachId: string; hypothesis: string; evidenceIds: string[] }; evidenceIds: string[] }> = [];
+        for (const member of members) {
+          const issue = projection.repairIssues?.[member.issueId];
+          if (issue?.externalBlocker) {
+            return errorOutput("repair_external_blocker", `Issue ${member.rootCause} has a recorded external blocker; no futile dispatch.`);
+          }
+          if (issue && issue.used >= issue.limit) {
+            return errorOutput("repair_issue_budget_exhausted", `Issue ${member.rootCause} used ${issue.used}/${issue.limit} repair cycles.`);
+          }
+          const live = requireLiveRepairDecision(issue, member.issueId, member.rootCause);
+          if ("isError" in live) return live;
+          const evidenceIds = [...new Set([...live.evidenceIds, ...checkEvidence])];
+          if (evidenceIds.length === 0) {
+            return errorOutput("repair_charge_evidence_required", `Dispatch for ${member.rootCause} requires durable evidence.`);
+          }
+          validated.push({ member, live, evidenceIds });
+        }
+        for (const { member, live, evidenceIds } of validated) {
+          chargeRepairDispatch(store, context.runId, clock(), [member], {
+            hypothesis: live.hypothesis,
+            evidenceIds,
+            approachId: live.approachId,
+            idempotencyKey: `${input.boundaryId}:${resolutionGeneration}`,
+          });
+        }
+      }
+      return appendEvent(store, {
+        runId: context.runId,
+        type: "delivery.boundary_failure_resolved",
+        occurredAt: clock(),
+        actor: { role: "architect", id: context.actor.id },
+        idempotencyKey: `delivery-boundary-resolution:${input.boundaryId}:${resolutionGeneration}`,
+        payload: {
+          taskId: input.taskId,
+          boundaryId: input.boundaryId,
+          resolutionGeneration,
+          resolution: input.resolution,
+          rationale: input.rationale,
+          ...(input.tasks
+            ? {
+                revision: projection.planRevision + 1,
+                tasks: input.tasks.map((task) => ({
+                  ...task,
+                  dependencies: [...task.dependencies],
+                  requiredCapabilities: [...task.requiredCapabilities],
+                  acceptanceCriteria: task.acceptanceCriteria.map((criterion) => ({ ...criterion })),
+                })),
+              }
+            : {}),
+        },
+      }, {
+        type: "architect_action",
+        action: "delivery_boundary_failure_resolved",
+        referenceId: input.boundaryId,
       });
     },
   });
@@ -1368,6 +1957,10 @@ function reconcilePlanTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const answered = answeredRunRefused(store, context.runId, "reconcile the plan");
+      if (answered) return answered;
+      const notReady = newPolicyPlanNotReady(store, context.runId);
+      if (notReady) return notReady;
       return appendEvent(store, {
         runId: context.runId,
         type: "plan.reconciled",
@@ -1408,6 +2001,10 @@ function planTasksTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const answered = answeredRunRefused(store, context.runId, "create tasks");
+      if (answered) return answered;
+      const notReady = newPolicyPlanNotReady(store, context.runId);
+      if (notReady) return notReady;
       const tasks: BuildTask[] = input.tasks.map((task) => ({
         ...task,
         dependencies: [...task.dependencies],
@@ -1475,6 +2072,10 @@ function reviseTaskTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const answered = answeredRunRefused(store, context.runId, "revise tasks");
+      if (answered) return answered;
+      const notReady = newPolicyPlanNotReady(store, context.runId);
+      if (notReady) return notReady;
       const patch = {
         ...(input.objective !== undefined ? { objective: input.objective } : {}),
         ...(input.dependencies ? { dependencies: [...input.dependencies] } : {}),
@@ -1562,6 +2163,22 @@ function reviewTaskTool(
         items: criterionReviewVerdictSchema(),
       },
       planReconciliation: planReconciliationSchema(),
+      findingDispositions: {
+        type: "array",
+        items: objectSchema({
+          findingId: { type: "string", minLength: 1 },
+          resolution: { type: "string", enum: ["plan_reconciled", "rejected", "deferred"] },
+          rationale: { type: "string", minLength: 1 },
+        }, ["findingId", "resolution", "rationale"]),
+      },
+      claimDispositions: {
+        type: "array",
+        items: objectSchema({
+          claimId: { type: "string", minLength: 1 },
+          status: { type: "string", enum: ["verified"] },
+          rationale: { type: "string", minLength: 1 },
+        }, ["claimId", "status", "rationale"]),
+      },
     }, ["taskId", "decision", "summary", "evidenceArtifactHashes"]),
     validate: validateReview,
     execute: async (input, context) => {
@@ -1577,6 +2194,8 @@ function reviewTaskTool(
           "Task review is blocked until the Architect upgrades acceptance criteria for every non-cancelled task."
         );
       }
+      const answered = answeredRunRefused(store, context.runId, "review tasks");
+      if (answered) return answered;
       const task = projection.tasks[input.taskId];
       if (!task) return errorOutput("unknown_task", `Unknown task ${input.taskId}.`);
       if (task.acceptanceCriteria) {
@@ -1675,6 +2294,8 @@ function reviewTaskTool(
           ...(input.planReconciliation
             ? { planReconciliation: input.planReconciliation }
             : {}),
+          ...(input.findingDispositions ? { findingDispositions: input.findingDispositions } : {}),
+          ...(input.claimDispositions ? { claimDispositions: input.claimDispositions } : {}),
         },
       }, {
         type: "architect_action",
@@ -1702,6 +2323,8 @@ function requestIntegrationTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      const answered = answeredRunRefused(store, context.runId, "request integration");
+      if (answered) return answered;
       const events = store.readRun(context.runId);
       const task = rebuildSchedulerProjection(events).tasks[input.taskId];
       const resolutionSequence = task?.status === "integration_resolution"
@@ -1768,12 +2391,22 @@ function completeRunTool(
           readiness.issues,
         );
       }
+      // FX-2 (CR-1): key each handoff request by the withdrawals it follows.
+      // Guidance withdraws a requested handoff into projectHandoffHistory
+      // (history only grows), so its length is durable log state that is
+      // stable on replay: 0 keeps the old key shape so old logs replay
+      // unchanged, N keys the request after N withdrawals. The reducer never
+      // inspects the key.
+      const handoffRequests = projection.projectHandoffHistory?.length ?? 0;
+      const handoffRequestKey = handoffRequests === 0
+        ? "project-handoff-requested"
+        : `project-handoff-requested:${handoffRequests}`;
       return appendEvent(store, {
         runId: context.runId,
         type: "project.handoff_requested",
         occurredAt: clock(),
         actor: { role: "architect", id: context.actor.id },
-        idempotencyKey: "project-handoff-requested",
+        idempotencyKey: handoffRequestKey,
         payload: { summary: input.summary },
       }, { type: "architect_action", action: "run_completed" });
     },
@@ -1872,12 +2505,12 @@ function acknowledgeUserGuidanceTool(
 ): NativeTool<AcknowledgeUserGuidanceInput> {
   return lifecycleTool({
     name: "acknowledge_user_guidance",
-    description: "Acknowledge the exact oldest pending user guidance with either durable evidence proving no semantic plan change or one atomic plan reconciliation",
+    description: "Acknowledge the exact oldest pending user guidance: folded_into_planning only while the run has no ready plan, otherwise durable evidence proving no semantic plan change or one atomic plan reconciliation",
     schema: objectSchema({
       guidanceId: { type: "string", minLength: 1 },
       expectedVersion: { type: "integer", minimum: 1 },
       resolution: objectSchema({
-        type: { type: "string", enum: ["no_plan_change", "plan_reconciled"] },
+        type: { type: "string", enum: ["no_plan_change", "plan_reconciled", "folded_into_planning"] },
         rationale: { type: "string", minLength: 1 },
         evidenceIds: {
           type: "array",
@@ -1891,19 +2524,26 @@ function acknowledgeUserGuidanceTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
-      if (architectAction.reason.type !== "user_guidance_required") {
+      const reason = architectAction.reason;
+      if (reason.type !== "user_guidance_required" && reason.type !== "plan_required") {
         return errorOutput("wrong_architect_action", "User guidance acknowledgement is unavailable for this Architect action.");
       }
       const projection = rebuildSchedulerProjection(store.readRun(context.runId));
+      // T9 repair cycle 1 (B3): the inline acknowledgement on a plan_required
+      // turn is new-policy only — legacy initial-plan turns proceed with
+      // guidance pending by design (the plan.created carve-out).
+      if (reason.type === "plan_required" && projection.planningPolicyVersion !== 1) {
+        return errorOutput("wrong_architect_action", "User guidance acknowledgement is unavailable for this Architect action.");
+      }
       const oldest = Object.values(projection.userGuidance)
         .filter((guidance) => guidance.status === "submitted")
         .sort((left, right) => left.version - right.version || left.guidanceId.localeCompare(right.guidanceId))[0];
       if (
         !oldest ||
-        oldest.guidanceId !== architectAction.reason.guidanceId ||
-        oldest.version !== architectAction.reason.version ||
         input.guidanceId !== oldest.guidanceId ||
-        input.expectedVersion !== oldest.version
+        input.expectedVersion !== oldest.version ||
+        (reason.type === "user_guidance_required" &&
+          (reason.guidanceId !== oldest.guidanceId || reason.version !== oldest.version))
       ) {
         return errorOutput(
           "wrong_pending_guidance",
@@ -2046,6 +2686,11 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
       ? undefined
       : parsePlanReconciliation(value.planReconciliation);
     if (value.planReconciliation !== undefined && !planReconciliation) return null;
+    const rawFindingDispositions: unknown = value.findingDispositions;
+    const findingDispositions = rawFindingDispositions === undefined ? undefined : Array.isArray(rawFindingDispositions) ? rawFindingDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.findingId) && (candidate.resolution === "plan_reconciled" || candidate.resolution === "rejected" || candidate.resolution === "deferred") && nonEmpty(candidate.rationale) ? { findingId: candidate.findingId, resolution: candidate.resolution as "plan_reconciled" | "rejected" | "deferred", rationale: candidate.rationale } : null) : null;
+    if (findingDispositions === null || findingDispositions?.some((candidate) => candidate === null)) return null;
+    const claimDispositions = value.claimDispositions === undefined ? undefined : Array.isArray(value.claimDispositions) ? value.claimDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.claimId) && candidate.status === "verified" && nonEmpty(candidate.rationale) ? { claimId: candidate.claimId, status: "verified" as const, rationale: candidate.rationale } : null) : null;
+    if (claimDispositions === null || claimDispositions?.some((candidate) => candidate === null)) return null;
     return {
       taskId: value.taskId,
       decision: value.decision,
@@ -2053,6 +2698,8 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
       evidenceArtifactHashes: hashes,
       ...(criterionVerdicts !== undefined ? { criterionVerdicts } : {}),
       ...(planReconciliation ? { planReconciliation } : {}),
+      ...(findingDispositions ? { findingDispositions: findingDispositions.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null) } : {}),
+      ...(claimDispositions ? { claimDispositions: claimDispositions.filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null) } : {}),
     };
   }, "taskId, decision, summary, and valid evidenceArtifactHashes are required");
 }
@@ -2138,6 +2785,20 @@ function validateAcknowledgeUserGuidance(
           type: "plan_reconciled" as const,
           rationale: value.resolution.rationale,
           planReconciliation,
+        },
+      };
+    }
+    // T9 repair cycle 2 (B3-r2): folded-into-planning carries no evidence
+    // and no reconciliation — the kernel accepts it only while the run has
+    // no ready plan. Extras are rejected so it cannot smuggle either path.
+    if (value.resolution.type === "folded_into_planning") {
+      if (value.resolution.evidenceIds !== undefined || value.resolution.planReconciliation !== undefined) return null;
+      return {
+        guidanceId: value.guidanceId,
+        expectedVersion: value.expectedVersion,
+        resolution: {
+          type: "folded_into_planning" as const,
+          rationale: value.resolution.rationale,
         },
       };
     }
@@ -2244,7 +2905,7 @@ function validateObject<T>(
 function appendEvent(
   store: SchedulerStore,
   event: Parameters<SchedulerStore["append"]>[0],
-  lifecycle: NonNullable<ToolExecutionOutput["lifecycle"]>
+  lifecycle?: ToolExecutionOutput["lifecycle"]
 ): ToolExecutionOutput {
   try {
     const events = store.readRun(event.runId);
@@ -2259,7 +2920,7 @@ function appendEvent(
     return {
       content: [{ type: "json", value: appended }],
       isError: false,
-      lifecycle,
+      ...(lifecycle ? { lifecycle } : {}),
     };
   } catch (error) {
     return errorOutput(
@@ -2273,6 +2934,50 @@ function architectOnly(context: ToolExecutionContext): ToolExecutionOutput | nul
   return context.actor.role === "architect"
     ? null
     : errorOutput("architect_only", "Only the Architect may use this tool.");
+}
+
+/**
+ * T3a repair (B1a, extra): the tool-side half of the new-policy readiness
+ * gate for the legacy plan/task tools. The reducer is the authority and
+ * refuses the same events; this only produces a clearer error earlier.
+ * Legacy runs and empty runs always pass.
+ */
+/**
+ * T9 (EP39): per-tool half of the answered zero-mutation guarantee. The
+ * reducer refuses forged invokes as well; this returns the precise error
+ * before the tool does any other work.
+ */
+function answeredRunRefused(
+  store: SchedulerStore,
+  runId: string,
+  action: string,
+): ToolExecutionOutput | null {
+  const events = store.readRun(runId);
+  if (events.length === 0) return null;
+  const projection = rebuildSchedulerProjection(events);
+  if (projection.planningPolicyVersion === 1 && projection.planningTriageDecision === "answer") {
+    return errorOutput(
+      "answered_run",
+      `Answered runs cannot ${action}; convert to build first.`,
+    );
+  }
+  return null;
+}
+
+function newPolicyPlanNotReady(
+  store: SchedulerStore,
+  runId: string,
+): ToolExecutionOutput | null {
+  const events = store.readRun(runId);
+  if (events.length === 0) return null;
+  const projection = rebuildSchedulerProjection(events);
+  if (projection.planningPolicyVersion === 1 && !readyPlanIdentity(projection)) {
+    return errorOutput(
+      "plan_not_ready",
+      "Scheduler tasks on a new-policy run require a ready plan revision; finish evidence-gated planning first."
+    );
+  }
+  return null;
 }
 
 function errorOutput(code: string, message: string, issues?: string[]): ToolExecutionOutput {
@@ -2450,6 +3155,9 @@ function cloneGuidanceAcknowledgementResolution(
 ): UserGuidanceAcknowledgementResolution {
   if (resolution.type === "no_plan_change") {
     return { ...resolution, evidenceIds: [...resolution.evidenceIds] };
+  }
+  if (resolution.type === "folded_into_planning") {
+    return { ...resolution };
   }
   return {
     ...resolution,
