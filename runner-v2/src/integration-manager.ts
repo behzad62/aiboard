@@ -13,6 +13,7 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
+import type { AcceptanceCriterion } from "./acceptance-contracts.js";
 import type { ChangeSet } from "./change-set.js";
 import {
   GitCommandError,
