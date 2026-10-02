@@ -166,7 +166,10 @@ import { runnerProviderRetryDeadlineMs } from "./provider-call-retry.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "./runtime-router.js";
 import { isSensitiveKey } from "./sensitive-redaction.js";
 import {
+  readyPlanIdentity,
   rebuildSchedulerProjection,
+  repairParentContractId,
+  taskPlanMembership,
   type SchedulerEvent,
   type SchedulerProjection,
   type BuildRiskAssessmentProjection,
@@ -1389,6 +1392,46 @@ export class NativeBuildFactory {
         return [...(await durableSubmission(projection, taskId)).changeSet.changedPaths];
       },
     });
+    // C3c: kernel-derived trusted run-level requirement ids for the
+    // integration trailer. Resolves the CURRENT accepted ready plan plus
+    // the matching readyPlanTaskBinding revision/digest and contract id
+    // (taskPlanMembership); repair tasks resolve through their recorded
+    // parent contract. Missing/stale binding or contract fails closed —
+    // an unmapped repair never invents ids, and the trailer never falls
+    // back to task-local criterion ids, worker ChangeSet fields, or model
+    // summary text.
+    const trustedIntegrationRequirementIds = (
+      projection: SchedulerProjection,
+      taskId: string,
+    ): string[] => {
+      const ready = readyPlanIdentity(projection);
+      const binding = projection.readyPlanTaskBindings?.[taskId];
+      if (
+        !ready ||
+        !binding ||
+        binding.revisionId !== ready.revisionId ||
+        binding.digest !== ready.digest
+      ) {
+        throw new Error(
+          `Task ${taskId} is not bound to the current ready plan revision; integration refuses a stale binding.`
+        );
+      }
+      const task = projection.tasks[taskId];
+      const membership = taskPlanMembership(projection, taskId);
+      const contractId = membership.contractId ??
+        (task?.kind === "verification_repair" && task
+          ? repairParentContractId(projection, task)
+          : undefined);
+      const revision = projection.planning?.plan?.revisionsById[projection.planning.plan.currentRevisionId];
+      const contract = revision?.tasks.find((candidate) => candidate.id === contractId);
+      const requirementIds = (contract?.requirementIds ?? []).filter((id) => id.trim().length > 0);
+      if (!contract || requirementIds.length === 0) {
+        throw new Error(
+          `Task ${taskId} has no trusted ready-plan contract requirement ids; unmapped repair never invents ids.`
+        );
+      }
+      return [...requirementIds];
+    };
     const integrationDriver: IntegrationRuntimeDriver = {
       integrate: async ({ taskId, changeSetId }) => {
         const projection = rebuildSchedulerProjection(
@@ -1407,7 +1450,13 @@ export class NativeBuildFactory {
         if (!session.changeSet || session.changeSet.id !== changeSetId) {
           throw new Error(`Submitted change set ${changeSetId} is unavailable.`);
         }
-        const result = await integrationManager.integrate(session.changeSet);
+        const policyOptions = projection.planningPolicyVersion === 1
+          ? {
+              planningPolicyVersion: 1 as const,
+              requirementIds: trustedIntegrationRequirementIds(projection, taskId),
+            }
+          : undefined;
+        const result = await integrationManager.integrate(session.changeSet, policyOptions);
         return result.status === "integrated"
           ? { status: "integrated", integrationRevision: result.integrationRevision }
           : {

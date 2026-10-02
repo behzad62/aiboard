@@ -13,7 +13,6 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
-import type { AcceptanceCriterion } from "./acceptance-contracts.js";
 import type { ChangeSet } from "./change-set.js";
 import {
   GitCommandError,
@@ -117,6 +116,38 @@ function commitTrailerBlock(body: string): Set<string> {
   return block;
 }
 
+/**
+ * C3c: authoritative runner trailers for a new-policy integration commit.
+ * Reserved `AIBoard-` trailer claims already present in the worker message
+ * (model free text reaches the message through the submit summary) are
+ * removed, so a forged Run/Task/Requirements line can never establish
+ * authority; the kernel-derived run id, task id, and trusted run-level
+ * requirement ids are then appended. The cherry-pick line is preserved so
+ * recovery still finds the integration by it.
+ */
+const RESERVED_TRAILER_PATTERN = /^\s*AIBoard-[A-Za-z0-9-]+:[ \t]*\S/;
+const CHERRY_PICK_LINE_PATTERN = /\(cherry picked from commit [a-f0-9]{40}\)/;
+
+function stampIntegrationTrailers(
+  body: string,
+  input: { runId: string; taskId: string; requirementIds: readonly string[] },
+): string {
+  const cherryPick = body.match(CHERRY_PICK_LINE_PATTERN)?.[0];
+  const kept = body
+    .split(/\r?\n/)
+    .filter((line) => !CHERRY_PICK_LINE_PATTERN.test(line) && !RESERVED_TRAILER_PATTERN.test(line));
+  while (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop();
+  return [
+    ...kept,
+    "",
+    ...(cherryPick ? [cherryPick] : []),
+    `AIBoard-Run: ${input.runId}`,
+    `AIBoard-Task: ${input.taskId}`,
+    `AIBoard-Requirements: ${input.requirementIds.join(" ")}`,
+    "",
+  ].join("\n");
+}
+
 /** Kernel handoff snapshot commit (docs policy v2, C2a: STATE.md only). */
 export interface HandoffSnapshotCommitRequest {
   writes: readonly ProjectDocWrite[];
@@ -160,6 +191,21 @@ export interface IntegrationManagerOptions {
     targetCommit: string;
     journalPath: string;
   }) => void | Promise<void>;
+}
+
+export interface IntegrationOptions {
+  /**
+   * New-policy runs stamp runner trailers; legacy runs omit it and stay
+   * byte-identical.
+   */
+  planningPolicyVersion?: number;
+  /**
+   * C3c: kernel-derived trusted run-level requirement ids from the CURRENT
+   * accepted ready-plan contract. Required and non-empty on new-policy
+   * runs. The trailer never falls back to task-local criterion ids, worker
+   * ChangeSet fields, or model summary text.
+   */
+  requirementIds?: readonly string[];
 }
 
 export type IntegrationResult =
@@ -535,7 +581,14 @@ export class IntegrationManager {
     });
   }
 
-  async integrate(changeSet: ChangeSet): Promise<IntegrationResult> {
+  async integrate(changeSet: ChangeSet, options?: IntegrationOptions): Promise<IntegrationResult> {
+    const newPolicy = options?.planningPolicyVersion === 1;
+    const trustedRequirementIds = [...(options?.requirementIds ?? [])].filter((id) => id.trim().length > 0);
+    if (newPolicy && trustedRequirementIds.length === 0) {
+      throw new Error(
+        `Change set ${changeSet.id} is not bound to the current ready plan contract: no trusted requirement ids.`
+      );
+    }
     return await this.serialized(async () => {
       await this.ensureIntegrationWorkspace();
       await this.assertCompatible(changeSet);
@@ -604,37 +657,101 @@ export class IntegrationManager {
         }
       }
       const before = await this.head();
-      const cherryPick = await this.execute({
-        cwd: this.path,
-        args: ["cherry-pick", "-x", ...changeSet.commits],
-        env: RUNNER_IDENTITY,
-        allowFailure: true,
-      });
-      if (cherryPick.exitCode !== 0) {
-        const conflicts = await this.git(this.path, [
-          "diff",
-          "--name-only",
-          "--diff-filter=U",
-          "-z",
-        ]);
-        await this.git(this.path, ["cherry-pick", "--abort"], true);
-        this.currentRevision = await this.head();
-        if (this.currentRevision !== before) {
-          throw new Error("Failed integration did not restore its original revision.");
+      if (!newPolicy) {
+        const cherryPick = await this.execute({
+          cwd: this.path,
+          args: ["cherry-pick", "-x", ...changeSet.commits],
+          env: RUNNER_IDENTITY,
+          allowFailure: true,
+        });
+        if (cherryPick.exitCode !== 0) {
+          const conflicts = await this.git(this.path, [
+            "diff",
+            "--name-only",
+            "--diff-filter=U",
+            "-z",
+          ]);
+          await this.git(this.path, ["cherry-pick", "--abort"], true);
+          this.currentRevision = await this.head();
+          if (this.currentRevision !== before) {
+            throw new Error("Failed integration did not restore its original revision.");
+          }
+          const conflictPaths = conflicts.stdout.split("\0").filter(Boolean);
+          if (conflictPaths.length === 0) {
+            throw new Error(
+              `Change set ${changeSet.id} could not be applied: ${cherryPick.stderr.trim()}`
+            );
+          }
+          return {
+            status: "conflict",
+            changeSetId: changeSet.id,
+            taskId: changeSet.taskId,
+            integrationRevision: before,
+            conflictPaths,
+          };
         }
-        const conflictPaths = conflicts.stdout.split("\0").filter(Boolean);
-        if (conflictPaths.length === 0) {
-          throw new Error(
-            `Change set ${changeSet.id} could not be applied: ${cherryPick.stderr.trim()}`
-          );
+      } else {
+        // C3c: one commit at a time so every cherry-picked commit carries
+        // the authoritative runner trailers (from the trusted ready-plan
+        // contract, never worker text). A mid-loop failure resets to the
+        // pre-integration revision, preserving the legacy atomicity fence.
+        for (const revision of changeSet.commits) {
+          const cherryPick = await this.execute({
+            cwd: this.path,
+            args: ["cherry-pick", "-x", revision],
+            env: RUNNER_IDENTITY,
+            allowFailure: true,
+          });
+          if (cherryPick.exitCode !== 0) {
+            const conflicts = await this.git(this.path, [
+              "diff",
+              "--name-only",
+              "--diff-filter=U",
+              "-z",
+            ]);
+            await this.git(this.path, ["cherry-pick", "--abort"], true);
+            await this.git(this.path, ["reset", "--hard", before], true);
+            this.currentRevision = await this.head();
+            if (this.currentRevision !== before) {
+              throw new Error("Failed integration did not restore its original revision.");
+            }
+            const conflictPaths = conflicts.stdout.split("\0").filter(Boolean);
+            if (conflictPaths.length === 0) {
+              throw new Error(
+                `Change set ${changeSet.id} could not be applied: ${cherryPick.stderr.trim()}`
+              );
+            }
+            return {
+              status: "conflict",
+              changeSetId: changeSet.id,
+              taskId: changeSet.taskId,
+              integrationRevision: before,
+              conflictPaths,
+            };
+          }
+          const picked = (await this.git(this.path, ["log", "-1", "--format=%B", "HEAD"])).stdout;
+          const stamped = stampIntegrationTrailers(picked, {
+            runId: changeSet.runId,
+            taskId: changeSet.taskId,
+            requirementIds: trustedRequirementIds,
+          });
+          const amend = await this.execute({
+            cwd: this.path,
+            args: ["commit", "--amend", "-m", stamped],
+            env: RUNNER_IDENTITY,
+            allowFailure: true,
+          });
+          if (amend.exitCode !== 0) {
+            await this.git(this.path, ["reset", "--hard", before], true);
+            this.currentRevision = await this.head();
+            if (this.currentRevision !== before) {
+              throw new Error("Failed integration did not restore its original revision.");
+            }
+            throw new Error(
+              `Change set ${changeSet.id} trailer stamp failed: ${amend.stderr.trim()}`
+            );
+          }
         }
-        return {
-          status: "conflict",
-          changeSetId: changeSet.id,
-          taskId: changeSet.taskId,
-          integrationRevision: before,
-          conflictPaths,
-        };
       }
 
       this.currentRevision = await this.head();
