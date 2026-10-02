@@ -31,8 +31,9 @@ section 1's layers 1–3, CD-22 and broad-validation clauses in SOURCE and the v
   under D-3 until separately delegated. All P6.6 work stays off production main until T8/REL-1.
 
 Takeover checkpoint: C3a `863814ee` received independent GPT-6.1 Sol ACCEPT (read-only, no
-blocking findings). Its dedicated `docs-policy-v2-stop-snapshot.test.ts` is running; the old
-11-file affected-file run is deferred under the owner's rule. C3b implementation is in flight
+blocking findings). Its dedicated `docs-policy-v2-stop-snapshot.test.ts` passed 19/19, zero skips
+(881.6 seconds), on 2026-10-02; typecheck and changed-file ESLint passed. The old 11-file affected
+run is deferred under the owner's rule. C3a is locally accepted, with protected merge pending. C3b implementation is in flight
 in `.worktrees/p66-c3b`, branch `exec/runner-v2-p6-6/C3b`, based on accepted C3a. INT-1 PR #105
 remains open, with 10 passing portable checks and the two recorded F-10 benchmark failures.
 Local prerequisite implementation may continue in stacked branches while protected PRs wait;
@@ -310,7 +311,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   `build-runtime.ts`, `project-docs.ts`, `scheduler-store.ts` (gate only), handoff and project-doc
   tests. P: yes (git writes, scheduler log). G: no. INT-1 layer 2 found one regression from repair 2
   (F-9); fixed in `e9440349`, `fe5286d6` (review ACCEPT), shipped in INT-1.
-- [ ] **C3a** code — Snapshot at every stop (split of SRC-A "C3" steps 1, 2 and 4; AR-R08; memory
+- [x] **C3a** code — LOCAL_ACCEPTED 2026-10-02 at `863814ee`; Muse implementation and two repairs, prior Sonnet r3 ACCEPT plus GPT-6.1 Sol high takeover ACCEPT; packet tests 19/19, tsc/lint green; protected merge pending. Snapshot at every stop (split of SRC-A "C3" steps 1, 2 and 4; AR-R08; memory
   rule: split large packets). DoD: the stop table (every transition into `paused`, every cancel and
   terminal failure, each classified notes-allowed or notes-denied) goes into the PR description; at
   every stop other than handoff after the triage decision `build`, the runner renders C1 with stop kind
