@@ -34,10 +34,10 @@ Takeover checkpoint: C3a `863814ee` received independent GPT-6.1 Sol ACCEPT (rea
 blocking findings). Its dedicated `docs-policy-v2-stop-snapshot.test.ts` passed 19/19, zero skips
 (881.6 seconds), on 2026-10-02; typecheck and changed-file ESLint passed. The old 11-file affected
 run is deferred under the owner's rule. C3a is locally accepted, with protected merge pending. C3a is published as stacked draft PR #106 on INT-1. C3b initial candidate `f4bd6ebc` is
-under Muse repair cycle 1 in `.worktrees/p66-c3b`, branch `exec/runner-v2-p6-6/C3b`, based on
-accepted C3a. Initial packet tests exited 1 with fixture failures; independent review requires
-the three source repairs listed in the C3b row. The worker was stopped between runs to deliver
-one consolidated repair brief; no tests were interrupted. INT-1 PR #105
+is repaired at `8c597d04` in `.worktrees/p66-c3b`, branch `exec/runner-v2-p6-6/C3b`, based on
+accepted C3a. GPT-6.1 Sol high ACCEPT; notes-denial proof passed with exact restoration. Initial
+fixture/source failures and the repair-delta gate failure were resolved in two Muse repair
+cycles. Only C3b packet tests ran; prior unchanged evidence was reused. No tests were interrupted. INT-1 PR #105
 remains open, with 10 passing portable checks and the two recorded F-10 benchmark failures.
 Local prerequisite implementation may continue in stacked branches while protected PRs wait;
 items are not declared merged or P6.6 complete until the integration/release obligations close.
@@ -328,7 +328,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   writes nothing; legacy runs unchanged; CD-7 factory tests. Red proof: remove the CD-9 skip → the
   answered-run tree-hash test goes red. Depends: INT-1. Touch: `build-runtime.ts`,
   `scheduler-store.ts`, `integration-manager.ts`, `native-build-factory.ts`, tests. P: yes. G: no.
-- [ ] **C3b** code — IN_PROGRESS / REPAIR_CYCLE_1 2026-10-02 in `.worktrees/p66-c3b` (`exec/runner-v2-p6-6/C3b`); initial candidate `f4bd6ebc`, packet test file exit 1 (fixture errors), GPT-6.1 Sol high REPAIR (repair-attempt budget denial, missing durable once-per-stop attempt, invalid stop linkage); Muse repair dispatched with only C3b tests. Architect stop notes (SRC-A "C3" step 3; AR-R09; EP40). DoD: a bounded
+- [x] **C3b** code — LOCAL_ACCEPTED 2026-10-02 at `8c597d04` in `.worktrees/p66-c3b` (`exec/runner-v2-p6-6/C3b`); Muse two repairs, GPT-6.1 Sol high ACCEPT. R1 dedicated file 11 tests: 10 pass, one crash-fixture boundary mismatch; R2 corrected crash plus three new tests green (4 selected); ten unchanged greens reused with reviewer confirmation; tsc/lint/diff green. Isolated single runtime-denial mutation red at required no-notes reason while independent admission prevented calls, exact bytes restored (SHA256 `1a956bada7c84c29ed57a8d9b54e1607e230a30d0f92b5925a0462c0dc1bf810`); selected green 1/1 (60.6 seconds), exit 0. EP17 alternative accepted by reviewer: removal of runtime denial alone cannot issue a call because the independent stop-eligibility guard still refuses admission. Broad coverage deferred to T8; protected merge pending. Architect stop notes (SRC-A "C3" step 3; AR-R09; EP40). DoD: a bounded
   investigation names the existing one-shot model-call path outside the Architect loop and uses it with
   the fixed short prompt, no tools, at most 2,000 characters and a time bound; cost recorded as purpose
   `handoff_notes`; text stored as the additive event `handoff.notes_recorded` (Architect actor,
@@ -337,7 +337,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   pause writes the "no notes" line and makes no model call; a notes failure still writes the snapshot.
   Red proof: remove the notes-denied check → the budget-exhaustion test sees a model call. Depends:
   C3a. Touch: C3a's list plus the chosen one-shot call module (call site only). P: yes. G: no.
-- [ ] **C3c** code — Revision targeting after a mid-run kernel commit and commit trailers (SRC-A "C3"
+- [ ] **C3c** code — NEXT; accepted source base `8c597d04`, latest C3b checklist commit to be inherited. Revision targeting after a mid-run kernel commit and commit trailers (SRC-A "C3"
   steps 5 and 6; AR-R10; CD-11). DoD: integration, final verification and handoff still target the
   right revisions after a mid-run kernel commit; `AIBoard-Run`, `AIBoard-Task` and
   `AIBoard-Requirements` trailers where the runner authors integration commits for new-policy runs (or
