@@ -46,6 +46,9 @@ import {
   readyPlanIdentity,
   classifyStopSnapshot,
   stopNotesForStop,
+  stopNotesAttemptForStop,
+  stopNotesFailureForStop,
+  STOP_NOTES_FAILED_REASON_MAX_LENGTH,
   EXCEPTIONAL_RECOVERY_PAUSE_REASON,
   rebuildSchedulerProjection,
   effectiveRepairPlanLimit,
@@ -473,12 +476,55 @@ const HANDOFF_SNAPSHOT_FAILURE_DETAIL_MAX_LENGTH = 300;
 const STOP_SNAPSHOT_NO_NOTES_REASON = "stop notes are added in C3b";
 
 /**
+ * C3b repair cycle 1 (R1-2): the no-notes reason rendered when a recorded
+ * attempt marker shows the stop already asked once but no completed or
+ * failed outcome survived (crash/restart between the call and the appends).
+ * Replay renders this and still snapshots -- it never issues a second call.
+ */
+const STOP_NOTES_INTERRUPTED_REASON = "the stop notes attempt did not complete; no second call was made";
+
+/**
+ * C3b repair cycle 1 (R1-2): bound one failure reason to a single short
+ * line for durable storage (STOP_NOTES_FAILED_REASON_MAX_LENGTH), so the
+ * persisted reason and the first-run snapshot line always agree.
+ */
+function boundStopNotesFailureReason(reason: string): string {
+  const singleLine = reason.replace(/\s+/g, " ").trim().slice(0, STOP_NOTES_FAILED_REASON_MAX_LENGTH);
+  return singleLine || "the stop notes call failed";
+}
+
+/**
+ * C3b repair cycle 1 (R1-3): the C3a skip rule decided on the stop
+ * projection, shared by the snapshot path (which records the skip) and the
+ * notes path (which never reuses stored notes for a skipped stop). No
+ * snapshot before the triage decision `build`, while a `clarify` triage is
+ * pending, on an answered run, with `handoffFiles: "export_only"`, or for
+ * C2's own `handoff_snapshot_failed` pause (C2 retries that commit itself).
+ * Decided on the stop projection, so a pause during triage stays skipped
+ * after the run is answered.
+ */
+function stopSnapshotSkipReason(stopProjection: SchedulerProjection): string | undefined {
+  const triage = stopProjection.planningTriageDecision;
+  return triage !== "build"
+    ? triage === "clarify" ? "clarify_pending" : triage === "answer" ? "answered_run" : "pre_triage"
+    : handoffFilesOf(stopProjection) !== "commit"
+      ? "export_only"
+      : stopProjection.pauseReason?.reason === "handoff_snapshot_failed"
+        ? "handoff_snapshot_failed"
+        : undefined;
+}
+
+/**
  * C3b (AR-R09): the notes gate. Returns the accurate no-notes reason when
  * the stop must not make a notes call, undefined when a call is allowed.
- * Honors C3a's allowed/denied classification; exhausted run or repair
- * budgets override an allowed classification (no budget remains for the
- * call); unknown reasons, cancel, terminal failure and provider/credit
- * failures can never make a notes call.
+ * Honors C3a's allowed/denied classification; an exhausted RUN budget
+ * overrides an allowed classification (no budget remains for the call,
+ * and the shared budgeted model refuses the reservation anyway); unknown
+ * reasons, cancel, terminal failure and provider/credit failures can never
+ * make a notes call. A LOCAL repair-attempt exhaustion
+ * (`repair:budget_exhausted:`) never denies: STOP_SNAPSHOT_TABLE and
+ * source C3 allow notes for that repair-limit stop while the run model
+ * budget remains.
  */
 function stopNotesDenialReason(input: {
   stopKind: StopSnapshotStopKind;
@@ -488,9 +534,6 @@ function stopNotesDenialReason(input: {
 }): string | undefined {
   if (input.reason !== undefined && input.reason.startsWith("budget_exhausted")) {
     return "the run budget is exhausted; no budget remains for a notes call";
-  }
-  if (input.detail !== undefined && input.detail.startsWith("repair:budget_exhausted:")) {
-    return "the repair budget is exhausted; no budget remains for a notes call";
   }
   if (!input.allowed) {
     if (input.reason === "owner_cancelled" || input.stopKind === "cancelled") {
@@ -3001,16 +3044,7 @@ export class BuildRuntime {
     // `build`, while a `clarify` triage is pending, on an answered run,
     // with `handoffFiles: "export_only"`, or for C2's own
     // `handoff_snapshot_failed` pause (C2 retries that commit itself).
-    // Decided on the stop projection, so a pause during triage stays
-    // skipped after the run is answered.
-    const triage = stopProjection.planningTriageDecision;
-    const skipReason = triage !== "build"
-      ? triage === "clarify" ? "clarify_pending" : triage === "answer" ? "answered_run" : "pre_triage"
-      : handoffFilesOf(stopProjection) !== "commit"
-        ? "export_only"
-        : stopProjection.pauseReason?.reason === "handoff_snapshot_failed"
-          ? "handoff_snapshot_failed"
-          : undefined;
+    const skipReason = stopSnapshotSkipReason(stopProjection);
     // C3b (AR-R09): every snapshot skip lands BEFORE any model call, so
     // a skipped stop (pre-triage, clarify, answered, export_only, C2's
     // own failure pause) never makes a notes call. Unknown reasons,
@@ -3104,14 +3138,20 @@ export class BuildRuntime {
    * the finding and the stop proceeds.
    */
   /**
-   * C3b (AR-R09): resolve the notes for one stop snapshot. Reuses already
-   * recorded notes on replay/resume (never a second call); without a
-   * driver renders the C3a line unchanged; denies unknown reasons,
-   * cancel, exhausted budgets and provider/credit failures before any
-   * model call; otherwise makes at most one bounded call and persists a
-   * `noted` outcome as `handoff.notes_recorded` (Architect actor, stop
-   * sequence key). Every failure path returns a no-notes reason -- the
-   * snapshot still writes and the stop proceeds.
+   * C3b (AR-R09) repair cycle 1: resolve the notes for one stop snapshot.
+   * The skip rule and the denial gate run BEFORE any reuse of stored
+   * notes (R1-3), so untrusted or invalid stored notes for a skipped or
+   * denied stop are never rendered. A recorded completed outcome is reused
+   * on replay/resume (never a second call); a recorded interrupted or
+   * failed attempt is never called again either (R1-2) -- it renders its
+   * no-notes reason and the snapshot still writes. Without a driver the
+   * C3a line renders unchanged. Otherwise the runner records one durable
+   * attempt marker BEFORE the single bounded call, persists the `noted`
+   * outcome as `handoff.notes_recorded` (Architect actor, stop sequence
+   * key) or the failure as `handoff.notes_failed` (bounded reason), and
+   * fails closed whenever the marker cannot be recorded. Every failure
+   * path returns a no-notes reason -- the snapshot still writes and the
+   * stop proceeds.
    */
   private async resolveStopNotes(input: {
     stop: SchedulerEvent;
@@ -3121,11 +3161,7 @@ export class BuildRuntime {
     const stopSequence = input.stop.sequence;
     const reason = input.stopProjection.pauseReason?.reason;
     const detail = input.stopProjection.pauseReason?.detail;
-    const reused = stopNotesForStop(this.projection(), stopSequence);
-    if (reused) {
-      return { notes: reused.notes, notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
-    }
-    if (!this.stopNotes) {
+    if (stopSnapshotSkipReason(input.stopProjection) !== undefined) {
       return { notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
     }
     const denial = stopNotesDenialReason({
@@ -3137,6 +3173,34 @@ export class BuildRuntime {
     if (denial !== undefined) {
       return { notesAbsentReason: denial };
     }
+    const terminal = this.readStopNotesTerminal(stopSequence);
+    if (terminal.status === "noted") {
+      return { notes: terminal.notes, notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+    }
+    if (terminal.status === "failed") {
+      return { notesAbsentReason: terminal.reason };
+    }
+    if (terminal.status === "attempted") {
+      return { notesAbsentReason: STOP_NOTES_INTERRUPTED_REASON };
+    }
+    if (!this.stopNotes) {
+      return { notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+    }
+    try {
+      this.appendStopNotesAttempted({ stopSequence, stopKind: input.classified.stopKind });
+    } catch {
+      const raced = this.readStopNotesTerminal(stopSequence);
+      if (raced.status === "noted") {
+        return { notes: raced.notes, notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+      }
+      if (raced.status === "failed") {
+        return { notesAbsentReason: raced.reason };
+      }
+      if (raced.status === "attempted") {
+        return { notesAbsentReason: STOP_NOTES_INTERRUPTED_REASON };
+      }
+      return { notesAbsentReason: "the stop notes attempt was not recorded" };
+    }
     const outcome = await this.callStopNotes({
       stopSequence,
       stopKind: input.classified.stopKind,
@@ -3144,24 +3208,53 @@ export class BuildRuntime {
       ...(detail !== undefined ? { detail } : {}),
     });
     if (outcome.status !== "noted") {
-      return { notesAbsentReason: outcome.reason };
+      const failureReason = boundStopNotesFailureReason(outcome.reason);
+      this.appendStopNotesFailedTolerated({ stopSequence, reason: failureReason });
+      return { notesAbsentReason: failureReason };
     }
     const notes = outcome.notes.length > HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH
       ? outcome.notes.slice(0, HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH)
       : outcome.notes;
     if (!notes.trim()) {
-      return { notesAbsentReason: "the Architect returned no stop notes text" };
+      const failureReason = "the Architect returned no stop notes text";
+      this.appendStopNotesFailedTolerated({ stopSequence, reason: failureReason });
+      return { notesAbsentReason: failureReason };
     }
     try {
       this.appendStopNotesRecorded({ stopSequence, notes, runtimeId: outcome.runtimeId });
     } catch {
-      const raced = stopNotesForStop(this.projection(), stopSequence);
-      if (raced) {
+      const raced = this.readStopNotesTerminal(stopSequence);
+      if (raced.status === "noted") {
         return { notes: raced.notes, notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+      }
+      if (raced.status === "failed") {
+        return { notesAbsentReason: raced.reason };
       }
       return { notesAbsentReason: "the stop notes were not recorded" };
     }
     return { notes, notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+  }
+
+  /**
+   * C3b repair cycle 1 (R1-2): the durable per-stop notes terminal read
+   * from authority facts. `noted` is a recorded completed outcome to reuse;
+   * `failed` is a recorded failed outcome whose reason renders as-is;
+   * `attempted` is a recorded attempt with no outcome yet (an interrupted,
+   * in-flight or lost call that must never run twice); `none` means this
+   * stop never asked.
+   */
+  private readStopNotesTerminal(stopSequence: number):
+    | { status: "noted"; notes: string }
+    | { status: "failed"; reason: string }
+    | { status: "attempted" }
+    | { status: "none" } {
+    const projection = this.projection();
+    const reused = stopNotesForStop(projection, stopSequence);
+    if (reused) return { status: "noted", notes: reused.notes };
+    const failed = stopNotesFailureForStop(projection, stopSequence);
+    if (failed) return { status: "failed", reason: failed.reason };
+    if (stopNotesAttemptForStop(projection, stopSequence)) return { status: "attempted" };
+    return { status: "none" };
   }
 
   /**
@@ -3216,6 +3309,55 @@ export class BuildRuntime {
         notes: input.notes,
       },
     });
+  }
+
+  /**
+   * C3b repair cycle 1 (R1-2): persist the durable per-stop attempt marker
+   * BEFORE the model call (runner actor, per-stop key). Not tolerated: when
+   * the marker cannot be recorded the caller fails closed and makes no call.
+   */
+  private appendStopNotesAttempted(input: {
+    stopSequence: number;
+    stopKind: StopSnapshotStopKind;
+  }): void {
+    this.store.append({
+      runId: this.runId,
+      type: "handoff.notes_attempted",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `handoff-notes-attempt:${input.stopSequence}`,
+      payload: {
+        stopSequence: input.stopSequence,
+        stopKind: input.stopKind,
+      },
+    });
+  }
+
+  /**
+   * C3b repair cycle 1 (R1-2): persist one failed-attempt outcome with its
+   * bounded reason, so replay renders it without a second call. Tolerated:
+   * the attempt marker already blocks any second call, so a lost failure
+   * record only loses the specific reason on replay.
+   */
+  private appendStopNotesFailedTolerated(input: {
+    stopSequence: number;
+    reason: string;
+  }): void {
+    try {
+      this.store.append({
+        runId: this.runId,
+        type: "handoff.notes_failed",
+        occurredAt: this.clock(),
+        actor: { role: "runner", id: "build-runtime" },
+        idempotencyKey: `handoff-notes-failed:${input.stopSequence}`,
+        payload: {
+          stopSequence: input.stopSequence,
+          reason: boundStopNotesFailureReason(input.reason),
+        },
+      });
+    } catch {
+      // Tolerated: the stop proceeds with whatever the log already holds.
+    }
   }
 
   private async commitStopSnapshot(input: {

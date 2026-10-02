@@ -12,11 +12,14 @@ import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import {
   rebuildSchedulerProjection,
   stopNotesForStop,
+  stopNotesAttemptForStop,
+  stopNotesFailureForStop,
   STOP_NOTES_MAX_LENGTH,
   type NewSchedulerEvent,
   type SchedulerActorRole,
   type SchedulerEvent,
 } from "../src/scheduler-store.js";
+import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 import { HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH } from "../src/handoff-snapshot.js";
 import {
@@ -32,6 +35,7 @@ import {
   readHandoffLog,
   resumeHandoff,
   seedEvent,
+  v2AnsweredSeed,
   v2PlanOnlySeed,
   withRunOptions,
   UnusedModel,
@@ -126,6 +130,28 @@ function snapshotCommits(events: ReturnType<typeof readHandoffLog>["events"]) {
 
 function notesEvents(events: ReturnType<typeof readHandoffLog>["events"]) {
   return events.filter((event) => event.type === "handoff.notes_recorded");
+}
+
+function notesAttemptEvents(events: ReturnType<typeof readHandoffLog>["events"]) {
+  return events.filter((event) => event.type === "handoff.notes_attempted");
+}
+
+function notesFailedEvents(events: ReturnType<typeof readHandoffLog>["events"]) {
+  return events.filter((event) => event.type === "handoff.notes_failed");
+}
+
+/** Well-ordered stored events for reducer tests: sequences assigned in append order. */
+function asStored(runId: string, inputs: NewSchedulerEvent[]): SchedulerEvent[] {
+  return inputs.map((input, index) => ({
+    eventId: `${runId}-e${index + 1}`,
+    runId,
+    sequence: index + 1,
+    type: input.type,
+    occurredAt: input.occurredAt,
+    actor: input.actor,
+    idempotencyKey: input.idempotencyKey,
+    payload: input.payload,
+  }));
 }
 
 async function stateBody(fixture: FactoryPortFixture, commit: string): Promise<string> {
@@ -352,13 +378,16 @@ test("C3b: cancel and unknown reasons deny notes; skip states and legacy docs v1
   }
   assert.equal(scripted.calls, 0, "unknown reasons make no model call");
   // Skip state: export_only writes nothing and never calls.
-  const exportFixture = await openFactoryPort("notes-export", "run-c3b-export", repairLimitSeed, "plan_only", {
+  const exportSeed = (runId: string, baselineRevision: string): NewSchedulerEvent[] =>
+    withRunOptions(repairLimitSeed(runId, baselineRevision), { handoffFiles: "export_only" });
+  const exportFixture = await openFactoryPort("notes-export", "run-c3b-export", exportSeed, "plan_only", {
     ...forScripted,
     handoffFiles: "export_only",
   });
   try {
     const { events } = await driveHandoff(exportFixture, "run-c3b-export", {
       stopNotes: exportFixture.stopNotes,
+      handoffFiles: "export_only",
     });
     assert.equal(snapshotCommits(events).length, 0, "a skipped stop commits nothing");
     assert.equal(notesEvents(events).length, 0);
@@ -394,7 +423,10 @@ test("C3b: cancel and unknown reasons deny notes; skip states and legacy docs v1
 test("C3b: replay of the same stop never calls twice; the next stop can call again", async () => {
   const RUN = "run-c3b-replay";
   const scripted = new ScriptedNotesModel((call) => `Notes for the next tool, call ${call}.`);
-  const fixture = await openFactoryPort("notes-replay", RUN, repairLimitSeed, "plan_only", {
+  // An owner pause, not a repair-cycle gate: the owner's resume below is
+  // authorized without a repair-cycle decision.
+  const ownerPauseSeed = (runId: string): NewSchedulerEvent[] => pauseSeed(runId, "user");
+  const fixture = await openFactoryPort("notes-replay", RUN, ownerPauseSeed, "plan_only", {
     modelsFor: modelsFor(scripted),
   });
   try {
@@ -471,59 +503,243 @@ test("C3b: notes text is bounded, tool-free blocks stay out, and the prompt is f
 
 test("C3b: the notes event is additive with Architect provenance and per-stop idempotence", () => {
   const runId = "run-c3b-notes-event";
-  const base: SchedulerEvent[] = [
-    {
-      eventId: `${runId}-1`,
-      runId,
-      sequence: 1,
-      type: "project_docs.policy_configured",
-      occurredAt: "2026-09-25T00:00:00.000Z",
-      actor: { role: "runner", id: "build-runtime" },
-      idempotencyKey: "docs-policy",
-      payload: { version: 2 },
-    },
-    {
-      eventId: `${runId}-2`,
-      runId,
-      sequence: 2,
-      type: "run.paused",
-      occurredAt: "2026-09-25T00:00:01.000Z",
-      actor: { role: "runner", id: "build-runtime" },
-      idempotencyKey: "pause:repair",
-      payload: { reason: "repair_cycle_limit" },
-    },
-  ];
-  // Old logs replay unchanged: no notes, no throw.
-  const legacy = rebuildSchedulerProjection(base);
-  assert.equal(stopNotesForStop(legacy, 2), undefined);
+  const base = asStored(runId, [
+    ...v2PlanOnlySeed(runId),
+    e(runId, "run.paused", "pause:repair", "runner", "build-runtime", { reason: "repair_cycle_limit" }),
+  ]);
+  const stopSequence = base.length;
   const noted: SchedulerEvent = {
-    eventId: `${runId}-3`,
+    eventId: `${runId}-noted`,
     runId,
-    sequence: 3,
+    sequence: stopSequence + 1,
     type: "handoff.notes_recorded",
     occurredAt: "2026-09-25T00:00:02.000Z",
     actor: { role: "architect", id: "arch:architect" },
-    idempotencyKey: "handoff-notes:2",
-    payload: { stopSequence: 2, notes: "Keep the value module." },
+    idempotencyKey: `handoff-notes:${stopSequence}`,
+    payload: { stopSequence, notes: "Keep the value module." },
   };
+  // Old logs replay unchanged: no notes, no markers, no throw.
+  const legacy = rebuildSchedulerProjection(base);
+  assert.equal(stopNotesForStop(legacy, stopSequence), undefined);
+  assert.equal(stopNotesAttemptForStop(legacy, stopSequence), undefined);
+  assert.equal(stopNotesFailureForStop(legacy, stopSequence), undefined);
+  // Eligible positive: notes link to the existing repair-limit stop.
   const withNotes = rebuildSchedulerProjection([...base, noted]);
-  assert.equal(stopNotesForStop(withNotes, 2)?.notes, "Keep the value module.");
-  assert.equal(stopNotesForStop(withNotes, 99), undefined, "other stops have no notes");
-  // Provenance: only the Architect records notes.
+  assert.equal(stopNotesForStop(withNotes, stopSequence)?.notes, "Keep the value module.");
+  assert.equal(stopNotesForStop(withNotes, stopSequence + 100), undefined, "other stops have no notes");
+  // Markers link the same way: an attempt, then its failure outcome.
+  const attempted: SchedulerEvent = {
+    ...noted,
+    eventId: `${runId}-attempted`,
+    type: "handoff.notes_attempted",
+    actor: { role: "runner", id: "build-runtime" },
+    idempotencyKey: `handoff-notes-attempt:${stopSequence}`,
+    payload: { stopSequence, stopKind: "paused" },
+  };
+  const withAttempt = rebuildSchedulerProjection([...base, attempted]);
+  assert.equal(stopNotesAttemptForStop(withAttempt, stopSequence)?.stopSequence, stopSequence);
+  const failed: SchedulerEvent = {
+    ...noted,
+    eventId: `${runId}-failed`,
+    sequence: stopSequence + 2,
+    type: "handoff.notes_failed",
+    actor: { role: "runner", id: "build-runtime" },
+    idempotencyKey: `handoff-notes-failed:${stopSequence}`,
+    payload: { stopSequence, reason: "stop notes call failed (boom)" },
+  };
+  const withFailed = rebuildSchedulerProjection([...base, attempted, failed]);
+  assert.equal(stopNotesFailureForStop(withFailed, stopSequence)?.reason, "stop notes call failed (boom)");
+  // Provenance: only the Architect records notes (checked before anything else).
   assert.throws(
     () =>
       rebuildSchedulerProjection([
         ...base,
-        { ...noted, eventId: `${runId}-4`, actor: { role: "runner", id: "build-runtime" } },
+        { ...noted, eventId: `${runId}-bad-actor`, actor: { role: "runner", id: "build-runtime" } },
       ]),
     /Only the Architect may record stop notes/,
+  );
+  // Provenance: the Architect actor names its runtime.
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        { ...noted, eventId: `${runId}-blank-actor`, actor: { role: "architect", id: "  " } },
+      ]),
+    /Architect runtime actor/,
+  );
+  // Links: future, non-stop and arbitrary sequences are refused.
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        {
+          ...noted,
+          eventId: `${runId}-future`,
+          payload: { stopSequence: stopSequence + 100, notes: "Keep it." },
+        },
+      ]),
+    /is not a stop/,
+  );
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        { ...noted, eventId: `${runId}-nonstop`, payload: { stopSequence: 1, notes: "Keep it." } },
+      ]),
+    /is not a stop/,
+  );
+  // Links: a denied stop (cancel) refuses notes.
+  const cancelId = `${runId}-cancel`;
+  const cancelBase = asStored(cancelId, [
+    ...v2PlanOnlySeed(cancelId),
+    e(cancelId, "run.paused", "pause:cancel", "user", "local-user", { reason: "owner_cancelled" }),
+  ]);
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...cancelBase,
+        {
+          ...noted,
+          eventId: `${runId}-denied`,
+          runId: cancelId,
+          sequence: cancelBase.length + 1,
+          idempotencyKey: `handoff-notes:${cancelBase.length}`,
+          payload: { stopSequence: cancelBase.length, notes: "Keep it." },
+        },
+      ]),
+    /does not allow stop notes/,
+  );
+  // Links: skipped stops (pre-triage, answered, export_only) refuse notes.
+  const preId = `${runId}-pretriage`;
+  const preTriageBase = asStored(preId, [
+    seedEvent(preId, "project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
+    seedEvent(preId, "run.paused", "pause:early", "runner", "build-runtime", { reason: "repair_cycle_limit" }),
+  ]);
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...preTriageBase,
+        {
+          ...noted,
+          eventId: `${runId}-pretriage`,
+          runId: preId,
+          sequence: 3,
+          idempotencyKey: "handoff-notes:2",
+          payload: { stopSequence: 2, notes: "Keep it." },
+        },
+      ]),
+    /pre_triage/,
+  );
+  const ansId = `${runId}-answered`;
+  const answeredBase = asStored(ansId, [
+    ...v2AnsweredSeed(ansId),
+    seedEvent(ansId, "run.paused", "pause:user", "user", "local-user", { reason: "user" }),
+  ]);
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...answeredBase,
+        {
+          ...noted,
+          eventId: `${runId}-answered`,
+          runId: ansId,
+          sequence: answeredBase.length + 1,
+          idempotencyKey: `handoff-notes:${answeredBase.length}`,
+          payload: { stopSequence: answeredBase.length, notes: "Keep it." },
+        },
+      ]),
+    /answered_run/,
+  );
+  const expId = `${runId}-export`;
+  const exportBase = asStored(expId, [
+    ...withRunOptions(v2PlanOnlySeed(expId), { handoffFiles: "export_only" }),
+    seedEvent(expId, "run.paused", "pause:user", "user", "local-user", { reason: "user" }),
+  ]);
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...exportBase,
+        {
+          ...noted,
+          eventId: `${runId}-export`,
+          runId: expId,
+          sequence: exportBase.length + 1,
+          idempotencyKey: `handoff-notes:${exportBase.length}`,
+          payload: { stopSequence: exportBase.length, notes: "Keep it." },
+        },
+      ]),
+    /export_only/,
+  );
+  // Markers: only the runner records attempts and failures, with the stop's kind.
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        { ...attempted, eventId: `${runId}-attempt-actor`, actor: { role: "architect", id: "arch:architect" } },
+      ]),
+    /Only the runner may record a stop notes attempt/,
+  );
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        {
+          ...attempted,
+          eventId: `${runId}-attempt-kind`,
+          payload: { stopSequence, stopKind: "failed" },
+        },
+      ]),
+    /does not match stop/,
+  );
+  // Markers: a failure needs its attempt first, and every terminal outcome is once.
+  assert.throws(
+    () => rebuildSchedulerProjection([...base, { ...failed, eventId: `${runId}-failed-lone`, sequence: stopSequence + 1 }]),
+    /no stop notes attempt to fail/,
+  );
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        attempted,
+        { ...attempted, eventId: `${runId}-attempt-again`, sequence: stopSequence + 2 },
+      ]),
+    /already recorded/,
+  );
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        noted,
+        { ...attempted, eventId: `${runId}-attempt-late`, sequence: stopSequence + 2 },
+      ]),
+    /already has stop notes recorded/,
+  );
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        attempted,
+        failed,
+        { ...noted, eventId: `${runId}-notes-late`, sequence: stopSequence + 3 },
+      ]),
+    /already has a failed stop notes attempt/,
+  );
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        attempted,
+        failed,
+        { ...failed, eventId: `${runId}-failed-again`, sequence: stopSequence + 3 },
+      ]),
+    /already recorded/,
   );
   // Data: empty and overlong notes are refused.
   assert.throws(
     () =>
       rebuildSchedulerProjection([
         ...base,
-        { ...noted, eventId: `${runId}-4`, payload: { stopSequence: 2, notes: "  " } },
+        { ...noted, eventId: `${runId}-blank`, payload: { stopSequence, notes: "  " } },
       ]),
     /Stop notes text is invalid/,
   );
@@ -531,9 +747,19 @@ test("C3b: the notes event is additive with Architect provenance and per-stop id
     () =>
       rebuildSchedulerProjection([
         ...base,
-        { ...noted, eventId: `${runId}-4`, payload: { stopSequence: 2, notes: "n".repeat(2001) } },
+        { ...noted, eventId: `${runId}-long`, payload: { stopSequence, notes: "n".repeat(2001) } },
       ]),
     /Stop notes text is invalid/,
+  );
+  // Data: the failure reason must be present and bounded.
+  assert.throws(
+    () =>
+      rebuildSchedulerProjection([
+        ...base,
+        attempted,
+        { ...failed, eventId: `${runId}-failed-long`, sequence: stopSequence + 2, payload: { stopSequence, reason: "r".repeat(501) } },
+      ]),
+    /failure reason is invalid/,
   );
   // Idempotence: the same stop never records twice.
   assert.throws(
@@ -541,25 +767,41 @@ test("C3b: the notes event is additive with Architect provenance and per-stop id
       rebuildSchedulerProjection([
         ...base,
         noted,
-        { ...noted, eventId: `${runId}-4`, sequence: 4, idempotencyKey: "handoff-notes:2-again" },
+        { ...noted, eventId: `${runId}-noted-again`, sequence: stopSequence + 2, idempotencyKey: `handoff-notes:${stopSequence}-again` },
       ]),
     /already recorded/,
   );
   // Docs v1 refuses notes.
-  const v1base = base.map((event, index) =>
-    index === 0
-      ? { ...event, payload: { version: 1 } }
-      : event,
+  const v1Id = `${runId}-v1`;
+  const v1Seed = v2PlanOnlySeed(v1Id).map((event) =>
+    event.type === "project_docs.policy_configured" ? { ...event, payload: { version: 1 } } : event,
   );
+  const v1base = asStored(v1Id, [
+    ...v1Seed,
+    e(v1Id, "run.paused", "pause:repair", "runner", "build-runtime", { reason: "repair_cycle_limit" }),
+  ]);
   assert.throws(
-    () => rebuildSchedulerProjection([...v1base, { ...noted, sequence: 3 }]),
+    () =>
+      rebuildSchedulerProjection([
+        ...v1base,
+        {
+          ...noted,
+          eventId: `${runId}-v1-noted`,
+          runId: v1Id,
+          sequence: v1base.length + 1,
+          idempotencyKey: `handoff-notes:${v1base.length}`,
+          payload: { stopSequence: v1base.length, notes: "Keep it." },
+        },
+      ]),
     /policy version 2/,
   );
 });
 
-test("C3b: a repair-budget exhausted pause overrides the allowed classification and makes no call", async () => {
+test("C3b: a repair-attempt exhausted pause still calls once and renders open repair work with notes", async () => {
   const RUN = "run-c3b-repair-budget";
   const scripted = new ScriptedNotesModel(() => NOTES_TEXT);
+  // Local repair-attempt exhaustion: STOP_SNAPSHOT_TABLE and source C3
+  // allow notes for this repair-limit stop while the run model budget remains.
   const seed = (runId: string): NewSchedulerEvent[] => [
     ...v2PlanOnlySeed(runId),
     e(runId, "repair.policy_configured", "repair-policy", "runner", "build-runtime", {
@@ -583,15 +825,121 @@ test("C3b: a repair-budget exhausted pause overrides the allowed classification 
   try {
     const { events, projection } = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
     assert.equal(projection.status, "paused", "the stop proceeds");
-    assert.equal(scripted.calls, 0, "exhausted repair budget makes no model call");
+    assert.equal(scripted.calls, 1, "local repair-attempt exhaustion still allows one notes call");
     const commits = snapshotCommits(events);
     assert.equal(commits.length, 1, "the snapshot still writes");
     const body = await stateBody(fixture, (commits[0]!.payload as Record<string, unknown>).commit as string);
+    assert.ok(body.includes("repair_issue_paused:issue-1"), "the header names the repair stop");
+    assert.ok(body.includes("REQ-1"), "the snapshot carries the open work");
     assert.ok(
-      body.includes("No Architect notes for this stop: the repair budget is exhausted; no budget remains for a notes call"),
-      "the snapshot names the budget override",
+      body.includes("> Next: keep the value module as is."),
+      "the snapshot renders the Architect notes",
     );
-    assert.equal(notesEvents(events).length, 0, "no notes event");
+    assert.ok(!body.includes("No Architect notes for this stop:"), "no no-notes line when notes exist");
+    assert.equal(notesEvents(events).length, 1, "one additive notes event");
+    assert.equal(notesAttemptEvents(events).length, 1, "one durable attempt marker");
+    assert.equal(notesFailedEvents(events).length, 0, "no failure outcome");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C3b: a crash between the notes call and snapshot persistence never calls or charges twice", async () => {
+  const RUN = "run-c3b-notes-crash";
+  const scripted = new ScriptedNotesModel(() => NOTES_TEXT);
+  const fixture = await openFactoryPort("notes-crash", RUN, repairLimitSeed, "plan_only", {
+    modelsFor: modelsFor(scripted),
+  });
+  try {
+    // Simulate a crash after the model call: the attempt marker persists,
+    // but the notes, snapshot and skip appends never land.
+    const storeProto = SqliteSchedulerStore.prototype;
+    const origAppend = storeProto.append;
+    const crashTypes = new Set([
+      "handoff.notes_recorded",
+      "project_docs.handoff_snapshot_committed",
+      "project_docs.stop_snapshot_skipped",
+    ]);
+    storeProto.append = function (this: SqliteSchedulerStore, input: NewSchedulerEvent) {
+      if (crashTypes.has(input.type)) throw new Error("Simulated crash before snapshot persistence.");
+      return origAppend.call(this, input);
+    };
+    try {
+      await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    } finally {
+      storeProto.append = origAppend;
+    }
+    assert.equal(scripted.calls, 1, "the crashed run issued exactly one call");
+    assert.deepEqual(architectModelCharges(fixture, RUN), { reserved: 1, settled: 1 }, "one charge stands");
+    const crashed = readHandoffLog(fixture, RUN);
+    assert.equal(notesAttemptEvents(crashed.events).length, 1, "only the attempt marker survived");
+    assert.equal(notesEvents(crashed.events).length, 0, "no notes survived the crash");
+    assert.equal(snapshotCommits(crashed.events).length, 0, "no snapshot survived the crash");
+    // Restart: replay renders the no-notes line and snapshots, with no second call or charge.
+    const { events } = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    assert.equal(scripted.calls, 1, "replay issues no second call");
+    assert.deepEqual(architectModelCharges(fixture, RUN), { reserved: 1, settled: 1 }, "replay adds no charge");
+    assert.equal(snapshotCommits(events).length, 1, "replay still snapshots");
+    assert.equal(notesEvents(events).length, 0, "replay records no notes");
+    assert.equal(notesAttemptEvents(events).length, 1, "replay records no duplicate marker");
+    const body = await stateBody(fixture, (snapshotCommits(events)[0]!.payload as Record<string, unknown>).commit as string);
+    assert.ok(
+      body.includes("No Architect notes for this stop: the stop notes attempt did not complete; no second call was made"),
+      "replay renders the interrupted no-notes line",
+    );
+    assert.ok(!body.includes(NOTES_TEXT), "the interrupted snapshot carries no notes text");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("C3b: a failed notes request persists its reason, and replay renders it with no second call", async () => {
+  const RUN = "run-c3b-notes-failed-replay";
+  const scripted = new ScriptedNotesModel(() => {
+    throw new Error("Injected provider failure.");
+  });
+  const fixture = await openFactoryPort("notes-failed-replay", RUN, repairLimitSeed, "plan_only", {
+    modelsFor: modelsFor(scripted),
+  });
+  try {
+    // Crash after the failure outcome is recorded but before the snapshot:
+    // the attempt marker and the failure reason persist.
+    const storeProto = SqliteSchedulerStore.prototype;
+    const origAppend = storeProto.append;
+    const crashTypes = new Set([
+      "project_docs.handoff_snapshot_committed",
+      "project_docs.stop_snapshot_skipped",
+    ]);
+    storeProto.append = function (this: SqliteSchedulerStore, input: NewSchedulerEvent) {
+      if (crashTypes.has(input.type)) throw new Error("Simulated crash before snapshot persistence.");
+      return origAppend.call(this, input);
+    };
+    try {
+      await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    } finally {
+      storeProto.append = origAppend;
+    }
+    assert.equal(scripted.calls, 1, "the failed run issued exactly one call");
+    const crashed = readHandoffLog(fixture, RUN);
+    assert.equal(notesAttemptEvents(crashed.events).length, 1, "the attempt marker survived");
+    const failures = notesFailedEvents(crashed.events);
+    assert.equal(failures.length, 1, "the failure outcome survived");
+    assert.ok(
+      ((failures[0]!.payload as Record<string, unknown>).reason as string).includes("Injected provider failure."),
+      "the persisted reason names the failure",
+    );
+    assert.equal(snapshotCommits(crashed.events).length, 0, "no snapshot survived the crash");
+    // Restart: replay renders the persisted reason and snapshots, with no second call.
+    const { events } = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    assert.equal(scripted.calls, 1, "replay issues no second call");
+    assert.equal(notesFailedEvents(events).length, 1, "replay records no duplicate failure");
+    assert.equal(snapshotCommits(events).length, 1, "replay still snapshots");
+    assert.equal(notesEvents(events).length, 0, "replay records no notes");
+    const body = await stateBody(fixture, (snapshotCommits(events)[0]!.payload as Record<string, unknown>).commit as string);
+    assert.ok(
+      body.includes("No Architect notes for this stop: stop notes call failed (Injected provider failure.)"),
+      "replay renders the persisted failure reason",
+    );
   } finally {
     await fixture.close();
   }

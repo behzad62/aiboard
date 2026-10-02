@@ -1028,7 +1028,14 @@ export async function driveHandoff(
   }
 }
 
-/** The owner's pause through the real runtime (stacks on top of a snapshot failure). */
+/**
+ * The owner's pause through the real runtime (stacks on top of a snapshot
+ * failure). Forwards the run-policy and stop-notes options exactly like
+ * driveHandoff: a pause on an export_only run must carry the recorded
+ * handoffFiles policy, and a pause that a later drive snapshots must carry
+ * the same notes driver (R1-4: dropping stopNotes here snapshots the new
+ * stop without notes).
+ */
 export async function pauseHandoff(
   fixture: FactoryPortFixture,
   runId: string,
@@ -1046,6 +1053,10 @@ export async function pauseHandoff(
       clock: options.clock ?? advancingClock(),
       runPolicy: options.runPolicy ?? "plan_only",
       evidenceStore: fixture.evidence,
+      ...(options.specCopy !== undefined ? { specCopy: options.specCopy } : {}),
+      ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
+      ...(options.stopNotes ? { stopNotes: options.stopNotes } : {}),
+      ...(options.stopNotesTimeoutMs !== undefined ? { stopNotesTimeoutMs: options.stopNotesTimeoutMs } : {}),
     });
     return runtime.pause(reason, key);
   } finally {

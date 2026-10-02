@@ -239,6 +239,8 @@ export type SchedulerEventType =
   | "project_docs.handoff_snapshot_committed"
   | "project_docs.stop_snapshot_skipped"
   | "handoff.notes_recorded"
+  | "handoff.notes_attempted"
+  | "handoff.notes_failed"
   | "delivery.review_started"
   | "delivery.review_requested"
   | "delivery.obligations_recorded"
@@ -392,6 +394,10 @@ export interface ProjectDocsProjection {
   stopSnapshotSkips?: StopSnapshotSkipRecord[];
   /** C3b (AR-R09): Architect stop notes per stop sequence, in append order. */
   stopNotes?: StopNotesRecord[];
+  /** C3b repair cycle 1 (R1-2): durable per-stop attempt markers, in append order. */
+  stopNoteAttempts?: StopNoteAttemptRecord[];
+  /** C3b repair cycle 1 (R1-2): durable per-stop failed-attempt outcomes, in append order. */
+  stopNoteFailures?: StopNoteFailureRecord[];
 }
 
 /**
@@ -965,6 +971,14 @@ export interface SchedulerProjection {
   projectHandoff?: ProjectHandoffProjection;
   projectHandoffHistory?: WithdrawnProjectHandoffProjection[];
   projectDocs?: ProjectDocsProjection;
+  /**
+   * C3b repair cycle 1 (R1-3): every stopped transition in append order,
+   * with its stop-time facts. The reducer records one entry per pause-typed
+   * event that leaves the run stopped; stop-notes events must link to one
+   * of these sequences (validated from these authority facts, never from
+   * model-supplied labels). Absent on logs that never stopped.
+   */
+  stopTransitions?: StopTransitionRecord[];
   /** Set when this run was stamped `project_docs.policy_configured`. Legacy runs omit it. */
   projectDocsPolicyVersion?: number;
   planningPolicyVersion?: 1;
@@ -5330,6 +5344,14 @@ export function reduceSchedulerEvent(
       applyHandoffNotesRecorded(next, event);
       break;
     }
+    case "handoff.notes_attempted": {
+      applyHandoffNotesAttempted(next, event);
+      break;
+    }
+    case "handoff.notes_failed": {
+      applyHandoffNotesFailed(next, event);
+      break;
+    }
     case "project_docs.stop_snapshot_skipped": {
       applyStopSnapshotSkipped(next, event);
       break;
@@ -5374,6 +5396,28 @@ export function reduceSchedulerEvent(
       next.projectDocsPolicyVersion = event.payload.version === 2 ? 2 : 1;
       break;
     }
+  }
+  // C3b repair cycle 1 (R1-3): record every stopped transition with its
+  // stop-time facts, so stop-notes events link to an existing actual stop.
+  // Additive and replay-deterministic: derived purely from the event log,
+  // so old logs replay unchanged and no stored branch changes meaning.
+  if (
+    isStopTransitionEventType(event.type) &&
+    (next.status === "paused" || next.status === "failed" || next.status === "stopped")
+  ) {
+    next.stopTransitions = [
+      ...(current.stopTransitions ?? []),
+      {
+        sequence: event.sequence,
+        type: event.type,
+        status: next.status,
+        ...(next.pauseReason?.reason !== undefined ? { reason: next.pauseReason.reason } : {}),
+        ...(next.pauseReason?.detail !== undefined ? { detail: next.pauseReason.detail } : {}),
+        ownerInitiated: event.actor.role === "user",
+        ...(next.planningTriageDecision !== undefined ? { triage: next.planningTriageDecision } : {}),
+        ...(next.handoffFiles !== undefined ? { handoffFiles: next.handoffFiles } : {}),
+      },
+    ];
   }
   if (isArchitectLifecycleEvent(event)) {
     next.lastArchitectActionEvent = {
@@ -9262,6 +9306,28 @@ export function classifyStopSnapshot(options: {
   return { stopKind: "paused", notes: "denied" };
 }
 
+/**
+ * C3b repair cycle 1 (R1-3): the pause-typed events that can record a
+ * stopped transition. Mirrors the runtime's `findCurrentStopEvent` set
+ * (build-runtime.ts): C2's `project.handoff_requested` is never a stop
+ * here, and only events that actually leave the run stopped are recorded.
+ */
+const STOP_TRANSITION_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "run.paused",
+  "repair.issue_paused",
+  "repair.cycle_limit_reached",
+  "context_manifest.recording_failed",
+  "context_manifest.recording_resolved",
+  "verifier.selection_required",
+  "architect.handoff_required",
+  "process.recovery_updated",
+]);
+
+/** C3b repair cycle 1 (R1-3): whether an event type can record a stopped transition. */
+function isStopTransitionEventType(type: string): boolean {
+  return STOP_TRANSITION_EVENT_TYPES.has(type);
+}
+
 /** C3a: whether a stopKind value is a stop-snapshot kind (paused/cancelled/failed) rather than a handoff kind. */
 export function isStopSnapshotStopKind(value: string): value is StopSnapshotStopKind {
   return value === "paused" || value === "cancelled" || value === "failed";
@@ -9359,6 +9425,104 @@ function applyStopSnapshotSkipped(
   };
 }
 
+/**
+ * C3b repair cycle 1 (R1-3): one stopped transition with the stop-time
+ * facts stop-notes validation needs. `status` is the run status the stop
+ * left; `reason`/`detail` mirror the stop's `pauseReason` when it has one;
+ * `ownerInitiated` mirrors the stop event's actor; `triage` and
+ * `handoffFiles` are the skip-rule inputs at the stop.
+ */
+export interface StopTransitionRecord {
+  sequence: number;
+  type: string;
+  status: "paused" | "failed" | "stopped";
+  reason?: string;
+  detail?: string;
+  ownerInitiated: boolean;
+  triage?: PlanningTriageDecision;
+  handoffFiles?: HandoffFilesOption;
+}
+
+/** C3b repair cycle 1 (R1-2): one durable stop-notes attempt marker per stop sequence, in append order. */
+export interface StopNoteAttemptRecord {
+  stopSequence: number;
+  stopKind: StopSnapshotStopKind;
+  sequence: number;
+}
+
+/** C3b repair cycle 1 (R1-2): one durable failed stop-notes attempt outcome per stop sequence, in append order. */
+export interface StopNoteFailureRecord {
+  stopSequence: number;
+  reason: string;
+  sequence: number;
+}
+
+/**
+ * C3b repair cycle 1 (R1-2): the maximum stored stop-notes failure-reason
+ * length. Failure reasons render as the snapshot's no-notes line, so they
+ * stay short like the skip reasons.
+ */
+export const STOP_NOTES_FAILED_REASON_MAX_LENGTH = 500;
+
+/** C3b repair cycle 1 (R1-2): the attempt marker recorded for a stop, if any. */
+export function stopNotesAttemptForStop(
+  projection: SchedulerProjection,
+  stopSequence: number,
+): StopNoteAttemptRecord | undefined {
+  return (projection.projectDocs?.stopNoteAttempts ?? []).find(
+    (record) => record.stopSequence === stopSequence,
+  );
+}
+
+/** C3b repair cycle 1 (R1-2): the failed-attempt outcome recorded for a stop, if any. */
+export function stopNotesFailureForStop(
+  projection: SchedulerProjection,
+  stopSequence: number,
+): StopNoteFailureRecord | undefined {
+  return (projection.projectDocs?.stopNoteFailures ?? []).find(
+    (record) => record.stopSequence === stopSequence,
+  );
+}
+
+/**
+ * C3b repair cycle 1 (R1-3): link a stop-notes reference to an EXISTING
+ * actual stopped transition of this run and validate eligibility at that
+ * stop. Rejects arbitrary, future and non-stop sequences (no such
+ * transition exists), skipped stops (the C3a triage/answered/export_only
+ * skip rules, decided from the stop-time facts) and denied stops (the C3a
+ * classification at the stop). Authority facts only: the tracked stop
+ * record, never model-supplied labels.
+ */
+function requireEligibleNotesStop(
+  projection: SchedulerProjection,
+  stopSequence: number,
+): StopTransitionRecord {
+  const stop = (projection.stopTransitions ?? []).find((record) => record.sequence === stopSequence);
+  if (!stop) {
+    throw new Error(`Stop notes require an existing stopped transition (stop ${stopSequence} is not a stop).`);
+  }
+  const skip = stop.triage !== "build"
+    ? stop.triage === "clarify" ? "clarify_pending" : stop.triage === "answer" ? "answered_run" : "pre_triage"
+    : stop.handoffFiles !== undefined && stop.handoffFiles !== "commit"
+      ? "export_only"
+      : stop.reason === "handoff_snapshot_failed"
+        ? "handoff_snapshot_failed"
+        : undefined;
+  if (skip !== undefined) {
+    throw new Error(`Stop ${stopSequence} cannot record stop notes (${skip}).`);
+  }
+  const classified = classifyStopSnapshot({
+    status: stop.status,
+    ...(stop.reason !== undefined ? { reason: stop.reason } : {}),
+    ...(stop.detail !== undefined ? { detail: stop.detail } : {}),
+    ownerInitiated: stop.ownerInitiated,
+  });
+  if (classified.notes !== "allowed") {
+    throw new Error(`Stop ${stopSequence} does not allow stop notes.`);
+  }
+  return stop;
+}
+
 /** C3b: one Architect stop-notes record per stop sequence, in append order. */
 export interface StopNotesRecord {
   stopSequence: number;
@@ -9385,10 +9549,17 @@ function applyHandoffNotesRecorded(
   if (event.actor.role !== "architect") {
     throw new Error("Only the Architect may record stop notes.");
   }
+  if (typeof event.actor.id !== "string" || !event.actor.id.trim()) {
+    throw new Error("Stop notes require an Architect runtime actor.");
+  }
   if (projection.projectDocsPolicyVersion !== 2) {
     throw new Error("Stop notes require project document policy version 2.");
   }
   const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
+  // C3b repair cycle 1 (R1-3): the notes must link to an existing eligible
+  // stop of this run -- arbitrary, future, non-stop, skipped and
+  // denied-stop references are refused here.
+  requireEligibleNotesStop(projection, stopSequence);
   const notes = requiredString(event.payload, "notes");
   if (!notes.trim() || notes.length > STOP_NOTES_MAX_LENGTH) {
     throw new Error("Stop notes text is invalid.");
@@ -9396,6 +9567,9 @@ function applyHandoffNotesRecorded(
   const existing = projection.projectDocs?.stopNotes ?? [];
   if (existing.some((record) => record.stopSequence === stopSequence)) {
     throw new Error(`Stop notes for stop ${stopSequence} are already recorded.`);
+  }
+  if ((projection.projectDocs?.stopNoteFailures ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a failed stop notes attempt.`);
   }
   if ((projection.projectDocs?.snapshots ?? []).some((record) => record.stopSequence === stopSequence)) {
     throw new Error(`Stop ${stopSequence} already has a snapshot commit.`);
@@ -9407,6 +9581,108 @@ function applyHandoffNotesRecorded(
     pending: projection.projectDocs?.pending ?? [],
     ...carriedProjectDocs(projection.projectDocs),
     stopNotes: [...existing, { stopSequence, notes, sequence: event.sequence }],
+  };
+}
+
+/**
+ * C3b repair cycle 1 (R1-2): the durable per-stop attempt marker, recorded
+ * by the runner BEFORE the model call. The stop link and eligibility are
+ * validated exactly like the notes themselves, and the recorded stop kind
+ * must match the stop's classification, so the marker binds to the actual
+ * stop identity. A recorded marker (with or without a terminal outcome)
+ * means no second external call for the stop, ever.
+ */
+function applyHandoffNotesAttempted(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may record a stop notes attempt.");
+  }
+  if (projection.projectDocsPolicyVersion !== 2) {
+    throw new Error("Stop notes attempts require project document policy version 2.");
+  }
+  const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
+  const stop = requireEligibleNotesStop(projection, stopSequence);
+  const stopKind = requiredString(event.payload, "stopKind");
+  if (!isStopSnapshotStopKind(stopKind)) {
+    throw new Error(`Stop notes attempt stop kind ${stopKind} is invalid.`);
+  }
+  const classified = classifyStopSnapshot({
+    status: stop.status,
+    ...(stop.reason !== undefined ? { reason: stop.reason } : {}),
+    ...(stop.detail !== undefined ? { detail: stop.detail } : {}),
+    ownerInitiated: stop.ownerInitiated,
+  });
+  if (classified.stopKind !== stopKind) {
+    throw new Error(`Stop notes attempt stop kind ${stopKind} does not match stop ${stopSequence}.`);
+  }
+  const existing = projection.projectDocs?.stopNoteAttempts ?? [];
+  if (existing.some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop notes attempt for stop ${stopSequence} is already recorded.`);
+  }
+  if ((projection.projectDocs?.stopNotes ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has stop notes recorded.`);
+  }
+  if ((projection.projectDocs?.stopNoteFailures ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a failed stop notes attempt.`);
+  }
+  if ((projection.projectDocs?.snapshots ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a snapshot commit.`);
+  }
+  if ((projection.projectDocs?.stopSnapshotSkips ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a stop snapshot skip.`);
+  }
+  projection.projectDocs = {
+    pending: projection.projectDocs?.pending ?? [],
+    ...carriedProjectDocs(projection.projectDocs),
+    stopNoteAttempts: [...existing, { stopSequence, stopKind, sequence: event.sequence }],
+  };
+}
+
+/**
+ * C3b repair cycle 1 (R1-2): the durable failed-attempt outcome. Recorded
+ * by the runner after a failed call (or an unusable empty result) so the
+ * failure reason survives a crash before snapshot persistence and replay
+ * renders it without ever issuing a second call. Requires the prior
+ * attempt marker: outcomes never precede attempts.
+ */
+function applyHandoffNotesFailed(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may record a failed stop notes attempt.");
+  }
+  if (projection.projectDocsPolicyVersion !== 2) {
+    throw new Error("Failed stop notes attempts require project document policy version 2.");
+  }
+  const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
+  requireEligibleNotesStop(projection, stopSequence);
+  const reason = requiredString(event.payload, "reason");
+  if (!reason.trim() || reason.length > STOP_NOTES_FAILED_REASON_MAX_LENGTH) {
+    throw new Error("Stop notes failure reason is invalid.");
+  }
+  if (!(projection.projectDocs?.stopNoteAttempts ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} has no stop notes attempt to fail.`);
+  }
+  const existing = projection.projectDocs?.stopNoteFailures ?? [];
+  if (existing.some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop notes failure for stop ${stopSequence} is already recorded.`);
+  }
+  if ((projection.projectDocs?.stopNotes ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has stop notes recorded.`);
+  }
+  if ((projection.projectDocs?.snapshots ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a snapshot commit.`);
+  }
+  if ((projection.projectDocs?.stopSnapshotSkips ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a stop snapshot skip.`);
+  }
+  projection.projectDocs = {
+    pending: projection.projectDocs?.pending ?? [],
+    ...carriedProjectDocs(projection.projectDocs),
+    stopNoteFailures: [...existing, { stopSequence, reason, sequence: event.sequence }],
   };
 }
 
@@ -9712,7 +9988,7 @@ function cloneProjectDocs(docs: ProjectDocsProjection): ProjectDocsProjection {
 
 function carriedProjectDocs(
   docs: ProjectDocsProjection | undefined,
-): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned" | "snapshots" | "stopSnapshotSkips" | "stopNotes"> {
+): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned" | "snapshots" | "stopSnapshotSkips" | "stopNotes" | "stopNoteAttempts" | "stopNoteFailures"> {
   if (!docs) return {};
   return {
     ...(docs.committed
@@ -9722,8 +9998,8 @@ function carriedProjectDocs(
     ...(docs.abandoned
       ? { abandoned: docs.abandoned.map((item) => ({ ...item })) }
       : {}),
-    ...((docs.snapshots ?? docs.stopSnapshotSkips ?? docs.stopNotes)
-      ? { ...(docs.snapshots ? { snapshots: docs.snapshots.map((record) => ({ ...record, paths: [...record.paths] })) } : {}), ...(docs.stopSnapshotSkips ? { stopSnapshotSkips: docs.stopSnapshotSkips.map((record) => ({ ...record })) } : {}), ...(docs.stopNotes ? { stopNotes: docs.stopNotes.map((record) => ({ ...record })) } : {}) }
+    ...((docs.snapshots ?? docs.stopSnapshotSkips ?? docs.stopNotes ?? docs.stopNoteAttempts ?? docs.stopNoteFailures)
+      ? { ...(docs.snapshots ? { snapshots: docs.snapshots.map((record) => ({ ...record, paths: [...record.paths] })) } : {}), ...(docs.stopSnapshotSkips ? { stopSnapshotSkips: docs.stopSnapshotSkips.map((record) => ({ ...record })) } : {}), ...(docs.stopNotes ? { stopNotes: docs.stopNotes.map((record) => ({ ...record })) } : {}), ...(docs.stopNoteAttempts ? { stopNoteAttempts: docs.stopNoteAttempts.map((record) => ({ ...record })) } : {}), ...(docs.stopNoteFailures ? { stopNoteFailures: docs.stopNoteFailures.map((record) => ({ ...record })) } : {}) }
       : {}),
   };
 }
