@@ -237,6 +237,7 @@ export type SchedulerEventType =
   | "project_doc.abandoned"
   | "project_docs.policy_configured"
   | "project_docs.handoff_snapshot_committed"
+  | "project_docs.stop_snapshot_skipped"
   | "delivery.review_started"
   | "delivery.review_requested"
   | "delivery.obligations_recorded"
@@ -386,6 +387,8 @@ export interface ProjectDocsProjection {
   abandoned?: ProjectDocAbandonmentProjection[];
   /** Kernel handoff snapshots (docs policy v2) in append order. */
   snapshots?: HandoffSnapshotRecord[];
+  /** C3a (AR-R08): stops with no snapshot commit and why, in append order. */
+  stopSnapshotSkips?: StopSnapshotSkipRecord[];
 }
 
 /**
@@ -3189,7 +3192,7 @@ export function reduceSchedulerEvent(
       next.processRecovery = { ...current.processRecovery, [record.proposalId]: record };
       if (recoveryBlocksRun(next.processRecovery)) {
         next.status = "paused";
-        next.pauseReason = { reason: "Exceptional process recovery requires an exact decision or cleanup proof." };
+        next.pauseReason = { reason: EXCEPTIONAL_RECOVERY_PAUSE_REASON };
       }
       break;
     }
@@ -5316,6 +5319,10 @@ export function reduceSchedulerEvent(
     }
     case "project_docs.handoff_snapshot_committed": {
       applyHandoffSnapshotCommitted(next, event);
+      break;
+    }
+    case "project_docs.stop_snapshot_skipped": {
+      applyStopSnapshotSkipped(next, event);
       break;
     }
     case "project_doc.abandoned": {
@@ -9137,6 +9144,212 @@ function applyProjectDocCommitted(
  * marked `@AGENTS.md` line (read back from the commit by the writer, never
  * the checkout). README is not required under v2.
  */
+/**
+ * C3a (AR-R08; packet C3 steps 1, 2 and 4): the stop table. Every
+ * transition into `paused`, every cancel and every terminal failure, with
+ * the snapshot stop kind C3a renders and whether the stop reason allows
+ * model calls. C3b reads this table for the Architect stop notes; C3a
+ * always renders "no notes". Unknown runner-recorded reasons are
+ * notes-denied by default (fail closed). The handoff request is C2's
+ * stop, not this one's: while a handoff is requested the runner stands
+ * down and C2's kernel commit owns the stop.
+ */
+export type StopSnapshotStopKind = "paused" | "cancelled" | "failed";
+
+export type StopSnapshotNotesPolicy = "allowed" | "denied";
+
+export interface StopSnapshotTableEntry {
+  /** Pause reason, failure reason, or stop event, as recorded in the log. */
+  readonly stop: string;
+  /** Where the stop is recorded. */
+  readonly site: string;
+  /** The stop kind the snapshot renders. */
+  readonly stopKind: StopSnapshotStopKind;
+  /** Whether the stop reason allows the stop-notes model call. */
+  readonly notes: StopSnapshotNotesPolicy;
+  /** Why this classification. */
+  readonly note: string;
+}
+
+export const STOP_SNAPSHOT_TABLE: readonly StopSnapshotTableEntry[] = [
+  { stop: "repair_cycle_limit", site: "scheduler-store.ts repair.cycle_limit_reached (build-runtime.ts pauseIfRepairCyclesExhausted)", stopKind: "paused", notes: "allowed", note: "Repair limit: the owner decides, model calls still work." },
+  { stop: "repair_issue_paused:<issueId> (repair:budget_exhausted:<detail>)", site: "scheduler-store.ts repair.issue_paused (build-runtime.ts pauseOnRepairIssue)", stopKind: "paused", notes: "allowed", note: "Repair limit: the owner decides, model calls still work." },
+  { stop: "repair_issue_paused:<issueId> (repair:external_blocker:<detail>)", site: "scheduler-store.ts repair.issue_paused (build-runtime.ts pauseOnRepairIssue)", stopKind: "paused", notes: "allowed", note: "External blocker: the owner/Architect decide, model calls still work." },
+  { stop: "repair_issue_paused:<issueId> (repair:approach_failed:<detail>)", site: "scheduler-store.ts repair.issue_paused (build-runtime.ts pauseOnRepairIssue)", stopKind: "paused", notes: "allowed", note: "A failed repair approach still leaves model calls working." },
+  { stop: "context_recording_failed", site: "build-runtime.ts recordContextRecordingFailure (run.paused)", stopKind: "paused", notes: "allowed", note: "Recording machinery failed; a notes call does not depend on it." },
+  { stop: "delivery_review_failed", site: "build-runtime.ts pauseForDeliveryGate", stopKind: "paused", notes: "allowed", note: "Failed verification/review: the Architect decides next, model calls still work." },
+  { stop: "delivery_boundary_unavailable", site: "build-runtime.ts pauseForDeliveryGate", stopKind: "paused", notes: "denied", note: "The boundary environment is unavailable: a model call cannot help." },
+  { stop: "delivery_<other>", site: "build-runtime.ts pauseForDeliveryGate", stopKind: "paused", notes: "denied", note: "Unrecognized delivery reason: denied by default." },
+  { stop: "coverage_reviewer_unavailable", site: "build-runtime.ts pauseForCoverageGate (run.paused)", stopKind: "paused", notes: "denied", note: "Provider failure: no reviewer runtime could be reached." },
+  { stop: "answer_reviewer_unavailable", site: "build-runtime.ts pauseForAnswerReviewGate (run.paused)", stopKind: "paused", notes: "denied", note: "Provider failure: no reviewer runtime could be reached." },
+  { stop: "owner pause (run.paused, actor user, any other reason)", site: "build-runtime.ts pause", stopKind: "paused", notes: "allowed", note: "Owner pause: the owner is present, model calls still work." },
+  { stop: "owner_cancelled (run.paused)", site: "build-runtime.ts pause", stopKind: "cancelled", notes: "denied", note: "Cancel: the run is over, notes are pointless." },
+  { stop: "verifier.selection_required", site: "scheduler-store.ts verifier.selection_required (build-runtime.ts driveIndependentVerifier)", stopKind: "paused", notes: "denied", note: "No verifier runtime is selected; fail closed until the owner selects one." },
+  { stop: "architect.handoff_required", site: "scheduler-store.ts architect.handoff_required (native-architect-runtime.ts requireArchitectHandoff)", stopKind: "paused", notes: "denied", note: "No Architect runtime is active; a notes call cannot run." },
+  { stop: "no_mechanical_progress", site: "native-build-manager.ts pump (run.paused, actor user)", stopKind: "paused", notes: "denied", note: "Runner-originated idle pause: a notes call cannot help." },
+  { stop: "autonomous_pump_error", site: "native-build-manager.ts pump (run.paused, actor user)", stopKind: "paused", notes: "denied", note: "Runner-originated pump error: fail closed." },
+  { stop: "budget_exhausted:<scope> (run.paused)", site: "build-runtime.ts pause", stopKind: "paused", notes: "denied", note: "Budget window exhausted: no budget remains for a notes call." },
+  { stop: "<reason mentioning a provider or credit failure>", site: "any run.paused", stopKind: "paused", notes: "denied", note: "Provider or credit failure: a notes call cannot run." },
+  { stop: "Exceptional process recovery requires an exact decision or cleanup proof.", site: "scheduler-store.ts process.recovery_updated", stopKind: "paused", notes: "allowed", note: "Recovery needs an exact decision; model calls still work." },
+  { stop: "context_recording_aborted", site: "scheduler-store.ts context_manifest.recording_resolved (abort)", stopKind: "failed", notes: "denied", note: "Terminal failure: the run is over, notes are pointless." },
+  { stop: "handoff_snapshot_failed", site: "build-runtime.ts pauseForHandoffSnapshotFailure (run.paused)", stopKind: "paused", notes: "denied", note: "Not snapshotted here at all: C2 retries that commit itself (skip rule)." },
+  { stop: "<unknown runner-recorded reason>", site: "any stop event", stopKind: "paused", notes: "denied", note: "Unknown reasons are denied by default (fail closed)." },
+];
+
+/** C3a: the owner-cancel pause reason. `BuildRuntime.pause` takes any reason; this one renders stop kind `cancelled`. */
+export const STOP_SNAPSHOT_OWNER_CANCEL_REASON = "owner_cancelled";
+
+/** C3a: the exceptional-recovery pause reason (scheduler-store.ts `process.recovery_updated`). */
+export const EXCEPTIONAL_RECOVERY_PAUSE_REASON = "Exceptional process recovery requires an exact decision or cleanup proof.";
+
+/**
+ * C3a: classify a stop for the snapshot (stop kind) and the C3b stop
+ * notes (allowed/denied). Provenance comes from the stop event's actor:
+ * an owner-recorded pause (`user`) is allowed unless the reason names a
+ * cancel, an exhausted budget, or a provider/credit failure; a
+ * runner-recorded stop must match an allowed entry, else denied.
+ */
+export function classifyStopSnapshot(options: {
+  status: "paused" | "failed" | "stopped";
+  reason?: string;
+  detail?: string;
+  ownerInitiated: boolean;
+}): { stopKind: StopSnapshotStopKind; notes: StopSnapshotNotesPolicy } {
+  if (options.status === "failed") return { stopKind: "failed", notes: "denied" };
+  if (options.status === "stopped") return { stopKind: "cancelled", notes: "denied" };
+  const reason = options.reason;
+  if (reason === STOP_SNAPSHOT_OWNER_CANCEL_REASON) return { stopKind: "cancelled", notes: "denied" };
+  if (reason !== undefined && reason.startsWith("budget_exhausted")) return { stopKind: "paused", notes: "denied" };
+  if (reason !== undefined) {
+    const lowered = reason.toLowerCase();
+    if (lowered.includes("provider") || lowered.includes("credit")) return { stopKind: "paused", notes: "denied" };
+  }
+  if (reason === "repair_cycle_limit") return { stopKind: "paused", notes: "allowed" };
+  if (reason !== undefined && reason.startsWith("repair_issue_paused:")) {
+    const cause = /^repair:(budget_exhausted|external_blocker|approach_failed):/.exec(options.detail ?? "")?.[1];
+    return cause === undefined
+      ? { stopKind: "paused", notes: "denied" }
+      : { stopKind: "paused", notes: "allowed" };
+  }
+  if (reason === "context_recording_failed") return { stopKind: "paused", notes: "allowed" };
+  if (reason === "delivery_review_failed") return { stopKind: "paused", notes: "allowed" };
+  if (reason === "delivery_boundary_unavailable") return { stopKind: "paused", notes: "denied" };
+  if (reason !== undefined && reason.startsWith("delivery_")) return { stopKind: "paused", notes: "denied" };
+  if (reason === "coverage_reviewer_unavailable" || reason === "answer_reviewer_unavailable") {
+    return { stopKind: "paused", notes: "denied" };
+  }
+  if (reason === EXCEPTIONAL_RECOVERY_PAUSE_REASON) return { stopKind: "paused", notes: "allowed" };
+  if (reason === "handoff_snapshot_failed") return { stopKind: "paused", notes: "denied" };
+  // C3a repair cycle 1 (M-2, M-3): reason first. The selection/handoff
+  // gates and the pump's own pauses are denied even when the stop event
+  // carries the owner actor (the pump records through pause(), actor
+  // `user`); the owner actor makes an unknown reason allowed only when it
+  // is not one of these known runner reasons.
+  if (reason === "verifier.selection_required") return { stopKind: "paused", notes: "denied" };
+  if (reason === "architect.handoff_required") return { stopKind: "paused", notes: "denied" };
+  if (reason === "no_mechanical_progress") return { stopKind: "paused", notes: "denied" };
+  if (reason === "autonomous_pump_error") return { stopKind: "paused", notes: "denied" };
+  if (options.ownerInitiated) return { stopKind: "paused", notes: "allowed" };
+  return { stopKind: "paused", notes: "denied" };
+}
+
+/** C3a: whether a stopKind value is a stop-snapshot kind (paused/cancelled/failed) rather than a handoff kind. */
+export function isStopSnapshotStopKind(value: string): value is StopSnapshotStopKind {
+  return value === "paused" || value === "cancelled" || value === "failed";
+}
+
+/**
+ * C3a: the stop-sequence rule for `project_docs.handoff_snapshot_committed`,
+ * shared by handoff and stop snapshots. Handoff kinds keep the C2 rule (the
+ * current request's stop or a withdrawn stop); stop kinds require a genuine
+ * stop -- the run is paused, failed or stopped at this point in the log.
+ * History-only either way: a stop sequence never equals a handoff
+ * requestedSequence, so a stop record never satisfies the AR-R05 gate.
+ */
+export function isAcceptedSnapshotStopSequence(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+  stopSequence: number,
+  requestedSequence: number | undefined,
+  withdrawnStop: boolean,
+): boolean {
+  const stopKind = event.payload.stopKind;
+  if (typeof stopKind === "string" && isStopSnapshotStopKind(stopKind)) {
+    return projection.status === "paused" || projection.status === "failed" || projection.status === "stopped";
+  }
+  return stopSequence === requestedSequence || withdrawnStop;
+}
+
+/**
+ * C3a (AR-R08 skip rule, CD-9/CD-5): why a stop has no snapshot commit.
+ * A commit failure is recorded here too, as `commit_failed: <cause>` --
+ * the finding that lets the stop proceed -- and a landed-but-unrecorded
+ * commit as `record_failed: <commit>: <cause>` -- so one record per stop
+ * sequence covers every no-commit outcome and no stop is ever retried.
+ */
+export type StopSnapshotSkipReason =
+  | "pre_triage"
+  | "clarify_pending"
+  | "answered_run"
+  | "export_only"
+  | "handoff_snapshot_failed";
+
+/** C3a: the skip-rule reasons (commit failures travel as `commit_failed: <cause>`, landed-but-unrecorded commits as `record_failed: <commit>: <cause>`). */
+export function isStopSnapshotSkipReason(value: unknown): value is StopSnapshotSkipReason {
+  return value === "pre_triage" ||
+    value === "clarify_pending" ||
+    value === "answered_run" ||
+    value === "export_only" ||
+    value === "handoff_snapshot_failed";
+}
+
+/** C3a: one no-commit record per stop sequence, in append order. */
+export interface StopSnapshotSkipRecord {
+  stopSequence: number;
+  stopKind: StopSnapshotStopKind;
+  reason: string;
+  sequence: number;
+}
+
+/** C3a: the maximum stored skip-reason length (the CD-9/CD-5 reasons are short; commit causes are pre-bounded). */
+export const STOP_SNAPSHOT_SKIP_REASON_MAX_LENGTH = 500;
+
+function applyStopSnapshotSkipped(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "runner") {
+    throw new Error("Only the runner may record a stop snapshot skip.");
+  }
+  if (projection.projectDocsPolicyVersion !== 2) {
+    throw new Error("Stop snapshot skips require project document policy version 2.");
+  }
+  const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
+  const stopKind = requiredString(event.payload, "stopKind");
+  if (!isStopSnapshotStopKind(stopKind)) {
+    throw new Error(`Stop snapshot skip stop kind ${stopKind} is invalid.`);
+  }
+  const reason = requiredString(event.payload, "reason");
+  if (!reason.trim() || reason.length > STOP_SNAPSHOT_SKIP_REASON_MAX_LENGTH) {
+    throw new Error("Stop snapshot skip reason is invalid.");
+  }
+  if (!isStopSnapshotSkipReason(reason) && !reason.startsWith("commit_failed") && !reason.startsWith("record_failed")) {
+    throw new Error(`Stop snapshot skip reason ${reason} is invalid.`);
+  }
+  const skips = projection.projectDocs?.stopSnapshotSkips ?? [];
+  if (skips.some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop snapshot skip for stop ${stopSequence} is already recorded.`);
+  }
+  if ((projection.projectDocs?.snapshots ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a snapshot commit.`);
+  }
+  projection.projectDocs = {
+    pending: projection.projectDocs?.pending ?? [],
+    ...carriedProjectDocs(projection.projectDocs),
+    stopSnapshotSkips: [...skips, { stopSequence, stopKind, reason, sequence: event.sequence }],
+  };
+}
+
 export function handoffSnapshotAtCurrentStop(
   projection: SchedulerProjection,
 ): HandoffSnapshotRecord | undefined {
@@ -9255,11 +9468,11 @@ function applyHandoffSnapshotCommitted(
   const withdrawnStop = (projection.projectHandoffHistory ?? []).some(
     (handoff) => handoff.requestedSequence === stopSequence,
   );
-  if (stopSequence !== requestedSequence && !withdrawnStop) {
+  if (!isAcceptedSnapshotStopSequence(projection, event, stopSequence, requestedSequence, withdrawnStop)) {
     throw new Error("Handoff snapshots require a requested project handoff.");
   }
   const stopKind = requiredString(event.payload, "stopKind");
-  if (stopKind !== "completed" && stopKind !== "plan_only") {
+  if (stopKind !== "completed" && stopKind !== "plan_only" && !isStopSnapshotStopKind(stopKind)) {
     throw new Error(`Handoff snapshot stop kind ${stopKind} is invalid.`);
   }
   const revision = requiredString(event.payload, "revision");
@@ -9439,7 +9652,7 @@ function cloneProjectDocs(docs: ProjectDocsProjection): ProjectDocsProjection {
 
 function carriedProjectDocs(
   docs: ProjectDocsProjection | undefined,
-): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned" | "snapshots"> {
+): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned" | "snapshots" | "stopSnapshotSkips"> {
   if (!docs) return {};
   return {
     ...(docs.committed
@@ -9449,8 +9662,8 @@ function carriedProjectDocs(
     ...(docs.abandoned
       ? { abandoned: docs.abandoned.map((item) => ({ ...item })) }
       : {}),
-    ...(docs.snapshots
-      ? { snapshots: docs.snapshots.map((record) => ({ ...record, paths: [...record.paths] })) }
+    ...((docs.snapshots ?? docs.stopSnapshotSkips)
+      ? { ...(docs.snapshots ? { snapshots: docs.snapshots.map((record) => ({ ...record, paths: [...record.paths] })) } : {}), ...(docs.stopSnapshotSkips ? { stopSnapshotSkips: docs.stopSnapshotSkips.map((record) => ({ ...record })) } : {}) }
       : {}),
   };
 }

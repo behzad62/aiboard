@@ -445,9 +445,18 @@ export class NativeBuildManager implements BuildControlPlane {
   ): Promise<SchedulerProjection> {
     const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () => {
-      const projection = handle.runtime.pause(reason, idempotencyKey);
+      // C3a repair cycle 2 (R2-1a): record the owner pause/cancel,
+      // then quiesce FIRST -- quiesceRun() stops the run's running
+      // command and browser, which is what ends an in-flight step.
+      // The snapshot call never waits for a step (the runtime returns
+      // at once while one is in flight; the step boundary takes the
+      // snapshot), so the pause never blocks on a long command or
+      // model call, on docs-v1 runs included. The call stays
+      // optional for older test doubles; it never throws.
+      handle.runtime.pause(reason, idempotencyKey);
       await handle.finalVerificationCleanup?.quiesceRun();
-      return projection;
+      await handle.runtime.commitStopSnapshotIfStopped?.();
+      return handle.runtime.projection();
     });
   }
 
@@ -768,6 +777,9 @@ export class NativeBuildManager implements BuildControlPlane {
           await handle.finalVerificationCleanup?.quiesceRun();
         }
         result = { status: "paused", action: "no_mechanical_progress" };
+        // C3a repair cycle 1 (B-1): snapshot the pump's own pause. No
+        // step is in flight (runUntilBlocked returned); never throws.
+        await handle.runtime.commitStopSnapshotIfStopped?.();
       }
       if (
         result.status === "blocked" &&
@@ -782,6 +794,10 @@ export class NativeBuildManager implements BuildControlPlane {
       );
       result = finalized.result;
       compaction = finalized.compaction;
+      // C3a repair cycle 1 (B-1): snapshot any stop the steps left
+      // behind -- the recording-abort failure resolves in the pump, not
+      // in a step. Runs after finalization; never throws.
+      await handle.runtime.commitStopSnapshotIfStopped?.();
       this.options.onPumpResult?.(runId, result);
     } catch (error) {
       const projection = handle.runtime.projection();
@@ -796,6 +812,9 @@ export class NativeBuildManager implements BuildControlPlane {
       catch (quiesceError) {
         reported = new AggregateError([error, quiesceError], `Build ${runId} failed and could not quiesce owned resources.`);
       }
+      // C3a repair cycle 1 (B-1): snapshot the pump-error pause (or the
+      // step stop, when the pause never recorded). Never throws.
+      await handle.runtime.commitStopSnapshotIfStopped?.();
       this.options.onPumpError?.(runId, reported);
       this.options.onPumpResult?.(runId, {
         status: "paused",
