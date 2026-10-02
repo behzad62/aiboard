@@ -11,6 +11,33 @@ migration (C2e repair 2, PX-2e) may append once to their own evidence file. The 
 until the closing PR (D-11). Stage 1 status: **DECISIONS ANSWERED 2026-10-01** (owner: "all recommended"); Stage 2 running. Coverage review r1 (fresh read-only reviewer, 2026-09-30): GAPS — 17, all
 fixed in this revision.
 
+## Owner continuation amendment — 2026-10-02
+
+Codex takes over development from Claude session `c3a6c726-b6f1-47ec-bea6-214ebdabe566`.
+The owner's current instruction overrides the prior testing and reviewer schedules, including
+section 1's layers 1–3, CD-22 and broad-validation clauses in SOURCE and the verbatim prompt:
+
+- Per new task/packet, run only that packet's tests. Do not run the rest of the tests, affected
+  importer groups, broad handoff/native-delivery groups or phase-end broad suites. Keep fast
+  typechecking, lint for changed files and diff checks. Do not weaken safety assertions or hide
+  failures in the selected tests.
+- Run the full suite and repair integration problems at the end of P6.6 (T8). Keep phase-specific
+  acceptance scenarios, selected as that phase-exit item's own tests; broad regression coverage
+  moves to T8. Record what was deferred in packet PR descriptions. Existing CI reports remain
+  historical evidence; do not intentionally launch broad gates for intermediate packets.
+- Implementation: Muse Code `muse-spark-1.3-contributor`, medium effort (the existing setup).
+  Independent review: a fresh GPT-6.1 Sol agent at high effort. CD-4's review rules still apply.
+- Preserve accepted commits and use isolated worktrees. Protected merges remain owner actions
+  under D-3 until separately delegated. All P6.6 work stays off production main until T8/REL-1.
+
+Takeover checkpoint: C3a `863814ee` received independent GPT-6.1 Sol ACCEPT (read-only, no
+blocking findings). Its dedicated `docs-policy-v2-stop-snapshot.test.ts` is running; the old
+11-file affected-file run is deferred under the owner's rule. C3b implementation is in flight
+in `.worktrees/p66-c3b`, branch `exec/runner-v2-p6-6/C3b`, based on accepted C3a. INT-1 PR #105
+remains open, with 10 passing portable checks and the two recorded F-10 benchmark failures.
+Local prerequisite implementation may continue in stacked branches while protected PRs wait;
+items are not declared merged or P6.6 complete until the integration/release obligations close.
+
 ## 0. Source, base, branches and entry check
 
 | Id | SOURCE | sha256 |
