@@ -33,8 +33,11 @@ section 1's layers 1–3, CD-22 and broad-validation clauses in SOURCE and the v
 Takeover checkpoint: C3a `863814ee` received independent GPT-6.1 Sol ACCEPT (read-only, no
 blocking findings). Its dedicated `docs-policy-v2-stop-snapshot.test.ts` passed 19/19, zero skips
 (881.6 seconds), on 2026-10-02; typecheck and changed-file ESLint passed. The old 11-file affected
-run is deferred under the owner's rule. C3a is locally accepted, with protected merge pending. C3b implementation is in flight
-in `.worktrees/p66-c3b`, branch `exec/runner-v2-p6-6/C3b`, based on accepted C3a. INT-1 PR #105
+run is deferred under the owner's rule. C3a is locally accepted, with protected merge pending. C3a is published as stacked draft PR #106 on INT-1. C3b initial candidate `f4bd6ebc` is
+under Muse repair cycle 1 in `.worktrees/p66-c3b`, branch `exec/runner-v2-p6-6/C3b`, based on
+accepted C3a. Initial packet tests exited 1 with fixture failures; independent review requires
+the three source repairs listed in the C3b row. The worker was stopped between runs to deliver
+one consolidated repair brief; no tests were interrupted. INT-1 PR #105
 remains open, with 10 passing portable checks and the two recorded F-10 benchmark failures.
 Local prerequisite implementation may continue in stacked branches while protected PRs wait;
 items are not declared merged or P6.6 complete until the integration/release obligations close.
@@ -325,7 +328,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   writes nothing; legacy runs unchanged; CD-7 factory tests. Red proof: remove the CD-9 skip → the
   answered-run tree-hash test goes red. Depends: INT-1. Touch: `build-runtime.ts`,
   `scheduler-store.ts`, `integration-manager.ts`, `native-build-factory.ts`, tests. P: yes. G: no.
-- [ ] **C3b** code — Architect stop notes (SRC-A "C3" step 3; AR-R09; EP40). DoD: a bounded
+- [ ] **C3b** code — IN_PROGRESS / REPAIR_CYCLE_1 2026-10-02 in `.worktrees/p66-c3b` (`exec/runner-v2-p6-6/C3b`); initial candidate `f4bd6ebc`, packet test file exit 1 (fixture errors), GPT-6.1 Sol high REPAIR (repair-attempt budget denial, missing durable once-per-stop attempt, invalid stop linkage); Muse repair dispatched with only C3b tests. Architect stop notes (SRC-A "C3" step 3; AR-R09; EP40). DoD: a bounded
   investigation names the existing one-shot model-call path outside the Architect loop and uses it with
   the fixed short prompt, no tools, at most 2,000 characters and a time bound; cost recorded as purpose
   `handoff_notes`; text stored as the additive event `handoff.notes_recorded` (Architect actor,
