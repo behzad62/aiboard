@@ -337,7 +337,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   pause writes the "no notes" line and makes no model call; a notes failure still writes the snapshot.
   Red proof: remove the notes-denied check → the budget-exhaustion test sees a model call. Depends:
   C3a. Touch: C3a's list plus the chosen one-shot call module (call site only). P: yes. G: no.
-- [ ] **C3c** code — NEXT; accepted source base `8c597d04`, latest C3b checklist commit to be inherited. Revision targeting after a mid-run kernel commit and commit trailers (SRC-A "C3"
+- [ ] **C3c** code — IN_PROGRESS 2026-10-02 in `.worktrees/p66-c3c` (`exec/runner-v2-p6-6/C3c`), base `59f19b5e` (accepted C3b source `8c597d04` plus checklist); Muse implementation dispatched, independent GPT-6.1 Sol high source checklist prepared; only C3c packet tests authorized. Revision targeting after a mid-run kernel commit and commit trailers (SRC-A "C3"
   steps 5 and 6; AR-R10; CD-11). DoD: integration, final verification and handoff still target the
   right revisions after a mid-run kernel commit; `AIBoard-Run`, `AIBoard-Task` and
   `AIBoard-Requirements` trailers where the runner authors integration commits for new-policy runs (or
