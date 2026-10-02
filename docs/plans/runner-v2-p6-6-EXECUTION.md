@@ -11,6 +11,33 @@ migration (C2e repair 2, PX-2e) may append once to their own evidence file. The 
 until the closing PR (D-11). Stage 1 status: **DECISIONS ANSWERED 2026-10-01** (owner: "all recommended"); Stage 2 running. Coverage review r1 (fresh read-only reviewer, 2026-09-30): GAPS — 17, all
 fixed in this revision.
 
+## Owner continuation amendment — 2026-10-02
+
+Codex takes over development from Claude session `c3a6c726-b6f1-47ec-bea6-214ebdabe566`.
+The owner's current instruction overrides the prior testing and reviewer schedules, including
+section 1's layers 1–3, CD-22 and broad-validation clauses in SOURCE and the verbatim prompt:
+
+- Per new task/packet, run only that packet's tests. Do not run the rest of the tests, affected
+  importer groups, broad handoff/native-delivery groups or phase-end broad suites. Keep fast
+  typechecking, lint for changed files and diff checks. Do not weaken safety assertions or hide
+  failures in the selected tests.
+- Run the full suite and repair integration problems at the end of P6.6 (T8). Keep phase-specific
+  acceptance scenarios, selected as that phase-exit item's own tests; broad regression coverage
+  moves to T8. Record what was deferred in packet PR descriptions. Existing CI reports remain
+  historical evidence; do not intentionally launch broad gates for intermediate packets.
+- Implementation: Muse Code `muse-spark-1.3-contributor`, medium effort (the existing setup).
+  Independent review: a fresh GPT-6.1 Sol agent at high effort. CD-4's review rules still apply.
+- Preserve accepted commits and use isolated worktrees. Protected merges remain owner actions
+  under D-3 until separately delegated. All P6.6 work stays off production main until T8/REL-1.
+
+Takeover checkpoint: C3a `863814ee` received independent GPT-6.1 Sol ACCEPT (read-only, no
+blocking findings). Its dedicated `docs-policy-v2-stop-snapshot.test.ts` is running; the old
+11-file affected-file run is deferred under the owner's rule. C3b implementation is in flight
+in `.worktrees/p66-c3b`, branch `exec/runner-v2-p6-6/C3b`, based on accepted C3a. INT-1 PR #105
+remains open, with 10 passing portable checks and the two recorded F-10 benchmark failures.
+Local prerequisite implementation may continue in stacked branches while protected PRs wait;
+items are not declared merged or P6.6 complete until the integration/release obligations close.
+
 ## 0. Source, base, branches and entry check
 
 | Id | SOURCE | sha256 |
@@ -35,9 +62,10 @@ fixed in this revision.
   `runner-v2-p6-5`, `runner-v2-robust-build`) hold no unmerged work for this plan. Stale:
   `runner-v2-p6-6-t5` (T5, already merged into lane A as `6286a9ee`).
 - Tool check (2026-09-30): `gh` logged in with admin on `behzad62/aiboard`; merge commits allowed;
-  `main` unprotected. Four GitHub workflows exist (section 1). A baseline of `typecheck:runner-v2`,
-  lint and the layer-1 time on origin/main is **not measured yet**; it is taken when INT-1 merges
-  origin/main into lane A (first Stage 2 step), before any new code.
+  `main` unprotected. Four GitHub workflows exist (section 1). Baseline (INT-1, 2026-10-01, merged
+  tree `98d37bad`): `typecheck:runner-v2` exit 0 (10 s); eslint `runner-v2` 0 errors, 6 warnings
+  (18 s). Layer-2 group times on that tree: handoff group 44 min, large-tree 46 min, native-delivery
+  7 min, Windows Job suites 3 min, replay-compatibility and audits 2 min.
 
 ## 1. Repo bindings for this repository (proposed; decision D-1)
 
@@ -264,14 +292,14 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
 
 ### 3.2 Open — phase C (correction)
 
-- [ ] **INT-1** code (integration) — Make lane A the integration line and publish it. SOURCE: CD-21
+- [x] **INT-1** code (integration) — branch `exec/runner-v2-p6-6/INT-1`, PR to `integration/runner-v2-p6-6`; — Make lane A the integration line and publish it. SOURCE: CD-21
   ("accepted PX-2 packets merge into lane A"), CD-10, D-2. DoD: lane C's accepted PX commits
   (through `16648709`) merged into lane A; origin/main merged into lane A (the 3 overlapping files
   checked); the baseline recorded (typecheck, lint, layer-1 time); layer 2 green for the merged result
   (handoff group, native-delivery files, Windows Job suites, replay-compatibility, audits); this file
   and SOURCE shipped; the integration target created per D-2. Depends: D-2, C2e accepted. Touch: merge
   only. P: yes. G: no.
-- [ ] **C2e** code — SOURCE: SRC-A "C2e" (CD-19), C2e reviews r1-r2. DoD: a tracked file at `docs` or
+- [x] **C2e** code — accepted 2026-10-01 (review r3 ACCEPT), commits `0ec56592`, `ca0df135`, `7c19ca24`, shipped in INT-1; SOURCE: SRC-A "C2e" (CD-19), C2e reviews r1-r2. DoD: a tracked file at `docs` or
   `docs/project`, and a directory or gitlink at `docs/project/STATE.md`, each hand off with a
   tree-derived skip reason the AR-R05 gate accepts, and v1 refuses clearly; `applyToProject` is bounded
   for any number of ignored files and any path length (byte-bounded pathspec chunks) and keeps every
@@ -280,18 +308,42 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   wording (m-4); a second-stop regression test for W-A4 exists (m-8); every recorded skip reason is
   accurate and old logs replay unchanged. Depends: C2d. Touch: `integration-manager.ts`,
   `build-runtime.ts`, `project-docs.ts`, `scheduler-store.ts` (gate only), handoff and project-doc
-  tests. P: yes (git writes, scheduler log). G: no. State: wip `0ec56592`, `ca0df135`; repair 2
-  running (Muse).
-- [ ] **C3** code — SOURCE: SRC-A "C3", AR-R08..AR-R10. DoD per the SRC-A C3 contract: a fresh
-  snapshot commit at every stop other than handoff after the triage decision `build`; Architect stop
-  notes once where the stop reason allows model calls, otherwise the snapshot says why; `AIBoard-Run`,
-  `AIBoard-Task`, `AIBoard-Requirements` trailers on runner-authored integration commits. Depends:
-  INT-1. Touch: `build-runtime.ts`, `integration-manager.ts`, `scheduler-store.ts`,
-  `agent-prompts.ts`. P: yes. G: no.
+  tests. P: yes (git writes, scheduler log). G: no. INT-1 layer 2 found one regression from repair 2
+  (F-9); fixed in `e9440349`, `fe5286d6` (review ACCEPT), shipped in INT-1.
+- [ ] **C3a** code — Snapshot at every stop (split of SRC-A "C3" steps 1, 2 and 4; AR-R08; memory
+  rule: split large packets). DoD: the stop table (every transition into `paused`, every cancel and
+  terminal failure, each classified notes-allowed or notes-denied) goes into the PR description; at
+  every stop other than handoff after the triage decision `build`, the runner renders C1 with stop kind
+  `paused`, `cancelled` or `failed` and commits STATE.md (plus missing entry lines) through C2's kernel
+  commit method and event; skip rule (CD-9, CD-5) recorded durably: no snapshot before `build`, while a
+  `clarify` is pending, on an answered run, with `export_only`, or for C2's own `handoff_snapshot_failed`
+  pause; the commit never blocks or changes the stop (a failure records a finding); replay or a double
+  resume creates no duplicate commit; until C3b every snapshot carries the "no notes" line. Tests from
+  SRC-A C3: cancel writes a snapshot without notes; replay/resume twice no duplicate; pause during
+  triage → answer → `apply_to_project` leaves the project tree hash unchanged; `export_only` pause
+  writes nothing; legacy runs unchanged; CD-7 factory tests. Red proof: remove the CD-9 skip → the
+  answered-run tree-hash test goes red. Depends: INT-1. Touch: `build-runtime.ts`,
+  `scheduler-store.ts`, `integration-manager.ts`, `native-build-factory.ts`, tests. P: yes. G: no.
+- [ ] **C3b** code — Architect stop notes (SRC-A "C3" step 3; AR-R09; EP40). DoD: a bounded
+  investigation names the existing one-shot model-call path outside the Architect loop and uses it with
+  the fixed short prompt, no tools, at most 2,000 characters and a time bound; cost recorded as purpose
+  `handoff_notes`; text stored as the additive event `handoff.notes_recorded` (Architect actor,
+  idempotency key from the stop event's sequence); notes asked only for notes-allowed stops. Tests:
+  repair-limit pause writes a snapshot with open work and scripted-Architect notes; budget-exhaustion
+  pause writes the "no notes" line and makes no model call; a notes failure still writes the snapshot.
+  Red proof: remove the notes-denied check → the budget-exhaustion test sees a model call. Depends:
+  C3a. Touch: C3a's list plus the chosen one-shot call module (call site only). P: yes. G: no.
+- [ ] **C3c** code — Revision targeting after a mid-run kernel commit and commit trailers (SRC-A "C3"
+  steps 5 and 6; AR-R10; CD-11). DoD: integration, final verification and handoff still target the
+  right revisions after a mid-run kernel commit; `AIBoard-Run`, `AIBoard-Task` and
+  `AIBoard-Requirements` trailers where the runner authors integration commits for new-policy runs (or
+  where it creates the task commit when integration fast-forwards; record which). Tests: pause →
+  snapshot → resume → task integrates → final verification passes on the right revision → handoff
+  snapshot; trailers in `git log`. Depends: C3b. Touch: C3a's list. P: yes. G: no.
 - [ ] **C4** code — SOURCE: SRC-A "C4", AR-R11..AR-R14 (AR-R13 amends parent EP09 per AR-2). DoD per
   the SRC-A C4 contract (v2 Architect prompt without docs templates; `write_project_doc` refusals;
   `record_planning_checkpoint` removed from the new-policy path with the derived index; reserved T2
-  event types with a static guard; token counts in the PR). Depends: C3. Touch: `agent-prompts.ts`,
+  event types with a static guard; token counts in the PR). Depends: C3c. Touch: `agent-prompts.ts`,
   `architect-tools.ts`, planning tools, `scheduler-store.ts`, `planning-projection.ts`, a static guard.
   P: yes (scheduler log). G: no.
 - [ ] **C5** code — SOURCE: SRC-A "C5", AR-R15, AR-R16, CD-12. DoD per the SRC-A C5 contract (kernel
@@ -302,7 +354,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   pauses, resumes and reaches handoff and writes only product files plus the kernel handoff files; an
   answered run writes nothing; v1 replay green; layer 3 for phase C green or each red fixed or recorded.
   Depends: C5.
-- [ ] **PX-2e** code (tests) — SOURCE: SRC-A "PX-2e" (CD-21 follow-up; does not gate phase C, CD-20).
+- [x] **PX-2e** code (tests) — accepted 2026-10-01 (review r2 ACCEPT), commits `2dc7ad8c`, `9a6295a5`, shipped in INT-1; SOURCE: SRC-A "PX-2e" (CD-21 follow-up; does not gate phase C, CD-20).
   DoD: each named Windows Job test file leaves no supervisor or Job host; a shared end check fails a file
   that does, proven red; leak causes fixed. Depends: PX-2c. Touch: the Windows Job test files, a test
   helper, product code only where a leak lives. P: yes if product code changes. G: yes. State: running.
@@ -434,12 +486,12 @@ and their tests. Every R item is P: yes (scheduler log or process paths) and G: 
 
 ## 4. Order and phases
 
-Phases keep SOURCE's own phases and exits (SRC-A section 5): **C** (INT-1, C2e, C3, C4, C5,
+Phases keep SOURCE's own phases and exits (SRC-A section 5): **C** (INT-1, C2e, C3a, C3b, C3c, C4, C5,
 PHASE-C-EXIT; PX-2e runs beside it and does not gate it, CD-20), **T7** (T7a-INV, T7a-OK, T7a, T7b,
 T7c, T7d, PHASE-T7-EXIT), **R1** (E1-E5), **R2** (V1-V3), **R3** (W1-W3, IV-1..IV-3; CD-23 puts IV in
 lane B after W3), **T10**, **T8**, then REL-1. Reason: SOURCE defines them and each ends at a checkable
 outcome. The dependency graph is SRC-A's (`C5→T7a…T7d`; `C5→E1…E5→V1…V3→W1…W3→IV-1…IV-3`;
-`{T7d, IV-3}→T10→T8`) plus INT-1 before C3 and the phase-exit items. Lane B starting at C5 before
+`{T7d, IV-3}→T10→T8`) plus INT-1 before C3a, the C3 split (C3a→C3b→C3c→C4) and the phase-exit items. Lane B starting at C5 before
 PHASE-C-EXIT, and running beside T7 on serialized surfaces, needs D-4.
 
 ## 5. Size and batches
@@ -539,6 +591,16 @@ PX-2c stays opt-in (a default-on change is beyond SOURCE; see F-4).
   alone (→ C2e repair 2 minor).
 - F-7 The prompt's DealFactory bindings do not exist in this repo (→ D-1).
 - F-8 C2d review r2 N-3: two tracked spellings of STATE.md pause the run permanently (→ D-7).
+- F-9 INT-1 layer 2: C2e repair 2 checked the case-collision kind before the link kind in
+  `commitStateBlockers`, so probe F-collide recorded "two spellings of docs" instead of the link
+  reason. The worker and the r3 reviewer did not run F-collide; layer 2 caught it. Fixed in INT-1
+  (`e9440349`, `fe5286d6`). Follow-up (minor): the stage-time `commitStateNonLinkBlocker` still checks
+  collision before link; only its skip decision is used, so no recorded output differs.
+- F-10 Pre-existing red on origin/main (`9d697978`, push run of 2026-09-30 14:21): the benchmark-tests
+  workflow fails `scripts/test-account-provider-runner-chat.mts:392` ("capability-handshake
+  account-provider runner reports version 21"; the runner reports 22) on Ubuntu and Windows. P6.6
+  changes no `scripts/` or `lib/` file, so every P6.6 PR shows the same red; not fixed here (outside
+  SOURCE).
 
 ---
 
