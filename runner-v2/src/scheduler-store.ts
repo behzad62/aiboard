@@ -1726,6 +1726,12 @@ export function assertPendingUserGuidanceAllowsEvent(
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     (event.type === "plan.created" && current.planRevision === 0) ||
     (event.type === "handoff.notes_recorded" && event.actor.role === "architect") ||
+    // C3b repair cycle 2: the runner-owned attempt marker and failure
+    // outcome link to the same eligible stop as the notes themselves, so
+    // they pass this gate under the exact runner actor the runtime uses.
+    ((event.type === "handoff.notes_attempted" || event.type === "handoff.notes_failed") &&
+      event.actor.role === "runner" &&
+      event.actor.id === "build-runtime") ||
     (event.type === "task.transitioned" &&
       (taskStatus === "integrated" || taskStatus === "integration_resolution"));
   if (!allowed) {
@@ -1757,7 +1763,13 @@ export function assertOpenArchitectQuestionAllowsEvent(
     (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     event.type === "planning.assignment_released" ||
-    (event.type === "handoff.notes_recorded" && event.actor.role === "architect");
+    (event.type === "handoff.notes_recorded" && event.actor.role === "architect") ||
+    // C3b repair cycle 2: the runner-owned attempt marker and failure
+    // outcome link to the same eligible stop as the notes themselves, so
+    // they pass this gate under the exact runner actor the runtime uses.
+    ((event.type === "handoff.notes_attempted" || event.type === "handoff.notes_failed") &&
+      event.actor.role === "runner" &&
+      event.actor.id === "build-runtime");
   if (!allowed) {
     throw new Error(
       `Blocking Architect question ${current.blockingArchitectQuestionId} must be answered before ${event.type} may advance the run.`

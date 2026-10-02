@@ -10,6 +10,8 @@ import type {
 } from "../src/agent-contracts.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
 import {
+  assertOpenArchitectQuestionAllowsEvent,
+  assertPendingUserGuidanceAllowsEvent,
   rebuildSchedulerProjection,
   stopNotesForStop,
   stopNotesAttemptForStop,
@@ -851,8 +853,21 @@ test("C3b: a crash between the notes call and snapshot persistence never calls o
     modelsFor: modelsFor(scripted),
   });
   try {
-    // Simulate a crash after the model call: the attempt marker persists,
-    // but the notes, snapshot and skip appends never land.
+    // Simulate a crash before the kernel snapshot commit: the attempt
+    // marker persists, but the kernel commit never lands and the notes,
+    // snapshot and skip appends never land either. Faulting the
+    // integration commit boundary (not the scheduler appends after a
+    // landed commit) keeps replay on a fresh render of the interrupted
+    // no-notes line instead of reusing a landed commit.
+    const origCommit = fixture.integration.commitHandoffSnapshot.bind(fixture.integration);
+    let commitArmed = true;
+    fixture.integration.commitHandoffSnapshot = async (input: Parameters<typeof origCommit>[0]) => {
+      if (commitArmed) {
+        commitArmed = false;
+        throw new Error("Simulated crash before kernel snapshot commit.");
+      }
+      return origCommit(input);
+    };
     const storeProto = SqliteSchedulerStore.prototype;
     const origAppend = storeProto.append;
     const crashTypes = new Set([
@@ -867,6 +882,7 @@ test("C3b: a crash between the notes call and snapshot persistence never calls o
     try {
       await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
     } finally {
+      fixture.integration.commitHandoffSnapshot = origCommit;
       storeProto.append = origAppend;
     }
     assert.equal(scripted.calls, 1, "the crashed run issued exactly one call");
@@ -942,5 +958,258 @@ test("C3b: a failed notes request persists its reason, and replay renders it wit
     );
   } finally {
     await fixture.close();
+  }
+});
+
+/** C3b repair cycle 2: an eligible user pause under a pending guidance item. */
+function pendingGuidanceSeed(runId: string): NewSchedulerEvent[] {
+  return [
+    ...v2PlanOnlySeed(runId),
+    // Pre-configured so factory creation appends nothing under the gates.
+    e(runId, "repair.policy_configured", "repair-policy", "runner", "build-runtime", {
+      repairPlanLimit: 1,
+      explicit: true,
+    }),
+    e(runId, "plan_critique.policy_configured", "critique-policy", "runner", "build-runtime", {
+      mode: "off",
+    }),
+    e(runId, "user.guidance_submitted", "guidance:gate", "user", "local-user", {
+      guidanceId: "guidance-gate",
+      text: "Hold the value module while the owner decides.",
+      version: 1,
+      interruptionProtocolVersion: 1,
+    }),
+    e(runId, "run.paused", "pause:user", "user", "local-user", { reason: "user" }),
+  ];
+}
+
+/** C3b repair cycle 2: an eligible user pause under an open blocking Architect question. */
+function openQuestionSeed(runId: string): NewSchedulerEvent[] {
+  return [
+    ...v2PlanOnlySeed(runId),
+    // Pre-configured so factory creation appends nothing under the gates.
+    e(runId, "repair.policy_configured", "repair-policy", "runner", "build-runtime", {
+      repairPlanLimit: 1,
+      explicit: true,
+    }),
+    e(runId, "plan_critique.policy_configured", "critique-policy", "runner", "build-runtime", {
+      mode: "off",
+    }),
+    e(runId, "architect.question_requested", "question:gate", "architect", "architect", {
+      questionId: "question-gate",
+      question: "Should the value module keep its current export?",
+      version: 1,
+    }),
+    e(runId, "run.paused", "pause:user", "user", "local-user", { reason: "user" }),
+  ];
+}
+
+test("C3b: the pending-guidance and open-question gates admit runner stop-notes attempts and failures narrowly", () => {
+  const guidedId = "run-c3b-gate-guided";
+  const guided = rebuildSchedulerProjection(asStored(guidedId, pendingGuidanceSeed(guidedId)));
+  assert.ok(
+    Object.values(guided.userGuidance).some((item) => item.status === "submitted"),
+    "the guidance item pends",
+  );
+  const questionedId = "run-c3b-gate-question";
+  const questioned = rebuildSchedulerProjection(asStored(questionedId, openQuestionSeed(questionedId)));
+  assert.equal(questioned.blockingArchitectQuestionId, "question-gate", "the Architect question blocks");
+  const runnerAttempt = {
+    type: "handoff.notes_attempted" as const,
+    actor: { role: "runner" as const, id: "build-runtime" },
+    payload: {},
+  };
+  const runnerFailed = {
+    type: "handoff.notes_failed" as const,
+    actor: { role: "runner" as const, id: "build-runtime" },
+    payload: {},
+  };
+  // Both new runner-owned events pass their gate ...
+  assert.doesNotThrow(() => assertPendingUserGuidanceAllowsEvent(guided, runnerAttempt));
+  assert.doesNotThrow(() => assertPendingUserGuidanceAllowsEvent(guided, runnerFailed));
+  assert.doesNotThrow(() => assertOpenArchitectQuestionAllowsEvent(questioned, runnerAttempt));
+  assert.doesNotThrow(() => assertOpenArchitectQuestionAllowsEvent(questioned, runnerFailed));
+  // ... while worker/Architect emissions of the runner events stay denied ...
+  for (const actor of [
+    { role: "worker" as const, id: "worker_task-1_1" },
+    { role: "architect" as const, id: "arch:architect" },
+    { role: "runner" as const, id: "build-manager" },
+  ]) {
+    assert.throws(
+      () => assertPendingUserGuidanceAllowsEvent(guided, { ...runnerAttempt, actor }),
+      /Pending user guidance/,
+    );
+    assert.throws(
+      () => assertPendingUserGuidanceAllowsEvent(guided, { ...runnerFailed, actor }),
+      /Pending user guidance/,
+    );
+    assert.throws(
+      () => assertOpenArchitectQuestionAllowsEvent(questioned, { ...runnerAttempt, actor }),
+      /Blocking Architect question/,
+    );
+    assert.throws(
+      () => assertOpenArchitectQuestionAllowsEvent(questioned, { ...runnerFailed, actor }),
+      /Blocking Architect question/,
+    );
+  }
+  // ... arbitrary handoff-adjacent events stay denied, and the pre-existing
+  // snapshot/notes admissions are unchanged.
+  const otherHandoff = {
+    type: "plan.reconciled" as const,
+    actor: { role: "architect" as const, id: "arch:architect" },
+    payload: {},
+  };
+  assert.throws(() => assertPendingUserGuidanceAllowsEvent(guided, otherHandoff), /Pending user guidance/);
+  assert.throws(() => assertOpenArchitectQuestionAllowsEvent(questioned, otherHandoff), /Blocking Architect question/);
+  const recorded = {
+    type: "handoff.notes_recorded" as const,
+    actor: { role: "architect" as const, id: "arch:architect" },
+    payload: {},
+  };
+  assert.doesNotThrow(() => assertPendingUserGuidanceAllowsEvent(guided, recorded));
+  assert.doesNotThrow(() => assertOpenArchitectQuestionAllowsEvent(questioned, recorded));
+  const snapshot = {
+    type: "project_docs.handoff_snapshot_committed" as const,
+    actor: { role: "runner" as const, id: "build-runtime" },
+    payload: {},
+  };
+  assert.doesNotThrow(() => assertPendingUserGuidanceAllowsEvent(guided, snapshot));
+  assert.doesNotThrow(() => assertOpenArchitectQuestionAllowsEvent(questioned, snapshot));
+});
+
+test("C3b: pending user guidance still records eligible user-pause stop notes with one call", async () => {
+  const RUN = "run-c3b-notes-pending-guidance";
+  const scripted = new ScriptedNotesModel(() => NOTES_TEXT);
+  const fixture = await openFactoryPort("notes-pending-guidance", RUN, pendingGuidanceSeed, "plan_only", {
+    modelsFor: modelsFor(scripted),
+  });
+  try {
+    const { events, projection } = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    assert.equal(projection.status, "paused", "the stop proceeds under pending guidance");
+    assert.equal(scripted.calls, 1, "exactly one notes call under pending guidance");
+    const attempts = notesAttemptEvents(events);
+    assert.equal(attempts.length, 1, "the runner attempt marker persists under pending guidance");
+    assert.deepEqual(attempts[0]!.actor, { role: "runner", id: "build-runtime" });
+    const noted = notesEvents(events);
+    assert.equal(noted.length, 1, "one additive notes event under pending guidance");
+    assert.equal((noted[0]!.payload as Record<string, unknown>).notes, NOTES_TEXT);
+    assert.equal(notesFailedEvents(events).length, 0, "no failure outcome on success");
+    const commits = snapshotCommits(events);
+    assert.equal(commits.length, 1, "the pause commits exactly one stop snapshot");
+    const body = await stateBody(fixture, (commits[0]!.payload as Record<string, unknown>).commit as string);
+    assert.ok(
+      body.includes("> Next: keep the value module as is."),
+      "the snapshot renders the Architect notes",
+    );
+    assert.equal(notesManifests(fixture, RUN).length, 1, "one handoff_notes purpose record");
+    assert.deepEqual(architectModelCharges(fixture, RUN), { reserved: 1, settled: 1 }, "one charge stands");
+    const replay = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    assert.equal(scripted.calls, 1, "replay makes no second call");
+    assert.equal(notesAttemptEvents(replay.events).length, 1, "replay records no duplicate marker");
+    assert.equal(notesEvents(replay.events).length, 1, "replay records no duplicate notes");
+    assert.equal(snapshotCommits(replay.events).length, 1, "replay records no duplicate snapshot");
+  } finally {
+    await fixture.close();
+  }
+  // A failed notes request under the same gate persists its reason, and replay renders it with no second call.
+  const FAIL_RUN = "run-c3b-notes-pending-guidance-failed";
+  const failing = new ScriptedNotesModel(() => {
+    throw new Error("Injected provider failure.");
+  });
+  const failFixture = await openFactoryPort("notes-pending-guidance-failed", FAIL_RUN, pendingGuidanceSeed, "plan_only", {
+    modelsFor: modelsFor(failing),
+  });
+  try {
+    const { events } = await driveHandoff(failFixture, FAIL_RUN, { stopNotes: failFixture.stopNotes });
+    assert.equal(failing.calls, 1, "the failed run issued exactly one call");
+    assert.equal(notesAttemptEvents(events).length, 1, "the attempt marker persists");
+    const failures = notesFailedEvents(events);
+    assert.equal(failures.length, 1, "the failure outcome persists under pending guidance");
+    assert.ok(
+      ((failures[0]!.payload as Record<string, unknown>).reason as string).includes("Injected provider failure."),
+      "the persisted reason names the failure",
+    );
+    assert.equal(notesEvents(events).length, 0, "no notes event on failure");
+    assert.equal(snapshotCommits(events).length, 1, "the snapshot still writes");
+    const replay = await driveHandoff(failFixture, FAIL_RUN, { stopNotes: failFixture.stopNotes });
+    assert.equal(failing.calls, 1, "replay issues no second call after a persisted failure");
+    assert.equal(notesFailedEvents(replay.events).length, 1, "replay records no duplicate failure");
+    assert.equal(snapshotCommits(replay.events).length, 1, "replay still snapshots once");
+    const body = await stateBody(failFixture, (snapshotCommits(replay.events)[0]!.payload as Record<string, unknown>).commit as string);
+    assert.ok(
+      body.includes("No Architect notes for this stop: stop notes call failed (Injected provider failure.)"),
+      "replay renders the persisted failure reason",
+    );
+  } finally {
+    await failFixture.close();
+  }
+});
+
+test("C3b: an open blocking Architect question still records eligible user-pause stop notes with one call", async () => {
+  const RUN = "run-c3b-notes-open-question";
+  const scripted = new ScriptedNotesModel(() => NOTES_TEXT);
+  const fixture = await openFactoryPort("notes-open-question", RUN, openQuestionSeed, "plan_only", {
+    modelsFor: modelsFor(scripted),
+  });
+  try {
+    const { events, projection } = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    assert.equal(projection.status, "paused", "the stop proceeds under the open question");
+    assert.equal(projection.blockingArchitectQuestionId, "question-gate", "the question still blocks");
+    assert.equal(scripted.calls, 1, "exactly one notes call under the open question");
+    const attempts = notesAttemptEvents(events);
+    assert.equal(attempts.length, 1, "the runner attempt marker persists under the open question");
+    assert.deepEqual(attempts[0]!.actor, { role: "runner", id: "build-runtime" });
+    const noted = notesEvents(events);
+    assert.equal(noted.length, 1, "one additive notes event under the open question");
+    assert.equal((noted[0]!.payload as Record<string, unknown>).notes, NOTES_TEXT);
+    assert.equal(notesFailedEvents(events).length, 0, "no failure outcome on success");
+    const commits = snapshotCommits(events);
+    assert.equal(commits.length, 1, "the pause commits exactly one stop snapshot");
+    const body = await stateBody(fixture, (commits[0]!.payload as Record<string, unknown>).commit as string);
+    assert.ok(
+      body.includes("> Next: keep the value module as is."),
+      "the snapshot renders the Architect notes",
+    );
+    assert.equal(notesManifests(fixture, RUN).length, 1, "one handoff_notes purpose record");
+    assert.deepEqual(architectModelCharges(fixture, RUN), { reserved: 1, settled: 1 }, "one charge stands");
+    const replay = await driveHandoff(fixture, RUN, { stopNotes: fixture.stopNotes });
+    assert.equal(scripted.calls, 1, "replay makes no second call");
+    assert.equal(notesAttemptEvents(replay.events).length, 1, "replay records no duplicate marker");
+    assert.equal(notesEvents(replay.events).length, 1, "replay records no duplicate notes");
+    assert.equal(snapshotCommits(replay.events).length, 1, "replay records no duplicate snapshot");
+  } finally {
+    await fixture.close();
+  }
+  // A failed notes request under the same gate persists its reason, and replay renders it with no second call.
+  const FAIL_RUN = "run-c3b-notes-open-question-failed";
+  const failing = new ScriptedNotesModel(() => {
+    throw new Error("Injected provider failure.");
+  });
+  const failFixture = await openFactoryPort("notes-open-question-failed", FAIL_RUN, openQuestionSeed, "plan_only", {
+    modelsFor: modelsFor(failing),
+  });
+  try {
+    const { events } = await driveHandoff(failFixture, FAIL_RUN, { stopNotes: failFixture.stopNotes });
+    assert.equal(failing.calls, 1, "the failed run issued exactly one call");
+    assert.equal(notesAttemptEvents(events).length, 1, "the attempt marker persists");
+    const failures = notesFailedEvents(events);
+    assert.equal(failures.length, 1, "the failure outcome persists under the open question");
+    assert.ok(
+      ((failures[0]!.payload as Record<string, unknown>).reason as string).includes("Injected provider failure."),
+      "the persisted reason names the failure",
+    );
+    assert.equal(notesEvents(events).length, 0, "no notes event on failure");
+    assert.equal(snapshotCommits(events).length, 1, "the snapshot still writes");
+    const replay = await driveHandoff(failFixture, FAIL_RUN, { stopNotes: failFixture.stopNotes });
+    assert.equal(failing.calls, 1, "replay issues no second call after a persisted failure");
+    assert.equal(notesFailedEvents(replay.events).length, 1, "replay records no duplicate failure");
+    assert.equal(snapshotCommits(replay.events).length, 1, "replay still snapshots once");
+    const body = await stateBody(failFixture, (snapshotCommits(replay.events)[0]!.payload as Record<string, unknown>).commit as string);
+    assert.ok(
+      body.includes("No Architect notes for this stop: stop notes call failed (Injected provider failure.)"),
+      "replay renders the persisted failure reason",
+    );
+  } finally {
+    await failFixture.close();
   }
 });
