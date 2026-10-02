@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import type { AgentModel } from "../../src/agent-contracts.js";
 import { ArtifactStore } from "../../src/artifact-store.js";
-import { BuildRuntime, type ArchitectRuntimeDriver, type ProjectDocsPort } from "../../src/build-runtime.js";
+import { BuildRuntime, type ArchitectRuntimeDriver, type ProjectDocsPort, type StopNotesDriver } from "../../src/build-runtime.js";
 import type { NativeBuildSpec } from "../../src/build-spec.js";
 import type { RunnerProviderConfig } from "../../src/provider-config-store.js";
 import { createExecutionHost } from "../../src/execution-host.js";
@@ -611,6 +611,8 @@ export function buildRuntimeForHandoff(options: {
   store: SqliteSchedulerStore;
   projectDocs: ProjectDocsPort;
   architect: { driver: ArchitectRuntimeDriver };
+  stopNotes?: StopNotesDriver;
+  stopNotesTimeoutMs?: number;
   clock: () => string;
   runPolicy: "finish" | "plan_only";
   evidenceStore?: EvidenceStore;
@@ -625,6 +627,8 @@ export function buildRuntimeForHandoff(options: {
     store: options.store,
     workerDriver: { run: async () => ({ type: "failed" as const, reason: "unused" }) },
     architectDriver: options.architect.driver,
+    ...(options.stopNotes ? { stopNotes: options.stopNotes } : {}),
+    ...(options.stopNotesTimeoutMs !== undefined ? { stopNotesTimeoutMs: options.stopNotesTimeoutMs } : {}),
     integrationDriver: { integrate: async () => ({ status: "integrated", integrationRevision: "unused" }) },
     ...(options.independentVerifier ? { independentVerifier: options.independentVerifier } : {}),
     maxConcurrency: 1,
@@ -752,6 +756,8 @@ export interface FactoryPortFixture {
   baselineRevision: string;
   integration: ProductionIntegrationManager;
   port: ProjectDocsPort;
+  /** C3b: the factory-built runtime's stop-notes driver (the actual Architect runtime). */
+  stopNotes: StopNotesDriver;
   factory: NativeBuildFactory;
   evidence: SqliteEvidenceStore;
   close: () => Promise<void>;
@@ -768,7 +774,7 @@ export async function openFactoryPort(
   runId: string,
   seed: (runId: string, baselineRevision: string) => NewSchedulerEvent[],
   runPolicy: "finish" | "plan_only",
-  specOptions: { specCopy?: boolean; handoffFiles?: "commit" | "export_only" } = {},
+  specOptions: { specCopy?: boolean; handoffFiles?: "commit" | "export_only"; modelsFor?: (config: RunnerProviderConfig) => AgentModel } = {},
 ): Promise<FactoryPortFixture> {
   const root = mkdtempSync(join(tmpdir(), `aiboard-c2b-factory-${label}-`));
   const project = join(root, "project");
@@ -810,7 +816,7 @@ export async function openFactoryPort(
     },
     executionHost,
     baselineFor: () => baseline.revision,
-    providerModelFactory: () => new UnusedModel(),
+    providerModelFactory: (config) => specOptions.modelsFor?.(config) ?? new UnusedModel(),
   });
   let built: { runtime: BuildRuntime; cleanup: () => Promise<void>; close: () => Promise<void> };
   try {
@@ -838,6 +844,8 @@ export async function openFactoryPort(
   const integration = seen[0]!;
   const port = (built.runtime as unknown as { projectDocs: ProjectDocsPort }).projectDocs;
   assert.ok(port, "the factory builds a docs port");
+  const stopNotes = (built.runtime as unknown as { stopNotes: StopNotesDriver }).stopNotes;
+  assert.ok(stopNotes, "the factory wires the Architect stop-notes driver");
   return {
     root,
     project,
@@ -845,6 +853,7 @@ export async function openFactoryPort(
     baselineRevision: baseline.revision,
     integration,
     port,
+    stopNotes,
     factory,
     evidence,
     close: async () => {
@@ -973,6 +982,8 @@ export function readHandoffLog(
 export interface DriveHandoffOptions {
   runPolicy?: "finish" | "plan_only";
   architect?: { driver: ArchitectRuntimeDriver };
+  stopNotes?: StopNotesDriver;
+  stopNotesTimeoutMs?: number;
   clock?: () => string;
   specCopy?: boolean;
   handoffFiles?: "commit" | "export_only";
@@ -1006,6 +1017,8 @@ export async function driveHandoff(
       ...(options.handoffFiles !== undefined ? { handoffFiles: options.handoffFiles } : {}),
       ...(options.artifacts ? { artifacts: options.artifacts } : {}),
       ...(options.independentVerifier ? { independentVerifier: options.independentVerifier } : {}),
+      ...(options.stopNotes ? { stopNotes: options.stopNotes } : {}),
+      ...(options.stopNotesTimeoutMs !== undefined ? { stopNotesTimeoutMs: options.stopNotesTimeoutMs } : {}),
     });
     await runtime.runUntilBlocked();
     const events = store.readRun(runId);

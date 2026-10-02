@@ -1584,6 +1584,9 @@ export class NativeBuildFactory {
       store: schedulerStore,
       workerDriver,
       architectDriver,
+      // C3b (AR-R09): the stop-notes one-shot runs on the run's actual
+      // Architect runtime (same models, ledger and manifests as turns).
+      stopNotes: architectDriver,
       integrationDriver,
       finalVerificationDriver,
       finalVerificationCleanupDriver: {

@@ -238,6 +238,7 @@ export type SchedulerEventType =
   | "project_docs.policy_configured"
   | "project_docs.handoff_snapshot_committed"
   | "project_docs.stop_snapshot_skipped"
+  | "handoff.notes_recorded"
   | "delivery.review_started"
   | "delivery.review_requested"
   | "delivery.obligations_recorded"
@@ -389,6 +390,8 @@ export interface ProjectDocsProjection {
   snapshots?: HandoffSnapshotRecord[];
   /** C3a (AR-R08): stops with no snapshot commit and why, in append order. */
   stopSnapshotSkips?: StopSnapshotSkipRecord[];
+  /** C3b (AR-R09): Architect stop notes per stop sequence, in append order. */
+  stopNotes?: StopNotesRecord[];
 }
 
 /**
@@ -1708,6 +1711,7 @@ export function assertPendingUserGuidanceAllowsEvent(
     (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
     (event.type === "plan.created" && current.planRevision === 0) ||
+    (event.type === "handoff.notes_recorded" && event.actor.role === "architect") ||
     (event.type === "task.transitioned" &&
       (taskStatus === "integrated" || taskStatus === "integration_resolution"));
   if (!allowed) {
@@ -1738,7 +1742,8 @@ export function assertOpenArchitectQuestionAllowsEvent(
     (event.type === "project_doc.committed" && event.actor.role === "runner") ||
     (event.type === "project_docs.handoff_snapshot_committed" && event.actor.role === "runner") ||
     (event.type === "project_doc.abandoned" && event.actor.role === "runner") ||
-    event.type === "planning.assignment_released";
+    event.type === "planning.assignment_released" ||
+    (event.type === "handoff.notes_recorded" && event.actor.role === "architect");
   if (!allowed) {
     throw new Error(
       `Blocking Architect question ${current.blockingArchitectQuestionId} must be answered before ${event.type} may advance the run.`
@@ -5319,6 +5324,10 @@ export function reduceSchedulerEvent(
     }
     case "project_docs.handoff_snapshot_committed": {
       applyHandoffSnapshotCommitted(next, event);
+      break;
+    }
+    case "handoff.notes_recorded": {
+      applyHandoffNotesRecorded(next, event);
       break;
     }
     case "project_docs.stop_snapshot_skipped": {
@@ -9350,6 +9359,57 @@ function applyStopSnapshotSkipped(
   };
 }
 
+/** C3b: one Architect stop-notes record per stop sequence, in append order. */
+export interface StopNotesRecord {
+  stopSequence: number;
+  notes: string;
+  sequence: number;
+}
+
+/**
+ * C3b (AR-R09): the maximum stored stop-notes length. Matches the C1 notes
+ * cap (HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH) so a recorded note always renders
+ * in full; the notes call truncates to this bound before recording.
+ */
+export const STOP_NOTES_MAX_LENGTH = 2000;
+
+/** C3b: the Architect stop notes recorded for a stop, if any. */
+export function stopNotesForStop(projection: SchedulerProjection, stopSequence: number): StopNotesRecord | undefined {
+  return (projection.projectDocs?.stopNotes ?? []).find((record) => record.stopSequence === stopSequence);
+}
+
+function applyHandoffNotesRecorded(
+  projection: SchedulerProjection,
+  event: SchedulerEvent,
+): void {
+  if (event.actor.role !== "architect") {
+    throw new Error("Only the Architect may record stop notes.");
+  }
+  if (projection.projectDocsPolicyVersion !== 2) {
+    throw new Error("Stop notes require project document policy version 2.");
+  }
+  const stopSequence = requiredPositiveInteger(event.payload, "stopSequence");
+  const notes = requiredString(event.payload, "notes");
+  if (!notes.trim() || notes.length > STOP_NOTES_MAX_LENGTH) {
+    throw new Error("Stop notes text is invalid.");
+  }
+  const existing = projection.projectDocs?.stopNotes ?? [];
+  if (existing.some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop notes for stop ${stopSequence} are already recorded.`);
+  }
+  if ((projection.projectDocs?.snapshots ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a snapshot commit.`);
+  }
+  if ((projection.projectDocs?.stopSnapshotSkips ?? []).some((record) => record.stopSequence === stopSequence)) {
+    throw new Error(`Stop ${stopSequence} already has a stop snapshot skip.`);
+  }
+  projection.projectDocs = {
+    pending: projection.projectDocs?.pending ?? [],
+    ...carriedProjectDocs(projection.projectDocs),
+    stopNotes: [...existing, { stopSequence, notes, sequence: event.sequence }],
+  };
+}
+
 export function handoffSnapshotAtCurrentStop(
   projection: SchedulerProjection,
 ): HandoffSnapshotRecord | undefined {
@@ -9652,7 +9712,7 @@ function cloneProjectDocs(docs: ProjectDocsProjection): ProjectDocsProjection {
 
 function carriedProjectDocs(
   docs: ProjectDocsProjection | undefined,
-): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned" | "snapshots" | "stopSnapshotSkips"> {
+): Pick<ProjectDocsProjection, "committed" | "documentTip" | "abandoned" | "snapshots" | "stopSnapshotSkips" | "stopNotes"> {
   if (!docs) return {};
   return {
     ...(docs.committed
@@ -9662,8 +9722,8 @@ function carriedProjectDocs(
     ...(docs.abandoned
       ? { abandoned: docs.abandoned.map((item) => ({ ...item })) }
       : {}),
-    ...((docs.snapshots ?? docs.stopSnapshotSkips)
-      ? { ...(docs.snapshots ? { snapshots: docs.snapshots.map((record) => ({ ...record, paths: [...record.paths] })) } : {}), ...(docs.stopSnapshotSkips ? { stopSnapshotSkips: docs.stopSnapshotSkips.map((record) => ({ ...record })) } : {}) }
+    ...((docs.snapshots ?? docs.stopSnapshotSkips ?? docs.stopNotes)
+      ? { ...(docs.snapshots ? { snapshots: docs.snapshots.map((record) => ({ ...record, paths: [...record.paths] })) } : {}), ...(docs.stopSnapshotSkips ? { stopSnapshotSkips: docs.stopSnapshotSkips.map((record) => ({ ...record })) } : {}), ...(docs.stopNotes ? { stopNotes: docs.stopNotes.map((record) => ({ ...record })) } : {}) }
       : {}),
   };
 }

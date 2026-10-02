@@ -45,6 +45,7 @@ import {
   nextAnswerReviewId,
   readyPlanIdentity,
   classifyStopSnapshot,
+  stopNotesForStop,
   EXCEPTIONAL_RECOVERY_PAUSE_REASON,
   rebuildSchedulerProjection,
   effectiveRepairPlanLimit,
@@ -87,6 +88,7 @@ import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./plan
 import type { BuildTask } from "./task-contracts.js";
 import {
   PREVIOUS_SNAPSHOT_EDITED_NOTICE_LINE,
+  HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH,
   handoffSnapshotInputFromProjection,
   renderHandoffSnapshot,
   verifyHandoffSnapshotDigest,
@@ -144,6 +146,36 @@ export interface ArchitectActionRequest {
 export interface ArchitectRuntimeDriver {
   run(request: ArchitectActionRequest): Promise<void>;
 }
+
+/**
+ * C3b (AR-R09): one bounded Architect stop-notes call for an eligible
+ * stop. The driver runs a single one-shot model call on the run's
+ * Architect runtime -- no tools, no turn, no stop change -- and charges
+ * it as purpose `handoff_notes` through the shared accounting. The
+ * runtime persists a `noted` outcome as `handoff.notes_recorded` and
+ * renders it through C1; a `failed` outcome renders its bounded reason
+ * as the no-notes line. The call never blocks or changes the stop.
+ */
+export interface StopNotesRequest {
+  runId: string;
+  stopSequence: number;
+  stopKind: StopSnapshotStopKind;
+  reason?: string;
+  detail?: string;
+  /** Aborted when the runtime's stop-notes time bound elapses. */
+  signal?: AbortSignal;
+}
+
+export type StopNotesOutcome =
+  | { status: "noted"; notes: string; runtimeId: string }
+  | { status: "failed"; reason: string; runtimeId?: string };
+
+export interface StopNotesDriver {
+  requestStopNotes(input: StopNotesRequest): Promise<StopNotesOutcome>;
+}
+
+/** C3b: the concrete bound on one stop-notes model call (AbortSignal cancellation). */
+export const STOP_NOTES_TIMEOUT_MS = 60_000;
 
 export type IntegrationRuntimeResult =
   | { status: "integrated"; integrationRevision: string }
@@ -418,6 +450,14 @@ export interface BuildRuntimeOptions {
    * records an explicit outstanding gate for the owner and never loops.
    */
   coverageSuspendedRetryLimit?: number;
+  /**
+   * C3b (AR-R09): the one-shot Architect stop-notes driver. Production
+   * wires the Architect runtime; absent means no notes call (the C3a
+   * "no notes" line renders unchanged).
+   */
+  stopNotes?: StopNotesDriver;
+  /** C3b: the concrete bound on one stop-notes call (default STOP_NOTES_TIMEOUT_MS). */
+  stopNotesTimeoutMs?: number;
 }
 
 const HANDOFF_SNAPSHOT_FAILURE_DETAIL_MAX_LENGTH = 300;
@@ -431,6 +471,43 @@ const HANDOFF_SNAPSHOT_FAILURE_DETAIL_MAX_LENGTH = 300;
  * C3b adds the Architect stop notes.
  */
 const STOP_SNAPSHOT_NO_NOTES_REASON = "stop notes are added in C3b";
+
+/**
+ * C3b (AR-R09): the notes gate. Returns the accurate no-notes reason when
+ * the stop must not make a notes call, undefined when a call is allowed.
+ * Honors C3a's allowed/denied classification; exhausted run or repair
+ * budgets override an allowed classification (no budget remains for the
+ * call); unknown reasons, cancel, terminal failure and provider/credit
+ * failures can never make a notes call.
+ */
+function stopNotesDenialReason(input: {
+  stopKind: StopSnapshotStopKind;
+  allowed: boolean;
+  reason?: string;
+  detail?: string;
+}): string | undefined {
+  if (input.reason !== undefined && input.reason.startsWith("budget_exhausted")) {
+    return "the run budget is exhausted; no budget remains for a notes call";
+  }
+  if (input.detail !== undefined && input.detail.startsWith("repair:budget_exhausted:")) {
+    return "the repair budget is exhausted; no budget remains for a notes call";
+  }
+  if (!input.allowed) {
+    if (input.reason === "owner_cancelled" || input.stopKind === "cancelled") {
+      return "the run was cancelled; notes are pointless";
+    }
+    if (input.stopKind === "failed") {
+      return "the run failed; notes are pointless";
+    }
+    const lowered = (input.reason ?? "").toLowerCase();
+    if (lowered.includes("provider") || lowered.includes("credit")) {
+      return "the provider is unavailable; a notes call cannot run";
+    }
+    const name = (input.reason ?? input.stopKind).replace(/[\s]+/g, " ").trim().slice(0, 200) || input.stopKind;
+    return `the ${name} stop does not allow model calls`;
+  }
+  return undefined;
+}
 
 /**
  * C3a (AR-R08): the log event that recorded the current stop (the latest
@@ -736,6 +813,8 @@ export class BuildRuntime {
   private readonly answerAuthority: AnswerReviewAuthority;
   private readonly planningHostCapabilities?: PlanningHostCapabilitiesProvider;
   private readonly coverageSuspendedRetryLimit: number;
+  private readonly stopNotes?: StopNotesDriver;
+  private readonly stopNotesTimeoutMs: number;
   private lifecycleController = new AbortController();
   private stepQueue = Promise.resolve();
   /**
@@ -793,7 +872,12 @@ export class BuildRuntime {
     this.answerReview = options.answerReview;
     this.answerAuthority = new SchedulerAnswerReviewAuthority(options.store);
     this.planningHostCapabilities = options.planningHostCapabilities;
+    this.stopNotes = options.stopNotes;
+    this.stopNotesTimeoutMs = options.stopNotesTimeoutMs ?? STOP_NOTES_TIMEOUT_MS;
     this.coverageSuspendedRetryLimit = options.coverageSuspendedRetryLimit ?? DEFAULT_COVERAGE_SUSPENDED_RETRY_LIMIT;
+    if (!Number.isSafeInteger(this.stopNotesTimeoutMs) || this.stopNotesTimeoutMs <= 0) {
+      throw new Error("stopNotesTimeoutMs must be a positive integer.");
+    }
     if (!Number.isSafeInteger(this.coverageSuspendedRetryLimit) || this.coverageSuspendedRetryLimit < 0) {
       throw new Error("coverageSuspendedRetryLimit must be a non-negative integer.");
     }
@@ -2927,12 +3011,21 @@ export class BuildRuntime {
         : stopProjection.pauseReason?.reason === "handoff_snapshot_failed"
           ? "handoff_snapshot_failed"
           : undefined;
+    // C3b (AR-R09): every snapshot skip lands BEFORE any model call, so
+    // a skipped stop (pre-triage, clarify, answered, export_only, C2's
+    // own failure pause) never makes a notes call. Unknown reasons,
+    // cancel, exhausted budgets and provider/credit failures are denied
+    // below by the notes gate, never by reaching the driver.
     if (skipReason !== undefined) {
       this.appendStopSnapshotSkippedTolerated({ stopSequence: stop.sequence, stopKind: classified.stopKind, reason: skipReason });
       return;
     }
+    // C3b (AR-R09): resolve the Architect stop notes (reuse, denial, or
+    // one bounded call), then render them through C1. A notes failure is
+    // a no-notes reason, never a stop failure.
+    const stopNotes = await this.resolveStopNotes({ stop, stopProjection, classified });
     try {
-      await this.commitStopSnapshot({ stop, stopProjection, stopKind: classified.stopKind });
+      await this.commitStopSnapshot({ stop, stopProjection, stopKind: classified.stopKind, notes: stopNotes.notes, notesAbsentReason: stopNotes.notesAbsentReason });
     } catch (error) {
       this.appendStopSnapshotSkippedTolerated({
         stopSequence: stop.sequence,
@@ -3010,12 +3103,131 @@ export class BuildRuntime {
    * handoff-only concern. Throws with a bounded cause; the caller records
    * the finding and the stop proceeds.
    */
+  /**
+   * C3b (AR-R09): resolve the notes for one stop snapshot. Reuses already
+   * recorded notes on replay/resume (never a second call); without a
+   * driver renders the C3a line unchanged; denies unknown reasons,
+   * cancel, exhausted budgets and provider/credit failures before any
+   * model call; otherwise makes at most one bounded call and persists a
+   * `noted` outcome as `handoff.notes_recorded` (Architect actor, stop
+   * sequence key). Every failure path returns a no-notes reason -- the
+   * snapshot still writes and the stop proceeds.
+   */
+  private async resolveStopNotes(input: {
+    stop: SchedulerEvent;
+    stopProjection: SchedulerProjection;
+    classified: { stopKind: StopSnapshotStopKind; notes: "allowed" | "denied" };
+  }): Promise<{ notes?: string; notesAbsentReason: string }> {
+    const stopSequence = input.stop.sequence;
+    const reason = input.stopProjection.pauseReason?.reason;
+    const detail = input.stopProjection.pauseReason?.detail;
+    const reused = stopNotesForStop(this.projection(), stopSequence);
+    if (reused) {
+      return { notes: reused.notes, notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+    }
+    if (!this.stopNotes) {
+      return { notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+    }
+    const denial = stopNotesDenialReason({
+      stopKind: input.classified.stopKind,
+      allowed: input.classified.notes === "allowed",
+      reason,
+      detail,
+    });
+    if (denial !== undefined) {
+      return { notesAbsentReason: denial };
+    }
+    const outcome = await this.callStopNotes({
+      stopSequence,
+      stopKind: input.classified.stopKind,
+      ...(reason !== undefined ? { reason } : {}),
+      ...(detail !== undefined ? { detail } : {}),
+    });
+    if (outcome.status !== "noted") {
+      return { notesAbsentReason: outcome.reason };
+    }
+    const notes = outcome.notes.length > HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH
+      ? outcome.notes.slice(0, HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH)
+      : outcome.notes;
+    if (!notes.trim()) {
+      return { notesAbsentReason: "the Architect returned no stop notes text" };
+    }
+    try {
+      this.appendStopNotesRecorded({ stopSequence, notes, runtimeId: outcome.runtimeId });
+    } catch {
+      const raced = stopNotesForStop(this.projection(), stopSequence);
+      if (raced) {
+        return { notes: raced.notes, notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+      }
+      return { notesAbsentReason: "the stop notes were not recorded" };
+    }
+    return { notes, notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON };
+  }
+
+  /**
+   * C3b: one bounded stop-notes call. The AbortSignal fires at the time
+   * bound so a hanging provider cannot block the stop; adapters that
+   * support cancellation stop there, the rest lose the race. Never
+   * throws: a throw becomes a `failed` outcome with a bounded reason.
+   */
+  private async callStopNotes(input: {
+    stopSequence: number;
+    stopKind: StopSnapshotStopKind;
+    reason?: string;
+    detail?: string;
+  }): Promise<StopNotesOutcome> {
+    const driver = this.stopNotes;
+    if (!driver) {
+      return { status: "failed", reason: STOP_SNAPSHOT_NO_NOTES_REASON };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.stopNotesTimeoutMs);
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        controller.signal.addEventListener("abort", () => {
+          reject(new Error("the stop notes call timed out"));
+        });
+      });
+      return await Promise.race([
+        driver.requestStopNotes({ runId: this.runId, signal: controller.signal, ...input }),
+        timeout,
+      ]);
+    } catch (error) {
+      return { status: "failed", reason: error instanceof Error ? error.message : String(error) };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** C3b: persist one `noted` outcome as `handoff.notes_recorded` (Architect actor, stop sequence key). */
+  private appendStopNotesRecorded(input: {
+    stopSequence: number;
+    notes: string;
+    runtimeId: string;
+  }): void {
+    this.store.append({
+      runId: this.runId,
+      type: "handoff.notes_recorded",
+      occurredAt: this.clock(),
+      actor: { role: "architect", id: input.runtimeId },
+      idempotencyKey: `handoff-notes:${input.stopSequence}`,
+      payload: {
+        stopSequence: input.stopSequence,
+        notes: input.notes,
+      },
+    });
+  }
+
   private async commitStopSnapshot(input: {
     stop: SchedulerEvent;
     stopProjection: SchedulerProjection;
     stopKind: StopSnapshotStopKind;
+    notes?: string;
+    notesAbsentReason: string;
   }): Promise<void> {
     const { stop, stopProjection, stopKind } = input;
+    const stopNotes = input.notes;
+    const stopNotesAbsentReason = input.notesAbsentReason;
     const stopSequence = stop.sequence;
     const revision = await this.handedOffRevision(stopProjection);
     if (!revision.trim()) {
@@ -3035,12 +3247,12 @@ export class BuildRuntime {
     const rendered = handoffSnapshotInputFromProjection(stopProjection, {
       stopAt: stop.occurredAt,
       revision,
-      notesAbsentReason: STOP_SNAPSHOT_NO_NOTES_REASON,
+      notesAbsentReason: stopNotesAbsentReason,
       ...(previousSnapshotEdited ? { previousSnapshotEdited: true as const } : {}),
     });
     let body: string;
     try {
-      body = renderHandoffSnapshot({ ...rendered, stopKind });
+      body = renderHandoffSnapshot({ ...rendered, ...(stopNotes !== undefined ? { notes: stopNotes } : {}), stopKind });
     } catch (error) {
       throw new Error(`stop snapshot render failed (${snapshotFailureDetail(error)})`);
     }

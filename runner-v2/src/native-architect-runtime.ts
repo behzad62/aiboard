@@ -7,6 +7,7 @@ import type { RunGitExecutionContext } from "./git-run-context.js";
 import type {
   AgentMessage,
   AgentModel,
+  ModelTurn,
   NativeTool,
   ToolCallBlock,
   ToolExecutionContext,
@@ -39,8 +40,11 @@ import type {
   ArchitectActionReason,
   ArchitectActionRequest,
   ArchitectRuntimeDriver,
+  StopNotesOutcome,
+  StopNotesRequest,
 } from "./build-runtime.js";
 import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import { HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH } from "./handoff-snapshot.js";
 import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import type { CapabilityRegistry } from "./capability-registry.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -455,6 +459,92 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
   }
 
   /**
+  /**
+   * C3b (AR-R09): one bounded Architect stop-notes call for an eligible
+   * stop. This is a single one-shot `complete()` on the run's Architect
+   * runtime model -- never a normal Architect turn: no loop, no tools, no
+   * session, no stop change. The cost records purpose `handoff_notes`
+   * (EP40) through the shared context manifest and the shared budgeted
+   * model; the caller persists the text as `handoff.notes_recorded` and
+   * renders it through C1. Never throws: every failure is a `{failed}`
+   * outcome so the stop snapshot still writes.
+   */
+  async requestStopNotes(input: StopNotesRequest): Promise<StopNotesOutcome> {
+    const projection = rebuildSchedulerProjection(
+      this.options.schedulerStore.readRun(input.runId)
+    );
+    const runtimeId = projection.runtime.architect.runtimeId ?? this.options.initialRuntimeId;
+    const candidate = this.candidateById.get(runtimeId);
+    const model = this.options.models.get(runtimeId);
+    if (!candidate || !model) {
+      return { status: "failed", reason: `no Architect runtime is available for stop notes (${boundStopNotesField(runtimeId, 100)})` };
+    }
+    const facts = buildStopNotesFacts({
+      runId: input.runId,
+      stopKind: input.stopKind,
+      reason: input.reason,
+      detail: input.detail,
+      taskCount: Object.keys(projection.tasks ?? {}).length,
+      planRevisionId: projection.planning?.plan?.currentRevisionId,
+    });
+    const limits = { maxBytes: 8192, maxEstimatedTokens: 2048 };
+    const pack = new ContextAssembler(limits).assemble([
+      { id: "stop-notes-facts", kind: "stop-notes", required: true, priority: 0, content: facts },
+    ]);
+    const sessionId = `architect-notes:${input.runId}:${input.stopSequence}`;
+    try {
+      await recordContextPack({
+        store: this.options.contextManifests,
+        artifacts: this.options.artifacts,
+        recordPackText: this.options.recordContextPackText,
+        runId: input.runId,
+        sessionId,
+        actor: { role: "architect", id: candidate.runtimeId },
+        role: "architect",
+        purpose: STOP_NOTES_CONTEXT_PURPOSE,
+        repositoryRevision: projection.integrationRevision,
+        limits,
+        pack,
+        recordedAt: this.clock(),
+      });
+    } catch (error) {
+      return { status: "failed", reason: `stop notes context recording failed (${boundStopNotesField(error instanceof Error ? error.message : String(error), 200)})` };
+    }
+    const runtimeModel = this.options.budgetLedger
+      ? new BudgetedAgentModel({
+          model,
+          ledger: this.options.budgetLedger,
+          scopeId: input.runId,
+          attribution: architectModelAttribution(candidate, sessionId),
+          outputTokenReserve: STOP_NOTES_OUTPUT_TOKEN_RESERVE,
+          estimateCostMicros: this.options.modelCostEstimators?.get(runtimeId),
+          costBasis: this.options.modelCostBases?.get(runtimeId),
+          clock: this.clock,
+        })
+      : model;
+    const messages = buildStopNotesMessages(facts);
+    let turn: ModelTurn;
+    try {
+      turn = await runtimeModel.complete({
+        sessionId,
+        messages,
+        tools: [],
+        toolChoice: "none",
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+    } catch (error) {
+      return { status: "failed", reason: `stop notes call failed (${boundStopNotesField(error instanceof Error ? error.message : String(error), 200)})` };
+    }
+    const notes = extractStopNotesText(turn);
+    if (!notes) {
+      return { status: "failed", reason: "the Architect returned no stop notes text" };
+    }
+    return { status: "noted", notes, runtimeId: candidate.runtimeId };
+  }
+
+  /**
+  }
+
    * review_required checks out the submission's taskRevision.
    * Every other reason checks out the integration revision.
    * A missing review revision is an error, never a fallback to integration.
@@ -822,6 +912,86 @@ export function prioritizedArchitectCapabilities(
     .filter((task) => task.id !== focusedTaskId)
     .flatMap((task) => task.requiredCapabilities);
   return [...new Set([...focused, ...broader])];
+}
+
+/**
+ * C3b (AR-R09, EP40): the context-manifest purpose every stop-notes model
+ * pass records. The token cost rides along through the shared budgeted
+ * model, exactly like every other Architect pass.
+ */
+export const STOP_NOTES_CONTEXT_PURPOSE = "handoff_notes";
+
+/**
+ * C3b: the budget reservation for one bounded stop-notes call. The notes
+ * cap is 2000 characters (about 500 tokens), so this reserve bounds the
+ * charge without starving the call.
+ */
+export const STOP_NOTES_OUTPUT_TOKEN_RESERVE = 2048;
+
+/** C3b: bound one untrusted stop-notes field to a single capped line. */
+export function boundStopNotesField(value: string, maxLength: number): string {
+  return value
+    .replace(/[\s\u0085]+/g, " ")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2028\u2029]/g, "")
+    .replace(/<!--/g, "&lt;!--")
+    .replace(/-->/g, "--&gt;")
+    .trim()
+    .slice(0, maxLength);
+}
+
+/** C3b: the bounded actual run facts one stop-notes call may see. */
+export function buildStopNotesFacts(input: {
+  runId: string;
+  stopKind: string;
+  reason?: string;
+  detail?: string;
+  taskCount: number;
+  planRevisionId?: string;
+}): string {
+  const lines = [
+    `Run ${boundStopNotesField(input.runId, 100)} stopped (${boundStopNotesField(input.stopKind, 20)}${input.reason !== undefined ? `, reason: ${boundStopNotesField(input.reason, 200)}` : ""}).`,
+  ];
+  if (input.detail !== undefined && input.detail.trim()) {
+    lines.push(`Detail: ${boundStopNotesField(input.detail, 200)}`);
+  }
+  lines.push(`Tasks recorded: ${Number.isSafeInteger(input.taskCount) && input.taskCount >= 0 ? input.taskCount : 0}.`);
+  if (input.planRevisionId !== undefined && input.planRevisionId.trim()) {
+    lines.push(`Plan revision: ${boundStopNotesField(input.planRevisionId, 100)}`);
+  }
+  return lines.join("\n");
+}
+
+/** C3b: the fixed short stop-notes prompt over bounded facts. No tools. */
+export function buildStopNotesMessages(facts: string): AgentMessage[] {
+  return [
+    {
+      id: "stop-notes-system",
+      role: "system",
+      content: "You are the AIBoard Architect writing stop notes for the next tool. In a few short lines record: notes for the next tool, what matters now, traps to avoid, and what to try next. Plain text only, no Markdown headings, no tool calls. Keep it under 1500 characters.",
+    },
+    {
+      id: "stop-notes-facts",
+      role: "user",
+      content: facts,
+    },
+  ];
+}
+
+/**
+ * C3b: the stop-notes text of one model turn: text blocks only, trimmed
+ * and capped at the C1 notes bound. Tool calls (none are offered) and
+ * non-text blocks never leak into the notes. Undefined when empty.
+ */
+export function extractStopNotesText(turn: ModelTurn): string | undefined {
+  const text = turn.blocks
+    .filter((block) => block.type === "text")
+    .map((block) => (block as { text: string }).text)
+    .join("\n")
+    .trim();
+  if (!text) return undefined;
+  return text.length > HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH
+    ? text.slice(0, HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH)
+    : text;
 }
 
 export function architectModelAttribution(
