@@ -344,7 +344,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   where it creates the task commit when integration fast-forwards; record which). Tests: pause →
   snapshot → resume → task integrates → final verification passes on the right revision → handoff
   snapshot; trailers in `git log`. Depends: C3b. Touch: C3a's list. P: yes. G: no.
-- [ ] **C4** code — IN_PROGRESS 2026-10-03, isolated branch `exec/runner-v2-p6-6/C4` from locally accepted C3c; Muse implementation with GPT-6.1 Sol high independent review, C4 packet tests only. SOURCE: SRC-A "C4", AR-R11..AR-R14 (AR-R13 amends parent EP09 per AR-2). DoD per
+- [ ] **C4** code — IN_PROGRESS / REPAIR_CYCLE_1 2026-10-03, `.worktrees/p66-c4` branch `exec/runner-v2-p6-6/C4`, base `81bae871`, frozen candidate `ef96a4a0`. Muse candidate dedicated C4 file 17/17 green, zero skips, 99 seconds; runner typecheck, changed-file lint and diff checks green. GPT-6.1 Sol high independent review REPAIR: case-variant kernel path bypass; valid inherited/baseline snapshot omission and planning-guidance eligibility; inaccurate current plan/review-derived resume work; rendered snapshot header outside 4 KiB cap. Consolidated Muse R1 dispatched with narrow historical checkpoint-after-fold ready replay and selected final-code fault restoration evidence. No broad tests; not accepted. SOURCE: SRC-A "C4", AR-R11..AR-R14 (AR-R13 amends parent EP09 per AR-2). DoD per
   the SRC-A C4 contract (v2 Architect prompt without docs templates; `write_project_doc` refusals;
   `record_planning_checkpoint` removed from the new-policy path with the derived index; reserved T2
   event types with a static guard; token counts in the PR). Depends: C3c. Touch: `agent-prompts.ts`,
