@@ -281,10 +281,14 @@ export function buildFixtureTasks(): ExecutionTaskContract[] {
   ];
 }
 
-export function buildFixtureRevision(manifest: ApprovedSourceManifest): ExecutionPlanRevision {
+export function buildFixtureRevision(
+  manifest: ApprovedSourceManifest,
+  opts?: { runId?: string; createdAt?: string },
+): ExecutionPlanRevision {
   return buildExecutionPlanRevision({
     revisionId: "revision_1",
-    runId: "run_fixture",
+    runId: opts?.runId ?? "run_fixture",
+
     sourceManifestId: manifest.manifestId,
     sourceManifestDigest: manifest.artifactDigest,
     requirements: buildFixtureRequirements(manifest),
@@ -293,15 +297,22 @@ export function buildFixtureRevision(manifest: ApprovedSourceManifest): Executio
     workflowPolicyVersion: 1,
     planningDecisions: [{ id: "D3", description: "Node 24.x (OA-9).", decidedAt: "2026-09-22T00:00:00.000Z" }],
     validationObligations: ["typecheck", "targeted-tests"],
-    createdAt: "2026-09-08T00:00:00.000Z",
+    createdAt: opts?.createdAt ?? "2026-09-08T00:00:00.000Z",
+
   });
 }
 
-export function buildFixtureCoverageReview(revision: ExecutionPlanRevision, manifest: ApprovedSourceManifest): CoverageReview {
+export function buildFixtureCoverageReview(
+  revision: ExecutionPlanRevision,
+  manifest: ApprovedSourceManifest,
+  opts?: { runId?: string },
+): CoverageReview {
+
   const requirementIds = ["REQ-MANDATORY", "REQ-CONDITIONAL", "REQ-COMPAT", "REQ-OPERATIONAL", "REQ-SECURITY", "REQ-NONFUNC", "REQ-RETIRED"];
   return {
     id: "coverage_1",
-    runId: "run_fixture",
+    runId: opts?.runId ?? "run_fixture",
+
     reviewerRuntimeId: "reviewer:distinct-model",
     independence: "distinct_model",
     sourceReadManifestId: manifest.manifestId,
@@ -345,10 +356,10 @@ export interface PlanningFixtureScenario {
   readonly hostCapabilities: HostPlanningCapabilities;
 }
 
-export function buildPlanningFixtureScenario(): PlanningFixtureScenario {
+export function buildPlanningFixtureScenario(opts?: { runId?: string; createdAt?: string }): PlanningFixtureScenario {
   const priorManifest = buildBaseManifest();
   const manifest = buildAmendedManifest(priorManifest);
-  const revision = buildFixtureRevision(manifest);
+  const revision = buildFixtureRevision(manifest, opts);
   return {
     manifest,
     amendedManifest: manifest,
@@ -357,7 +368,7 @@ export function buildPlanningFixtureScenario(): PlanningFixtureScenario {
     requirements: buildFixtureRequirements(manifest),
     tasks: buildFixtureTasks(),
     revision,
-    coverageReview: buildFixtureCoverageReview(revision, manifest),
+    coverageReview: buildFixtureCoverageReview(revision, manifest, opts),
     hostCapabilities: buildFixtureHostCapabilities(),
   };
 }

@@ -185,8 +185,8 @@ function seedNewPolicySource(
 }
 
 /** Fixture scenario with the amendment's recorded impact scoped (T2 pattern), so retirements validate. */
-function scopedFixture() {
-  const fixture = buildPlanningFixtureScenario();
+function scopedFixture(runId = "run_fixture", createdAt = "2026-09-08T00:00:00.000Z") {
+  const fixture = buildPlanningFixtureScenario({ runId, createdAt });
   const amendment = fixture.manifest.amendment!;
   return {
     ...fixture,
@@ -209,6 +209,24 @@ function withoutDigest<T extends { digest: string }>(value: T): Omit<T, "digest"
   const { digest: _digest, ...rest } = value;
   return rest;
 }
+
+/**
+ * A kernel-acceptable revise submission for the next revision id: the
+ * envelope already matches the run (threaded fixture), and every task's
+ * kernel-owned requiredBase names the NEW revision, not the prior one.
+ */
+function reviseToNext(revision: { digest: string }, revisionId: string) {
+  const rest = withoutDigest(revision) as unknown as {
+    tasks: { requiredBase?: string }[];
+    [key: string]: unknown;
+  };
+  return {
+    ...rest,
+    revisionId,
+    tasks: rest.tasks.map((task) => ({ ...task, requiredBase: `accepted plan revision ${revisionId}` })),
+  };
+}
+
 
 async function invokePlanningTool(
   tools: readonly NativeTool<unknown>[],
@@ -573,7 +591,8 @@ test("T3a stale manifest and unknown section are refused without reading bytes",
 test("T3a draft before the ledger is refused; ledger then draft then revise succeed", async () => {
   const store = new MemorySchedulerStore();
   const runId = "run_t3a_ledger_first";
-  const fixture = scopedFixture();
+  const fixture = scopedFixture(runId, CLOCK);
+
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
   const tools = createPlanningTools({ store, clock });
   try {
@@ -607,10 +626,11 @@ test("T3a draft before the ledger is refused; ledger then draft then revise succ
     assert.deepEqual(investigation.dependentUnlockTaskIds, ["T3"]);
 
     const revised = await invokePlanningTool(tools, "revise_planning_plan", {
-      revision: { ...withoutDigest(fixture.revision), revisionId: "revision_2" },
+      revision: reviseToNext(fixture.revision, "revision_2"),
       expectedRevisionId: plan.currentRevisionId,
       expectedDigest: plan.currentDigest,
     }, runId);
+
     assert.equal(revised.isError, false, JSON.stringify(revised.error));
     const after = projectionOf(store, runId).planning!.plan!;
     assert.equal(after.currentRevisionId, "revision_2");
@@ -623,7 +643,8 @@ test("T3a draft before the ledger is refused; ledger then draft then revise succ
 test("T3a invalid ledger and stale revise base are refused", async () => {
   const store = new MemorySchedulerStore();
   const runId = "run_t3a_invalid";
-  const fixture = scopedFixture();
+  const fixture = scopedFixture(runId, CLOCK);
+
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
   const tools = createPlanningTools({ store, clock });
   try {
@@ -1343,7 +1364,8 @@ test("T3a plan_only new-policy run dispatches zero workers, including after rest
   const root = mkdtempSync(join(tmpdir(), "aiboard-t3a-planonly-"));
   const database = join(root, "scheduler.sqlite");
   const runId = "run_t3a_planonly";
-  const fixture = scopedFixture();
+  const fixture = scopedFixture(runId, CLOCK);
+
   const worker = new CountingWorkerDriver();
   const architect = new PlanningArchitectDriver(fixture);
   let workspaceCalls = 0;
@@ -1491,9 +1513,10 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 test("T3a worker admission refused until ready, blocked again after a source change", async () => {
-  const fixture = scopedFixture();
+  const fixture = scopedFixture("run_t3a_admission", CLOCK);
   const store = new MemorySchedulerStore();
   const runId = "run_t3a_admission";
+
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
   const tools = createPlanningTools({ store, clock });
   try {
@@ -1587,10 +1610,11 @@ test("T3a worker admission refused until ready, blocked again after a source cha
 });
 
 test("T3a worker admission blocked again after a plan change, with a ready control", async () => {
-  const fixture = scopedFixture();
   for (const label of ["control", "revised"] as const) {
     const store = new MemorySchedulerStore();
     const runId = `run_t3a_revise_${label}`;
+    const fixture = scopedFixture(runId, CLOCK);
+
     seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
     const tools = createPlanningTools({ store, clock });
     try {
@@ -1623,10 +1647,11 @@ test("T3a worker admission blocked again after a plan change, with a ready contr
       if (label === "revised") {
         const plan = projectionOf(store, runId).planning!.plan!;
         const revised = await invokePlanningTool(tools, "revise_planning_plan", {
-          revision: { ...withoutDigest(fixture.revision), revisionId: "revision_2" },
+          revision: reviseToNext(fixture.revision, "revision_2"),
           expectedRevisionId: plan.currentRevisionId,
           expectedDigest: plan.currentDigest,
         }, runId);
+
         assert.equal(revised.isError, false);
         assert.equal(projectionOf(store, runId).planning!.readiness, "not_ready");
       }
@@ -2012,9 +2037,10 @@ test("T3a repair B1: planning-state turns hide legacy plan tools; forged invokes
 });
 
 test("T3a repair B1: no task outside the ready plan is ever dispatched", async () => {
-  const fixture = scopedFixture();
+  const fixture = scopedFixture("run_t3a_b1_repro", CLOCK);
   const store = new MemorySchedulerStore();
   const runId = "run_t3a_b1_repro";
+
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
   try {
     // The reviewer's reproduction: plan_tasks before the ledger is refused,
@@ -2281,9 +2307,10 @@ test("T3a repair N4: command refusal is evaluated on every invoke", async () => 
 });
 
 test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)", async () => {
-  const fixture = scopedFixture();
+  const fixture = scopedFixture("run_t3a_b2_rebind", CLOCK);
   const store = new MemorySchedulerStore();
   const runId = "run_t3a_b2_rebind";
+
   seedNewPolicySource(store, runId, fixture.manifest, { priorManifest: fixture.priorManifest });
   try {
     const planningTools = createPlanningTools({ store, clock });
@@ -2311,10 +2338,11 @@ test("T3a repair B2: re-readiness rebinds tasks so they dispatch again (probe B)
     // A plan revision supersedes R1; admission closes until re-readiness.
     const r1plan = projectionOf(store, runId).planning!.plan!;
     const revised = await invokePlanningTool(planningTools, "revise_planning_plan", {
-      revision: { ...withoutDigest(fixture.revision), revisionId: "revision_2" },
+      revision: reviseToNext(fixture.revision, "revision_2"),
       expectedRevisionId: r1plan.currentRevisionId,
       expectedDigest: r1plan.currentDigest,
     }, runId);
+
     assert.equal(revised.isError, false);
     assert.equal(projectionOf(store, runId).planning!.readiness, "not_ready");
 

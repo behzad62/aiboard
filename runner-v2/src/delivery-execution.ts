@@ -30,6 +30,7 @@ import type { DeliverableReviewInputs, DeliveryDepthRunner } from "./native-deli
 import { outputFor, type OneShotCommandExecutor } from "./one-shot-command-executor.js";
 import type { SchedulerProjection } from "./scheduler-store.js";
 import type { BuildTask } from "./task-contracts.js";
+import type { ExecutionTaskContract } from "./planning-contracts.js";
 import {
   outcomeFromReportReading,
   readJUnitReport,
@@ -81,14 +82,17 @@ export interface DurableSubmission {
 
 /**
  * Builds the reviewer inputs from durable state only: the task's contract
- * criteria, the session's change set, the diff bytes by artifact hash, and
- * the worker's own submit_task summary. Missing inputs throw (the review is
- * then recorded as not performed and the run pauses), never placeholders.
+ * criteria, the session's change set, the diff bytes by artifact hash, the
+ * worker's own submit_task summary, and the authoritative accepted contract
+ * when supplied (C5). Missing inputs throw (the review is then recorded as
+ * not performed and the run pauses), never placeholders.
  */
 export async function loadDeliverableReviewInputs(input: {
   task: BuildTask;
   submission: DurableSubmission;
   artifacts: Pick<ArtifactStore, "get">;
+  /** C5: the authoritative accepted contract resolved from durable state. */
+  contract?: ExecutionTaskContract;
 }): Promise<DeliverableReviewInputs> {
   const { task, submission } = input;
   const changeSet = submission.changeSet;
@@ -116,6 +120,7 @@ export async function loadDeliverableReviewInputs(input: {
       links: changeSet.criterionEvidenceLinks ?? [],
     }),
     authorRuntimeId: submission.authorRuntimeId,
+    ...(input.contract ? { contract: input.contract } : {}),
   };
 }
 

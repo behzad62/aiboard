@@ -250,7 +250,7 @@ function buildCoveragePlan(
     writableSurfaces: [`src/${id.toLowerCase()}.ts`],
     forbiddenSurfaces: ["src/frozen.ts"],
     dependencies: [],
-    requiredBase: "main",
+    requiredBase: "accepted plan revision revision_1",
     inputs: [`input for ${id}`],
     outputs: [`output for ${id}`],
     steps: [`Implement ${id}.`, `Test ${id}.`],
@@ -2597,11 +2597,18 @@ class ScriptedPlanningArchitect implements ArchitectRuntimeDriver {
       await invoke("request-1", "request_coverage_review", {});
     } else if (step === 3) {
       const current = projectionOf(this.store, this.runId).planning!.plan!;
+      const { digest: _digest, ...rest } = this.plan.revision;
+      void _digest;
       await invoke("revise-2", "revise_planning_plan", {
-        revision: { ...withoutDigest(this.plan.revision), revisionId: "revision_2" },
+        revision: {
+          ...rest,
+          revisionId: "revision_2",
+          tasks: rest.tasks.map((task) => ({ ...task, requiredBase: "accepted plan revision revision_2" })),
+        },
         expectedRevisionId: current.currentRevisionId,
         expectedDigest: current.currentDigest,
       });
+
     } else if (step === 4) {
       await invoke("request-2", "request_coverage_review", {});
     } else {

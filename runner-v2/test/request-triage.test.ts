@@ -3892,7 +3892,16 @@ test("T9 repair B4-r3: folded guidance after a passing review cannot ready until
   });
   // A fresh passing review for one revision through the real kernel (the
   // stub coverage driver below reuses this for the post-fold review).
-  const recordFreshPassingReview = (reviewId: string, revisionId: string, digest: string, keyPrefix: string) => {
+  // The recorded review's run id follows the revision it evaluates, so a
+  // review of a kernel-stamped (post-C5) revision still binds to it.
+  const recordFreshPassingReview = (
+    reviewId: string,
+    revisionId: string,
+    digest: string,
+    keyPrefix: string,
+    reviewRunId: string = fixture.coverageReview.runId,
+  ) => {
+
     append("planning.coverage_obligations_recorded", `${keyPrefix}:obligations`, { role: "verifier", id: "reviewer" }, {
       reviewId,
       sourceManifestId: fixture.manifest.manifestId,
@@ -3915,6 +3924,7 @@ test("T9 repair B4-r3: folded guidance after a passing review cannot ready until
       review: {
         ...structuredClone(fixture.coverageReview),
         id: reviewId,
+        runId: reviewRunId,
         planRevisionId: revisionId,
         planRevisionDigest: digest,
       },
@@ -3926,6 +3936,7 @@ test("T9 repair B4-r3: folded guidance after a passing review cannot ready until
       if (request.reason.type === "user_guidance_required") {
         await invokeMustSucceed(request, "acknowledge_user_guidance", {
           guidanceId: "g1",
+
           expectedVersion: 1,
           resolution: {
             type: "folded_into_planning",
@@ -3936,10 +3947,18 @@ test("T9 repair B4-r3: folded guidance after a passing review cannot ready until
       }
       if (request.reason.type === "plan_required") {
         // The Architect planning turn after the fold: revise the plan through
-        // the real tool, with the folded guidance in context.
+        // the real tool, with the folded guidance in context. Kernel-owned
+        // envelope (run, authorship time) is omitted for stamping and the
+        // next revision's requiredBase rides on every task.
         const next = structuredClone(fixture.revision) as unknown as Record<string, unknown>;
         next.revisionId = "revision_2";
+        next.runId = runId;
+        delete next.createdAt;
         delete next.digest;
+        for (const task of next.tasks as Record<string, unknown>[]) {
+          task["requiredBase"] = "accepted plan revision revision_2";
+        }
+
         await invokeMustSucceed(request, "revise_planning_plan", {
           revision: next,
           expectedRevisionId: fixture.revision.revisionId,
@@ -3961,7 +3980,8 @@ test("T9 repair B4-r3: folded guidance after a passing review cannot ready until
         reviewId: input.reviewId,
         guidance: input.guidance.map((item) => ({ ...item })),
       });
-      recordFreshPassingReview(input.reviewId, input.planRevision.revisionId, input.planRevision.digest, `cov:${input.reviewId}`);
+      recordFreshPassingReview(input.reviewId, input.planRevision.revisionId, input.planRevision.digest, `cov:${input.reviewId}`, runId);
+
       return { status: "reviewed", reviewId: input.reviewId } as never;
     },
   };
@@ -4151,7 +4171,16 @@ test("T9 repair B4-r3: the folded rule covers the re-planning window after a rea
     idempotencyKey,
     payload,
   });
-  const recordFreshPassingReview = (reviewId: string, revisionId: string, digest: string, keyPrefix: string) => {
+  // The recorded review's run id follows the revision it evaluates, so a
+  // review of a kernel-stamped (post-C5) revision still binds to it.
+  const recordFreshPassingReview = (
+    reviewId: string,
+    revisionId: string,
+    digest: string,
+    keyPrefix: string,
+    reviewRunId: string = fixture.coverageReview.runId,
+  ) => {
+
     append("planning.coverage_obligations_recorded", `${keyPrefix}:obligations`, { role: "verifier", id: "reviewer" }, {
       reviewId,
       sourceManifestId: fixture.manifest.manifestId,
@@ -4174,12 +4203,14 @@ test("T9 repair B4-r3: the folded rule covers the re-planning window after a rea
       review: {
         ...structuredClone(fixture.coverageReview),
         id: reviewId,
+        runId: reviewRunId,
         planRevisionId: revisionId,
         planRevisionDigest: digest,
       },
     });
   };
   let planTurns = 0;
+
   const architect: ArchitectRuntimeDriver = {
     run: async (request) => {
       reasons.push(request.reason.type);
@@ -4213,10 +4244,18 @@ test("T9 repair B4-r3: the folded rule covers the re-planning window after a rea
         }
         if (turn === 1) {
           // The checkpoint alone cannot unbind the stale review, so the
-          // second turn revises the plan through the real tool.
+          // second turn revises the plan through the real tool. Kernel-owned
+          // envelope (run, authorship time) is omitted for stamping and the
+          // next revision's requiredBase rides on every task.
           const next = structuredClone(fixture.revision) as unknown as Record<string, unknown>;
           next.revisionId = "revision_2";
+          next.runId = runId;
+          delete next.createdAt;
           delete next.digest;
+          for (const task of next.tasks as Record<string, unknown>[]) {
+            task["requiredBase"] = "accepted plan revision revision_2";
+          }
+
           await invokeMustSucceed(request, "revise_planning_plan", {
             revision: next,
             expectedRevisionId: fixture.revision.revisionId,
@@ -4239,7 +4278,8 @@ test("T9 repair B4-r3: the folded rule covers the re-planning window after a rea
         reviewId: input.reviewId,
         guidance: input.guidance.map((item) => ({ ...item })),
       });
-      recordFreshPassingReview(input.reviewId, input.planRevision.revisionId, input.planRevision.digest, `w:${input.reviewId}`);
+      recordFreshPassingReview(input.reviewId, input.planRevision.revisionId, input.planRevision.digest, `w:${input.reviewId}`, runId);
+
       return { status: "reviewed", reviewId: input.reviewId } as never;
     },
   };

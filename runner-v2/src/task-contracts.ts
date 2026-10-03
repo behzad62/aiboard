@@ -72,6 +72,21 @@ export interface DeliveryRepairProvenance {
   evidenceIds: string[];
 }
 
+/**
+ * C5 (AR-R15/AR-R16): the authoritative accepted contract reference a
+ * scheduler task carries — the current ready plan revision, its digest and
+ * the contract id this task was bridged from. Stamped and refreshed by the
+ * kernel bridge (scheduler-store.ts); workers and reviewers resolve the
+ * compact semantic contract through it from durable state. Never
+ * model-authored: model prose copies are not authoritative. Absent only on
+ * legacy runs and pre-bridge tasks.
+ */
+export interface TaskContractRef {
+  readonly revisionId: string;
+  readonly digest: string;
+  readonly taskId: string;
+}
+
 export interface BuildTask {
   id: string;
   /** Legacy implementation tasks omit this field; final verification is explicit. */
@@ -84,6 +99,8 @@ export interface BuildTask {
   acceptanceCriteria?: AcceptanceCriterion[];
   /** Monotonically versions the criterion set across plan revisions. */
   acceptanceCriteriaVersion?: number;
+  /** C5: the authoritative accepted contract reference (kernel-stamped). */
+  contractRef?: TaskContractRef;
   /** Immutable evidence mapping captured when the current attempt is submitted. */
   criterionEvidenceLinks?: CriterionEvidenceLink[];
   attempt: number;

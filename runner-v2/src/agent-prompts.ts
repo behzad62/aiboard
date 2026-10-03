@@ -9,7 +9,7 @@ import type { ProjectMemoryEntry } from "./project-memory.js";
 import type { SchedulerProjection } from "./scheduler-store.js";
 import { effectiveRepairPlanLimit, isPlanningState, readyPlanTaskCount, repairPlanLimitScales } from "./scheduler-store.js";
 import type { SkillDocument } from "./skill-catalog.js";
-import type { BuildTask } from "./task-contracts.js";
+import type { BuildTask, TaskContractRef } from "./task-contracts.js";
 import type {
   AcceptanceCriterion,
   CriterionEvidenceLink,
@@ -23,6 +23,7 @@ import {
 import {
   computePlanReadiness,
   T1A_SEEDED_HOST_PLANNING_CAPABILITIES,
+  type ExecutionTaskContract,
 } from "./planning-contracts.js";
 import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./planning-projection.js";
 import { evaluatePhaseAcceptance, phaseAcceptanceKey } from "./delivery-acceptance.js";
@@ -165,6 +166,15 @@ export interface WorkerGuidanceContext {
 export interface BuildWorkerContextInput {
   limits: ContextLimits;
   task: BuildTask;
+  /**
+   * C5 (AR-R16): the authoritative accepted contract resolved from
+   * durable state, rendered as the required compact contract block.
+   * Present on new-policy tasks; absent only on legacy runs, which
+   * carry no plan contracts.
+   */
+  contract?: ExecutionTaskContract;
+  /** The accepted revision/digest/task identity the block was resolved at. */
+  contractRef?: TaskContractRef;
   guidance: WorkerGuidanceContext[];
   instructions: ProjectInstructionSource[];
   skills: SkillDocument[];
@@ -177,6 +187,76 @@ export interface BuildWorkerContextInput {
   defectClasses?: readonly string[];
 }
 
+/**
+ * C5 (AR-R16): compact semantic contract blocks. Both render the SAME
+ * authoritative accepted contract resolved from durable state — never
+ * model-authored copied prose. The worker block carries outcome,
+ * scope/exclusions, inputs, outputs, steps, writable/forbidden surfaces
+ * (plus shared resource claims), criteria, definition of done, both
+ * validation rationales, negative-proof applicability and
+ * cleanup/recovery/rollback. The reviewer block carries outcome, scope,
+ * criteria, definition of done, review criteria, integration checks,
+ * negative-proof applicability and both validation rationales. Compact
+ * single-line rendering: required facts ride a required section, so they
+ * fit the recorded cap or the assembly fails closed (protected overflow);
+ * optional extras are omitted honestly by the assembler.
+ */
+export const WORKER_CONTRACT_SECTION_ID = "task-contract";
+export const REVIEWER_CONTRACT_SECTION_ID = "task-contract";
+
+function contractIdentityLine(contract: ExecutionTaskContract, ref?: TaskContractRef): string {
+  const provenance = ref
+    ? `accepted revision ${ref.revisionId} (digest ${ref.digest})`
+    : "accepted revision (unpinned)";
+  return `Authoritative plan contract ${contract.id} — ${provenance}; required base ${contract.requiredBase}. Model-authored copies are not authoritative.`;
+}
+
+export function buildWorkerContractBlock(contract: ExecutionTaskContract, ref?: TaskContractRef): string {
+  return [
+    contractIdentityLine(contract, ref),
+    `Outcome (user): ${contract.outcome.user}`,
+    `Outcome (system): ${contract.outcome.system}`,
+    `Scope includes: ${contract.scope.includes.join("; ")}`,
+    `Scope excludes: ${contract.scope.excludes.join("; ")}`,
+    `Inputs: ${contract.inputs.join("; ")}`,
+    `Outputs: ${contract.outputs.join("; ")}`,
+    `Writable surfaces: ${contract.writableSurfaces.join("; ")}`,
+    ...((contract.sharedResourceClaims ?? []).length > 0
+      ? [`Shared resource claims: ${(contract.sharedResourceClaims ?? []).join("; ")}`]
+      : []),
+    `Forbidden surfaces: ${contract.forbiddenSurfaces.join("; ")}`,
+    "Steps:",
+    ...contract.steps.map((step, index) => `${index + 1}. ${step}`),
+    "Acceptance criteria:",
+    ...contract.acceptance.criteria.map((criterion) => `- ${criterion.id}: ${criterion.text}`),
+    `Definition of done: ${contract.acceptance.definitionOfDone}`,
+    `Targeted validation: ${contract.validation.targetedRationale}`,
+    `Affected-scope validation: ${contract.validation.affectedScopeRationale}`,
+    `Negative proof: ${contract.negativeProofApplicability.applicable ? "applicable" : "not applicable"} — ${contract.negativeProofApplicability.rationale}`,
+    `Cleanup: ${contract.cleanup.cleanup} / Recovery: ${contract.cleanup.recovery} / Rollback: ${contract.cleanup.rollback}`,
+  ].join("\n");
+}
+
+export function buildReviewerContractBlock(contract: ExecutionTaskContract, ref?: TaskContractRef): string {
+  return [
+    contractIdentityLine(contract, ref),
+    `Outcome (user): ${contract.outcome.user}`,
+    `Outcome (system): ${contract.outcome.system}`,
+    `Scope includes: ${contract.scope.includes.join("; ")}`,
+    `Scope excludes: ${contract.scope.excludes.join("; ")}`,
+    "Acceptance criteria:",
+    ...contract.acceptance.criteria.map((criterion) => `- ${criterion.id}: ${criterion.text}`),
+    `Definition of done: ${contract.acceptance.definitionOfDone}`,
+    "Review criteria:",
+    ...contract.reviewCriteria.map((item) => `- ${item}`),
+    "Integration checks:",
+    ...contract.integrationChecks.map((item) => `- ${item}`),
+    `Negative proof: ${contract.negativeProofApplicability.applicable ? "applicable" : "not applicable"} — ${contract.negativeProofApplicability.rationale}`,
+    `Targeted validation rationale: ${contract.validation.targetedRationale}`,
+    `Affected-scope validation rationale: ${contract.validation.affectedScopeRationale}`,
+  ].join("\n");
+}
+
 export function buildWorkerContext(input: BuildWorkerContextInput): ContextPack {
   return new ContextAssembler(input.limits).assemble(workerContextSections(input));
 }
@@ -186,6 +266,23 @@ export function workerContextSections(input: BuildWorkerContextInput): ContextSe
     required("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
     required("current-task", "task", JSON.stringify(input.task, null, 2)),
   ];
+  // C5 (AR-R16): the authoritative compact semantic contract. Required
+  // whenever the kernel resolved one — protected overflow fails closed
+  // instead of silently truncating required facts. A reference without
+  // substance is refused outright.
+  if (input.contract) {
+    sections.push(required(
+      WORKER_CONTRACT_SECTION_ID,
+      "contract",
+      buildWorkerContractBlock(input.contract, input.contractRef),
+    ));
+  } else if (input.contractRef) {
+    throw new Error(
+      `Worker context for task ${input.task.id} names accepted contract ${input.contractRef.taskId} ` +
+      `(${input.contractRef.revisionId}/${input.contractRef.digest}) but carries no accepted contract — ` +
+      "a reference without substance is refused.",
+    );
+  }
   if (input.guidance.length > 0) {
     sections.push(
       required("architect-guidance", "guidance", JSON.stringify(input.guidance, null, 2))

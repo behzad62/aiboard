@@ -2396,3 +2396,651 @@ export function computePlanReadiness(input: PlanReadinessInput): PlanReadinessRe
 
   return { ready: blockers.length === 0, blockers };
 }
+
+
+// ---------------------------------------------------------------------------
+// C5 (AR-R15): kernel-owned submission envelope and mirrored-link derivation.
+// ---------------------------------------------------------------------------
+
+/**
+ * C5 (AR-R15): the kernel-owned envelope fields of a plan revision. The
+ * model may omit them — the kernel stamps them from actual run, source
+ * and revision state — but any supplied value must exactly match the
+ * actual, or the submission is refused. `createdAt` is the kernel clock
+ * at submission; `coverageReviewId` / `repairBudgetLineageId` carry the
+ * current (prior) revision's recorded binding forward (then authoritative
+ * absence — no other durable source names them, and the live review is
+ * never stamped onto an unevaluated revision). Omission is the field
+ * being absent: an
+
+ * explicit blank, null or wrong-typed value is a supplied value and is
+ * refused, never silently repaired. Historical validation, canonical
+ * serialization and stored digests are untouched — normalization runs
+ * only at the draft/revise submission boundary, before the digest is
+ * calculated.
+ */
+export const KERNEL_STAMPED_REVISION_FIELDS = [
+  "runId",
+  "sourceManifestId",
+  "sourceManifestDigest",
+  "workflowPolicyVersion",
+  "createdAt",
+  "coverageReviewId",
+  "repairBudgetLineageId",
+] as const;
+
+export type KernelStampedRevisionField = (typeof KERNEL_STAMPED_REVISION_FIELDS)[number];
+
+/**
+ * Actual kernel state the envelope is stamped from at the submission
+ * boundary. `coverageReviewId` / `repairBudgetLineageId` are absent
+ * (undefined) for authoritative absence — no current id in durable
+ * state — so an omitted field stays absent and any supplied value is
+ * refused.
+ */
+export interface PlanSubmissionActuals {
+  readonly runId: string;
+  readonly sourceManifestId: string;
+  readonly sourceManifestDigest: string;
+  readonly workflowPolicyVersion: number;
+  readonly createdAt: string;
+  readonly coverageReviewId?: string;
+  readonly repairBudgetLineageId?: string;
+}
+
+
+/**
+ * C5 required-base interpretation: an immutable, deterministic kernel
+ * descriptor tied to the validated submitted plan revision, documenting
+ * required plan provenance. It is not a checkout SHA: the exact attempt
+ * checkout remains the allocated Git SHA, and assignment claims prefer the
+ * allocation baseline, then the persisted attempt baseline, before this
+ * descriptor (task-scheduler.ts). Never frozen across revisions — each
+ * submitted revision carries its own descriptor.
+ */
+export function requiredBaseForRevision(revisionId: string): string {
+  return `accepted plan revision ${revisionId}`;
+}
+
+/**
+ * A submitted requirement: either link side may be omitted — the model
+ * authors one side of each link and the kernel derives the other. The
+ * semantic requirement fields (reference, purpose, outcome, acceptance
+ * conditions) stay required.
+ */
+export type PlanSubmissionRequirement = Omit<SourceRequirement, "accountablePhaseId" | "contributingTaskIds"> & {
+  readonly accountablePhaseId?: string;
+  readonly contributingTaskIds?: readonly string[];
+};
+
+/**
+ * A submitted task: requiredBase and every link side may be omitted for
+ * kernel derivation. Semantic lineage (task.lineage) is model-authored
+ * and required — the kernel never infers or stamps it.
+ */
+export type PlanSubmissionTask = Omit<ExecutionTaskContract, "requiredBase" | "accountablePhaseId" | "requirementIds"> & {
+  readonly requiredBase?: string;
+  readonly accountablePhaseId?: string;
+  readonly requirementIds?: readonly string[];
+};
+
+/** A submitted phase: membership lists may be omitted for kernel derivation. */
+export type PlanSubmissionPhase = Omit<ExecutionPlanPhase, "requirementIds" | "contributingTaskIds"> & {
+  readonly requirementIds?: readonly string[];
+  readonly contributingTaskIds?: readonly string[];
+};
+
+/**
+ * A submitted revision: the kernel-stamped envelope fields, every task's
+ * requiredBase, and every requirement/task/phase link side may be
+ * omitted. Everything else (EP06 semantic fields,
+ * REQUIRED_TEXT_LIST_FIELDS, identity/coverage constraints) stays
+ * required — omission there is still refused downstream, never defaulted.
+ */
+export type PlanSubmissionRevision = Omit<
+  ExecutionPlanRevisionWithoutDigest,
+  | "runId"
+  | "sourceManifestId"
+  | "sourceManifestDigest"
+  | "workflowPolicyVersion"
+  | "createdAt"
+  | "coverageReviewId"
+  | "repairBudgetLineageId"
+  | "requirements"
+  | "tasks"
+  | "phases"
+> & {
+  readonly runId?: string;
+  readonly sourceManifestId?: string;
+  readonly sourceManifestDigest?: string;
+  readonly workflowPolicyVersion?: number;
+  readonly createdAt?: string;
+  readonly coverageReviewId?: string;
+  readonly repairBudgetLineageId?: string;
+  readonly requirements: readonly PlanSubmissionRequirement[];
+  readonly tasks: readonly PlanSubmissionTask[];
+  readonly phases: readonly PlanSubmissionPhase[];
+};
+
+export interface PlanSubmissionFailure {
+  readonly code:
+    | "envelope_mismatch"
+    | "base_mismatch"
+    | "unknown_requirement_ref"
+    | "unknown_task_ref"
+    | "unknown_phase_ref"
+    | "link_conflict"
+    | "malformed_link";
+
+  readonly taskId?: string;
+  readonly requirementId?: string;
+  readonly phaseId?: string;
+  readonly message: string;
+}
+
+export type StampedPlanSubmission =
+  | { readonly ok: true; readonly revision: ExecutionPlanRevisionWithoutDigest; readonly derived: readonly string[] }
+  | { readonly ok: false; readonly failure: PlanSubmissionFailure };
+
+function mismatched(field: KernelStampedRevisionField, supplied: unknown, actual: unknown): PlanSubmissionFailure {
+  return {
+    code: "envelope_mismatch",
+    message: `Submitted plan envelope field ${field} (${JSON.stringify(supplied)}) does not match the kernel's actual ${field} (${JSON.stringify(actual)}) — envelope fields are kernel-owned; omit them or supply the exact actual value.`,
+  };
+}
+
+/**
+ * Stamps omitted envelope fields from actuals; refuses supplied values
+ * that do not match. Pure: operates on a structured clone, preserves key
+ * order and array order (canonical serialization is unaffected).
+ */
+export function stampPlanSubmissionEnvelope(
+  revision: PlanSubmissionRevision,
+  actuals: PlanSubmissionActuals,
+): StampedPlanSubmission {
+  const copy = structuredClone(revision) as unknown as Record<string, unknown> & {
+    tasks: Record<string, unknown>[];
+  };
+  const actualByField: Record<KernelStampedRevisionField, unknown> = {
+    runId: actuals.runId,
+    sourceManifestId: actuals.sourceManifestId,
+    sourceManifestDigest: actuals.sourceManifestDigest,
+    workflowPolicyVersion: actuals.workflowPolicyVersion,
+    createdAt: actuals.createdAt,
+    coverageReviewId: actuals.coverageReviewId,
+    repairBudgetLineageId: actuals.repairBudgetLineageId,
+  };
+  for (const field of KERNEL_STAMPED_REVISION_FIELDS) {
+    const supplied = copy[field];
+    const actual = actualByField[field];
+    if (supplied === undefined) {
+      // Omission is absence: stamp the actual, or leave the field absent
+      // when the kernel authoritatively has no current id. An omitted
+      // envelope value is never serialized as an explicit blank or null,
+      // so historical digests stay stable.
+      if (actual === undefined) delete copy[field];
+      else copy[field] = actual;
+      continue;
+    }
+    // Any provided value — including an explicit blank, null or
+    // wrong-typed value — must exactly match the actual. Nothing supplied
+    // is silently repaired.
+    if (supplied !== actual) {
+      return { ok: false, failure: mismatched(field, supplied, actual) };
+    }
+  }
+  const revisionId = copy["revisionId"];
+  if (typeof revisionId !== "string" || revisionId.trim().length === 0) {
+    return {
+      ok: false,
+      failure: { code: "envelope_mismatch", message: "Submitted plan revision requires a model-authored revisionId." },
+    };
+  }
+  const expectedBase = requiredBaseForRevision(revisionId);
+  const tasks = Array.isArray(copy.tasks) ? copy.tasks : [];
+  for (const task of tasks) {
+    if (task === undefined || task === null) continue;
+    const supplied = task["requiredBase"];
+    if (supplied === undefined) {
+      task["requiredBase"] = expectedBase;
+      continue;
+    }
+    if (supplied !== expectedBase) {
+      return {
+        ok: false,
+        failure: {
+          code: "base_mismatch",
+          taskId: typeof task["id"] === "string" ? (task["id"] as string) : undefined,
+          message: `Task ${typeof task["id"] === "string" ? (task["id"] as string) : "?"} supplies requiredBase (${JSON.stringify(supplied)}) but the kernel's required base for submitted revision ${revisionId} is (${JSON.stringify(expectedBase)}) — requiredBase is kernel-owned; omit it or supply the exact value.`,
+        },
+      };
+    }
+  }
+  return { ok: true, revision: copy as unknown as ExecutionPlanRevisionWithoutDigest, derived: [] };
+}
+
+
+function linkFailure(failure: PlanSubmissionFailure): StampedPlanSubmission {
+  return { ok: false, failure };
+}
+
+/** One authored side of a reciprocal link. `supplied` false is omission. */
+interface SuppliedLinkSide {
+  readonly supplied: boolean;
+  readonly values: readonly string[];
+}
+
+/**
+ * Reads one authored reciprocal array. Absent (undefined) is omission —
+ * the kernel may derive it. Any other value must be an array of strings;
+ * anything else (null, a bare string, non-string entries) is malformed
+ * and fails closed — never treated as omission.
+ */
+function readLinkSide(value: unknown): SuppliedLinkSide | undefined {
+  if (value === undefined) return { supplied: false, values: [] };
+  if (!Array.isArray(value)) return undefined;
+  const values: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") return undefined;
+    values.push(entry);
+  }
+  return { supplied: true, values };
+}
+
+/** One authored accountable-phase side. Absent (undefined) is omission. */
+interface SuppliedOwnerSide {
+  readonly supplied: boolean;
+  readonly value: string;
+}
+
+function readOwnerSide(value: unknown): SuppliedOwnerSide | undefined {
+  if (value === undefined) return { supplied: false, value: "" };
+  if (typeof value !== "string") return undefined;
+  return { supplied: true, value };
+}
+
+/** A link-bearing submission node with its raw authored sides. */
+interface SubmissionLinkNode {
+  readonly id?: unknown;
+  readonly accountablePhaseId?: unknown;
+  readonly contributingTaskIds?: unknown;
+  readonly requirementIds?: unknown;
+  readonly investigation?: unknown;
+}
+
+function isLinkNode(value: unknown): value is SubmissionLinkNode {
+  return value !== undefined && value !== null && typeof value === "object";
+}
+
+function queueLinkAddition(additions: Map<string, string[]>, key: string, value: string): void {
+  const queued = additions.get(key);
+  if (queued) {
+    if (!queued.includes(value)) queued.push(value);
+    return;
+  }
+  additions.set(key, [value]);
+}
+
+/**
+ * Derives the mirrored requirement/task/phase links from whichever side
+ * the model authored: the model authors one side of each link and the
+ * kernel fills the other by appending (authored array order is preserved;
+ * nothing is reordered or removed). Every original authored side is
+ * snapshotted before any mutation, the complete reciprocal sets are
+ * computed from those originals only, and only then applied — so fan-in
+ * (two requirements to one silent task, two tasks to one silent
+ * requirement, several members to one silent phase) derives coherently
+ * instead of tripping on iteration-time mutations. Both sides supplied
+ * but disagreeing, unknown identities, unknown phases, ambiguous reverse
+ * ownership and malformed sides all fail closed. An omitted
+ * accountablePhaseId derives from exactly one uniquely naming phase
+ * membership; several naming phases are ambiguous and refused. Links
+ * missing on both sides are left for the EP06/coverage validators, which
+ * still refuse them.
+ */
+export function deriveMirroredPlanLinks(
+  revision: PlanSubmissionRevision,
+): StampedPlanSubmission {
+  const copy = structuredClone(revision) as unknown as Record<string, unknown>;
+  const derived: string[] = [];
+  const requirements = (
+    Array.isArray(copy["requirements"]) ? (copy["requirements"] as unknown[]) : []
+  ).filter(isLinkNode);
+  const tasks = (
+    Array.isArray(copy["tasks"]) ? (copy["tasks"] as unknown[]) : []
+  ).filter(isLinkNode);
+  const phases = (
+    Array.isArray(copy["phases"]) ? (copy["phases"] as unknown[]) : []
+  ).filter(isLinkNode);
+  const requirementById = new Map<string, SubmissionLinkNode>();
+  for (const requirement of requirements) {
+    if (typeof requirement.id === "string") requirementById.set(requirement.id, requirement);
+  }
+  const taskById = new Map<string, SubmissionLinkNode>();
+  for (const task of tasks) {
+    if (typeof task.id === "string") taskById.set(task.id, task);
+  }
+  const phaseById = new Map<string, SubmissionLinkNode>();
+  for (const phase of phases) {
+    if (typeof phase.id === "string") phaseById.set(phase.id, phase);
+  }
+
+  // Snapshot every original authored side BEFORE any mutation. All
+  // conflict checks below compare these originals only.
+  const reqContrib = new Map<string, SuppliedLinkSide>();
+  const reqOwner = new Map<string, SuppliedOwnerSide>();
+  const taskReqs = new Map<string, SuppliedLinkSide>();
+  const taskOwner = new Map<string, SuppliedOwnerSide>();
+  const phaseReqs = new Map<string, SuppliedLinkSide>();
+  const phaseTasks = new Map<string, SuppliedLinkSide>();
+  const malformed = (where: string, field: string, id: string): StampedPlanSubmission =>
+    linkFailure({
+      code: "malformed_link",
+      message: `${where} ${id} supplies a malformed ${field} side (expected an omitted field or an array of id strings) — malformed sides fail closed, never treated as omission.`,
+    });
+  for (const requirement of requirements) {
+    if (typeof requirement.id !== "string") continue;
+    const contrib = readLinkSide(requirement.contributingTaskIds);
+    if (!contrib) return malformed("Requirement", "contributingTaskIds", requirement.id);
+    const owner = readOwnerSide(requirement.accountablePhaseId);
+    if (!owner) return malformed("Requirement", "accountablePhaseId", requirement.id);
+    reqContrib.set(requirement.id, contrib);
+    reqOwner.set(requirement.id, owner);
+  }
+  for (const task of tasks) {
+    if (typeof task.id !== "string") continue;
+    const claimed = readLinkSide(task.requirementIds);
+    if (!claimed) return malformed("Task", "requirementIds", task.id);
+    const owner = readOwnerSide(task.accountablePhaseId);
+    if (!owner) return malformed("Task", "accountablePhaseId", task.id);
+    taskReqs.set(task.id, claimed);
+    taskOwner.set(task.id, owner);
+  }
+  for (const phase of phases) {
+    if (typeof phase.id !== "string") continue;
+    const memberReqs = readLinkSide(phase.requirementIds);
+    if (!memberReqs) return malformed("Phase", "requirementIds", phase.id);
+    const memberTasks = readLinkSide(phase.contributingTaskIds);
+    if (!memberTasks) return malformed("Phase", "contributingTaskIds", phase.id);
+    phaseReqs.set(phase.id, memberReqs);
+    phaseTasks.set(phase.id, memberTasks);
+  }
+
+  // Unknown identities fail closed before any derivation invents a link.
+  for (const task of tasks) {
+    if (typeof task.id !== "string") continue;
+    for (const requirementId of taskReqs.get(task.id)?.values ?? []) {
+      if (!requirementById.has(requirementId)) {
+        return linkFailure({
+          code: "unknown_requirement_ref",
+          taskId: task.id,
+          requirementId,
+          message: `Task ${task.id} claims unknown requirement ${requirementId} — a dropped or nonexistent requirement.`,
+        });
+      }
+    }
+    const investigation = task.investigation as { dependentUnlockTaskIds?: unknown } | undefined;
+    const unlocks = investigation !== undefined && isNonBlankStringArray(investigation.dependentUnlockTaskIds)
+      ? investigation.dependentUnlockTaskIds
+      : [];
+    for (const unlockId of unlocks) {
+      if (!taskById.has(unlockId)) {
+        return linkFailure({
+          code: "unknown_task_ref",
+          taskId: task.id,
+          message: `Investigation task ${task.id}'s dependent unlock ${unlockId} does not resolve to a task in this revision.`,
+        });
+      }
+    }
+  }
+  for (const requirement of requirements) {
+    if (typeof requirement.id !== "string") continue;
+    for (const taskId of reqContrib.get(requirement.id)?.values ?? []) {
+      if (!taskById.has(taskId)) {
+        return linkFailure({
+          code: "unknown_task_ref",
+          requirementId: requirement.id,
+          taskId,
+          message: `Requirement ${requirement.id} claims unknown contributing task ${taskId}.`,
+        });
+      }
+    }
+    const owner = reqOwner.get(requirement.id);
+    if (owner?.supplied && !phaseById.has(owner.value)) {
+      return linkFailure({
+        code: "unknown_phase_ref",
+        requirementId: requirement.id,
+        phaseId: owner.value,
+        message: `Requirement ${requirement.id} names unknown accountable phase ${owner.value}.`,
+      });
+    }
+  }
+  for (const task of tasks) {
+    if (typeof task.id !== "string") continue;
+    const owner = taskOwner.get(task.id);
+    if (owner?.supplied && !phaseById.has(owner.value)) {
+      return linkFailure({
+        code: "unknown_phase_ref",
+        taskId: task.id,
+        phaseId: owner.value,
+        message: `Task ${task.id} names unknown accountable phase ${owner.value}.`,
+      });
+    }
+  }
+  for (const phase of phases) {
+    if (typeof phase.id !== "string") continue;
+    for (const requirementId of phaseReqs.get(phase.id)?.values ?? []) {
+      if (!requirementById.has(requirementId)) {
+        return linkFailure({
+          code: "unknown_requirement_ref",
+          phaseId: phase.id,
+          requirementId,
+          message: `Phase ${phase.id} references unknown requirement ${requirementId}.`,
+        });
+      }
+    }
+    for (const taskId of phaseTasks.get(phase.id)?.values ?? []) {
+      if (!taskById.has(taskId)) {
+        return linkFailure({
+          code: "unknown_task_ref",
+          phaseId: phase.id,
+          taskId,
+          message: `Phase ${phase.id} references unknown contributing task ${taskId}.`,
+        });
+      }
+    }
+  }
+
+  // Planned additions, computed from the originals and applied only after
+  // every check passes — never interleaved with conflict checks.
+  const taskReqAdditions = new Map<string, string[]>();
+  const reqContribAdditions = new Map<string, string[]>();
+  const phaseReqAdditions = new Map<string, string[]>();
+  const phaseTaskAdditions = new Map<string, string[]>();
+  const reqOwnerAssignments = new Map<SubmissionLinkNode, string>();
+  const taskOwnerAssignments = new Map<SubmissionLinkNode, string>();
+
+  // Requirement <-> task: derive the silent side from the authored one,
+  // refuse a disagreeing supplied side.
+  for (const requirement of requirements) {
+    if (typeof requirement.id !== "string") continue;
+    const contrib = reqContrib.get(requirement.id);
+    if (!contrib?.supplied) continue;
+    for (const taskId of contrib.values) {
+      const peer = taskReqs.get(taskId);
+      if (!peer) continue;
+      if (peer.supplied) {
+        if (!peer.values.includes(requirement.id)) {
+          return linkFailure({
+            code: "link_conflict",
+            requirementId: requirement.id,
+            taskId,
+            message: `Requirement ${requirement.id} claims task ${taskId} as contributing, but task ${taskId} names a different requirement set (${peer.values.join(", ")}) — supplied sides disagree.`,
+          });
+        }
+        continue;
+      }
+      queueLinkAddition(taskReqAdditions, taskId, requirement.id);
+    }
+  }
+  for (const task of tasks) {
+    if (typeof task.id !== "string") continue;
+    const claimed = taskReqs.get(task.id);
+    if (!claimed?.supplied) continue;
+    for (const requirementId of claimed.values) {
+      const peer = reqContrib.get(requirementId);
+      if (!peer) continue;
+      if (peer.supplied) {
+        if (!peer.values.includes(task.id)) {
+          return linkFailure({
+            code: "link_conflict",
+            requirementId,
+            taskId: task.id,
+            message: `Task ${task.id} claims requirement ${requirementId}, but requirement ${requirementId} names a different contributing set (${peer.values.join(", ")}) — supplied sides disagree.`,
+          });
+        }
+        continue;
+      }
+      queueLinkAddition(reqContribAdditions, requirementId, task.id);
+    }
+  }
+
+  // Phase <-> requirement/task ownership from either supplied side: an
+  // authored owner derives into a silent membership list, an authored
+  // membership derives into a silent owner, and a supplied pair that
+  // disagrees is refused.
+  const resolveOwnership = (
+    kind: "requirement" | "task",
+    nodes: readonly SubmissionLinkNode[],
+    owners: Map<string, SuppliedOwnerSide>,
+    memberSides: Map<string, SuppliedLinkSide>,
+    additions: Map<string, string[]>,
+    assignments: Map<SubmissionLinkNode, string>,
+    memberField: "requirementIds" | "contributingTaskIds",
+  ): StampedPlanSubmission | undefined => {
+    const idField = kind === "requirement" ? "requirementId" : "taskId";
+    for (const node of nodes) {
+      if (typeof node.id !== "string") continue;
+      const owner = owners.get(node.id);
+      if (!owner) continue;
+      if (owner.supplied) {
+        if (!phaseById.has(owner.value)) continue;
+        for (const [phaseId, side] of memberSides) {
+          if (phaseId === owner.value || !side.supplied || !side.values.includes(node.id)) continue;
+          return linkFailure({
+            code: "link_conflict",
+            phaseId,
+            [idField]: node.id,
+            message: `Phase ${phaseId} lists ${kind} ${node.id}, but that ${kind}'s accountable phase is ${owner.value} — supplied sides disagree.`,
+          });
+        }
+        const homeSide = memberSides.get(owner.value);
+        if (homeSide?.supplied) {
+          if (!homeSide.values.includes(node.id)) {
+            return linkFailure({
+              code: "link_conflict",
+              phaseId: owner.value,
+              [idField]: node.id,
+              message: `${kind === "requirement" ? "Requirement" : "Task"} ${node.id} is accountable to phase ${owner.value}, but phase ${owner.value} names a different ${memberField} set (${homeSide.values.join(", ")}) — supplied sides disagree.`,
+            });
+          }
+          continue;
+        }
+        queueLinkAddition(additions, owner.value, node.id);
+      } else {
+        // Reverse derivation: exactly one uniquely naming phase owns it.
+        // Several naming phases are ambiguous and refused; none leaves
+        // the owner for EP06/coverage validation.
+        const owners: string[] = [];
+        for (const [phaseId, side] of memberSides) {
+          if (side.supplied && side.values.includes(node.id)) owners.push(phaseId);
+        }
+        if (owners.length > 1) {
+          return linkFailure({
+            code: "link_conflict",
+            [idField]: node.id,
+            message: `${kind === "requirement" ? "Requirement" : "Task"} ${node.id} omits its accountable phase, but phases ${owners.join(", ")} both name it — ownership is ambiguous; author exactly one side.`,
+          });
+        }
+        if (owners.length === 1) assignments.set(node, owners[0] as string);
+      }
+    }
+    return undefined;
+  };
+  const ownershipFailure = resolveOwnership(
+    "requirement",
+    requirements,
+    reqOwner,
+    phaseReqs,
+    phaseReqAdditions,
+    reqOwnerAssignments,
+    "requirementIds",
+  ) ?? resolveOwnership(
+    "task",
+    tasks,
+    taskOwner,
+    phaseTasks,
+    phaseTaskAdditions,
+    taskOwnerAssignments,
+    "contributingTaskIds",
+  );
+  if (ownershipFailure) return ownershipFailure;
+
+  // Apply the complete reciprocal sets. Legitimately omitted sides are
+  // initialized here — never pushed onto absent fields — while supplied
+  // sides are never rewritten (additions only queued against omitted
+  // sides). Authored array order is preserved throughout.
+  const applyLinkAdditions = (
+    targets: Map<string, SubmissionLinkNode>,
+    additions: Map<string, string[]>,
+    field: "requirementIds" | "contributingTaskIds",
+    describe: (id: string, peer: string) => string,
+  ): void => {
+    for (const [id, values] of additions) {
+      const node = targets.get(id);
+      if (!node) continue;
+      const record = node as unknown as Record<string, unknown>;
+      const current = record[field];
+      const list = Array.isArray(current)
+        ? (current as string[])
+        : ((record[field] = []) as string[]);
+      for (const value of values) {
+        if (!list.includes(value)) {
+          list.push(value);
+          derived.push(describe(id, value));
+        }
+      }
+    }
+  };
+  applyLinkAdditions(taskById, taskReqAdditions, "requirementIds", (id, peer) => `task ${id} derives requirement ${peer}`);
+  applyLinkAdditions(requirementById, reqContribAdditions, "contributingTaskIds", (id, peer) => `requirement ${id} derives task ${peer}`);
+  applyLinkAdditions(phaseById, phaseReqAdditions, "requirementIds", (id, peer) => `phase ${id} derives requirement ${peer}`);
+  applyLinkAdditions(phaseById, phaseTaskAdditions, "contributingTaskIds", (id, peer) => `phase ${id} derives task ${peer}`);
+  for (const [node, phaseId] of reqOwnerAssignments) {
+    (node as unknown as Record<string, unknown>)["accountablePhaseId"] = phaseId;
+    derived.push(`requirement ${String(node.id)} derives accountable phase ${phaseId}`);
+  }
+  for (const [node, phaseId] of taskOwnerAssignments) {
+    (node as unknown as Record<string, unknown>)["accountablePhaseId"] = phaseId;
+    derived.push(`task ${String(node.id)} derives accountable phase ${phaseId}`);
+  }
+  return { ok: true, revision: copy as unknown as ExecutionPlanRevisionWithoutDigest, derived };
+}
+
+
+/**
+ * The C5 submission boundary: stamp the kernel envelope (and requiredBase)
+ * from actuals, then derive mirrored links. Runs before the digest is
+ * calculated, so the digest binds the stamped submission. Returns the
+ * normalized revision or the first fail-closed refusal.
+ */
+export function normalizePlanSubmission(
+  revision: PlanSubmissionRevision,
+  actuals: PlanSubmissionActuals,
+): StampedPlanSubmission {
+  const stamped = stampPlanSubmissionEnvelope(revision, actuals);
+  if (!stamped.ok) return stamped;
+  const linked = deriveMirroredPlanLinks(stamped.revision);
+  if (!linked.ok) return linked;
+  return { ok: true, revision: linked.revision, derived: [...stamped.derived, ...linked.derived] };
+}

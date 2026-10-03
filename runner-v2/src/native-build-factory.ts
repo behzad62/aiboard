@@ -33,6 +33,8 @@ import {
   type DurableSubmission,
 } from "./delivery-execution.js";
 import { NativeDeliverableReviewRuntime } from "./native-deliverable-review.js";
+import type { ExecutionTaskContract } from "./planning-contracts.js";
+import type { BuildTask } from "./task-contracts.js";
 import type { MutationFileSystem } from "./mutation-probe.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
 import { CapabilityRegistry } from "./capability-registry.js";
@@ -169,6 +171,8 @@ import {
   readyPlanIdentity,
   rebuildSchedulerProjection,
   repairParentContractId,
+  resolveTaskContractAtRef,
+  resolveTaskContractReference,
   taskPlanMembership,
   type SchedulerEvent,
   type SchedulerProjection,
@@ -1331,6 +1335,22 @@ export class NativeBuildFactory {
     // state only (session change set, diff artifact, submit_task summary);
     // commands run through FinalVerificationRuntime and the audited executor
     // in disposable checkouts (independent-verifier kind).
+    // C5 (AR-R16): the authoritative accepted contract for review inputs,
+    // resolved from durable state only. Prefers the exact submitted
+    // provenance pinned on the task; falls back to the current ready
+    // revision. Anything else fails closed — the review is recorded as
+    // not performed and the run pauses, never placeholder prose.
+    const resolveReviewContract = (projection: SchedulerProjection, task: BuildTask): ExecutionTaskContract => {
+      if (task.contractRef) {
+        const pinned = resolveTaskContractAtRef(projection, task.contractRef);
+        if (pinned) return pinned.contract;
+      }
+      const resolution = resolveTaskContractReference(projection, task.id);
+      if (resolution.status === "current") return resolution.contract;
+      throw new Error(
+        `Deliverable review inputs unavailable: task ${task.id} has no resolvable accepted contract (resolution: ${resolution.status}).`,
+      );
+    };
     const durableSubmission = async (projection: SchedulerProjection, taskId: string): Promise<DurableSubmission> => {
       const task = projection.tasks[taskId];
       if (!task) throw new Error(`Unknown task ${taskId}.`);
@@ -1378,6 +1398,7 @@ export class NativeBuildFactory {
         task,
         submission: await durableSubmission(projection, task.id),
         artifacts: this.artifacts,
+        contract: resolveReviewContract(projection, task),
       }),
       workspace: {
         create: async (taskRevision) => ({ path: (await deliveryReviewWorkspace.create(taskRevision)).path }),

@@ -44,6 +44,7 @@ import {
   isFinalVerificationTask,
   REPLAN_REASONS,
   type BuildTask,
+  type TaskContractRef,
   type PlanNewTask,
   type PlanReconciliation,
   type PlanTaskUpdate,
@@ -51,7 +52,7 @@ import {
   type ReplanRequest,
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
-import type { ExecutionTaskContract } from "./planning-contracts.js";
+import type { ExecutionPlanRevision, ExecutionTaskContract } from "./planning-contracts.js";
 import {
   planFinalVerification,
   validateFinalVerificationPlan,
@@ -1505,7 +1506,10 @@ export function repairParentContractId(
   return undefined;
 }
 
-function schedulerTaskFromContract(contract: ExecutionTaskContract): BuildTask {
+function schedulerTaskFromContract(
+  contract: ExecutionTaskContract,
+  ready: ReadyPlanIdentity,
+): BuildTask {
   return {
     id: contract.id,
     objective: contract.outcome.user,
@@ -1517,6 +1521,9 @@ function schedulerTaskFromContract(contract: ExecutionTaskContract): BuildTask {
       text: criterion.text,
     })),
     acceptanceCriteriaVersion: 1,
+    // C5: the authoritative accepted contract reference, stamped by the
+    // kernel bridge — never model-authored.
+    contractRef: { revisionId: ready.revisionId, digest: ready.digest, taskId: contract.id },
     attempt: 0,
   };
 }
@@ -1554,7 +1561,7 @@ function materializeReadyPlanTasks(projection: SchedulerProjection): void {
       throw new Error(`Ready plan contract ${contract.id} collides with a kernel repair task.`);
     }
     if (!existing) {
-      projection.tasks[contract.id] = schedulerTaskFromContract(contract);
+      projection.tasks[contract.id] = schedulerTaskFromContract(contract, ready);
       knownIds.add(contract.id);
     } else if (
       existing.status !== "assigned" &&
@@ -1572,6 +1579,13 @@ function materializeReadyPlanTasks(projection: SchedulerProjection): void {
       revisionId: ready.revisionId,
       digest: ready.digest,
       contractId: contract.id,
+    };
+    // C5: mirror the binding on the task itself, so the authoritative
+    // accepted contract reference resolves from durable state —
+    // including across re-readiness (bindings are rewritten above).
+    projection.tasks[contract.id] = {
+      ...projection.tasks[contract.id]!,
+      contractRef: { revisionId: ready.revisionId, digest: ready.digest, taskId: contract.id },
     };
   }
   projection.readyPlanTaskBindings = bindings;
@@ -1635,7 +1649,153 @@ function rebindMemberTasksToReadyPlan(projection: SchedulerProjection): void {
         : {}),
     };
   }
-  if (rebound) projection.readyPlanTaskBindings = rebound;
+  // C5: mirror refreshed bindings on the tasks so the authoritative
+  // contract reference stays current across re-readiness and restart.
+  if (rebound) {
+    for (const [taskId, binding] of Object.entries(rebound)) {
+      const task = projection.tasks[taskId];
+      if (!task || binding.contractId === undefined) continue;
+      if (
+        task.contractRef?.revisionId !== binding.revisionId ||
+        task.contractRef?.digest !== binding.digest ||
+        task.contractRef?.taskId !== binding.contractId
+      ) {
+        projection.tasks[taskId] = {
+          ...task,
+          contractRef: { revisionId: binding.revisionId, digest: binding.digest, taskId: binding.contractId },
+        };
+      }
+    }
+    projection.readyPlanTaskBindings = rebound;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// C5 (AR-R15/AR-R16): authoritative task contract reference resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * C5: where a scheduler task's contract reference stands against the
+ * CURRENT authoritative accepted plan revision from durable state.
+ * - `current`: the reference resolves to a contract in the current ready revision.
+ * - `stale`: the reference names an older ready identity than the current one.
+ * - `dropped`: the contract left the current revision — non-admissible, surfaced.
+ * - `mismatched`: the task's contractRef contradicts its ready-plan binding.
+ * - `unmapped`: no binding and no reference (rogue tasks; repair tasks
+ *   without a resolvable parent contract).
+ * - `not_ready`: the run has no ready plan identity.
+ * - `legacy`: pre-P1 runs carry no plan contracts.
+ * Pure function of the projection: deterministic across restart and replay.
+ */
+export type TaskContractResolution =
+  | { readonly status: "current"; readonly ref: TaskContractRef; readonly contract: ExecutionTaskContract }
+  | { readonly status: "stale"; readonly ref: TaskContractRef; readonly currentRevisionId: string; readonly currentDigest: string; readonly contract?: ExecutionTaskContract }
+  | { readonly status: "dropped"; readonly ref: TaskContractRef }
+  | { readonly status: "mismatched"; readonly taskId: string; readonly detail: string }
+  | { readonly status: "unmapped"; readonly taskId: string }
+  | { readonly status: "not_ready"; readonly taskId: string }
+  | { readonly status: "legacy"; readonly taskId: string };
+
+/**
+ * C5 bridge: resolves the current authoritative accepted contract
+ * revision, digest and task id for a scheduler task from durable state.
+ * Direct for bridged tasks; through the parent contract for kernel-created
+ * repair tasks. Never invents a contract — every failure mode is explicit.
+ */
+export function resolveTaskContractReference(
+  projection: SchedulerProjection,
+  taskId: string,
+): TaskContractResolution {
+  if (projection.planningPolicyVersion !== 1) return { status: "legacy", taskId };
+  const task = projection.tasks[taskId];
+  if (!task) return { status: "unmapped", taskId };
+  const ready = readyPlanIdentity(projection);
+  const plan = projection.planning?.plan;
+  const revision = ready ? plan?.revisionsById[ready.revisionId] : undefined;
+  if (!ready || !revision) return { status: "not_ready", taskId };
+  const binding = projection.readyPlanTaskBindings?.[taskId];
+  const ref = task.contractRef;
+  if (!binding && !ref) {
+    if (task.kind === "verification_repair") {
+      const parent = repairParentContractId(projection, task);
+      const parentContract = parent !== undefined
+        ? revision.tasks.find((contract) => contract.id === parent)
+        : undefined;
+      if (parent !== undefined && parentContract) {
+        return {
+          status: "current",
+          ref: { revisionId: ready.revisionId, digest: ready.digest, taskId: parent },
+          contract: parentContract,
+        };
+      }
+    }
+    return { status: "unmapped", taskId };
+  }
+  if (binding && ref) {
+    if (binding.revisionId !== ref.revisionId || binding.digest !== ref.digest) {
+      return {
+        status: "mismatched",
+        taskId,
+        detail: `Task ${taskId}'s contractRef (${ref.revisionId}/${ref.digest}) contradicts its ready-plan binding (${binding.revisionId}/${binding.digest}).`,
+      };
+    }
+    if (binding.contractId !== undefined && binding.contractId !== ref.taskId) {
+      return {
+        status: "mismatched",
+        taskId,
+        detail: `Task ${taskId}'s contractRef names contract ${ref.taskId} but its ready-plan binding names ${binding.contractId}.`,
+      };
+    }
+  }
+  const effective: TaskContractRef = ref ?? {
+    revisionId: binding!.revisionId,
+    digest: binding!.digest,
+    taskId: binding!.contractId ?? taskId,
+  };
+  if (effective.revisionId !== ready.revisionId || effective.digest !== ready.digest) {
+    const survived = revision.tasks.find((contract) => contract.id === effective.taskId);
+    return {
+      status: "stale",
+      ref: effective,
+      currentRevisionId: ready.revisionId,
+      currentDigest: ready.digest,
+      ...(survived ? { contract: survived } : {}),
+    };
+  }
+  const contract = revision.tasks.find((item) => item.id === effective.taskId) ??
+    (task.kind === "verification_repair"
+      ? repairParentContractOf(projection, revision, task)
+      : undefined);
+  if (!contract) return { status: "dropped", ref: effective };
+  return { status: "current", ref: effective, contract };
+}
+
+function repairParentContractOf(
+  projection: SchedulerProjection,
+  revision: ExecutionPlanRevision,
+  task: BuildTask,
+): ExecutionTaskContract | undefined {
+  const parent = repairParentContractId(projection, task);
+  return parent !== undefined
+    ? revision.tasks.find((contract) => contract.id === parent)
+    : undefined;
+}
+
+/**
+ * C5: pins a contract reference to its exact stored revision — the
+ * reviewer's submitted-provenance path. Undefined unless the stored
+ * revision's own digest still matches (unchanged historical record).
+ */
+export function resolveTaskContractAtRef(
+  projection: SchedulerProjection,
+  ref: TaskContractRef,
+): { readonly revision: ExecutionPlanRevision; readonly contract: ExecutionTaskContract } | undefined {
+  if (projection.planningPolicyVersion !== 1) return undefined;
+  const revision = projection.planning?.plan?.revisionsById[ref.revisionId];
+  if (!revision || revision.digest !== ref.digest) return undefined;
+  const contract = revision.tasks.find((item) => item.id === ref.taskId);
+  if (!contract) return undefined;
+  return { revision, contract };
 }
 
 /**

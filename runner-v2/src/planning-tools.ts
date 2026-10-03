@@ -7,10 +7,12 @@ import type {
 import type { ArtifactStore } from "./artifact-store.js";
 import {
   buildExecutionPlanRevision,
+  normalizePlanSubmission,
   validateExecutionPlanRevision,
   validateRequirementLedger,
   type ExecutionPlanPhase,
-  type ExecutionPlanRevisionWithoutDigest,
+  type PlanSubmissionActuals,
+  type PlanSubmissionRevision,
   type SourceRequirement,
   type SourceSectionDisposition,
 } from "./planning-contracts.js";
@@ -89,11 +91,11 @@ interface PersistLedgerInput {
 }
 
 interface DraftPlanInput {
-  revision: ExecutionPlanRevisionWithoutDigest;
+  revision: PlanSubmissionRevision;
 }
 
 interface RevisePlanInput {
-  revision: ExecutionPlanRevisionWithoutDigest;
+  revision: PlanSubmissionRevision;
   expectedRevisionId: string;
   expectedDigest: string;
 }
@@ -417,7 +419,10 @@ function draftPlanTool(
     name: "draft_planning_plan",
     description:
       "Draft the execution plan revision (requirements, phases, complete task contracts, bounded " +
-      "investigations) after the requirement ledger is persisted.",
+      "investigations) after the requirement ledger is persisted. Envelope fields (run, manifest id and digest, " +
+      "policy version, createdAt, coverage review and repair lineage ids) and each task's requiredBase are " +
+      "kernel-stamped: omit them or supply the exact " +
+      "actual values; one-sided requirement/task/phase links are derived, conflicting sides refused.",
     schema: {
       type: "object",
       properties: {
@@ -429,7 +434,7 @@ function draftPlanTool(
     validate: (input) =>
       validateObject(input, (value) => {
         if (!isRecord(value.revision) || !nonEmpty(value.revision.revisionId)) return null;
-        return { revision: value.revision as ExecutionPlanRevisionWithoutDigest };
+        return { revision: value.revision as PlanSubmissionRevision };
       }, "revision with a revisionId is required."),
     execute: async (input, context) => {
       const denied = architectOnly(context);
@@ -457,7 +462,22 @@ function draftPlanTool(
         );
       }
       const manifest = planning.source.manifestsById[planning.source.currentManifestId];
-      const revision = buildExecutionPlanRevision(input.revision);
+      // C5 (AR-R15): normalize and stamp the kernel envelope BEFORE the
+      // digest is calculated, so the digest binds the stamped submission.
+      // Historical revisions, replay and canonical serialization are
+      // untouched — only this new-submission boundary normalizes.
+      const normalized = normalizePlanSubmission(
+        input.revision,
+        submissionActuals(projection, manifest, context.runId, clock),
+      );
+      if (!normalized.ok) {
+        return errorOutput(
+          normalized.failure.code,
+          `Plan revision is refused: ${normalized.failure.message}`,
+          [normalized.failure.message],
+        );
+      }
+      const revision = buildExecutionPlanRevision(normalized.revision);
       const validation = validateExecutionPlanRevision(
         revision,
         manifest,
@@ -496,7 +516,8 @@ function revisePlanTool(
     name: "revise_planning_plan",
     description:
       "Revise the execution plan revision against the exact current revision identity " +
-      "(expectedRevisionId plus expectedDigest); a stale base is refused.",
+      "(expectedRevisionId plus expectedDigest); a stale base is refused. Envelope fields and requiredBase are " +
+      "kernel-stamped like a draft; one-sided links are derived, conflicting sides refused.",
     schema: {
       type: "object",
       properties: {
@@ -512,7 +533,7 @@ function revisePlanTool(
         if (!isRecord(value.revision) || !nonEmpty(value.revision.revisionId)) return null;
         if (!nonEmpty(value.expectedRevisionId) || !nonEmpty(value.expectedDigest)) return null;
         return {
-          revision: value.revision as ExecutionPlanRevisionWithoutDigest,
+          revision: value.revision as PlanSubmissionRevision,
           expectedRevisionId: value.expectedRevisionId,
           expectedDigest: value.expectedDigest,
         };
@@ -552,7 +573,20 @@ function revisePlanTool(
         );
       }
       const manifest = planning.source.manifestsById[planning.source.currentManifestId];
-      const revision = buildExecutionPlanRevision(input.revision);
+      // C5 (AR-R15): normalize and stamp the kernel envelope BEFORE the
+      // digest is calculated, so the digest binds the stamped submission.
+      const normalized = normalizePlanSubmission(
+        input.revision,
+        submissionActuals(projection, manifest, context.runId, clock),
+      );
+      if (!normalized.ok) {
+        return errorOutput(
+          normalized.failure.code,
+          `Plan revision is refused: ${normalized.failure.message}`,
+          [normalized.failure.message],
+        );
+      }
+      const revision = buildExecutionPlanRevision(normalized.revision);
       if (planning.plan.revisionHistoryIds.includes(revision.revisionId)) {
         return errorOutput(
           "duplicate_plan_revision",
@@ -590,6 +624,46 @@ function revisePlanTool(
     },
   });
 }
+
+/**
+ * C5 (AR-R15): the kernel actuals a plan submission envelope is stamped
+ * from — the submitting run, its current source manifest, the run's
+ * planning policy version, the kernel clock, and the durable
+ * review/lineage bindings. `coverageReviewId` / `repairBudgetLineageId`
+ * carry the current (prior) revision's binding forward when one is
+ * recorded, else authoritative absence. The live coverage review is
+ * deliberately NOT used: it evaluated the prior revision, so stamping
+ * its id onto a new revision would claim a binding the coverage-review
+ * events cannot prove (validateCoverageReviewBinding would refuse the
+ * next review). A new submission therefore never invents a review
+ * binding; it only continues a recorded one.
+ */
+function submissionActuals(
+  projection: SchedulerProjection,
+  manifest: ApprovedSourceManifest,
+  runId: string,
+  clock: () => string,
+): PlanSubmissionActuals {
+  const planning = projection.planning;
+  const currentRevision = planning?.plan !== undefined
+    ? planning.plan.revisionsById[planning.plan.currentRevisionId]
+    : undefined;
+  return {
+    runId,
+    sourceManifestId: manifest.manifestId,
+    sourceManifestDigest: manifest.artifactDigest,
+    workflowPolicyVersion: projection.planningPolicyVersion ?? 1,
+    createdAt: clock(),
+    ...(currentRevision?.coverageReviewId !== undefined
+      ? { coverageReviewId: currentRevision.coverageReviewId }
+      : {}),
+    ...(currentRevision?.repairBudgetLineageId !== undefined
+      ? { repairBudgetLineageId: currentRevision.repairBudgetLineageId }
+      : {}),
+  };
+}
+
+
 
 function amendmentHistoryOf(
   planning: NonNullable<ReturnType<typeof rebuildSchedulerProjection>["planning"]>,

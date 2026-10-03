@@ -1328,10 +1328,16 @@ test("C4: derived index drops stale gates after a plan revision", async () => {
     for (const tool of createPlanningTools({ store, clock: () => CLOCK })) registry.register(tool);
     const next = structuredClone(fixture.revision) as unknown as Record<string, unknown>;
     next.revisionId = "revision_2";
+    next.runId = runId;
+    delete next.createdAt;
     delete next.digest;
+    for (const task of next.tasks as Record<string, unknown>[]) {
+      task["requiredBase"] = "accepted plan revision revision_2";
+    }
     const revised = await registry.invoke({
       type: "tool_call",
       callId: "revise:stalegate",
+
       name: "revise_planning_plan",
       arguments: {
         revision: next,
@@ -1623,10 +1629,16 @@ test("C4: folded guidance needs a new plan revision, never reads or an old revis
     for (const tool of createPlanningTools({ store, clock: () => CLOCK })) registry.register(tool);
     const next = structuredClone(fixture.revision) as unknown as Record<string, unknown>;
     next.revisionId = "revision_2";
+    next.runId = runId;
+    delete next.createdAt;
     delete next.digest;
+    for (const task of next.tasks as Record<string, unknown>[]) {
+      task["requiredBase"] = "accepted plan revision revision_2";
+    }
     const revised = await registry.invoke({
       type: "tool_call",
       callId: "revise:c4",
+
       name: "revise_planning_plan",
       arguments: {
         revision: next,
@@ -1641,9 +1653,11 @@ test("C4: folded guidance needs a new plan revision, never reads or an old revis
     appendReviewChain(store, runId, "coverage_3", {
       ...structuredClone(fixture.coverageReview),
       id: "coverage_3",
+      runId,
       planRevisionId: rev2.revisionId,
       planRevisionDigest: rev2.digest,
     } as never, "r3");
+
     store.append({
       runId,
       type: "planning.plan_ready",
@@ -2018,9 +2032,16 @@ class C4ArchitectModel implements AgentModel {
     if (!seen.has("draft_planning_plan")) {
       assert.equal(probe.isError, true, "checkpoint probe must refuse");
       assert.equal(probe.errorCode, "unknown_tool", "checkpoint probe refuses as unknown_tool");
-      const { digest: _digest, ...rest } = this.fixture.revision as unknown as Record<string, unknown>;
+      // C5: the run id and authorship time are kernel-stamped (the factory
+      // clock is real time, so the fixture's fixed values cannot match);
+      // manifest, policy, lineage absence and requiredBase ride supplied.
+      const { digest: _digest, runId: _run, createdAt: _created, ...rest } =
+        this.fixture.revision as unknown as Record<string, unknown>;
       void _digest;
+      void _run;
+      void _created;
       return this.call("draft_planning_plan", { revision: rest });
+
     }
     if (!seen.has("request_coverage_review")) {
       return this.call("request_coverage_review", { reviewId: "coverage_1" });

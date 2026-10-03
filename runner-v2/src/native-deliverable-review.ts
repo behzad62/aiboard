@@ -10,7 +10,12 @@ import type {
   ToolResult,
 } from "./agent-contracts.js";
 import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
-import { RUNNER_KERNEL_INVARIANTS, defectClassBrief } from "./agent-prompts.js";
+import {
+  RUNNER_KERNEL_INVARIANTS,
+  REVIEWER_CONTRACT_SECTION_ID,
+  buildReviewerContractBlock,
+  defectClassBrief,
+} from "./agent-prompts.js";
 import type { ReviewDefectRecorder } from "./defect-history.js";
 import { modelTrackRecordSnapshot } from "./defect-history.js";
 import type { ArtifactStore } from "./artifact-store.js";
@@ -53,7 +58,7 @@ import {
 import type { OneShotCommandExecutor } from "./one-shot-command-executor.js";
 import type { PermissionProfile } from "./contracts.js";
 import type { SqlitePermissionStore } from "./permission-store.js";
-import { PLANNING_FINDING_CATEGORIES } from "./planning-contracts.js";
+import { PLANNING_FINDING_CATEGORIES, type ExecutionTaskContract } from "./planning-contracts.js";
 import type { RunnerProviderRetryRuntime } from "./provider-call-retry.js";
 import { classifyProviderFailure } from "./provider-health.js";
 import { assertRoleToolSurface, type RoleCapabilityBroker } from "./role-capabilities.js";
@@ -64,7 +69,7 @@ import {
   type SchedulerStore,
 } from "./scheduler-store.js";
 import type { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
-import type { BuildTask } from "./task-contracts.js";
+import type { BuildTask, TaskContractRef } from "./task-contracts.js";
 import type { ToolInvocationLedger } from "./tool-ledger.js";
 import { ToolRegistry, type AgentToolRuntime } from "./tool-registry.js";
 import {
@@ -112,6 +117,15 @@ export interface DeliverableReviewInputs {
   unresolvedConcerns: string[];
   claims: DeliveryClaim[];
   authorRuntimeId: string;
+  /**
+   * C5 (AR-R16): the authoritative accepted contract from durable state,
+   * rendered as the required compact contract block on the findings and
+   * verdict passes. Absent only on legacy/test paths, which carry no
+   * plan contracts.
+   */
+  contract?: ExecutionTaskContract;
+  /** The accepted revision/digest/task identity the contract was resolved at. */
+  contractRef?: TaskContractRef;
 }
 
 export class DeliverableReviewInputsUnavailableError extends Error {}
@@ -384,7 +398,7 @@ export class NativeDeliverableReviewRuntime {
     workspacePath: string | undefined,
   ): Promise<NativeDeliverableReviewResult | undefined> {
     const { request, reviewId, candidate, model, independence } = context;
-    const limits = this.options.contextLimits ?? { maxBytes: 512 * 1024, maxEstimatedTokens: 128 * 1024 };
+    const limits = this.options.contextLimits ?? { ...DELIVERABLE_REVIEW_CONTEXT_LIMITS };
     let pack: ContextPack;
     try {
       pack = new ContextAssembler(limits).assemble(this.sections(context, pass));
@@ -498,6 +512,17 @@ export class NativeDeliverableReviewRuntime {
         `Plan-contract acceptance criteria (the source of truth):\n${inputs.criteria.map((criterion) => `- ${criterion.id}: ${criterion.text}`).join("\n")}`,
       ),
     ];
+    // C5 (AR-R16): the authoritative compact contract on the findings and
+    // verdict passes. The obligations pass keeps criteria only
+    // (obligations-before-diff isolation); findings-before-claims and
+    // prior-findings isolation below are unchanged.
+    if (pass !== "obligations" && inputs.contract) {
+      sections.push(section(
+        REVIEWER_CONTRACT_SECTION_ID,
+        "contract",
+        buildReviewerContractBlock(inputs.contract, inputs.contractRef),
+      ));
+    }
     if (pass === "obligations") return sections;
     if (durable?.obligations) {
       sections.push(section(
@@ -725,6 +750,17 @@ function section(id: string, kind: string, content: string): ContextSection {
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+/**
+ * C5 (AR-R16/EP40): the concrete deliverable-review context caps.
+ * Applied by the assembler on every pass and recorded on every pass
+ * manifest beside the pack digest, token count and limits of the actual
+ * request.
+ */
+export const DELIVERABLE_REVIEW_CONTEXT_LIMITS: ContextLimits = {
+  maxBytes: 512 * 1024,
+  maxEstimatedTokens: 128 * 1024,
+};
 
 export const DELIVERABLE_REVIEWER_INVARIANTS = [
   "You are an independent reviewer of a submitted change. You did not write it.",
