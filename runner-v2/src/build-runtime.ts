@@ -11,6 +11,28 @@ import type {
   NativeBuildRunPolicy,
 } from "./build-spec.js";
 import { ensurePlanningProvisioningPrefix } from "./native-planning-provisioner.js";
+import {
+  assertSupportedInitialSourceBytes,
+  buildApprovedSourceManifest,
+  registerApprovedSource,
+  validateApprovedSourceInput,
+  type ApprovedSourceInputV1,
+} from "./native-planning-provisioner.js";
+import {
+  computeArtifactDigest,
+  verifyAmendmentReferencesPredecessor,
+  type ApprovedSourceManifest,
+} from "./source-manifest.js";
+import {
+  buildAmendmentManifest,
+  buildPlanningExportDocument,
+  projectPlanningReadiness,
+  resolveSelectionAnswerSequence,
+  type ExplicitStartRequestV1,
+  type PlanningExportDocument,
+  type PlanningReadinessSnapshot,
+  type ValidatedSourceAmendmentRequest,
+} from "./planning-controls.js";
 import type {
   BuildRiskAssessmentProjection,
   HandoffFilesOption,
@@ -48,6 +70,9 @@ import {
   newPolicyStaleTasksRequireArchitect,
   nextAnswerReviewId,
   readyPlanIdentity,
+  currentExplicitStartIdentity,
+  explicitStartAuthorizationCovers,
+  explicitStartBlocked,
   classifyStopSnapshot,
   stopNotesForStop,
   stopNotesAttemptForStop,
@@ -472,6 +497,13 @@ export interface BuildRuntimeOptions {
   stopNotes?: StopNotesDriver;
   /** C3b: the concrete bound on one stop-notes call (default STOP_NOTES_TIMEOUT_MS). */
   stopNotesTimeoutMs?: number;
+  /**
+   * T7b: the saved spec creation clock for post-creation source approval.
+   * The initial manifest binds this stable clock (never a retry clock), so
+   * an exact registration retry reproduces the identical manifest and
+   * reuses the recorded registration instead of conflicting.
+   */
+  specCreatedAt?: string;
 }
 
 const HANDOFF_SNAPSHOT_FAILURE_DETAIL_MAX_LENGTH = 300;
@@ -835,6 +867,7 @@ export class BuildRuntime {
   private readonly maxTaskAttempts: number;
   private readonly resourceCapacity?: TaskSchedulerOptions["resourceCapacity"];
   private readonly architectId: string;
+  private readonly specCreatedAt?: string;
   private readonly clock: () => string;
   private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
@@ -901,6 +934,7 @@ export class BuildRuntime {
     this.maxTaskAttempts = options.maxTaskAttempts ?? 2;
     this.resourceCapacity = options.resourceCapacity;
     this.architectId = options.architectId ?? "architect_1";
+    this.specCreatedAt = options.specCreatedAt;
     this.clock = options.clock ?? (() => new Date().toISOString());
     this.renewBudgetWindow = options.renewBudgetWindow;
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
@@ -1158,7 +1192,8 @@ export class BuildRuntime {
 
   selectArchitectHandoff(
     runtimeId: string,
-    idempotencyKey: string
+    idempotencyKey: string,
+    requiredSequence?: number
   ): SchedulerProjection {
     // FX-2 repair 1 (M2): scope the stored key to the requirement this
     // answer belongs to. The client reuses one key per runtime
@@ -1173,13 +1208,27 @@ export class BuildRuntime {
     const storedArchitectKey = handoffRequirements <= 1
       ? idempotencyKey
       : `${idempotencyKey}:req-${handoffRequirements}`;
+    // T7b (FX-2 review r2 F1): the answer names the exact pending handoff
+    // requirement. A stale named sequence is refused before any append; an
+    // omitted sequence binds the current requirement for pre-T7b drivers.
+    const pendingHandoff = this.projection().runtime.architect.handoff;
+    const boundHandoffSequence = pendingHandoff === undefined
+      ? requiredSequence
+      : resolveSelectionAnswerSequence({
+        provided: requiredSequence,
+        current: pendingHandoff.requiredSequence,
+        label: "Architect handoff selection",
+      });
     this.store.append({
       runId: this.runId,
       type: "architect.handoff_selected",
       occurredAt: this.clock(),
       actor: { role: "user", id: "local-user" },
       idempotencyKey: storedArchitectKey,
-      payload: { runtimeId },
+      payload: {
+        runtimeId,
+        ...(boundHandoffSequence !== undefined ? { requiredSequence: boundHandoffSequence } : {}),
+      },
     });
     return this.projection();
   }
@@ -1187,6 +1236,7 @@ export class BuildRuntime {
   selectVerifierRuntime(
     runtimeId: string,
     idempotencyKey: string,
+    requiredSequence?: number,
   ): SchedulerProjection {
     // FX-2 repair 1 (B1): scope the stored key to the requirement this
     // answer belongs to. The client reuses one key per runtime
@@ -1203,13 +1253,27 @@ export class BuildRuntime {
     const storedVerifierKey = verifierRequirements <= 1
       ? idempotencyKey
       : `${idempotencyKey}:req-${verifierRequirements}`;
+    // T7b (FX-2 review r2 F1): the answer names the exact pending selection
+    // requirement. A stale named sequence is refused before any append; an
+    // omitted sequence binds the current requirement for pre-T7b drivers.
+    const pendingSelection = this.projection().verifierSelection;
+    const boundSelectionSequence = pendingSelection?.status !== "required"
+      ? requiredSequence
+      : resolveSelectionAnswerSequence({
+        provided: requiredSequence,
+        current: pendingSelection.requiredSequence,
+        label: "Verifier selection",
+      });
     this.store.append({
       runId: this.runId,
       type: "verifier.selection_selected",
       occurredAt: this.clock(),
       actor: { role: "user", id: "local-user" },
       idempotencyKey: storedVerifierKey,
-      payload: { runtimeId },
+      payload: {
+        runtimeId,
+        ...(boundSelectionSequence !== undefined ? { requiredSequence: boundSelectionSequence } : {}),
+      },
     });
     return this.projection();
   }
@@ -1323,6 +1387,256 @@ export class BuildRuntime {
       },
     });
     return this.projection();
+  }
+
+  /**
+   * T7b: bounded owner approval of the specification bytes for a run that
+   * opted into evidence-gated planning without an initial source. The kernel
+   * validates the bytes, stores them content-addressed, and records the
+   * kernel-derived manifest through the authoritative user event only. The
+   * saved spec is never rewritten here. Exact repeats reuse the recorded
+   * registration; any conflicting reuse fails closed before effects.
+   */
+  async registerPlanningSource(input: {
+    approvedSource: ApprovedSourceInputV1;
+    idempotencyKey: string;
+  }): Promise<SchedulerProjection> {
+    const projection = this.projection();
+    try {
+      if (projection.planningPolicyVersion !== 1) {
+        throw new Error("an explicit planningPolicy version 1 opt-in is required");
+      }
+      if (
+        projection.planningTriageDecision !== undefined &&
+        projection.planningTriageDecision !== "build"
+      ) {
+        throw new Error(
+          `a triage decision of build is required; the current triage decision is ${projection.planningTriageDecision}`,
+        );
+      }
+      if (this.specCreatedAt === undefined) {
+        throw new Error("the saved spec creation clock is unavailable");
+      }
+      if (!this.artifacts) {
+        throw new Error("an artifact store is unavailable");
+      }
+      const validated = validateApprovedSourceInput(input.approvedSource);
+      const manifest = buildApprovedSourceManifest({
+        runId: this.runId,
+        validated,
+        artifactDigest: computeArtifactDigest(validated.bytes),
+        approvedBy: "local-user",
+        createdAt: this.specCreatedAt,
+      });
+      assertSupportedInitialSourceBytes(validated.bytes, manifest);
+      await this.artifacts.put(validated.bytes, validated.mediaType, `approved-source:${this.runId}`);
+      registerApprovedSource(this.store, this.runId, manifest, "local-user");
+    } catch (error) {
+      throw new Error(
+        `Planning source refused: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return this.projection();
+  }
+
+  /**
+   * T7b: bounded owner amendment of the approved source. The bytes proposal
+   * reuses the initial-source validation; the predecessor must be the exact
+   * current manifest (identity and digest), and the impact chain, approval,
+   * and authority are kernel-checked before the content-addressed bytes and
+   * the authoritative user event land. Amendments never rewrite the saved
+   * initial source. An exact idempotent repeat is harmless; any differing
+   * reuse of the key conflicts before effects.
+   */
+  async amendPlanningSource(
+    request: ValidatedSourceAmendmentRequest,
+  ): Promise<SchedulerProjection> {
+    const projection = this.projection();
+    try {
+      if (projection.planningPolicyVersion !== 1) {
+        throw new Error("an explicit planningPolicy version 1 opt-in is required");
+      }
+      const currentManifestId = projection.planning?.source.currentManifestId;
+      if (currentManifestId === undefined) {
+        throw new Error("no approved source is registered to amend");
+      }
+      const prior = projection.planning!.source.manifestsById[currentManifestId]!;
+      if (
+        request.predecessorManifestId !== prior.manifestId ||
+        request.predecessorArtifactDigest !== prior.artifactDigest
+      ) {
+        throw new Error(
+          `the amendment names predecessor ${request.predecessorManifestId}, ` +
+          `but the current source manifest is ${prior.manifestId} (stale or drifted predecessors are refused, never rebound)`,
+        );
+      }
+      const recorded = this.store.readRun(this.runId).find(
+        (event) =>
+          event.type === "planning.source_amended" &&
+          event.idempotencyKey === request.idempotencyKey,
+      );
+      if (recorded) {
+        const recordedManifest = (recorded.payload as { manifest?: unknown }).manifest as
+          | ApprovedSourceManifest
+          | undefined;
+        const same =
+          recorded.actor.role === "user" &&
+          recorded.actor.id === "local-user" &&
+          recordedManifest?.amendment?.id === request.amendmentId &&
+          recordedManifest?.amendment?.priorManifestId === request.predecessorManifestId &&
+          recordedManifest?.amendment?.priorArtifactDigest === request.predecessorArtifactDigest &&
+          recordedManifest?.artifactDigest === computeArtifactDigest(request.validated.bytes) &&
+          recordedManifest?.authority === "user:local-user" &&
+          JSON.stringify(recordedManifest?.amendment?.recordedImpact) ===
+            JSON.stringify(request.impact);
+        if (!same) {
+          throw new Error(
+            `idempotency key ${request.idempotencyKey} already records a different amendment`,
+          );
+        }
+        return this.projection();
+      }
+      if (!this.artifacts) {
+        throw new Error("an artifact store is unavailable");
+      }
+      const manifest = buildAmendmentManifest({
+        runId: this.runId,
+        validated: request.validated,
+        prior,
+        amendmentId: request.amendmentId,
+        approvedBy: "local-user",
+        rationale: request.rationale,
+        impact: request.impact,
+        createdAt: this.clock(),
+      });
+      verifyAmendmentReferencesPredecessor(manifest, prior);
+      await this.artifacts.put(
+        request.validated.bytes,
+        request.validated.mediaType,
+        `approved-source:${this.runId}`,
+      );
+      this.store.append({
+        runId: this.runId,
+        type: "planning.source_amended",
+        occurredAt: this.clock(),
+        actor: { role: "user", id: "local-user" },
+        idempotencyKey: request.idempotencyKey,
+        payload: { manifest: JSON.parse(JSON.stringify(manifest)) as Record<string, unknown> },
+      });
+    } catch (error) {
+      throw new Error(
+        `Source amendment refused: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return this.projection();
+  }
+
+  /**
+   * T7b: semantic current-plan execution authorization, separate from the
+   * supervisor process start and pump activation. The named identities must
+   * equal the CURRENT ready identity exactly; reconnects, duplicates, stale
+   * readiness, and post-amendment starts are refused unchanged before any
+   * worker or runtime effect. Only the owner (user role, control token)
+   * authorizes; worker and model roles are refused by the kernel.
+   */
+  authorizeExplicitPlanStart(request: ExplicitStartRequestV1): SchedulerProjection {
+    const projection = this.projection();
+    try {
+      if (projection.planningPolicyVersion !== 1) {
+        throw new Error("an explicit planningPolicy version 1 opt-in is required");
+      }
+      if (projection.planningTriageDecision !== "build") {
+        throw new Error(
+          `a durable triage decision of build is required; the current triage decision is ${projection.planningTriageDecision ?? "none"}`,
+        );
+      }
+      if (projection.runPolicy === "plan_only") {
+        throw new Error("plan-only runs never execute workers and need no start authorization");
+      }
+      if (isAnsweredRun(projection)) {
+        throw new Error("answered runs admit no workers and need no start authorization");
+      }
+      const identity = currentExplicitStartIdentity(projection);
+      if (!identity) {
+        throw new Error("no ready current plan is recorded");
+      }
+      if (!explicitStartAuthorizationCovers(identity, request)) {
+        throw new Error(
+          `the request binds plan revision ${request.planRevisionId} and source manifest ${request.sourceManifestId}, ` +
+          `but the current ready plan is revision ${identity.planRevisionId} with source manifest ` +
+          `${identity.sourceManifestId} (stale or drifted identities are refused, never rebound)`,
+        );
+      }
+      this.store.append({
+        runId: this.runId,
+        type: "planning.execution_authorized",
+        occurredAt: this.clock(),
+        actor: { role: "user", id: "local-user" },
+        idempotencyKey: request.idempotencyKey,
+        payload: {
+          authorization: {
+            version: 1,
+            planRevisionId: request.planRevisionId,
+            planDigest: request.planDigest,
+            sourceManifestId: request.sourceManifestId,
+            sourceArtifactDigest: request.sourceArtifactDigest,
+            planningPolicyVersion: 1,
+            projectDocsPolicyVersion: request.projectDocsPolicyVersion,
+            ownerChoice: request.ownerChoice,
+          },
+        },
+      });
+    } catch (error) {
+      throw new Error(
+        `Plan start refused: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return this.projection();
+  }
+
+  /**
+   * T7b: canonical plan-readiness snapshot from the actual projection.
+   * Read-only: no event, no worker effect. Source omissions and blockers
+   * are visible in the snapshot, never hidden.
+   */
+  planningReadiness(): PlanningReadinessSnapshot {
+    const projection = this.projection();
+    return projectPlanningReadiness({
+      runId: this.runId,
+      projection,
+      explicitStartAuthorized: this.explicitStartCovered(projection),
+    });
+  }
+
+  /**
+   * T7b: on-demand planning export through the existing C1 renderer.
+   * Read-only: preview and export never dispatch workers. The document
+   * references evidence by identity only â€” no transcripts, credentials, or
+   * environment â€” and never writes a project file.
+   */
+  planningExport(): PlanningExportDocument {
+    const projection = this.projection();
+    const readiness = projectPlanningReadiness({
+      runId: this.runId,
+      projection,
+      explicitStartAuthorized: this.explicitStartCovered(projection),
+    });
+    return buildPlanningExportDocument({
+      runId: this.runId,
+      projection,
+      readiness,
+      exportedAt: this.clock(),
+    });
+  }
+
+  private explicitStartCovered(projection: SchedulerProjection): boolean {
+    const identity = currentExplicitStartIdentity(projection);
+    const authorization = projection.planning?.executionAuthorization;
+    return (
+      identity !== undefined &&
+      authorization !== undefined &&
+      explicitStartAuthorizationCovers(identity, authorization)
+    );
   }
 
   selectProjectHandoff(
@@ -1593,6 +1907,18 @@ export class BuildRuntime {
         if (coverage) return coverage;
         await this.runArchitect({ type: "plan_required" }, projection);
         return this.afterArchitect("plan_required");
+      }
+      // T7b: readiness alone never authorizes execution. Before any worker
+      // dispatch the owner must have authorized this exact ready identity;
+      // drift refuses here as a durable owner-visible pause with zero
+      // worker or runtime effects beyond the pause itself.
+      if (
+        projection.planningTriageDecision === "build" &&
+        projection.runPolicy !== "plan_only" &&
+        !isAnsweredRun(projection) &&
+        explicitStartBlocked(projection)
+      ) {
+        return this.pauseForPlanStartRequired();
       }
     } else if (projection.planRevision === 0) {
       await this.runArchitect({ type: "plan_required" }, projection);
@@ -4674,6 +5000,26 @@ export class BuildRuntime {
    * the owner's normal resume re-drives the retry (and clears a terminal
    * N6 gate — see resumeInternal).
    */
+  /**
+   * T7b: the ready plan waits for its explicit owner start. The pause names
+   * the exact next owner action; preview and export stay available, and no
+   * worker dispatch or plan effect follows from this pause.
+   */
+  private pauseForPlanStartRequired(): BuildStepResult {
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `plan-start-required:${this.projection().lastSequence}`,
+      payload: {
+        reason: "plan_start_required",
+        detail: "The plan is ready but no explicit owner start authorizes this current plan revision, source, and policy. Authorize the current plan to dispatch workers; preview and export never dispatch.",
+      },
+    });
+    return { status: "paused", action: "plan_start_required" };
+  }
+
   private pauseForMissingApprovedSource(): BuildStepResult {
     this.store.append({
       runId: this.runId,

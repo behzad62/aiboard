@@ -11,6 +11,13 @@ import type {
   SchedulerEvent,
   SchedulerProjection,
 } from "./scheduler-store.js";
+import type { ApprovedSourceInputV1 } from "./native-planning-provisioner.js";
+import type {
+  ExplicitStartRequestV1,
+  PlanningExportDocument,
+  PlanningReadinessSnapshot,
+  ValidatedSourceAmendmentRequest,
+} from "./planning-controls.js";
 
 export interface BuildControlPlane {
   projection(runId: string): SchedulerProjection;
@@ -31,13 +38,29 @@ export interface BuildControlPlane {
   selectArchitectHandoff(
     runId: string,
     runtimeId: string,
-    idempotencyKey: string
+    idempotencyKey: string,
+    requiredSequence?: number,
   ): Promise<SchedulerProjection>;
   selectVerifierRuntime(
     runId: string,
     runtimeId: string,
     idempotencyKey: string,
+    requiredSequence?: number,
   ): Promise<SchedulerProjection>;
+  registerPlanningSource(
+    runId: string,
+    input: { approvedSource: ApprovedSourceInputV1; idempotencyKey: string },
+  ): Promise<SchedulerProjection>;
+  amendPlanningSource(
+    runId: string,
+    request: ValidatedSourceAmendmentRequest,
+  ): Promise<SchedulerProjection>;
+  authorizeExplicitPlanStart(
+    runId: string,
+    request: ExplicitStartRequestV1,
+  ): Promise<SchedulerProjection>;
+  planningReadiness(runId: string): PlanningReadinessSnapshot;
+  planningExport(runId: string): PlanningExportDocument;
   extendRepairCycles(
     runId: string,
     additionalRepairPlans: number,
@@ -183,17 +206,48 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
   async selectArchitectHandoff(
     runId: string,
     runtimeId: string,
-    idempotencyKey: string
+    idempotencyKey: string,
+    requiredSequence?: number,
   ): Promise<SchedulerProjection> {
-    return this.require(runId).selectArchitectHandoff(runtimeId, idempotencyKey);
+    return this.require(runId).selectArchitectHandoff(runtimeId, idempotencyKey, requiredSequence);
   }
 
   async selectVerifierRuntime(
     runId: string,
     runtimeId: string,
     idempotencyKey: string,
+    requiredSequence?: number,
   ): Promise<SchedulerProjection> {
-    return this.require(runId).selectVerifierRuntime(runtimeId, idempotencyKey);
+    return this.require(runId).selectVerifierRuntime(runtimeId, idempotencyKey, requiredSequence);
+  }
+
+  async registerPlanningSource(
+    runId: string,
+    input: { approvedSource: ApprovedSourceInputV1; idempotencyKey: string },
+  ): Promise<SchedulerProjection> {
+    return await this.require(runId).registerPlanningSource(input);
+  }
+
+  async amendPlanningSource(
+    runId: string,
+    request: ValidatedSourceAmendmentRequest,
+  ): Promise<SchedulerProjection> {
+    return await this.require(runId).amendPlanningSource(request);
+  }
+
+  async authorizeExplicitPlanStart(
+    runId: string,
+    request: ExplicitStartRequestV1,
+  ): Promise<SchedulerProjection> {
+    return await this.require(runId).authorizeExplicitPlanStart(request);
+  }
+
+  planningReadiness(runId: string): PlanningReadinessSnapshot {
+    return this.require(runId).planningReadiness();
+  }
+
+  planningExport(runId: string): PlanningExportDocument {
+    return this.require(runId).planningExport();
   }
 
   async extendRepairCycles(

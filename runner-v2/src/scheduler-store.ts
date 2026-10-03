@@ -348,6 +348,12 @@ export interface WorkerRuntimeAssignmentProjection {
 }
 
 export interface ArchitectHandoffProjection {
+  /**
+   * T7b (FX-2 review r2 F1): the scheduler event sequence of the pending
+   * handoff requirement. Stamped by the reducer on every
+   * `architect.handoff_required`; absent only pre-T7b (legacy answer path).
+   */
+  requiredSequence?: number;
   reason: string;
   requiredCapabilities: string[];
   candidateRuntimeIds: string[];
@@ -639,6 +645,14 @@ export interface BuildRiskProjection {
 
 export interface VerifierSelectionProjection {
   status: "required" | "selected";
+  /**
+   * T7b (FX-2 review r2 F1): the scheduler event sequence of the pending
+   * requirement this selection answers. Stamped by the reducer on every
+   * `verifier.selection_required` (including replayed history, whose events
+   * already carry sequences); absent only on projections reduced before T7b
+   * without a requirement event, which keep the legacy answer path.
+   */
+  requiredSequence?: number;
   reason: string;
   requiredCapabilities: string[];
   candidateRuntimeIds: string[];
@@ -1146,6 +1160,7 @@ const TRIAGE_GATED_PLANNING_EVENTS: ReadonlySet<string> = new Set([
   "planning.reference_recorded",
   "planning.acceptance_recorded",
   "planning.acceptance_reopened",
+  "planning.execution_authorized",
 ]);
 
 export function hasAnswerReviewVerdict(projection: SchedulerProjection): boolean {
@@ -1346,6 +1361,115 @@ export interface ReadyPlanTaskBinding {
 }
 
 /**
+ * T7b (FX-2 review r2 F1): the kernel refuses a stale selection answer. An
+ * answer naming a requirement sequence that is not the current pending one
+ * never rebinds to the newer offer. A missing sequence keeps the legacy
+ * answer path so pre-T7b answers and replays stay readable; the versioned
+ * API and the runtime control path always name the requirement.
+ */
+function assertSelectionAnswerSequence(
+  payload: Record<string, unknown>,
+  current: number | undefined,
+  label: string,
+): void {
+  const named = payload.requiredSequence;
+  if (named === undefined) return;
+  if (!Number.isSafeInteger(named) || (named as number) < 1) {
+    throw new Error(`${label} answer requiredSequence must be a positive integer event sequence.`);
+  }
+  if (current !== undefined && named !== current) {
+    throw new Error(
+      `${label} answer is stale: it names requirement sequence ${named as number}, ` +
+      `but the current requirement is sequence ${current}.`,
+    );
+  }
+}
+
+/**
+ * T7b: the canonical current-plan authorization identity â€” the ready plan
+ * revision and digest, the current source manifest and digest, and the
+ * planning and docs policy versions. Undefined when no ready plan (legacy
+ * runs and not-ready runs never carry a start identity).
+ */
+export interface ExplicitStartIdentity {
+  readonly planRevisionId: string;
+  readonly planDigest: string;
+  readonly sourceManifestId: string;
+  readonly sourceArtifactDigest: string;
+  readonly planningPolicyVersion: 1;
+  readonly projectDocsPolicyVersion: number;
+}
+
+export function currentExplicitStartIdentity(
+  projection: SchedulerProjection,
+): ExplicitStartIdentity | undefined {
+  if (projection.planningPolicyVersion !== 1) return undefined;
+  const planning = projection.planning;
+  if (planning?.readiness !== "ready" || !planning.plan) return undefined;
+  if (!planning.plan.currentRevisionId || !planning.plan.currentDigest) return undefined;
+  if (projection.projectDocsPolicyVersion === undefined) return undefined;
+  return {
+    planRevisionId: planning.plan.currentRevisionId,
+    planDigest: planning.plan.currentDigest,
+    sourceManifestId: planning.source.currentManifestId,
+    sourceArtifactDigest: planning.source.artifactDigest,
+    planningPolicyVersion: 1,
+    projectDocsPolicyVersion: projection.projectDocsPolicyVersion,
+  };
+}
+
+export function explicitStartAuthorizationCovers(
+  identity: ExplicitStartIdentity,
+  authorization: {
+    readonly planRevisionId: string;
+    readonly planDigest: string;
+    readonly sourceManifestId: string;
+    readonly sourceArtifactDigest: string;
+    readonly planningPolicyVersion: 1;
+    readonly projectDocsPolicyVersion: number;
+  },
+): boolean {
+  return (
+    identity.planRevisionId === authorization.planRevisionId &&
+    identity.planDigest === authorization.planDigest &&
+    identity.sourceManifestId === authorization.sourceManifestId &&
+    identity.sourceArtifactDigest === authorization.sourceArtifactDigest &&
+    identity.planningPolicyVersion === authorization.planningPolicyVersion &&
+    identity.projectDocsPolicyVersion === authorization.projectDocsPolicyVersion
+  );
+}
+
+/**
+ * T7b: the explicit-start block for worker admission. A ready plan alone
+ * never authorizes execution: the owner must have authorized THIS current
+ * identity. A recorded authorization for a superseded revision, an amended
+ * source, or changed policy versions stays durable but covers nothing, so
+ * drift while ready refuses dispatch until the owner re-authorizes.
+ */
+export function explicitStartBlocked(
+  projection: SchedulerProjection,
+): string | undefined {
+  const ready = readyPlanIdentity(projection);
+  if (!ready) return undefined;
+  const identity = currentExplicitStartIdentity(projection);
+  if (!identity) {
+    return "Worker admission requires an explicit owner start authorization: the current ready plan has no complete start identity.";
+  }
+  const authorization = projection.planning?.executionAuthorization;
+  if (!authorization) {
+    return `Worker admission requires an explicit owner start authorization for the current ready plan revision ${ready.revisionId}.`;
+  }
+  if (!explicitStartAuthorizationCovers(identity, authorization)) {
+    return (
+      `The recorded plan start authorization binds plan revision ${authorization.planRevisionId} ` +
+      `and source manifest ${authorization.sourceManifestId}; the current ready plan is revision ` +
+      `${identity.planRevisionId} with source manifest ${identity.sourceManifestId}. Re-authorize the current plan.`
+    );
+  }
+  return undefined;
+}
+
+/**
  * T3a repair (B1c): single source of truth for new-policy worker admission.
  * Returns the blocking reason, or undefined when the task may be admitted.
  * Legacy runs are never blocked here. The `task.transitioned` reducer gate
@@ -1369,6 +1493,11 @@ export function newPolicyTaskAdmissionBlocked(
   if (!ready) {
     return "Worker admission requires a ready plan revision.";
   }
+  // T7b: readiness alone never authorizes execution. A current owner start
+  // authorization for this exact identity is required before any worker
+  // dispatch; drift while ready refuses here as well as at the step gate.
+  const startBlocked = explicitStartBlocked(projection);
+  if (startBlocked) return startBlocked;
   const binding = projection.readyPlanTaskBindings?.[taskId];
   if (
     !binding ||
@@ -4091,6 +4220,7 @@ export function reduceSchedulerEvent(
       }
       next.verifierSelection = {
         status: "required",
+        requiredSequence: event.sequence,
         reason: requiredString(event.payload, "reason"),
         requiredCapabilities,
         candidateRuntimeIds: [...candidateRuntimeIds],
@@ -4111,6 +4241,7 @@ export function reduceSchedulerEvent(
       ) {
         throw new Error(`Runtime ${runtimeId} is not an offered verifier selection.`);
       }
+      assertSelectionAnswerSequence(event.payload, selection.requiredSequence, "Verifier selection");
       next.verifierSelection = {
         ...selection,
         status: "selected",
@@ -5466,6 +5597,7 @@ export function reduceSchedulerEvent(
       next.runtime.architect = {
         ...next.runtime.architect,
         handoff: {
+          requiredSequence: event.sequence,
           reason: requiredString(event.payload, "reason"),
           requiredCapabilities: stringArray(event.payload, "requiredCapabilities"),
           candidateRuntimeIds,
@@ -5484,6 +5616,7 @@ export function reduceSchedulerEvent(
       if (!handoff || !handoff.candidateRuntimeIds.includes(runtimeId)) {
         throw new Error(`Runtime ${runtimeId} is not an offered Architect handoff.`);
       }
+      assertSelectionAnswerSequence(event.payload, handoff.requiredSequence, "Architect handoff selection");
       next.runtime.architect = { runtimeId };
       next.status = "running";
       delete next.pauseReason;

@@ -29,6 +29,9 @@ import {
   type ValidationObservation,
 } from "./planning-contracts.js";
 import {
+  assertExecutionAuthorizationPayload,
+} from "./planning-controls.js";
+import {
   assertClaimSuccessor,
   assignmentContractId,
   assignmentIsKernelRepair,
@@ -71,6 +74,7 @@ export const PLANNING_EVENT_TYPES = [
   "planning.reference_recorded",
   "planning.acceptance_recorded",
   "planning.acceptance_reopened",
+  "planning.execution_authorized",
 ] as const;
 
 export type PlanningEventType = (typeof PLANNING_EVENT_TYPES)[number];
@@ -125,6 +129,7 @@ export const PLANNING_EVENT_ACTOR_ROLES: Readonly<Record<PlanningEventType, read
   "planning.reference_recorded": ["runner"],
   "planning.acceptance_recorded": ["architect", "runner"],
   "planning.acceptance_reopened": ["architect"],
+  "planning.execution_authorized": ["user"],
 };
 
 export const PLANNING_EVENT_TRANSITIONS: Readonly<Record<PlanningEventType, string>> = {
@@ -155,6 +160,7 @@ export const PLANNING_EVENT_TRANSITIONS: Readonly<Record<PlanningEventType, stri
   "planning.reference_recorded": "plan_drafted -> immutable reference+",
   "planning.acceptance_recorded": "plan_ready + verified assignment + terminal validations -> accepted",
   "planning.acceptance_reopened": "accepted -> reopened",
+  "planning.execution_authorized": "plan_ready -> execution_authorized",
 };
 
 /**
@@ -374,6 +380,25 @@ export interface PlanningResumeIndex {
   readonly nextAction: string;
 }
 
+/**
+ * T7b: the owner's explicit current-plan execution authorization. Validity
+ * is derived, never stored as a boolean: an authorization covers execution
+ * only while every bound identity still equals the current ready identity.
+ * A plan revision, source amendment, or policy change leaves the record in
+ * place but uncovered until the owner authorizes the new current plan.
+ */
+export interface PlanningExecutionAuthorization {
+  readonly version: 1;
+  readonly planRevisionId: string;
+  readonly planDigest: string;
+  readonly sourceManifestId: string;
+  readonly sourceArtifactDigest: string;
+  readonly planningPolicyVersion: 1;
+  readonly projectDocsPolicyVersion: number;
+  readonly ownerChoice: string;
+  readonly authorizedAt: string;
+}
+
 export interface PlanningProjection {
   readonly source: {
     readonly currentManifestId: string;
@@ -433,6 +458,7 @@ export interface PlanningProjection {
   /** T3b repair cycle 2 (N-R2-2): findings retired by a source amendment, by finding id. */
   readonly coverageRetiredFindings: Readonly<Record<string, CoverageRetiredFinding>>;
   readonly hostCapabilities?: HostPlanningCapabilities;
+  readonly executionAuthorization?: PlanningExecutionAuthorization;
   readonly resume: PlanningResumeIndex;
   readonly references: Readonly<Record<string, PlanningReferenceRecord>>;
 }
@@ -2211,6 +2237,36 @@ export function reducePlanningProjection(
       // exempted plan_ready_blocked gate (if any) clears durably now that
       // readiness re-evaluated the actual blockers and found none.
       next = { ...next, hostCapabilities, readiness: "ready", coverageUnavailable: undefined };
+      break;
+    }
+    case "planning.execution_authorized": {
+      if (next.readiness !== "ready" || !next.plan) {
+        throw new Error("Plan start refused: no ready plan revision is recorded.");
+      }
+      const authorization = assertExecutionAuthorizationPayload(event.payload);
+      if (
+        authorization.planRevisionId !== next.plan.currentRevisionId ||
+        authorization.planDigest !== next.plan.currentDigest
+      ) {
+        throw new Error(
+          `Plan start refused: the authorization binds plan revision ${authorization.planRevisionId}, ` +
+          `but the current ready revision is ${next.plan.currentRevisionId}.`,
+        );
+      }
+      const manifest = next.source.manifestsById[next.source.currentManifestId];
+      if (
+        authorization.sourceManifestId !== manifest.manifestId ||
+        authorization.sourceArtifactDigest !== manifest.artifactDigest
+      ) {
+        throw new Error(
+          `Plan start refused: the authorization binds source manifest ${authorization.sourceManifestId}, ` +
+          `but the current source manifest is ${manifest.manifestId}.`,
+        );
+      }
+      next = {
+        ...next,
+        executionAuthorization: { ...authorization, authorizedAt: event.occurredAt },
+      };
       break;
     }
     case "planning.assignment_claimed": {

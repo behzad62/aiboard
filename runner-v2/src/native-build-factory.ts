@@ -60,12 +60,14 @@ import {
   projectExecutionSafetyObservability,
   projectFinalVerificationObservability,
   projectIndependentVerifierObservability,
+  projectPlanningObservability,
 } from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import { cloneBuildSpec, validateBuildSpec, type NativeBuildSpec } from "./build-spec.js";
 import {
   assertManifestMatchesBytes,
   computeArtifactDigest,
+  type ApprovedSourceManifest,
 } from "./source-manifest.js";
 import {
   approvedSourceApprover,
@@ -370,6 +372,31 @@ export const NATIVE_BUILD_RUNTIME_RECOVERY_COVERAGE = Object.freeze([
   "spills",
   "tempRoots",
 ] as const);
+
+/**
+ * T7b: the current event-registered source manifest for a run whose saved
+ * spec carries no initial source â€” the latest `planning.source_registered`
+ * or `planning.source_amended` payload. Undefined when no source was ever
+ * registered. Read-only; the spec store keeps no mutable copy.
+ */
+function currentEventRegisteredSourceManifest(
+  events: readonly SchedulerEvent[],
+): ApprovedSourceManifest | undefined {
+  let current: ApprovedSourceManifest | undefined;
+  for (const event of events) {
+    if (
+      event.type !== "planning.source_registered" &&
+      event.type !== "planning.source_amended"
+    ) {
+      continue;
+    }
+    const manifest = (event.payload as { manifest?: unknown }).manifest as
+      | ApprovedSourceManifest
+      | undefined;
+    if (manifest !== undefined) current = manifest;
+  }
+  return current;
+}
 
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
@@ -684,6 +711,26 @@ export class NativeBuildFactory {
       );
     }
     const schedulerEvents = schedulerStore.readRun(spec.runId);
+    // T7b: a saved spec without an initial source may still carry a later
+    // owner-registered current source in its durable events (post-creation
+    // approval or amendment). Verify those bytes exist and match before any
+    // consumer reads them; no mutable current-source state is duplicated
+    // into the spec store. Missing or drifted bytes fail closed here.
+    if (spec.approvedSource === undefined && spec.planningPolicy?.version === 1) {
+      const currentManifest = currentEventRegisteredSourceManifest(schedulerEvents);
+      if (currentManifest !== undefined) {
+        let storedBytes: Uint8Array;
+        try {
+          storedBytes = await this.artifacts.get(currentManifest.artifactDigest);
+        } catch (error) {
+          throw new Error(
+            `Registered source artifact ${currentManifest.artifactDigest} is not provisioned for ${spec.runId}.`,
+            { cause: error },
+          );
+        }
+        assertManifestMatchesBytes(currentManifest, storedBytes);
+      }
+    }
     initializationStage = "session_store";
     // T6b repair (OA-17): Runner-private durable creation records for
     // this run, keyed to the real run and project ids. The temp-path
@@ -1809,6 +1856,8 @@ export class NativeBuildFactory {
       runId: spec.runId,
       initialObjective: spec.objective,
       runPolicy: spec.runPolicy,
+      // T7b: the stable saved-spec clock for post-creation source approval.
+      specCreatedAt: spec.createdAt,
       // C2b (CD-5): per-run handoff file options from the spec; recorded
       // durably in `run.policy_configured` by the runtime.
       specCopy: spec.specCopy ?? true,
@@ -2063,6 +2112,7 @@ export class NativeBuildFactory {
           independentVerifier:
             projectIndependentVerifierObservability(schedulerProjection),
           contextManifestCount: contextManifests.listRun(spec.runId).length,
+          planning: projectPlanningObservability(schedulerProjection),
         };
       },
       contextManifests: () => contextManifests.listRun(spec.runId),

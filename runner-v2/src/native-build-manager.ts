@@ -15,8 +15,15 @@ import type {
 import { validateBuildSpec, type BuildSpecStore, type NativeBuildSpec } from "./build-spec.js";
 import {
   stableProvisioningRequestsMatch,
+  type ApprovedSourceInputV1,
   type ProvisioningPrepareOptions,
 } from "./native-planning-provisioner.js";
+import type {
+  ExplicitStartRequestV1,
+  PlanningExportDocument,
+  PlanningReadinessSnapshot,
+  ValidatedSourceAmendmentRequest,
+} from "./planning-controls.js";
 export type { ApprovedSourceInputV1 } from "./native-planning-provisioner.js";
 import type { NativeBuildUsageProjection } from "./model-usage-projection.js";
 import type {
@@ -528,11 +535,12 @@ export class NativeBuildManager implements BuildControlPlane {
   async selectArchitectHandoff(
     runId: string,
     runtimeId: string,
-    idempotencyKey: string
+    idempotencyKey: string,
+    requiredSequence?: number
   ): Promise<SchedulerProjection> {
     const handle = this.requireMutable(runId);
     return await this.withRuntimeActivity(async () =>
-      handle.runtime.selectArchitectHandoff(runtimeId, idempotencyKey)
+      handle.runtime.selectArchitectHandoff(runtimeId, idempotencyKey, requiredSequence)
     );
   }
 
@@ -540,13 +548,82 @@ export class NativeBuildManager implements BuildControlPlane {
     runId: string,
     runtimeId: string,
     idempotencyKey: string,
+    requiredSequence?: number,
   ): Promise<SchedulerProjection> {
     const handle = this.requireMutable(runId);
     const projection = await this.withRuntimeActivity(async () =>
-      handle.runtime.selectVerifierRuntime(runtimeId, idempotencyKey)
+      handle.runtime.selectVerifierRuntime(runtimeId, idempotencyKey, requiredSequence)
     );
     this.wake(runId);
     return projection;
+  }
+
+  /**
+   * T7b: bounded owner approval of the specification bytes for a source-free
+   * run. The saved spec is never rewritten; the kernel-derived manifest is
+   * recorded through the authoritative user event only.
+   */
+  async registerPlanningSource(
+    runId: string,
+    input: { approvedSource: ApprovedSourceInputV1; idempotencyKey: string },
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.registerPlanningSource(input)
+    );
+    this.wake(runId);
+    return projection;
+  }
+
+  /**
+   * T7b: bounded owner amendment of the approved source. The predecessor
+   * must be the exact current manifest; the saved initial source is never
+   * rewritten; bytes land content-addressed before the user event.
+   */
+  async amendPlanningSource(
+    runId: string,
+    request: ValidatedSourceAmendmentRequest,
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.amendPlanningSource(request)
+    );
+    this.wake(runId);
+    return projection;
+  }
+
+  /**
+   * T7b: semantic current-plan execution authorization. The named identities
+   * must equal the current ready identity; stale identities, drift, and
+   * unauthorized callers are refused before any worker or runtime effect.
+   */
+  async authorizeExplicitPlanStart(
+    runId: string,
+    request: ExplicitStartRequestV1,
+  ): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(async () =>
+      handle.runtime.authorizeExplicitPlanStart(request)
+    );
+    this.wake(runId);
+    return projection;
+  }
+
+  /**
+   * T7b: canonical plan-readiness snapshot. Read-only: works on historical
+   * terminals, appends nothing, dispatches nothing.
+   */
+  planningReadiness(runId: string): PlanningReadinessSnapshot {
+    return this.require(runId).runtime.planningReadiness();
+  }
+
+  /**
+   * T7b: on-demand planning export through the existing C1 renderer.
+   * Read-only: works on historical terminals, appends nothing, dispatches
+   * nothing, writes no project file.
+   */
+  planningExport(runId: string): PlanningExportDocument {
+    return this.require(runId).runtime.planningExport();
   }
 
   async extendRepairCycles(

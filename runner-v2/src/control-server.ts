@@ -28,6 +28,11 @@ import {
   type ApprovedSourceInputV1,
   type ProvisioningPrepareOptions,
 } from "./native-planning-provisioner.js";
+import {
+  validateExplicitStartRequest,
+  validateSelectionAnswer,
+  validateSourceAmendmentRequest,
+} from "./planning-controls.js";
 import { assertBudgetLimits } from "./budget-policy.js";
 import { type GitPreflightResult } from "./git-preflight.js";
 import type {
@@ -125,6 +130,7 @@ interface RunBuildBody {
 interface ArchitectHandoffBody {
   runtimeId: string;
   idempotencyKey: string;
+  requiredSequence: number;
 }
 
 interface RepairCyclesBody {
@@ -629,17 +635,23 @@ export class ControlServer {
         request.method === "POST"
       ) {
         const body = await readJson<ArchitectHandoffBody>(request);
+        assertExactBodyKeys(body, ["runtimeId", "idempotencyKey", "requiredSequence"]);
         if (
           !isNonEmptyString(body.runtimeId) ||
           !isNonEmptyString(body.idempotencyKey)
         ) invalidBody();
+        if (!Number.isSafeInteger(body.requiredSequence) || body.requiredSequence < 1) invalidBody();
+        // The answer names the exact pending requirement (FX-2 review r2
+        // F1); stale identities are refused by the kernel, never rebound.
+        void validateSelectionAnswer(body);
         sendJson(
           response,
           200,
           await this.requireBuilds().selectArchitectHandoff(
             runId,
             body.runtimeId,
-            body.idempotencyKey
+            body.idempotencyKey,
+            body.requiredSequence
           )
         );
         return;
@@ -651,10 +663,15 @@ export class ControlServer {
         request.method === "POST"
       ) {
         const body = await readJson<ArchitectHandoffBody>(request);
+        assertExactBodyKeys(body, ["runtimeId", "idempotencyKey", "requiredSequence"]);
         if (
           !isNonEmptyString(body.runtimeId) ||
           !isNonEmptyString(body.idempotencyKey)
         ) invalidBody();
+        if (!Number.isSafeInteger(body.requiredSequence) || body.requiredSequence < 1) invalidBody();
+        // The answer names the exact pending requirement (FX-2 review r2
+        // F1); stale identities are refused by the kernel, never rebound.
+        void validateSelectionAnswer(body);
         sendJson(
           response,
           200,
@@ -662,8 +679,103 @@ export class ControlServer {
             runId,
             body.runtimeId,
             body.idempotencyKey,
+            body.requiredSequence,
           ),
         );
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "source" &&
+        request.method === "POST"
+      ) {
+        // T7b: bounded owner approval of the specification bytes for a
+        // source-free run. Authenticated by the control token; the approval
+        // authority is fixed server-side and never taken from the body.
+        const body = await readJson<unknown>(request);
+        assertExactBodyKeys(body, ["approvedSource", "idempotencyKey"]);
+        const record = body as { approvedSource?: unknown; idempotencyKey?: unknown };
+        if (!isNonEmptyString(record.idempotencyKey)) invalidBody();
+        try {
+          validateApprovedSourceInput(record.approvedSource);
+        } catch {
+          invalidBody();
+        }
+        const projection = await this.serializeRunCommand(runId, () =>
+          this.requireBuilds().registerPlanningSource(runId, {
+            approvedSource: record.approvedSource as ApprovedSourceInputV1,
+            idempotencyKey: record.idempotencyKey as string,
+          })
+        );
+        sendJson(response, 200, projection);
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "source-amendments" &&
+        request.method === "POST"
+      ) {
+        // T7b: bounded owner amendment. The predecessor must be the exact
+        // current manifest; the saved initial source is never rewritten.
+        const body = await readJson<unknown>(request);
+        let amendment;
+        try {
+          amendment = validateSourceAmendmentRequest(body);
+        } catch {
+          invalidBody();
+        }
+        const projection = await this.serializeRunCommand(runId, () =>
+          this.requireBuilds().amendPlanningSource(runId, amendment)
+        );
+        sendJson(response, 200, projection);
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "planning-readiness" &&
+        request.method === "GET"
+      ) {
+        // T7b: canonical plan-readiness snapshot. Read-only: no event, no
+        // worker effect, no project write. Omissions stay visible.
+        sendJson(response, 200, this.requireBuilds().planningReadiness(runId));
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "plan-start" &&
+        request.method === "POST"
+      ) {
+        // T7b: semantic current-plan execution authorization, separate from
+        // the supervisor process start. The named identities must equal the
+        // current ready identity; stale identities and drift are refused
+        // unchanged before any worker or runtime effect.
+        const body = await readJson<unknown>(request);
+        let start;
+        try {
+          start = validateExplicitStartRequest(body);
+        } catch {
+          invalidBody();
+        }
+        const projection = await this.serializeRunCommand(runId, () =>
+          this.requireBuilds().authorizeExplicitPlanStart(runId, start)
+        );
+        sendJson(response, 200, projection);
+        return;
+      }
+      if (
+        segments.length === 5 &&
+        segments[3] === "build" &&
+        segments[4] === "planning-export" &&
+        request.method === "GET"
+      ) {
+        // T7b: on-demand planning export through the existing C1 renderer.
+        // Read-only and redacted: evidence by identity only, no
+        // transcripts, credentials, environment, or project writes.
+        sendJson(response, 200, this.requireBuilds().planningExport(runId));
         return;
       }
       if (
@@ -1310,6 +1422,11 @@ function toHttpError(error: unknown): HttpError {
   }
   if (/Scheduler idempotency conflict/i.test(message)) {
     return new HttpError(409, "idempotency_conflict", message);
+  }
+  if (
+    /^(Planning source refused:|Source amendment refused:|Plan start refused:|Verifier selection answer|Architect handoff selection answer)/.test(message)
+  ) {
+    return new HttpError(409, "planning_control_refused", message);
   }
   if (
     /cannot accept|must be the first|Expected event sequence|User guidance version must advance|Architect question .* (?:version is|is not open|is not the active blocking question)|Duplicate user guidance/i.test(message)
