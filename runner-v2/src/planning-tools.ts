@@ -96,8 +96,8 @@ interface DraftPlanInput {
 
 interface RevisePlanInput {
   revision: PlanSubmissionRevision;
-  expectedRevisionId: string;
-  expectedDigest: string;
+  expectedRevisionId?: string;
+  expectedDigest?: string;
 }
 
 export function createPlanningTools(
@@ -420,7 +420,8 @@ function draftPlanTool(
     description:
       "Draft the execution plan revision (requirements, phases, complete task contracts, bounded " +
       "investigations) after the requirement ledger is persisted. Envelope fields (run, manifest id and digest, " +
-      "policy version, createdAt, coverage review and repair lineage ids) and each task's requiredBase are " +
+      "policy version, createdAt, coverage review and repair lineage ids), each task's requiredBase and " +
+      "decision/disposition timestamps are " +
       "kernel-stamped: omit them or supply the exact " +
       "actual values; one-sided requirement/task/phase links are derived, conflicting sides refused.",
     schema: {
@@ -516,7 +517,8 @@ function revisePlanTool(
     name: "revise_planning_plan",
     description:
       "Revise the execution plan revision against the exact current revision identity " +
-      "(expectedRevisionId plus expectedDigest); a stale base is refused. Envelope fields and requiredBase are " +
+      "(expectedRevisionId plus expectedDigest, kernel-stamped from the durable plan when omitted; " +
+      "a supplied stale base is refused). Envelope fields, requiredBase and decision timestamps are " +
       "kernel-stamped like a draft; one-sided links are derived, conflicting sides refused.",
     schema: {
       type: "object",
@@ -525,19 +527,26 @@ function revisePlanTool(
         expectedRevisionId: { type: "string", minLength: 1 },
         expectedDigest: { type: "string", minLength: 1 },
       },
-      required: ["revision", "expectedRevisionId", "expectedDigest"],
+      required: ["revision"],
       additionalProperties: false,
     },
     validate: (input) =>
       validateObject(input, (value) => {
         if (!isRecord(value.revision) || !nonEmpty(value.revision.revisionId)) return null;
-        if (!nonEmpty(value.expectedRevisionId) || !nonEmpty(value.expectedDigest)) return null;
+        // Omitted expected identity stamps the durable current revision;
+        // a supplied null, blank or malformed value is refused, never stamped.
+        if (value.expectedRevisionId !== undefined && !nonEmpty(value.expectedRevisionId)) return null;
+        if (value.expectedDigest !== undefined && !nonEmpty(value.expectedDigest)) return null;
         return {
           revision: value.revision as PlanSubmissionRevision,
-          expectedRevisionId: value.expectedRevisionId,
-          expectedDigest: value.expectedDigest,
+          ...(value.expectedRevisionId === undefined
+            ? {}
+            : { expectedRevisionId: value.expectedRevisionId as string }),
+          ...(value.expectedDigest === undefined
+            ? {}
+            : { expectedDigest: value.expectedDigest as string }),
         };
-      }, "revision, expectedRevisionId, and expectedDigest are required."),
+      }, "revision is required; expectedRevisionId and expectedDigest are kernel-stamped when omitted but refused when blank or malformed."),
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
@@ -563,9 +572,14 @@ function revisePlanTool(
           "No initial planning revision exists; use draft_planning_plan first.",
         );
       }
+      // C5 (AR-R15): an omitted expected identity stamps the durable
+      // current revision; a supplied stale base is refused. The event
+      // payload carries the actual resolved identity, never undefined.
+      const resolvedExpectedRevisionId = input.expectedRevisionId ?? planning.plan.currentRevisionId;
+      const resolvedExpectedDigest = input.expectedDigest ?? planning.plan.currentDigest;
       if (
-        input.expectedRevisionId !== planning.plan.currentRevisionId ||
-        input.expectedDigest !== planning.plan.currentDigest
+        resolvedExpectedRevisionId !== planning.plan.currentRevisionId ||
+        resolvedExpectedDigest !== planning.plan.currentDigest
       ) {
         return errorOutput(
           "stale_plan_revision",
@@ -613,8 +627,8 @@ function revisePlanTool(
         idempotencyKey: `planning-plan:${revision.revisionId}`,
         payload: {
           revision: structuredClone(revision),
-          expectedRevisionId: input.expectedRevisionId,
-          expectedDigest: input.expectedDigest,
+          expectedRevisionId: resolvedExpectedRevisionId,
+          expectedDigest: resolvedExpectedDigest,
         },
       }, {
         type: "architect_action",
@@ -659,6 +673,36 @@ function submissionActuals(
       : {}),
     ...(currentRevision?.repairBudgetLineageId !== undefined
       ? { repairBudgetLineageId: currentRevision.repairBudgetLineageId }
+      : {}),
+    // C5 (AR-R15): the durable decision/disposition timestamps an omitted
+    // submission timestamp stamps from — matching identity keeps its
+    // durable time, a new semantic record takes the submission time above.
+    ...(currentRevision !== undefined
+      ? {
+        priorRevision: {
+          planningDecisions: currentRevision.planningDecisions.map((decision) => ({
+            id: decision.id,
+            description: decision.description,
+            decidedAt: decision.decidedAt,
+          })),
+          ...(currentRevision.nonNormativeSections !== undefined
+            ? {
+              nonNormativeSections: currentRevision.nonNormativeSections.map((record) => ({
+                sectionId: record.sectionId,
+                decidedAt: record.decidedAt,
+              })),
+            }
+            : {}),
+          ...(currentRevision.retiredRequirementIds !== undefined
+            ? {
+              retiredRequirementIds: currentRevision.retiredRequirementIds.map((record) => ({
+                requirementId: record.requirementId,
+                decidedAt: record.decidedAt,
+              })),
+            }
+            : {}),
+        },
+      }
       : {}),
   };
 }

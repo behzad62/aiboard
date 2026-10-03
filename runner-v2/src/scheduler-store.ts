@@ -1701,6 +1701,10 @@ export type TaskContractResolution =
  * revision, digest and task id for a scheduler task from durable state.
  * Direct for bridged tasks; through the parent contract for kernel-created
  * repair tasks. Never invents a contract — every failure mode is explicit.
+ * An explicitly supplied ref.taskId that names no current contract fails
+ * closed (dropped): parent derivation applies only when the bridge holds
+ * no explicit identity, and the returned ref then names the resolved
+ * contract.
  */
 export function resolveTaskContractReference(
   projection: SchedulerProjection,
@@ -1762,12 +1766,25 @@ export function resolveTaskContractReference(
       ...(survived ? { contract: survived } : {}),
     };
   }
-  const contract = revision.tasks.find((item) => item.id === effective.taskId) ??
-    (task.kind === "verification_repair"
-      ? repairParentContractOf(projection, revision, task)
-      : undefined);
-  if (!contract) return { status: "dropped", ref: effective };
-  return { status: "current", ref: effective, contract };
+  // F5: an explicitly supplied ref.taskId names the contract. When it is
+  // missing from the current revision the reference fails closed
+  // (dropped) — the repair-parent derivation below is legitimate ONLY
+  // when the bridge holds no explicit identity, and the returned ref
+  // then names the actual resolved contract.
+  if (ref) {
+    const contract = revision.tasks.find((item) => item.id === effective.taskId);
+    if (!contract) return { status: "dropped", ref: effective };
+    return { status: "current", ref: effective, contract };
+  }
+  const direct = revision.tasks.find((item) => item.id === effective.taskId);
+  if (direct) return { status: "current", ref: effective, contract: direct };
+  if (task.kind === "verification_repair") {
+    const parent = repairParentContractOf(projection, revision, task);
+    if (parent) {
+      return { status: "current", ref: { ...effective, taskId: parent.id }, contract: parent };
+    }
+  }
+  return { status: "dropped", ref: effective };
 }
 
 function repairParentContractOf(

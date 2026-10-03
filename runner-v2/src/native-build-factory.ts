@@ -34,7 +34,7 @@ import {
 } from "./delivery-execution.js";
 import { NativeDeliverableReviewRuntime } from "./native-deliverable-review.js";
 import type { ExecutionTaskContract } from "./planning-contracts.js";
-import type { BuildTask } from "./task-contracts.js";
+import type { BuildTask, TaskContractRef } from "./task-contracts.js";
 import type { MutationFileSystem } from "./mutation-probe.js";
 import { ArtifactReachabilityGuard } from "./artifact-reachability.js";
 import { CapabilityRegistry } from "./capability-registry.js";
@@ -171,7 +171,6 @@ import {
   readyPlanIdentity,
   rebuildSchedulerProjection,
   repairParentContractId,
-  resolveTaskContractAtRef,
   resolveTaskContractReference,
   taskPlanMembership,
   type SchedulerEvent,
@@ -1336,19 +1335,17 @@ export class NativeBuildFactory {
     // commands run through FinalVerificationRuntime and the audited executor
     // in disposable checkouts (independent-verifier kind).
     // C5 (AR-R16): the authoritative accepted contract for review inputs,
-    // resolved from durable state only. Prefers the exact submitted
-    // provenance pinned on the task; falls back to the current ready
-    // revision. Anything else fails closed — the review is recorded as
-    // not performed and the run pauses, never placeholder prose.
-    const resolveReviewContract = (projection: SchedulerProjection, task: BuildTask): ExecutionTaskContract => {
-      if (task.contractRef) {
-        const pinned = resolveTaskContractAtRef(projection, task.contractRef);
-        if (pinned) return pinned.contract;
-      }
+    // resolved from durable state only. The CURRENT ready revision is the
+    // only authority: an invalid, stale, dropped or mismatched reference
+    // fails closed before any provider call — there is no historical
+    // fallback on the live readiness path (resolveTaskContractAtRef stays
+    // available for historical operations only). The exact current ref
+    // rides with the contract so the reviewer renders pinned identity.
+    const resolveReviewContract = (projection: SchedulerProjection, task: BuildTask): { contract: ExecutionTaskContract; ref: TaskContractRef } => {
       const resolution = resolveTaskContractReference(projection, task.id);
-      if (resolution.status === "current") return resolution.contract;
+      if (resolution.status === "current") return { contract: resolution.contract, ref: resolution.ref };
       throw new Error(
-        `Deliverable review inputs unavailable: task ${task.id} has no resolvable accepted contract (resolution: ${resolution.status}).`,
+        `Deliverable review inputs unavailable: task ${task.id} has no current accepted contract (resolution: ${resolution.status}).`,
       );
     };
     const durableSubmission = async (projection: SchedulerProjection, taskId: string): Promise<DurableSubmission> => {
@@ -1394,12 +1391,16 @@ export class NativeBuildFactory {
       sessions,
       artifacts: this.artifacts,
       evidenceStore,
-      loadInputs: async ({ task, projection }) => await loadDeliverableReviewInputs({
-        task,
-        submission: await durableSubmission(projection, task.id),
-        artifacts: this.artifacts,
-        contract: resolveReviewContract(projection, task),
-      }),
+      loadInputs: async ({ task, projection }) => {
+        const resolved = resolveReviewContract(projection, task);
+        return await loadDeliverableReviewInputs({
+          task,
+          submission: await durableSubmission(projection, task.id),
+          artifacts: this.artifacts,
+          contract: resolved.contract,
+          contractRef: resolved.ref,
+        });
+      },
       workspace: {
         create: async (taskRevision) => ({ path: (await deliveryReviewWorkspace.create(taskRevision)).path }),
         cleanup: () => deliveryReviewWorkspace.cleanup(),

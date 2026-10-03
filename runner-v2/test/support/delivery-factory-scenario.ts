@@ -163,9 +163,20 @@ function lastToolValue(request: AgentModelRequest): Record<string, unknown> | un
   return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
 }
 
+/**
+ * C5: optional observation of the actual AgentModel requests the real
+ * worker and reviewer turns receive — transport scripting only; the
+ * worker still writes, runs evidence and submits through real tools.
+ */
+export interface DeliveryFactoryObservation {
+  workerRequests?: AgentModelRequest[];
+  reviewerRequests?: AgentModelRequest[];
+}
+
 class WorkerModel implements AgentModel {
-  constructor(private readonly content: string) {}
+  constructor(private readonly content: string, private readonly observe?: DeliveryFactoryObservation) {}
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    this.observe?.workerRequests?.push(request);
     const toolCount = request.messages.filter((message) => message.role === "tool").length;
     if (toolCount === 0) return call("fs.write", { path: "src/value.mjs", content: this.content, createDirectories: true }, "write-1");
     if (toolCount === 1) return call("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
@@ -182,7 +193,9 @@ class WorkerModel implements AgentModel {
 
 class ReviewerModel implements AgentModel {
   readonly passes: string[] = [];
+  constructor(private readonly observe?: DeliveryFactoryObservation) {}
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
+    this.observe?.reviewerRequests?.push(request);
     const system = request.messages.find((message) => message.role === "system");
     const pass = system?.id ?? "";
     this.passes.push(pass);
@@ -254,7 +267,7 @@ function withPathPrefix(environment: Readonly<Record<string, string>>, prefix: s
 export async function runDeliveryFactoryScenario(
   content: string,
   scripts: Record<string, string> = { test: "node --test" },
-  options: { testFile?: string | null; extraFiles?: Record<string, string>; expect?: "accepted" | "not_accepted"; pathPrefix?: string } = {},
+  options: { testFile?: string | null; extraFiles?: Record<string, string>; expect?: "accepted" | "not_accepted"; pathPrefix?: string; observe?: DeliveryFactoryObservation } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "aiboard delivery factory "));
   const project = join(root, "project");
@@ -276,9 +289,9 @@ export async function runDeliveryFactoryScenario(
   const seed = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
   for (const input of planningEvents()) seed.append(input);
   seed.close();
-  const reviewer = new ReviewerModel();
+  const reviewer = new ReviewerModel(options.observe);
   const pauseDetail = () => JSON.stringify((handle!.runtime as unknown as { store: SqliteSchedulerStore }).store.readRun(RUN_ID).filter((item) => item.type === "run.paused").at(-1)?.payload);
-  const worker = new WorkerModel(content);
+  const worker = new WorkerModel(content, options.observe);
   const executionHost = createExecutionHost({
     projectRoot: project,
     stateDirectory: state,
@@ -344,7 +357,7 @@ export async function runDeliveryFactoryScenario(
     if (options.expect === "not_accepted") {
       assert.equal(boundary.passed, false, JSON.stringify(boundary));
       assert.equal(projection.tasks.T1!.status, "integrated");
-      return { review, boundary, projection };
+      return { review, boundary, projection, manifests: handle!.contextManifests?.() ?? [] };
     }
     const testsCheck = boundary.checks.find((check) => check.checkId === "tests")!;
     assert.equal(testsCheck.report?.status, "passed", JSON.stringify(testsCheck));
@@ -360,7 +373,7 @@ export async function runDeliveryFactoryScenario(
     assert.deepEqual(phase.exitChecks.map((check) => check.checkId), ["tests"]);
     const readiness = buildCompletionReadiness(projection);
     assert.equal(readiness.issues.some((issue) => /acceptance|conditional_pending|coverage/i.test(issue)), false, readiness.issues.join(" | "));
-    return { review, boundary, projection };
+    return { review, boundary, projection, manifests: handle!.contextManifests?.() ?? [] };
   } finally {
     await handle?.close();
     await factory?.close();

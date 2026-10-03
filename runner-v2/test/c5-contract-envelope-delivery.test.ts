@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import type { NativeTool, ToolExecutionOutput } from "../src/agent-contracts.js";
+import type { AgentModelRequest, NativeTool, ToolExecutionOutput } from "../src/agent-contracts.js";
 import {
   buildReviewerContractBlock,
   buildWorkerContext,
@@ -14,7 +14,7 @@ import {
   workerContextSections,
   type BuildWorkerContextInput,
 } from "../src/agent-prompts.js";
-import { ContextAssembler, type ContextSection } from "../src/context-assembler.js";
+import { ContextAssembler, ProtectedContextOverflowError, type ContextSection } from "../src/context-assembler.js";
 import { toContextManifest } from "../src/context-manifest-store.js";
 import {
   buildExecutionPlanRevision,
@@ -30,7 +30,7 @@ import {
   type StampedPlanSubmission,
 } from "../src/planning-contracts.js";
 import { createPlanningTools } from "../src/planning-tools.js";
-import { DELIVERABLE_REVIEW_CONTEXT_LIMITS, NativeDeliverableReviewRuntime } from "../src/native-deliverable-review.js";
+import { DELIVERABLE_REVIEW_CONTEXT_LIMITS, NativeDeliverableReviewRuntime, type DeliverableReviewInputs } from "../src/native-deliverable-review.js";
 import { loadDeliverableReviewInputs, type DurableSubmission } from "../src/delivery-execution.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { NATIVE_WORKER_CONTEXT_LIMITS } from "../src/native-worker-driver.js";
@@ -46,6 +46,8 @@ import {
   type SchedulerStore,
 } from "../src/scheduler-store.js";
 import type { ApprovedSourceManifest } from "../src/source-manifest.js";
+import type { BuildTask, TaskContractRef } from "../src/task-contracts.js";
+import { HIGH_CONTENT, runDeliveryFactoryScenario } from "./support/delivery-factory-scenario.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { buildPlanningFixtureScenario } from "./fixtures/planning-source-fixture.js";
 import { seedBoundCoverageAndReady } from "./support/planning-seed.js";
@@ -149,6 +151,15 @@ function strippedSubmission(fixture: C5Fixture, revisionId: string): PlanSubmiss
   for (const field of [...KERNEL_STAMPED_REVISION_FIELDS]) delete clone[field];
   const tasks = clone["tasks"] as Record<string, unknown>[];
   for (const task of tasks) delete task["requiredBase"];
+  // Kernel-owned decision/disposition timestamps are omitted so the
+  // boundary stamps them; a supplied fixture time would mismatch the
+  // kernel clock and must be refused, never silently repaired.
+  for (const key of ["planningDecisions", "nonNormativeSections", "retiredRequirementIds"] as const) {
+    const records = clone[key];
+    if (Array.isArray(records)) {
+      for (const record of records) delete (record as Record<string, unknown>)["decidedAt"];
+    }
+  }
   clone["revisionId"] = revisionId;
   if (revisionId !== "revision_1") {
     for (const task of tasks) task["requiredBase"] = requiredBaseForRevision(revisionId);
@@ -248,9 +259,15 @@ test("C5 supplied matching envelope is kept and the digest binds the stamped con
   const fixture = c5Fixture(runId);
   const { digest: _digest, ...supplied } = fixture.revision;
   void _digest;
+  // A supplied timestamp must match the kernel actual: for a new record
+  // with no durable identity that is the kernel submission time (CLOCK).
+  const decisions = (supplied as unknown as { planningDecisions: Array<Record<string, unknown>> }).planningDecisions;
+  for (const decision of decisions) decision["decidedAt"] = CLOCK;
   const result = normalizePlanSubmission(supplied as PlanSubmissionRevision, actualsFor(runId, fixture.manifest));
   assertOk(result);
-  assert.equal(computeExecutionPlanRevisionDigest(result.revision), fixture.revision.digest);
+  const stored = buildExecutionPlanRevision(result.revision);
+  assert.equal(stored.digest, computeExecutionPlanRevisionDigest(result.revision));
+  assert.equal(validateExecutionPlanRevision(stored, fixture.manifest).valid, true);
 });
 
 test("C5 authoritative absence: omitted review/lineage stay absent, supplied values refused", () => {
@@ -903,8 +920,9 @@ test("C5 review inputs carry the durable accepted contract and no placeholder", 
       authorRuntimeId: "author-runtime",
     } as unknown as DurableSubmission;
     const task = { ...projection.tasks["T1"]!, changeSetId: "changeset_1", attempt: 0 };
-    const inputs = await loadDeliverableReviewInputs({ task, submission, artifacts, contract: resolution.contract });
+    const inputs = await loadDeliverableReviewInputs({ task, submission, artifacts, contract: resolution.contract, contractRef: resolution.ref });
     assert.equal(inputs.contract, resolution.contract);
+    assert.deepEqual(inputs.contractRef, resolution.ref);
     assert.ok(inputs.diffText.includes("src/t1.ts"));
     const legacy = await loadDeliverableReviewInputs({ task, submission, artifacts });
     assert.equal(legacy.contract, undefined);
@@ -914,7 +932,9 @@ test("C5 review inputs carry the durable accepted contract and no placeholder", 
 });
 
 // ---------------------------------------------------------------------------
-// Journey: real SQLite worker + reviewer contexts on the current contract.
+// Store-backed contexts: worker/reviewer section assembly over a real
+// SQLite scheduler store (restart included) — assembly-level coverage,
+// not the factory pump (see the actual factory journey below).
 // ---------------------------------------------------------------------------
 
 
@@ -962,7 +982,7 @@ function assertCompactWorkerContract(text: string, contractId: string, revisionI
   }
 }
 
-test("C5 factory journey delivers the current accepted contract to worker and reviewer contexts within caps", async () => {
+test("C5 store-backed worker and reviewer contexts carry the current accepted contract within caps", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-c5-journey-"));
   const database = join(root, "scheduler.sqlite");
   const runId = "run_c5_journey";
@@ -1136,5 +1156,507 @@ test("C5 factory journey delivers the current accepted contract to worker and re
   } finally {
     closeStore();
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F5: an explicitly supplied ref.taskId that names no current contract
+// fails closed — even when a repair parent would resolve. Parent identity
+// derivation applies only when the bridge holds no explicit identity,
+// and the returned ref then names the actual resolved contract.
+// ---------------------------------------------------------------------------
+
+test("C5 explicit ref identity fails closed; parent derivation names the resolved contract", async () => {
+  const runId = "run_c5_explicit_ref";
+  const fixture = c5Fixture(runId);
+  const store = new MemorySchedulerStore();
+  await readyJourneyStore(runId, fixture, store);
+  const now = projectionOf(store, runId);
+  const ready = readyPlanIdentity(now)!;
+  const withRepair = (contractRef?: TaskContractRef): SchedulerProjection => ({
+    ...now,
+    tasks: {
+      ...now.tasks,
+      R1: {
+        id: "R1",
+        kind: "verification_repair",
+        objective: "Repair T1.",
+        dependencies: ["T1"],
+        status: "planned",
+        requiredCapabilities: [],
+        attempt: 0,
+        ...(contractRef ? { contractRef } : {}),
+      },
+    },
+  });
+  // Explicitly supplied but missing: dropped, never the parent's contract
+  // under the wrong identity.
+  const wrong = resolveTaskContractReference(
+    withRepair({ revisionId: ready.revisionId, digest: ready.digest, taskId: "NOPE" }),
+    "R1",
+  );
+  assert.equal(wrong.status, "dropped");
+  if (wrong.status !== "dropped") throw new Error("unreachable");
+  assert.equal(wrong.ref.taskId, "NOPE");
+  // No explicit identity: the repair resolves through its parent, and the
+  // returned ref names the actual resolved contract.
+  const derived = resolveTaskContractReference(withRepair(), "R1");
+  assert.equal(derived.status, "current");
+  if (derived.status !== "current") throw new Error("unreachable");
+  assert.equal(derived.ref.taskId, "T1");
+  assert.equal(derived.contract.id, "T1");
+  assert.equal(derived.ref.revisionId, ready.revisionId);
+  assert.equal(derived.ref.digest, ready.digest);
+  // A direct task with an explicit unknown ref fails closed as well.
+  const direct = resolveTaskContractReference(
+    {
+      ...now,
+      tasks: {
+        ...now.tasks,
+        T9: {
+          id: "T9",
+          objective: "Rogue.",
+          dependencies: [],
+          status: "planned",
+          requiredCapabilities: [],
+          attempt: 0,
+          contractRef: { revisionId: ready.revisionId, digest: ready.digest, taskId: "NOPE" },
+        },
+      },
+    },
+    "T9",
+  );
+  assert.equal(direct.status, "dropped");
+});
+
+// ---------------------------------------------------------------------------
+// F2: decision/disposition timestamps stamp from kernel actuals at the
+// submission boundary only. Omitted stamps the matching durable time for
+// a known identity, else the kernel submission time; a supplied value
+// must match. History, replay and digests are untouched.
+// ---------------------------------------------------------------------------
+
+test("C5 omitted decision timestamps stamp the kernel submission time", () => {
+  const runId = "run_c5_stamp_time";
+  const fixture = c5Fixture(runId);
+  const result = normalizePlanSubmission(
+    strippedSubmission(fixture, "revision_1"),
+    actualsFor(runId, fixture.manifest),
+  );
+  assertOk(result);
+  const decisions = (result.revision as unknown as {
+    planningDecisions: Array<{ id: string; decidedAt: string }>;
+  }).planningDecisions;
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0]!.id, "D3");
+  assert.equal(decisions[0]!.decidedAt, CLOCK);
+});
+
+test("C5 supplied decision timestamps must match the kernel actual", () => {
+  const runId = "run_c5_time_match";
+  const fixture = c5Fixture(runId);
+  const actuals = actualsFor(runId, fixture.manifest);
+  const kept = strippedSubmission(fixture, "revision_1");
+  (kept.planningDecisions[0] as unknown as Record<string, unknown>)["decidedAt"] = CLOCK;
+  assert.equal(normalizePlanSubmission(kept, actuals).ok, true);
+  const stale = strippedSubmission(fixture, "revision_1");
+  (stale.planningDecisions[0] as unknown as Record<string, unknown>)["decidedAt"] = "2026-09-22T00:00:00.000Z";
+  const refused = normalizePlanSubmission(stale, actuals);
+  assert.equal(refused.ok, false);
+  if (!refused.ok) assert.equal(refused.failure.code, "timestamp_mismatch");
+});
+
+test("C5 draft and revise stamp omitted decision times and refuse mismatches", async () => {
+  const runId = "run_c5_tool_time";
+  const fixture = c5Fixture(runId);
+  const store = new MemorySchedulerStore();
+  seedPolicySourceLedger(store, runId, fixture);
+  const tools = createPlanningTools({ store, clock });
+  const drafted = await invokePlanningTool(
+    tools,
+    "draft_planning_plan",
+    { revision: strippedSubmission(fixture, "revision_1") },
+    runId,
+  );
+  assert.equal(drafted.isError, false, JSON.stringify(drafted.error));
+  const storedR1 = projectionOf(store, runId).planning!.plan!.revisionsById["revision_1"]!;
+  assert.equal(storedR1.planningDecisions[0]!.decidedAt, CLOCK);
+  // A new decision identity stamps the kernel submission time when omitted.
+  const plan = projectionOf(store, runId).planning!.plan!;
+  const next = strippedSubmission(fixture, "revision_2");
+  (next.planningDecisions as unknown as Array<Record<string, unknown>>).push({
+    id: "D9",
+    description: "A new ledger call.",
+  });
+  const revised = await invokePlanningTool(tools, "revise_planning_plan", {
+    revision: next,
+    expectedRevisionId: plan.currentRevisionId,
+    expectedDigest: plan.currentDigest,
+  }, runId);
+  assert.equal(revised.isError, false, JSON.stringify(revised.error));
+  const storedR2 = projectionOf(store, runId).planning!.plan!.revisionsById["revision_2"]!;
+  assert.equal(storedR2.planningDecisions.find((decision) => decision.id === "D3")!.decidedAt, CLOCK);
+  assert.equal(storedR2.planningDecisions.find((decision) => decision.id === "D9")!.decidedAt, CLOCK);
+  // A wrong supplied time for a carried identity is refused.
+  const bad = strippedSubmission(fixture, "revision_3");
+  (bad.planningDecisions[0] as unknown as Record<string, unknown>)["decidedAt"] = "2020-01-01T00:00:00.000Z";
+  const refused = await invokePlanningTool(tools, "revise_planning_plan", {
+    revision: bad,
+    expectedRevisionId: "revision_2",
+    expectedDigest: storedR2.digest,
+  }, runId);
+  assert.equal(refused.isError, true);
+  assert.equal(refused.error?.code, "timestamp_mismatch");
+});
+
+// ---------------------------------------------------------------------------
+// F3: the revise expected identity stamps the durable current revision
+// when omitted; a supplied wrong/null/blank/malformed value is refused.
+// The event payload carries the actual resolved identity, never undefined.
+// ---------------------------------------------------------------------------
+
+test("C5 revise stamps an omitted expected identity and keeps stale refusal", async () => {
+  const runId = "run_c5_expected_stamp";
+  const fixture = c5Fixture(runId);
+  const store = new MemorySchedulerStore();
+  seedPolicySourceLedger(store, runId, fixture);
+  const tools = createPlanningTools({ store, clock });
+  const drafted = await invokePlanningTool(
+    tools,
+    "draft_planning_plan",
+    { revision: strippedSubmission(fixture, "revision_1") },
+    runId,
+  );
+  assert.equal(drafted.isError, false, JSON.stringify(drafted.error));
+  const storedR1 = projectionOf(store, runId).planning!.plan!.revisionsById["revision_1"]!;
+  const revised = await invokePlanningTool(tools, "revise_planning_plan", {
+    revision: strippedSubmission(fixture, "revision_2"),
+  }, runId);
+  assert.equal(revised.isError, false, JSON.stringify(revised.error));
+  const after = projectionOf(store, runId).planning!.plan!;
+  assert.equal(after.currentRevisionId, "revision_2");
+  const revisedEvent = store.readRun(runId).find((event) => event.type === "planning.plan_revised")!;
+  const payload = revisedEvent.payload as { expectedRevisionId: string; expectedDigest: string };
+  assert.equal(payload.expectedRevisionId, "revision_1");
+  assert.equal(payload.expectedDigest, storedR1.digest);
+  // A supplied stale base is still refused.
+  const stale = await invokePlanningTool(tools, "revise_planning_plan", {
+    revision: strippedSubmission(fixture, "revision_3"),
+    expectedRevisionId: "revision_1",
+    expectedDigest: storedR1.digest,
+  }, runId);
+  assert.equal(stale.isError, true);
+  assert.equal(stale.error?.code, "stale_plan_revision");
+  assert.equal(projectionOf(store, runId).planning!.plan!.currentRevisionId, "revision_2");
+});
+
+test("C5 revise refuses null, blank and malformed expected identity without stamping", async () => {
+  const runId = "run_c5_expected_bad";
+  const fixture = c5Fixture(runId);
+  const store = new MemorySchedulerStore();
+  seedPolicySourceLedger(store, runId, fixture);
+  const tools = createPlanningTools({ store, clock });
+  const drafted = await invokePlanningTool(
+    tools,
+    "draft_planning_plan",
+    { revision: strippedSubmission(fixture, "revision_1") },
+    runId,
+  );
+  assert.equal(drafted.isError, false, JSON.stringify(drafted.error));
+  const plan = projectionOf(store, runId).planning!.plan!;
+  const tool = tools.find((candidate) => candidate.definition.name === "revise_planning_plan")!;
+  const bad: Array<Record<string, unknown>> = [
+    { expectedRevisionId: null, expectedDigest: plan.currentDigest },
+    { expectedRevisionId: plan.currentRevisionId, expectedDigest: "" },
+    { expectedRevisionId: "   ", expectedDigest: plan.currentDigest },
+    { expectedRevisionId: 42, expectedDigest: plan.currentDigest },
+  ];
+  for (const patch of bad) {
+    const validation = tool.validate({
+      revision: strippedSubmission(fixture, "revision_9"),
+      ...patch,
+    });
+    assert.equal(validation.ok, false, JSON.stringify(patch));
+  }
+  // Omitted entirely validates: the kernel stamps the durable current.
+  assert.equal(tool.validate({ revision: strippedSubmission(fixture, "revision_9") }).ok, true);
+  assert.equal(projectionOf(store, runId).planning!.plan!.currentRevisionId, "revision_1");
+});
+
+// ---------------------------------------------------------------------------
+// F4: the reviewer resolves the CURRENT accepted contract before any
+// loader or provider call. A superseded (non-ready) reference fails
+// closed without invoking the loader; a loader-carried historical
+// contract, a drifted scheduler criterion text, or a reference without
+// substance is refused. An exact authority passes the gate with no
+// provider call. The obligations pass stays criteria-only.
+// ---------------------------------------------------------------------------
+
+test("C5 reviewer resolves current authority before any loader or provider call", async () => {
+  const runId = "run_c5_review_gate";
+  const fixture = c5Fixture(runId);
+  const store = new MemorySchedulerStore();
+  await readyJourneyStore(runId, fixture, store);
+  // Drive T1 to a real submission through kernel events.
+  store.append({
+    runId,
+    type: "task.transitioned",
+    occurredAt: CLOCK,
+    actor: { role: "runner", id: "build-runtime" },
+    idempotencyKey: "assign:T1",
+    payload: { taskId: "T1", status: "assigned", patch: { assignedWorkerId: "worker_1" } },
+  });
+  store.append({
+    runId,
+    type: "task.transitioned",
+    occurredAt: CLOCK,
+    actor: { role: "runner", id: "build-runtime" },
+    idempotencyKey: "running:T1",
+    payload: { taskId: "T1", status: "running" },
+  });
+  store.append({
+    runId,
+    type: "task.transitioned",
+    occurredAt: CLOCK,
+    actor: { role: "runner", id: "worker_1" },
+    idempotencyKey: "submit:T1",
+    payload: {
+      taskId: "T1",
+      status: "submitted",
+      patch: {
+        changeSetId: "changeset_1",
+        criterionEvidenceLinks: [
+          { criterionId: "c1", evidenceId: "e1", artifactHashes: ["ab".repeat(32)], attempt: 1 },
+        ],
+      },
+    },
+  });
+  assert.equal(projectionOf(store, runId).tasks["T1"]!.status, "submitted");
+  const buildInputs = (projection: SchedulerProjection, mutate?: (inputs: DeliverableReviewInputs) => void): DeliverableReviewInputs => {
+    const task = projection.tasks["T1"]!;
+    const resolution = resolveTaskContractReference(projection, "T1");
+    assert.equal(resolution.status, "current");
+    if (resolution.status !== "current") throw new Error("unreachable");
+    const inputs: DeliverableReviewInputs = {
+      taskId: "T1",
+      attempt: task.attempt,
+      changeSetId: "changeset_1",
+      baselineRevision: "b".repeat(40),
+      taskRevision: "c".repeat(40),
+      diffArtifactHash: "ab".repeat(32),
+      diffText: "diff --git a/src/t1.ts b/src/t1.ts",
+      changedPaths: ["src/t1.ts"],
+      objective: resolution.contract.outcome.user,
+      criteria: resolution.contract.acceptance.criteria.map((criterion) => ({ id: criterion.id, text: criterion.text })),
+      workerSummary: "Worker summary for T1.",
+      unresolvedConcerns: [],
+      claims: [],
+      authorRuntimeId: "author-runtime",
+      contract: resolution.contract,
+      contractRef: resolution.ref,
+    };
+    mutate?.(inputs);
+    return inputs;
+  };
+  const reviewWith = (
+    target: SchedulerStore,
+    loadInputs: (input: { task: BuildTask; projection: SchedulerProjection }) => Promise<DeliverableReviewInputs>,
+  ): { runtime: NativeDeliverableReviewRuntime; calls: { count: number } } => {
+    const calls = { count: 0 };
+    const runtime = new NativeDeliverableReviewRuntime({
+      store: target,
+      architectRuntimeId: "architect-runtime",
+      router: { selectVerifier: () => { throw new Error("unused"); } } as never,
+      candidates: [],
+      models: new Map(),
+      reviewerRuntimeIds: [],
+      sessions: {} as never,
+      artifacts: {} as never,
+      evidenceStore: {} as never,
+      loadInputs: async (input) => {
+        calls.count += 1;
+        return loadInputs(input);
+      },
+      workspace: { create: async () => ({ path: "unused" }), cleanup: async () => undefined },
+      depth: { run: async () => { throw new Error("unused"); } },
+    });
+    return { runtime, calls };
+  };
+  const reasonOf = (result: { status: string; reason?: string }): string => {
+    assert.equal(result.status, "unavailable");
+    return (result as { reason: string }).reason;
+  };
+  // Exact authority passes the gate with no provider: empty candidates
+  // fail identity lookup only after authority checks.
+  {
+    const { runtime, calls } = reviewWith(store, async ({ projection }) => buildInputs(projection));
+    const result = await runtime.review({ runId, taskId: "T1" });
+    assert.equal(reasonOf(result), "delivery_identity_unavailable");
+    assert.equal(calls.count, 1);
+  }
+  // Restart shape: the same durable events replayed into a fresh store
+  // pass the gate identically.
+  {
+    const replayed = new MemorySchedulerStore();
+    for (const event of store.readRun(runId)) {
+      const { eventId: _eventId, sequence: _sequence, ...input } = event;
+      void _eventId;
+      void _sequence;
+      replayed.append(input);
+    }
+    const { runtime, calls } = reviewWith(replayed, async ({ projection }) => buildInputs(projection));
+    const result = await runtime.review({ runId, taskId: "T1" });
+    assert.equal(reasonOf(result), "delivery_identity_unavailable");
+    assert.equal(calls.count, 1);
+  }
+  // A loader-carried historical contract (stale digest) is refused.
+  {
+    const { runtime, calls } = reviewWith(store, async ({ projection }) => buildInputs(projection, (inputs) => {
+      inputs.contractRef = { ...inputs.contractRef!, digest: "f".repeat(64) };
+    }));
+    const result = await runtime.review({ runId, taskId: "T1" });
+    assert.equal(reasonOf(result), "delivery_inputs_unavailable");
+    assert.equal(calls.count, 1);
+  }
+  // A same-ID changed scheduler criterion text is refused.
+  {
+    const { runtime } = reviewWith(store, async ({ projection }) => buildInputs(projection, (inputs) => {
+      inputs.criteria = inputs.criteria.map((criterion) => ({ ...criterion, text: `${criterion.text} (edited)` }));
+    }));
+    const result = await runtime.review({ runId, taskId: "T1" });
+    assert.equal(reasonOf(result), "delivery_inputs_unavailable");
+  }
+  // A reference without substance is refused.
+  {
+    const { runtime } = reviewWith(store, async ({ projection }) => buildInputs(projection, (inputs) => {
+      delete (inputs as unknown as Record<string, unknown>)["contract"];
+    }));
+    const result = await runtime.review({ runId, taskId: "T1" });
+    assert.equal(reasonOf(result), "delivery_inputs_unavailable");
+  }
+  // A superseded plan (revised but not re-readied) fails closed before
+  // the loader runs at all.
+  {
+    const tools = createPlanningTools({ store, clock });
+    const plan = projectionOf(store, runId).planning!.plan!;
+    const revised = await invokePlanningTool(tools, "revise_planning_plan", {
+      revision: strippedSubmission(fixture, "revision_2"),
+      expectedRevisionId: plan.currentRevisionId,
+      expectedDigest: plan.currentDigest,
+    }, runId);
+    assert.equal(revised.isError, false, JSON.stringify(revised.error));
+    assert.equal(projectionOf(store, runId).planning!.readiness, "not_ready");
+    const { runtime, calls } = reviewWith(store, async ({ projection }) => buildInputs(projection));
+    const result = await runtime.review({ runId, taskId: "T1" });
+    assert.equal(result.status, "unavailable");
+    if (result.status !== "unavailable") throw new Error("unreachable");
+    assert.equal(result.reason, "delivery_contract_not_current");
+    assert.equal(calls.count, 0);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// F1 actual journey: NativeBuildFactory -> runtime.step() over real
+// SQLite, scripting ONLY the AgentModel transport. The real worker
+// writes, runs evidence and submits through real tools; the real
+// reviewer receives the submitted diff and renders findings/verdict
+// contexts from the current accepted contract.
+// ---------------------------------------------------------------------------
+
+function requestText(request: AgentModelRequest): string {
+  return request.messages
+    .map((message) => (typeof message.content === "string" ? message.content : JSON.stringify(message.content)))
+    .join("\n");
+}
+
+function requestPass(request: AgentModelRequest): string {
+  return request.messages.find((message) => message.role === "system")?.id ?? "";
+}
+
+test("C5 actual factory journey pins the current accepted contract in real worker and reviewer requests", async () => {
+  const workerRequests: AgentModelRequest[] = [];
+  const reviewerRequests: AgentModelRequest[] = [];
+  const { projection, manifests } = await runDeliveryFactoryScenario(
+    HIGH_CONTENT,
+    { test: "node --test" },
+    { observe: { workerRequests, reviewerRequests } },
+  );
+  const ready = readyPlanIdentity(projection)!;
+  assert.equal(projection.planning!.plan!.currentRevisionId, "revision_value");
+  const provenance = `accepted revision revision_value (digest ${ready.digest})`;
+  // The real worker's requests carry the exact current contract block.
+  assert.ok(workerRequests.length >= 1, "the real worker made model calls");
+  const workerText = workerRequests.map(requestText).join("\n");
+  for (const required of [
+    "Authoritative plan contract T1",
+    provenance,
+    "required base accepted plan revision revision_value",
+    "Create src/value.mjs exporting value = 2.",
+    "- c1: src/value.mjs exports value = 2 and the tests pass.",
+  ]) {
+    assert.ok(workerText.includes(required), `real worker requests carry ${required}`);
+  }
+  assert.ok(!workerText.includes("(unpinned)"), "real worker requests are pinned");
+  // The real reviewer's findings and verdict requests carry the same
+  // authority; the obligations pass stays criteria-only and precedes diff.
+  const byPass = new Map<string, string>();
+  for (const request of reviewerRequests) {
+    const pass = requestPass(request);
+    byPass.set(pass, `${byPass.get(pass) ?? ""}\n${requestText(request)}`);
+  }
+  assert.ok(byPass.has("delivery-obligations-system"), "obligations pass ran");
+  assert.ok(byPass.has("delivery-findings-system"), "findings pass ran");
+  assert.ok(byPass.has("delivery-verdict-system"), "verdict pass ran");
+  const obligations = byPass.get("delivery-obligations-system")!;
+  assert.ok(!obligations.includes("Authoritative plan contract"), "obligations stays criteria-only");
+  assert.ok(!obligations.includes("Unified diff"), "obligations precedes the diff");
+  for (const pass of ["delivery-findings-system", "delivery-verdict-system"] as const) {
+    const text = byPass.get(pass)!;
+    for (const required of ["Authoritative plan contract T1", provenance, "- c1: src/value.mjs exports value = 2 and the tests pass."]) {
+      assert.ok(text.includes(required), `real reviewer ${pass} carries ${required}`);
+    }
+    assert.ok(!text.includes("(unpinned)"), `real reviewer ${pass} is pinned`);
+  }
+  // The durable context manifest store records the actual packs within caps.
+  const workerManifests = manifests.filter((manifest) => manifest.purpose === "worker:task");
+  assert.ok(workerManifests.length >= 1, "worker packs are recorded");
+  for (const manifest of workerManifests) {
+    assert.deepEqual(manifest.limits, NATIVE_WORKER_CONTEXT_LIMITS);
+    assert.match(manifest.packDigest, /^[a-f0-9]{64}$/);
+    assert.ok(manifest.byteLength > 0 && manifest.byteLength <= manifest.limits.maxBytes);
+    assert.ok(manifest.estimatedTokens > 0 && manifest.estimatedTokens <= manifest.limits.maxEstimatedTokens);
+    assert.ok(manifest.sections.some((section) => section.id === "task-contract"), "recorded worker pack includes the contract");
+    assert.ok(!manifest.omissions.some((omission) => omission.id === "task-contract"), "recorded worker pack never omits the contract");
+  }
+  for (const purpose of ["delivery:findings", "delivery:verdict"] as const) {
+    const recorded = manifests.filter((manifest) => manifest.purpose === purpose);
+    assert.ok(recorded.length >= 1, `${purpose} pack is recorded`);
+    for (const manifest of recorded) {
+      assert.deepEqual(manifest.limits, DELIVERABLE_REVIEW_CONTEXT_LIMITS);
+      assert.ok(manifest.byteLength <= manifest.limits.maxBytes);
+      assert.ok(manifest.estimatedTokens <= manifest.limits.maxEstimatedTokens);
+      assert.ok(manifest.sections.some((section) => section.id === "task-contract"), `recorded ${purpose} pack includes the contract`);
+    }
+  }
+  const recordedObligations = manifests.filter((manifest) => manifest.purpose === "delivery:obligations");
+  assert.ok(recordedObligations.length >= 1, "obligations pack is recorded");
+  for (const manifest of recordedObligations) {
+    assert.ok(!manifest.sections.some((section) => section.id === "task-contract"), "recorded obligations stay criteria-only");
+  }
+  console.log(`C5 actual journey: ${workerRequests.length} worker + ${reviewerRequests.length} reviewer requests, ${manifests.length} manifests, first worker pack ${workerManifests[0]!.byteLength} B`);
+});
+
+test("C5 required contract facts fail closed instead of truncating under caps", async () => {
+  const runId = "run_c5_overflow";
+  const fixture = c5Fixture(runId);
+  const store = new MemorySchedulerStore();
+  await readyJourneyStore(runId, fixture, store);
+  const input = workerInputFor(projectionOf(store, runId), "T1");
+  try {
+    buildWorkerContext({ ...input, limits: { maxBytes: 64, maxEstimatedTokens: 16 } });
+    assert.fail("expected a protected overflow, not a truncated contract");
+  } catch (error) {
+    assert.ok(error instanceof ProtectedContextOverflowError, `expected ProtectedContextOverflowError, got ${error}`);
+    assert.ok(error.requiredSectionIds.includes("task-contract"), "the contract block is protected");
   }
 });

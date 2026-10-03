@@ -29,7 +29,7 @@ import {
 import type { DeliverableReviewInputs, DeliveryDepthRunner } from "./native-deliverable-review.js";
 import { outputFor, type OneShotCommandExecutor } from "./one-shot-command-executor.js";
 import type { SchedulerProjection } from "./scheduler-store.js";
-import type { BuildTask } from "./task-contracts.js";
+import type { BuildTask, TaskContractRef } from "./task-contracts.js";
 import type { ExecutionTaskContract } from "./planning-contracts.js";
 import {
   outcomeFromReportReading,
@@ -93,6 +93,8 @@ export async function loadDeliverableReviewInputs(input: {
   artifacts: Pick<ArtifactStore, "get">;
   /** C5: the authoritative accepted contract resolved from durable state. */
   contract?: ExecutionTaskContract;
+  /** C5: the exact accepted revision/digest/task identity the contract was resolved at. */
+  contractRef?: TaskContractRef;
 }): Promise<DeliverableReviewInputs> {
   const { task, submission } = input;
   const changeSet = submission.changeSet;
@@ -121,6 +123,7 @@ export async function loadDeliverableReviewInputs(input: {
     }),
     authorRuntimeId: submission.authorRuntimeId,
     ...(input.contract ? { contract: input.contract } : {}),
+    ...(input.contractRef ? { contractRef: input.contractRef } : {}),
   };
 }
 

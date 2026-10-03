@@ -2446,6 +2446,17 @@ export interface PlanSubmissionActuals {
   readonly createdAt: string;
   readonly coverageReviewId?: string;
   readonly repairBudgetLineageId?: string;
+  /**
+   * The durable current revision's decision/disposition timestamps when
+   * revising (absent when drafting): an omitted submission timestamp
+   * stamps the matching durable record's time when its identity already
+   * exists, else the kernel submission time (createdAt).
+   */
+  readonly priorRevision?: {
+    readonly planningDecisions: readonly { readonly id: string; readonly decidedAt: string }[];
+    readonly nonNormativeSections?: readonly { readonly sectionId: string; readonly decidedAt: string }[];
+    readonly retiredRequirementIds?: readonly { readonly requirementId: string; readonly decidedAt: string }[];
+  };
 }
 
 
@@ -2491,9 +2502,31 @@ export type PlanSubmissionPhase = Omit<ExecutionPlanPhase, "requirementIds" | "c
 };
 
 /**
+ * A submitted planning decision: identity and description stay
+ * model-authored and required — only the kernel timestamp may be
+ * omitted for stamping at the submission boundary.
+ */
+export type PlanSubmissionPlanningDecision = {
+  readonly id: string;
+  readonly description: string;
+  readonly decidedAt?: string;
+};
+
+/** A submitted non-normative section record: only decidedAt may be omitted. */
+export type PlanSubmissionSectionDisposition = Omit<SourceSectionDisposition, "decidedAt"> & {
+  readonly decidedAt?: string;
+};
+
+/** A submitted retired-requirement record: only decidedAt may be omitted. */
+export type PlanSubmissionRetiredRequirement = Omit<RetiredRequirementRecord, "decidedAt"> & {
+  readonly decidedAt?: string;
+};
+
+/**
  * A submitted revision: the kernel-stamped envelope fields, every task's
  * requiredBase, and every requirement/task/phase link side may be
- * omitted. Everything else (EP06 semantic fields,
+ * omitted. The decision/disposition timestamps above may also be omitted
+ * for kernel stamping. Everything else (EP06 semantic fields,
  * REQUIRED_TEXT_LIST_FIELDS, identity/coverage constraints) stays
  * required — omission there is still refused downstream, never defaulted.
  */
@@ -2509,6 +2542,9 @@ export type PlanSubmissionRevision = Omit<
   | "requirements"
   | "tasks"
   | "phases"
+  | "planningDecisions"
+  | "nonNormativeSections"
+  | "retiredRequirementIds"
 > & {
   readonly runId?: string;
   readonly sourceManifestId?: string;
@@ -2520,12 +2556,16 @@ export type PlanSubmissionRevision = Omit<
   readonly requirements: readonly PlanSubmissionRequirement[];
   readonly tasks: readonly PlanSubmissionTask[];
   readonly phases: readonly PlanSubmissionPhase[];
+  readonly planningDecisions: readonly PlanSubmissionPlanningDecision[];
+  readonly nonNormativeSections?: readonly PlanSubmissionSectionDisposition[];
+  readonly retiredRequirementIds?: readonly PlanSubmissionRetiredRequirement[];
 };
 
 export interface PlanSubmissionFailure {
   readonly code:
     | "envelope_mismatch"
     | "base_mismatch"
+    | "timestamp_mismatch"
     | "unknown_requirement_ref"
     | "unknown_task_ref"
     | "unknown_phase_ref"
@@ -2615,6 +2655,78 @@ export function stampPlanSubmissionEnvelope(
         },
       };
     }
+  }
+  return { ok: true, revision: copy as unknown as ExecutionPlanRevisionWithoutDigest, derived: [] };
+}
+
+/**
+ * Stamps omitted decision/disposition timestamps from actuals; refuses a
+ * supplied timestamp that does not match. The authoritative actual for an
+ * identity the durable prior revision already records is that record's
+ * timestamp; for a new semantic record it is the kernel submission time
+ * (actuals.createdAt). Semantic id/description/rationale/authorizedBy/
+ * amendmentRef stay model-authored and are still required downstream —
+ * stamping never infers approval. Malformed entries are left for the
+ * downstream validators, which refuse them.
+ */
+export function stampSubmissionTimestamps(
+  revision: PlanSubmissionRevision,
+  actuals: PlanSubmissionActuals,
+): StampedPlanSubmission {
+  const copy = structuredClone(revision) as unknown as Record<string, unknown>;
+  const now = actuals.createdAt;
+  const prior = actuals.priorRevision;
+  const stamp = (
+    list: unknown,
+    identity: (record: Record<string, unknown>) => string | undefined,
+    durableAt: (id: string) => string | undefined,
+    describe: (id: string) => string,
+  ): PlanSubmissionFailure | undefined => {
+    if (list === undefined || !Array.isArray(list)) return undefined;
+    for (const entry of list) {
+      if (!isRecord(entry)) continue;
+      const id = identity(entry);
+      if (id === undefined) continue;
+      const actual = durableAt(id) ?? now;
+      if (entry["decidedAt"] === undefined) {
+        entry["decidedAt"] = actual;
+        continue;
+      }
+      if (entry["decidedAt"] !== actual) {
+        return {
+          code: "timestamp_mismatch",
+          message: `${describe(id)} supplies decidedAt (${JSON.stringify(entry["decidedAt"])}) but the kernel's actual is (${JSON.stringify(actual)}) — decision timestamps are kernel-owned; omit them or supply the exact actual value.`,
+        };
+      }
+    }
+    return undefined;
+  };
+  const textId = (field: string) => (record: Record<string, unknown>): string | undefined =>
+    typeof record[field] === "string" && (record[field] as string).length > 0
+      ? (record[field] as string)
+      : undefined;
+  const failures = [
+    stamp(
+      copy["planningDecisions"],
+      textId("id"),
+      (id) => prior?.planningDecisions.find((candidate) => candidate.id === id)?.decidedAt,
+      (id) => `Planning decision ${id}`,
+    ),
+    stamp(
+      copy["nonNormativeSections"],
+      textId("sectionId"),
+      (id) => prior?.nonNormativeSections?.find((candidate) => candidate.sectionId === id)?.decidedAt,
+      (id) => `Non-normative section ${id}`,
+    ),
+    stamp(
+      copy["retiredRequirementIds"],
+      textId("requirementId"),
+      (id) => prior?.retiredRequirementIds?.find((candidate) => candidate.requirementId === id)?.decidedAt,
+      (id) => `Retired requirement ${id}`,
+    ),
+  ];
+  for (const failure of failures) {
+    if (failure) return { ok: false, failure };
   }
   return { ok: true, revision: copy as unknown as ExecutionPlanRevisionWithoutDigest, derived: [] };
 }
@@ -3040,7 +3152,9 @@ export function normalizePlanSubmission(
 ): StampedPlanSubmission {
   const stamped = stampPlanSubmissionEnvelope(revision, actuals);
   if (!stamped.ok) return stamped;
-  const linked = deriveMirroredPlanLinks(stamped.revision);
+  const timed = stampSubmissionTimestamps(stamped.revision, actuals);
+  if (!timed.ok) return timed;
+  const linked = deriveMirroredPlanLinks(timed.revision);
   if (!linked.ok) return linked;
-  return { ok: true, revision: linked.revision, derived: [...stamped.derived, ...linked.derived] };
+  return { ok: true, revision: linked.revision, derived: [...stamped.derived, ...timed.derived, ...linked.derived] };
 }

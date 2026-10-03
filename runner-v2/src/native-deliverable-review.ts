@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import type {
   AgentMessage,
@@ -65,6 +66,7 @@ import { assertRoleToolSurface, type RoleCapabilityBroker } from "./role-capabil
 import type { AgentRuntimeCandidate, RuntimeRouter } from "./runtime-router.js";
 import {
   rebuildSchedulerProjection,
+  resolveTaskContractReference,
   type SchedulerProjection,
   type SchedulerStore,
 } from "./scheduler-store.js";
@@ -261,10 +263,23 @@ export class NativeDeliverableReviewRuntime {
         replayed: true,
       };
     }
+    // C5 (AR-R16): the CURRENT accepted contract is the only reviewer
+    // authority, resolved here before any loader or provider call. An
+    // invalid, stale, dropped or mismatched reference fails closed —
+    // never a historical fallback on the live readiness path.
+    const authority = resolveTaskContractReference(projection, task.id);
+    if (authority.status !== "current") {
+      return {
+        status: "unavailable",
+        reason: "delivery_contract_not_current",
+        detail: `Task ${task.id} has no current accepted contract (resolution: ${authority.status}).`,
+      };
+    }
     let inputs: DeliverableReviewInputs;
     try {
       inputs = await this.options.loadInputs({ runId: request.runId, task, projection });
       assertInputs(inputs, task);
+      assertContractAuthority(inputs, task, authority);
     } catch (error) {
       return { status: "unavailable", reason: "delivery_inputs_unavailable", detail: message(error) };
     }
@@ -740,6 +755,61 @@ function assertInputs(inputs: DeliverableReviewInputs, task: BuildTask): void {
   const criteria = (task.acceptanceCriteria ?? []).map((criterion) => criterion.id).sort();
   if (criteria.length === 0 || JSON.stringify(inputs.criteria.map((criterion) => criterion.id).sort()) !== JSON.stringify(criteria)) {
     throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs must carry the task's exact acceptance criteria.");
+  }
+}
+
+/**
+ * C5 (AR-R16): the loader must carry the exact current authority
+ * resolved in review() — never a historical or alternate contract —
+ * and the submitted scheduler copies must agree with it. A loader that
+ * carries no contract takes the legacy/test path (unchanged above); a
+ * reference without substance is refused. Direct members carry the
+ * contract's own objective and criterion ids/text (a same-id changed
+ * text is a mismatch); kernel repair tasks keep their own durable
+ * objective/criteria but still ride the exact resolved parent contract
+ * and ref. Anything else is refused before any provider call, so every
+ * actual reviewer pass sees consistent current authoritative criteria.
+ */
+function assertContractAuthority(
+  inputs: DeliverableReviewInputs,
+  task: BuildTask,
+  authority: { readonly ref: TaskContractRef; readonly contract: ExecutionTaskContract },
+): void {
+  if (!inputs.contract && !inputs.contractRef) return;
+  if (!inputs.contract || !inputs.contractRef) {
+    throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs name an accepted contract reference without its substance.");
+  }
+  if (
+    inputs.contractRef.revisionId !== authority.ref.revisionId ||
+    inputs.contractRef.digest !== authority.ref.digest ||
+    inputs.contractRef.taskId !== authority.ref.taskId
+  ) {
+    throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs carry a contract reference that is not the current accepted reference.");
+  }
+  if (!isDeepStrictEqual(inputs.contract, authority.contract)) {
+    throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs carry a contract that is not the current accepted contract.");
+  }
+  const direct = authority.ref.taskId === task.id;
+  const expectedCriteria = direct
+    ? authority.contract.acceptance.criteria
+    : (task.acceptanceCriteria ?? []);
+  const want = expectedCriteria.map((criterion) => `${criterion.id}\n${criterion.text}`).sort();
+  const got = inputs.criteria.map((criterion) => `${criterion.id}\n${criterion.text}`).sort();
+  if (want.length === 0 || JSON.stringify(got) !== JSON.stringify(want)) {
+    throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs must carry the current authoritative acceptance criteria (criterion ids and text).");
+  }
+  if (direct && inputs.objective !== authority.contract.outcome.user) {
+    throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs must carry the current authoritative task objective.");
+  }
+  // Claims parse from the authoritative criteria above: a claim citing
+  // any other criterion (or forged evidence linkage) is refused — the
+  // worker's summary claim stays a claim, never evidence.
+  const expectedClaimIds = new Set(expectedCriteria.map((criterion) => `claim:${criterion.id}`));
+  for (const claim of inputs.claims) {
+    if (claim.id === "claim:summary") continue;
+    if (!expectedClaimIds.has(claim.id)) {
+      throw new DeliverableReviewInputsUnavailableError("Deliverable review claims must cite the current authoritative acceptance criteria.");
+    }
   }
 }
 
