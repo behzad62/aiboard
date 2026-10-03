@@ -13,6 +13,7 @@ import { basename, dirname, relative, resolve } from "node:path";
 import { unavailableGitRunner, type GitCommandOptions } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import { parseWorktreeAssociations } from "./worktree-state.js";
+import { isKernelHandoffSnapshotCommit } from "./integration-manager.js";
 
 const VERIFICATION_WORKSPACE_VERSION = 1 as const;
 const VERIFICATION_WORKSPACE_KIND = "final-verification" as const;
@@ -505,12 +506,72 @@ export class VerificationWorkspaceManager {
       }
     }
     if (options.requireCanonicalState) {
-      const canonical = await this.readCanonicalState();
-      if (canonical.revision !== metadata.canonicalRevision) {
-        throw new Error("Canonical checkout revision changed after verification workspace creation.");
-      }
-      this.assertCanonicalClean(canonical);
+      await this.assertCanonicalCheckoutAllowed(metadata);
     }
+  }
+
+  /**
+   * The canonical checkout may advance past the recorded revision only
+   * through the legitimate kernel-only doc chain (handoff snapshots for
+   * this run): docs-only snapshots never change the verified target, so
+   * remaining checks stay exact. Any other movement -- a new integration,
+   * a foreign commit, a rewrite -- keeps the exact refusal, and a dirty
+   * canonical checkout is always refused.
+   */
+  private async assertCanonicalCheckoutAllowed(
+    metadata: VerificationWorkspaceMetadata
+  ): Promise<void> {
+    const canonical = await this.readCanonicalState();
+    if (canonical.revision === metadata.canonicalRevision) {
+      this.assertCanonicalClean(canonical);
+      return;
+    }
+    const ancestor = await this.git(
+      this.repositoryRoot,
+      ["merge-base", "--is-ancestor", metadata.canonicalRevision, canonical.revision],
+      true
+    );
+    const range = ancestor.exitCode === 0
+      ? await this.git(this.repositoryRoot, [
+        "log",
+        "--reverse",
+        "--format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x00",
+        `${metadata.canonicalRevision}..${canonical.revision}`,
+      ])
+      : undefined;
+    const commits: Array<{
+      revision: string;
+      authorName: string;
+      authorEmail: string;
+      committerName: string;
+      committerEmail: string;
+      body: string;
+    }> = [];
+    if (range) {
+      const fields = range.stdout.split("\0");
+      for (let index = 0; index + 5 < fields.length; index += 6) {
+        const revision = fields[index].trim();
+        if (revision) {
+          commits.push({
+            revision,
+            authorName: (fields[index + 1] ?? "").trim(),
+            authorEmail: (fields[index + 2] ?? "").trim(),
+            committerName: (fields[index + 3] ?? "").trim(),
+            committerEmail: (fields[index + 4] ?? "").trim(),
+            body: fields[index + 5] ?? "",
+          });
+        }
+      }
+    }
+    const kernelOnly =
+      commits.length > 0 &&
+      commits.every((commit) =>
+        isKernelHandoffSnapshotCommit({ ...commit, runId: this.runId })
+      );
+    if (!kernelOnly) {
+      throw new Error("Canonical checkout revision changed after verification workspace creation.");
+    }
+    this.assertCanonicalClean(canonical);
   }
 
   private async writeMetadata(

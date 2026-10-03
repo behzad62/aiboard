@@ -186,6 +186,11 @@ export function gitWorkingRootsForRun(projectRoot: string, stateDirectory: strin
     // (VerificationWorkspaceManager suffixes "delivery-review"/"delivery-boundary").
     join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("delivery-review")}`),
     join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("delivery-boundary")}`),
+    // The independent-verifier baseline expectations checkout and the
+    // architect-commands checkout use the same suffixed layout; without
+    // their exact roots every post-snapshot verifier run is refused.
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("baseline")}`),
+    join(resolve(stateDirectory), "verifier-workspaces", `${segment(12, "run")}-${suffixSegment("architect-commands")}`),
     join(resolve(stateDirectory), "git-baselines", segment(40, "run")),
   ]);
 }

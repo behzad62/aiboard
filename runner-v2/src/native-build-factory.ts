@@ -668,7 +668,6 @@ export class NativeBuildFactory {
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      integrationManager,
     });
     constructionResources.add("verification_workspace", () => verificationWorkspace.cleanup());
     await this.options.runtimeConstructionHooks?.afterAcquire?.("verification_workspace");
@@ -678,15 +677,16 @@ export class NativeBuildFactory {
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      integrationManager,
       kind: "independent-verifier",
     });
+    // Every caller pins the exact scheduler-derived target revision, so no
+    // live-tip default: after a kernel snapshot the tip is a snapshot, not
+    // the verified target, and resolving it would strand the check.
     const architectCommandWorkspace = new VerificationWorkspaceManager({
       execute: requireGitRunner(gitContext).lifecycle("verification").run,
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      integrationManager,
       kind: "independent-verifier",
       workspaceSuffix: "architect-commands",
     });
@@ -727,7 +727,6 @@ export class NativeBuildFactory {
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
-      integrationManager,
       kind: "independent-verifier",
       workspaceSuffix: "baseline",
     });
@@ -1479,11 +1478,28 @@ export class NativeBuildFactory {
     // report files (OA-17); legacy runs keep P6.5 behavior.
     const policyTempRecorders = (): { tempRecorders?: typeof tempRecorders } =>
       rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).planningPolicyVersion === 1 ? { tempRecorders } : {};
+    // C3c/F1: the scheduler-canonical integration revision (the accepted
+    // task revision), never the live physical tip: kernel stop snapshots
+    // advance the tip without changing the canonical revision, so checks
+    // must compare against the canonical value to stay exact.
+    const canonicalIntegrationRevision = (): string =>
+      rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).integrationRevision ?? "";
     const finalVerificationDriver: FinalVerificationCheckDriver = {
       executeCheck: async (input) => {
+        // C3c/F1: pin the workspace to the scheduler-authorized generation
+        // target. The shared manager resolves the live physical tip, which
+        // kernel snapshots advance mid-verification; remaining checks must
+        // still execute on the exact canonical revision.
+        const generationWorkspace = new VerificationWorkspaceManager({
+          execute: requireGitRunner(gitContext).lifecycle("verification").run,
+          repositoryRoot: integrationManager.path,
+          stateDirectory: this.options.stateDirectory,
+          runId: spec.runId,
+          targetRevision: input.targetRevision,
+        });
         const verification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
-          workspaceManager: verificationWorkspace,
+          workspaceManager: generationWorkspace,
           artifacts: this.artifacts,
           evidenceStore,
           runId: input.runId,
@@ -1493,7 +1509,7 @@ export class NativeBuildFactory {
           ambientNodeOptions: ambientNodeOptions(),
           ...policyTempRecorders(),
           checkCategory: input.category,
-          currentIntegrationRevision: () => integrationManager.revision,
+          currentIntegrationRevision: () => canonicalIntegrationRevision() || input.targetRevision,
           managedProcessService: this.liveManagedProcesses(),
           managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
           browserBackend: this.browserBackend,
@@ -1561,7 +1577,13 @@ export class NativeBuildFactory {
         }
         const rerunVerification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
-          workspaceManager: verificationWorkspace,
+          workspaceManager: new VerificationWorkspaceManager({
+            execute: requireGitRunner(gitContext).lifecycle("verification").run,
+            repositoryRoot: integrationManager.path,
+            stateDirectory: this.options.stateDirectory,
+            runId: spec.runId,
+            targetRevision: input.targetRevision,
+          }),
           artifacts: this.artifacts,
           evidenceStore,
           runId: input.runId,
@@ -1572,7 +1594,7 @@ export class NativeBuildFactory {
           ...(testNamePattern !== undefined ? { testNamePattern } : {}),
           ...policyTempRecorders(),
           checkCategory: "tests",
-          currentIntegrationRevision: () => integrationManager.revision,
+          currentIntegrationRevision: () => canonicalIntegrationRevision() || input.targetRevision,
           managedProcessService: this.liveManagedProcesses(),
           managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
           browserBackend: this.browserBackend,
@@ -3183,11 +3205,18 @@ export function buildNativeVerifierInspectionRequest(input: {
   const changes = acceptedChangeSessions(input.projection, input.sessions)
     .map((session) => {
       const changeSet = session.changeSet!;
+      // The session actor id is the worker assignment id (worker_Task_Attempt),
+      // never a provider runtime: resolve the recorded assignment runtime so
+      // verifier selection can exclude the author's model. The actor id
+      // remains as fallback, which selection still rejects loudly when unknown.
+      const assignment = Object.values(input.projection.runtime.workerAssignments).find(
+        (candidate) => candidate.sessionId === session.sessionId,
+      );
       return {
         taskId: changeSet.taskId,
         attempt: input.projection.tasks[changeSet.taskId]?.attempt ?? 1,
         changeSetId: changeSet.id,
-        authorRuntimeId: session.actor.id,
+        authorRuntimeId: assignment?.runtimeId ?? session.actor.id,
         baselineRevision: changeSet.baselineRevision,
         taskRevision: changeSet.taskRevision,
         changedPaths: [...changeSet.changedPaths],

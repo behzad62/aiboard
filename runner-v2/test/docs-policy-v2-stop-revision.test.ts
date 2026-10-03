@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -221,6 +221,40 @@ class ReviewerModel implements AgentModel {
     if (pass === "delivery-findings-system") {
       if (tools === 0) return call("fs.read", { path: "src/value.mjs" }, "read-1");
       return call("record_deliverable_findings", { findings: [] }, `findings-${tools}`);
+    }
+    const offered = new Set(request.tools.map((tool) => tool.name));
+    // C3c: the two-pass independent verifier runs after the approved final
+    // review. Pass 1 records expectations from the baseline checkout; pass
+    // 2 really runs the tests in the verification checkout and cites the
+    // resulting evidence in a satisfied verdict.
+    if (offered.has("record_verification_expectations")) {
+      return call("record_verification_expectations", {
+        expectations: [{
+          taskId: "T1",
+          criterionId: "c1",
+          expectedBehaviors: ["src/value.mjs exports value = 2."],
+          edgeCases: ["A new module has no prior-incorrect case."],
+          regressionSurfaces: ["src/value.mjs"],
+          requiredTests: ["The value test passes."],
+        }],
+      }, `verifier-expectations-${tools}`);
+    }
+    if (offered.has("submit_verifier_verdict")) {
+      if (tools === 0) {
+        return call("run_evidence_command", { label: "verifier-tests", command: process.execPath, args: ["--test"] }, "verifier-evidence-1");
+      }
+      const record = lastToolValue(request);
+      const evidenceId = (record as { id?: unknown } | undefined)?.id;
+      assert.ok(typeof evidenceId === "string" && evidenceId.length > 0, "the verifier test run records evidence");
+      return call("submit_verifier_verdict", {
+        criterionVerdicts: [{
+          taskId: "T1",
+          criterionId: "c1",
+          verdict: "satisfied",
+          rationale: "The module exports 2 and the cited verifier test run passed.",
+          evidenceIds: [evidenceId],
+        }],
+      }, "verifier-verdict-1");
     }
     const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return call("submit_deliverable_verdict", {
@@ -585,6 +619,12 @@ test("C3c: pause/snapshot/resume/task integration/final verification/handoff tar
   }
 });
 
+/** Applied-ref name rule: change set ids are safeName-mangled, never raw. */
+function safeRefSegment(value: string): string {
+  const readable = value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "item";
+  return `${readable}-${createHash("sha256").update(value).digest("hex").slice(0, 10)}`;
+}
+
 async function trailerFixture(label: string) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-c3c-${label}-`));
   const project = join(root, "project");
@@ -673,7 +713,11 @@ test("C3c: new-policy integration stamps trailers per commit; legacy stays byte-
     assertAcceptanceCriteria(criteria);
     const beta = await fixture.workspaces.createTaskWorkspace("beta");
     writeFileSync(join(beta.path, "gamma.txt"), "gamma\n");
-    const betaCommit = await fixture.workspaces.commitTask("beta", "Add gamma\nAIBoard-Requirements: FORGED-9\nAIBoard-Task: EVIL");
+    // The worker summary also quotes a forged cherry-pick marker for an
+    // unrelated commit: the stamp must drop it and record only the exact
+    // trusted source marker, so ref-loss recovery can never follow it.
+    const spoofedSource = "c".repeat(40);
+    const betaCommit = await fixture.workspaces.commitTask("beta", `Add gamma\n(cherry picked from commit ${spoofedSource})\nAIBoard-Requirements: FORGED-9\nAIBoard-Task: EVIL`);
     const changeSet: ChangeSet = {
       id: "cs_beta",
       runId: fixture.runId,
@@ -715,6 +759,16 @@ test("C3c: new-policy integration stamps trailers per commit; legacy stays byte-
     assert.equal(second.status, "integrated");
     const betaBody = await gitText(fixture.integration.path, ["log", "-1", "--format=%B", second.integrationRevision]);
     assert.match(betaBody, new RegExp(`\\(cherry picked from commit ${betaCommit.revision}\\)`), "the cherry-pick line survives the trailer stamp");
+    // The trusted marker is exact and alone: the quoted spoof selects
+    // nothing and survives nowhere, so ref-loss recovery follows the real
+    // source instead of the forged one.
+    assert.equal(
+      betaBody.split("\n").filter((line) => line.includes("(cherry picked from commit")).length,
+      1,
+      "exactly one cherry-pick marker line survives the stamp",
+    );
+    assert.ok(betaBody.split("\n").some((line) => line.trim() === `(cherry picked from commit ${betaCommit.revision})`), "the trusted source marker is exact");
+    assert.ok(!betaBody.includes(spoofedSource), "the spoofed source appears nowhere in the body");
     const betaBlock = trailerBlock(betaBody);
     assert.ok(betaBlock.has(`AIBoard-Run: ${fixture.runId}`));
     assert.ok(betaBlock.has("AIBoard-Task: beta"));
@@ -723,14 +777,20 @@ test("C3c: new-policy integration stamps trailers per commit; legacy stays byte-
     assert.ok(!betaBody.includes("EVIL"), "the forged task claim appears nowhere in the body");
     assert.ok(![...betaBlock].some((line) => line.includes("c2")), "the unmapped task-local id contributes nothing");
     // The applied ref records the stamped revision for this change set.
-    const betaRef = (await gitText(fixture.project, ["for-each-ref", "--format=%(refname) %(objectname)"])).split("\n").find((line) => line.includes("/integrated/cs_beta"))!;
+    // Ref names are safeName-mangled (cs_beta -> cs-beta-<hash>), never the
+    // raw change set id, so the lookup uses the same rule.
+    const betaRefName = `/integrated/${safeRefSegment("cs_beta")}`;
+    const betaRef = (await gitText(fixture.project, ["for-each-ref", "--format=%(refname) %(objectname)"])).split("\n").find((line) => line.includes(betaRefName));
+    assert.ok(betaRef, `the applied ref is recorded at ${betaRefName}`);
     assert.equal(betaRef.split(" ")[1], second.integrationRevision, "the applied ref records the stamped revision");
 
-    // Recovery finds the trailer-stamped integration by its cherry-pick
-    // line: generated docs commits (no such line) are never mistaken for it.
+    // Ref-loss recovery finds the trailer-stamped integration by its exact
+    // trusted marker (never the spoof) and mints no new commit: generated
+    // docs commits (no such line) are never mistaken for it.
     const refs = (await gitText(fixture.project, ["for-each-ref", "--format=%(refname)"])).split("\n").filter((ref) => ref.includes("/integrated/"));
     assert.equal(refs.length, 2);
-    await runGit({ cwd: fixture.project, args: ["update-ref", "-d", refs[1]!] });
+    const countBeforeRecovery = await gitText(fixture.integration.path, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    await runGit({ cwd: fixture.project, args: ["update-ref", "-d", betaRef.split(" ")[0]!] });
     const recoveredManager = new IntegrationManager({
       repositoryRoot: fixture.project,
       stateDirectory: fixture.state,
@@ -744,8 +804,284 @@ test("C3c: new-policy integration stamps trailers per commit; legacy stays byte-
     ) => Promise<{ status: string; integrationRevision: string }>)(changeSet, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] });
     assert.equal(recovered.status, "integrated");
     assert.equal(recovered.integrationRevision, second.integrationRevision, "recovery reuses the stamped integration commit");
+    assert.equal(await gitText(fixture.integration.path, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]), countBeforeRecovery, "recovery mints no new commit");
+    const recoveredBody = await gitText(fixture.integration.path, ["log", "-1", "--format=%B", recovered.integrationRevision]);
+    assert.ok(!recoveredBody.includes(spoofedSource), "recovery still follows the trusted source, not the spoof");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * C3c crash gap (F2): a restart between the cherry-pick and the trailer
+ * amend must neither silently accept the unstamped commit nor duplicate
+ * it. The restarted manager repairs the provably owned tip in place, so
+ * the final commit carries the authoritative stamp exactly once.
+ */
+test("C3c: restart between cherry-pick and trailer amend repairs the owned tip", async () => {
+  const fixture = await trailerFixture("gap");
+  try {
+    const gamma = await fixture.workspaces.createTaskWorkspace("gamma");
+    writeFileSync(join(gamma.path, "gamma.txt"), "gamma\n");
+    const taskCommit = await fixture.workspaces.commitTask("gamma", "Add gamma");
+    const changeSet: ChangeSet = {
+      id: "cs_gap",
+      runId: fixture.runId,
+      taskId: "gamma",
+      baselineRevision: taskCommit.baselineRevision,
+      taskRevision: taskCommit.revision,
+      commits: [...taskCommit.commits],
+      changedPaths: [...taskCommit.changedPaths],
+      diffArtifactHash: "0".repeat(64),
+      evidenceArtifactHashes: [],
+      externalEffects: [],
+      guidanceIds: [],
+      memoryIds: [],
+      unresolvedConcerns: [],
+    };
+    // Crash between pick and amend: the cherry-pick lands unstamped.
+    await runGit({ cwd: fixture.integration.path, args: ["cherry-pick", "-x", taskCommit.revision] });
+    const unstampedBody = await gitText(fixture.integration.path, ["log", "-1", "--format=%B", "HEAD"]);
+    assert.ok(!trailerBlock(unstampedBody).has("AIBoard-Task: gamma"), "the interrupted pick carries no task trailer yet");
+    const restarted = new IntegrationManager({
+      repositoryRoot: fixture.project,
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      baselineRevision: fixture.baseline.revision,
+    });
+    await restarted.initialize();
+    const result = await (restarted.integrate.bind(restarted) as (
+      changeSet: ChangeSet,
+      options?: { planningPolicyVersion?: number; requirementIds?: readonly string[] },
+    ) => Promise<{ status: string; integrationRevision: string }>)(changeSet, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] });
+    assert.equal(result.status, "integrated");
+    // Repaired in place: exactly one commit, never re-picked.
+    assert.equal(await gitText(fixture.integration.path, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]), "1");
+    const body = await gitText(fixture.integration.path, ["log", "-1", "--format=%B", result.integrationRevision]);
+    assert.equal(
+      body.split("\n").filter((line) => line.includes("(cherry picked from commit")).length,
+      1,
+      "exactly one marker line after repair",
+    );
+    assert.ok(body.split("\n").some((line) => line.trim() === `(cherry picked from commit ${taskCommit.revision})`), "the repaired stamp names the trusted source");
+    const block = trailerBlock(body);
+    assert.ok(block.has(`AIBoard-Run: ${fixture.runId}`));
+    assert.ok(block.has("AIBoard-Task: gamma"));
+    assert.ok(block.has("AIBoard-Requirements: REQ-1"));
+    const gapRef = (await gitText(fixture.project, ["for-each-ref", "--format=%(refname) %(objectname)"])).split("\n").find((line) => line.includes(`/integrated/${safeRefSegment("cs_gap")}`));
+    assert.ok(gapRef, "the applied ref is recorded for the repaired integration");
+    assert.equal(gapRef.split(" ")[1], result.integrationRevision);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * C3c multi-commit prefix (F2): a restart after a stamped prefix resumes
+ * exactly at the gap. The owned prefix commit is preserved byte-identical
+ * (never re-picked, so the first pick can never stick as an empty
+ * duplicate) and the final bodies, ancestry, and apply refs are exact.
+ */
+test("C3c: restart after a stamped multi-commit prefix resumes exactly", async () => {
+  const fixture = await trailerFixture("prefix");
+  try {
+    const alpha = await fixture.workspaces.createTaskWorkspace("alpha");
+    writeFileSync(join(alpha.path, "alpha.txt"), "alpha\n");
+    const partCommit = await fixture.workspaces.commitTask("alpha", "Add alpha");
+    writeFileSync(join(alpha.path, "beta.txt"), "beta\n");
+    const fullCommit = await fixture.workspaces.commitTask("alpha", "Add beta");
+    assert.equal(fullCommit.commits.length, 2, "two worker commits");
+    const baseChangeSet = {
+      runId: fixture.runId,
+      taskId: "alpha",
+      diffArtifactHash: "0".repeat(64),
+      evidenceArtifactHashes: [],
+      externalEffects: [],
+      guidanceIds: [],
+      memoryIds: [],
+      unresolvedConcerns: [],
+    };
+    const integrate = fixture.integration.integrate.bind(fixture.integration) as (
+      changeSet: ChangeSet,
+      options?: { planningPolicyVersion?: number; requirementIds?: readonly string[] },
+    ) => Promise<{ status: string; integrationRevision: string }>;
+    const part: ChangeSet = {
+      ...baseChangeSet,
+      id: "cs_part",
+      baselineRevision: partCommit.baselineRevision,
+      taskRevision: partCommit.revision,
+      commits: [...partCommit.commits],
+      changedPaths: [...partCommit.changedPaths],
+    };
+    const first = await integrate(part, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] });
+    assert.equal(first.status, "integrated");
+    // Crash before the remaining picks: a restarted manager integrates the
+    // fuller change set over the same history.
+    const full: ChangeSet = {
+      ...baseChangeSet,
+      id: "cs_full",
+      baselineRevision: fullCommit.baselineRevision,
+      taskRevision: fullCommit.revision,
+      commits: [...fullCommit.commits],
+      changedPaths: [...fullCommit.changedPaths],
+    };
+    const restarted = new IntegrationManager({
+      repositoryRoot: fixture.project,
+      stateDirectory: fixture.state,
+      runId: fixture.runId,
+      baselineRevision: fixture.baseline.revision,
+    });
+    await restarted.initialize();
+    const reintegrate = restarted.integrate.bind(restarted) as typeof integrate;
+    const result = await reintegrate(full, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] });
+    assert.equal(result.status, "integrated");
+    const lineage = (await gitText(fixture.integration.path, ["log", "--reverse", "--format=%H", `${fixture.baseline.revision}..HEAD`])).split("\n");
+    assert.equal(lineage.length, 2, "the owned prefix is resumed, never re-picked");
+    assert.equal(lineage[0], first.integrationRevision, "the stamped prefix commit is preserved exactly");
+    assert.equal(lineage[1], result.integrationRevision);
+    for (const [index, source] of fullCommit.commits.entries()) {
+      const body = await gitText(fixture.integration.path, ["log", "-1", "--format=%B", lineage[index]!]);
+      assert.ok(body.split("\n").some((line) => line.trim() === `(cherry picked from commit ${source})`), `commit ${index} names its trusted source`);
+      const block = trailerBlock(body);
+      assert.ok(block.has(`AIBoard-Run: ${fixture.runId}`));
+      assert.ok(block.has("AIBoard-Task: alpha"));
+      assert.ok(block.has("AIBoard-Requirements: REQ-1"));
+    }
+    const fullRef = (await gitText(fixture.project, ["for-each-ref", "--format=%(refname) %(objectname)"])).split("\n").find((line) => line.includes(`/integrated/${safeRefSegment("cs_full")}`));
+    assert.ok(fullRef, "the applied ref records the resumed integration");
+    assert.equal(fullRef.split(" ")[1], result.integrationRevision);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * C3c false acceptance (F2): a recorded applied ref without the
+ * authoritative stamp (here from the legacy byte-identical path) must be
+ * refused fail-closed under the new policy, never silently accepted.
+ */
+test("C3c: new-policy refuses an applied ref without authoritative trailers", async () => {
+  const fixture = await trailerFixture("appliedref");
+  try {
+    const alpha = await fixture.workspaces.createTaskWorkspace("alpha");
+    writeFileSync(join(alpha.path, "alpha.txt"), "alpha\n");
+    const taskCommit = await fixture.workspaces.commitTask("alpha", "Add alpha");
+    const changeSet: ChangeSet = {
+      id: "cs_mixed",
+      runId: fixture.runId,
+      taskId: "alpha",
+      baselineRevision: taskCommit.baselineRevision,
+      taskRevision: taskCommit.revision,
+      commits: [...taskCommit.commits],
+      changedPaths: [...taskCommit.changedPaths],
+      diffArtifactHash: "0".repeat(64),
+      evidenceArtifactHashes: [],
+      externalEffects: [],
+      guidanceIds: [],
+      memoryIds: [],
+      unresolvedConcerns: [],
+    };
+    const first = await fixture.integration.integrate(changeSet);
+    assert.equal(first.status, "integrated");
+    const headBefore = await gitText(fixture.integration.path, ["rev-parse", "HEAD"]);
+    const countBefore = await gitText(fixture.integration.path, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]);
+    const integrateWithPolicy = fixture.integration.integrate.bind(fixture.integration) as (
+      changeSet: ChangeSet,
+      options?: { planningPolicyVersion?: number; requirementIds?: readonly string[] },
+    ) => Promise<{ status: string; integrationRevision: string }>;
+    await assert.rejects(
+      () => integrateWithPolicy(changeSet, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] }),
+      /authoritative integration trailers/,
+      "an unstamped recorded ref is refused, never silently accepted",
+    );
+    assert.equal(await gitText(fixture.integration.path, ["rev-parse", "HEAD"]), headBefore, "a refused accept leaves history untouched");
+    assert.equal(await gitText(fixture.integration.path, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]), countBefore);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * C3c clean tree (F4): a new-policy integration refuses a dirty
+ * index/worktree before any mutation. The refusal leaves HEAD, the exact
+ * dirty bytes, the worktree status, and the index unchanged -- nothing is
+ * normalized, reset, or removed. Both unstaged and staged dirt refuse.
+ */
+test("C3c: new-policy integration refuses a dirty worktree without touching it", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c3c-dirty-"));
+  const project = join(root, "project");
+  const state = join(root, "state");
+  mkdirSync(project);
+  mkdirSync(state);
+  const runId = "run_c3c_dirty";
+  writeFileSync(join(project, "shared.txt"), "baseline\n");
+  const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId });
+  const workspaces = new WorkspaceManager({
+    repositoryRoot: project,
+    stateDirectory: state,
+    runId,
+    baselineRevision: baseline.revision,
+  });
+  const integration = new IntegrationManager({
+    repositoryRoot: project,
+    stateDirectory: state,
+    runId,
+    baselineRevision: baseline.revision,
+  });
+  await integration.initialize();
+  try {
+    const alpha = await workspaces.createTaskWorkspace("alpha");
+    writeFileSync(join(alpha.path, "shared.txt"), "task edit\n");
+    const taskCommit = await workspaces.commitTask("alpha", "Edit shared");
+    const changeSet: ChangeSet = {
+      id: "cs_dirty",
+      runId,
+      taskId: "alpha",
+      baselineRevision: taskCommit.baselineRevision,
+      taskRevision: taskCommit.revision,
+      commits: [...taskCommit.commits],
+      changedPaths: [...taskCommit.changedPaths],
+      diffArtifactHash: "0".repeat(64),
+      evidenceArtifactHashes: [],
+      externalEffects: [],
+      guidanceIds: [],
+      memoryIds: [],
+      unresolvedConcerns: [],
+    };
+    const integrateWithPolicy = integration.integrate.bind(integration) as (
+      changeSet: ChangeSet,
+      options?: { planningPolicyVersion?: number; requirementIds?: readonly string[] },
+    ) => Promise<{ status: string; integrationRevision: string }>;
+    const dirtyBytes = Buffer.from("user dirty bytes\n");
+    const headBefore = await gitText(integration.path, ["rev-parse", "HEAD"]);
+    // Unstaged dirt on the overlapping tracked path refuses first.
+    writeFileSync(join(integration.path, "shared.txt"), dirtyBytes);
+    const statusBefore = await gitText(integration.path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const cachedBefore = await gitText(integration.path, ["diff", "--cached", "--name-only", "-z"]);
+    await assert.rejects(
+      () => integrateWithPolicy(changeSet, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] }),
+      /dirty/,
+      "unstaged dirt refuses before any mutation",
+    );
+    assert.equal(await gitText(integration.path, ["rev-parse", "HEAD"]), headBefore, "refusal leaves HEAD");
+    assert.deepEqual(readFileSync(join(integration.path, "shared.txt")), dirtyBytes, "refusal leaves the exact dirty bytes");
+    assert.equal(await gitText(integration.path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]), statusBefore, "refusal leaves worktree status");
+    assert.equal(await gitText(integration.path, ["diff", "--cached", "--name-only", "-z"]), cachedBefore, "refusal leaves the index");
+    // Staged dirt is the same class: still refused, still untouched.
+    await runGit({ cwd: integration.path, args: ["add", "--", "shared.txt"] });
+    const statusStaged = await gitText(integration.path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
+    const cachedStaged = await gitText(integration.path, ["diff", "--cached", "--name-only", "-z"]);
+    await assert.rejects(
+      () => integrateWithPolicy(changeSet, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] }),
+      /dirty/,
+      "staged dirt refuses before any mutation",
+    );
+    assert.equal(await gitText(integration.path, ["rev-parse", "HEAD"]), headBefore, "staged refusal leaves HEAD");
+    assert.deepEqual(readFileSync(join(integration.path, "shared.txt")), dirtyBytes, "staged refusal leaves the exact dirty bytes");
+    assert.equal(await gitText(integration.path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]), statusStaged, "staged refusal leaves worktree status");
+    assert.equal(await gitText(integration.path, ["diff", "--cached", "--name-only", "-z"]), cachedStaged, "staged refusal leaves the index");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

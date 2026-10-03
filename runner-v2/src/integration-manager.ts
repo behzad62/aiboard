@@ -130,9 +130,17 @@ const CHERRY_PICK_LINE_PATTERN = /\(cherry picked from commit [a-f0-9]{40}\)/;
 
 function stampIntegrationTrailers(
   body: string,
-  input: { runId: string; taskId: string; requirementIds: readonly string[] },
+  input: { runId: string; taskId: string; requirementIds: readonly string[]; sourceRevision: string },
 ): string {
-  const cherryPick = body.match(CHERRY_PICK_LINE_PATTERN)?.[0];
+  // The source marker is built from the TRUSTED for-loop revision (a
+  // validated ChangeSet commit), never from message text. A worker summary
+  // may quote a forged "(cherry picked from commit ...)" line; every
+  // marker-looking line is stripped as untrusted and exactly one exact
+  // trusted marker is appended, so no message claim can establish source
+  // identity and recovery never follows a spoofed marker.
+  if (!/^[a-f0-9]{40,64}$/.test(input.sourceRevision)) {
+    throw new Error("Refusing to stamp an integration trailer with an invalid source revision.");
+  }
   const kept = body
     .split(/\r?\n/)
     .filter((line) => !CHERRY_PICK_LINE_PATTERN.test(line) && !RESERVED_TRAILER_PATTERN.test(line));
@@ -140,12 +148,83 @@ function stampIntegrationTrailers(
   return [
     ...kept,
     "",
-    ...(cherryPick ? [cherryPick] : []),
+    `(cherry picked from commit ${input.sourceRevision})`,
     `AIBoard-Run: ${input.runId}`,
     `AIBoard-Task: ${input.taskId}`,
     `AIBoard-Requirements: ${input.requirementIds.join(" ")}`,
     "",
   ].join("\n");
+}
+
+/**
+ * Whether a commit body carries the AUTHORITATIVE runner stamp for one
+ * integrated source commit: exactly one cherry-pick marker line, and the
+ * message ends with the exact trusted marker plus the exact
+ * Run/Task/Requirements trailers in order. Position is part of authority --
+ * a quoted marker or forged trailer anywhere else in the message never
+ * validates, so message text cannot smuggle source identity.
+ */
+function isAuthoritativeIntegrationBody(
+  body: string,
+  input: { runId: string; taskId: string; requirementIds: readonly string[]; source: string },
+): boolean {
+  const markerLines = body.split(/\r?\n/).filter((line) => CHERRY_PICK_LINE_PATTERN.test(line));
+  if (markerLines.length !== 1) return false;
+  const lines = body.split(/\r?\n/);
+  while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
+  const tail = lines.slice(-4);
+  return (
+    tail.length === 4 &&
+    tail[0]!.trim() === `(cherry picked from commit ${input.source})` &&
+    tail[1]!.trim() === `AIBoard-Run: ${input.runId}` &&
+    tail[2]!.trim() === `AIBoard-Task: ${input.taskId}` &&
+    tail[3]!.trim() === `AIBoard-Requirements: ${[...input.requirementIds].join(" ")}`
+  );
+}
+
+/** The last non-empty message line carrying a cherry-pick marker, if any. */
+function lastMarkerLine(body: string): string | null {
+  const lines = body.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]!;
+    if (line.trim() === "") continue;
+    return CHERRY_PICK_LINE_PATTERN.test(line) ? line.trim() : null;
+  }
+  return null;
+}
+
+/**
+ * Whether a commit is a legitimate kernel-only handoff snapshot for a run:
+ * fully runner-authored, carrying the snapshot trailers for that run, with
+ * no cherry-pick line and no task trailer. An integrated worker commit can
+ * never satisfy this (its cherry-pick line and task trailer exclude it),
+ * and a forged snapshot claim without the runner identity is not enough.
+ */
+export function isKernelHandoffSnapshotCommit(input: {
+  authorName: string;
+  authorEmail: string;
+  committerName: string;
+  committerEmail: string;
+  body: string;
+  runId: string;
+}): boolean {
+  if (
+    input.authorName !== RUNNER_IDENTITY.GIT_AUTHOR_NAME ||
+    input.authorEmail !== RUNNER_IDENTITY.GIT_AUTHOR_EMAIL ||
+    input.committerName !== RUNNER_IDENTITY.GIT_COMMITTER_NAME ||
+    input.committerEmail !== RUNNER_IDENTITY.GIT_COMMITTER_EMAIL
+  ) {
+    return false;
+  }
+  const block = commitTrailerBlock(input.body);
+  return (
+    block.has(`AIBoard-Run: ${input.runId}`) &&
+    block.has("AIBoard-Author: runner") &&
+    block.has("AIBoard-Generated: handoff-snapshot") &&
+    [...block].some((line) => line.startsWith("AIBoard-Snapshot-Key: ")) &&
+    !CHERRY_PICK_LINE_PATTERN.test(input.body) &&
+    ![...block].some((line) => line.startsWith("AIBoard-Task:"))
+  );
 }
 
 /** Kernel handoff snapshot commit (docs policy v2, C2a: STATE.md only). */
@@ -612,6 +691,16 @@ export class IntegrationManager {
           changedPaths: [],
         };
       }
+      if (newPolicy) {
+        // F4: refuse a dirty index/worktree before any new-policy mutation,
+        // so the transaction baseline below is provably ours and a later
+        // rollback can never delete foreign edits. Legacy keeps its
+        // abort-only behavior.
+        await this.assertCleanForNewPolicyIntegration(changeSet.id);
+        // F2: refuse to resume through an unfinished cherry-pick/merge
+        // sequencer instead of rolling it back blindly.
+        await this.assertNoIncompleteIntegrationTransaction(changeSet.id);
+      }
       const appliedRef = this.appliedRef(changeSet.id);
       const alreadyApplied = await this.resolveRef(appliedRef);
       if (alreadyApplied) {
@@ -625,6 +714,13 @@ export class IntegrationManager {
             `Applied change-set ref ${appliedRef} is not in the integration history.`
           );
         }
+        if (newPolicy) {
+          // F2: never silently accept the ref. The recorded chain must
+          // carry the authoritative stamp for every source commit;
+          // anything else (unstamped, forged, or legacy trailers) is
+          // refused fail-closed instead of reported as integrated.
+          await this.assertAuthoritativeAppliedChain(changeSet, trustedRequirementIds, appliedRef, alreadyApplied);
+        }
         return {
           status: "integrated",
           changeSetId: changeSet.id,
@@ -634,16 +730,36 @@ export class IntegrationManager {
         };
       }
 
-      const recoveredRevision = await this.findIntegratedRevision(changeSet);
-      if (recoveredRevision) {
-        await this.recordAppliedRef(appliedRef, recoveredRevision);
-        return {
-          status: "integrated",
-          changeSetId: changeSet.id,
-          taskId: changeSet.taskId,
-          integrationRevision: recoveredRevision,
-          changedPaths: [...changeSet.changedPaths],
-        };
+      // F2: bounded recovery over the owned prefix (new-policy only). A
+      // restart after a stamped prefix resumes exactly at the gap without
+      // duplicating changes; an interrupted unstamped tip is repaired in
+      // place; anything ambiguous is refused. Legacy keeps text-only reuse.
+      let prefixCount = 0;
+      if (newPolicy) {
+        const recovered = await this.recoverOwnedIntegrationPrefix(changeSet, trustedRequirementIds);
+        if (recovered.prefixCount >= changeSet.commits.length && recovered.prefixRevision) {
+          await this.recordAppliedRef(appliedRef, recovered.prefixRevision);
+          return {
+            status: "integrated",
+            changeSetId: changeSet.id,
+            taskId: changeSet.taskId,
+            integrationRevision: recovered.prefixRevision,
+            changedPaths: [...changeSet.changedPaths],
+          };
+        }
+        prefixCount = recovered.prefixCount;
+      } else {
+        const recoveredRevision = await this.findIntegratedRevision(changeSet);
+        if (recoveredRevision) {
+          await this.recordAppliedRef(appliedRef, recoveredRevision);
+          return {
+            status: "integrated",
+            changeSetId: changeSet.id,
+            taskId: changeSet.taskId,
+            integrationRevision: recoveredRevision,
+            changedPaths: [...changeSet.changedPaths],
+          };
+        }
       }
 
       for (const revision of changeSet.commits) {
@@ -695,7 +811,10 @@ export class IntegrationManager {
         // the authoritative runner trailers (from the trusted ready-plan
         // contract, never worker text). A mid-loop failure resets to the
         // pre-integration revision, preserving the legacy atomicity fence.
-        for (const revision of changeSet.commits) {
+        // After a restart the validated owned prefix is never re-picked:
+        // only the remaining sources are applied, so the first pick can
+        // never stick as an empty duplicate.
+        for (const revision of changeSet.commits.slice(prefixCount)) {
           const cherryPick = await this.execute({
             cwd: this.path,
             args: ["cherry-pick", "-x", revision],
@@ -734,6 +853,7 @@ export class IntegrationManager {
             runId: changeSet.runId,
             taskId: changeSet.taskId,
             requirementIds: trustedRequirementIds,
+            sourceRevision: revision,
           });
           const amend = await this.execute({
             cwd: this.path,
@@ -3827,6 +3947,204 @@ export class IntegrationManager {
       cursor = index + 1;
     }
     return matched;
+  }
+
+  /**
+   * Refuse a dirty index/worktree before any new-policy mutation. With a
+   * clean preflight the transaction baseline recorded below is provably
+   * ours, so a later rollback can never delete foreign edits.
+   */
+  private async assertCleanForNewPolicyIntegration(changeSetId: string): Promise<void> {
+    const status = await this.git(this.path, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+    ]);
+    if (status.stdout.length !== 0) {
+      throw new Error(
+        `Refusing new-policy integration of change set ${changeSetId} on a dirty worktree; clean the integration checkout first.`
+      );
+    }
+  }
+
+  /** Refuse to resume through an unfinished cherry-pick/merge sequencer state. */
+  private async assertNoIncompleteIntegrationTransaction(changeSetId: string): Promise<void> {
+    for (const state of ["CHERRY_PICK_HEAD", "MERGE_HEAD"] as const) {
+      const pending = await this.git(this.path, ["rev-parse", "--verify", state], true);
+      if (pending.exitCode === 0) {
+        throw new Error(
+          `Refusing new-policy integration of change set ${changeSetId} with an unfinished ${state} transaction; resolve it by hand first.`
+        );
+      }
+    }
+  }
+
+  /** Whether an integration history commit is this change set's owned stamp for one source. */
+  private isOwnedStampedCommit(
+    commit: { committerName: string; committerEmail: string; body: string },
+    changeSet: ChangeSet,
+    requirementIds: readonly string[],
+    source: string,
+  ): boolean {
+    return (
+      commit.committerName === RUNNER_IDENTITY.GIT_COMMITTER_NAME &&
+      commit.committerEmail === RUNNER_IDENTITY.GIT_COMMITTER_EMAIL &&
+      isAuthoritativeIntegrationBody(commit.body, {
+        runId: changeSet.runId,
+        taskId: changeSet.taskId,
+        requirementIds,
+        source,
+      })
+    );
+  }
+
+  /**
+   * Never silently accept an applied ref: the recorded chain must carry
+   * the authoritative stamp for every source commit. Anything else
+   * (unstamped, forged, or legacy trailers) is refused fail-closed.
+   */
+  private async assertAuthoritativeAppliedChain(
+    changeSet: ChangeSet,
+    requirementIds: readonly string[],
+    appliedRef: string,
+    appliedRevision: string,
+  ): Promise<void> {
+    const sources = changeSet.commits;
+    const history = await this.git(this.path, [
+      "log",
+      "--format=%H%x00%cn%x00%ce%x00%B%x00",
+      "-n",
+      String(sources.length),
+      appliedRevision,
+    ]);
+    const fields = history.stdout.split("\0");
+    const entries: Array<{ revision: string; committerName: string; committerEmail: string; body: string }> = [];
+    for (let index = 0; index + 3 < fields.length; index += 4) {
+      const revision = fields[index].trim();
+      if (revision) {
+        entries.push({
+          revision,
+          committerName: (fields[index + 1] ?? "").trim(),
+          committerEmail: (fields[index + 2] ?? "").trim(),
+          body: fields[index + 3] ?? "",
+        });
+      }
+    }
+    const valid =
+      entries.length === sources.length &&
+      entries.every((entry, position) =>
+        this.isOwnedStampedCommit(entry, changeSet, requirementIds, sources[sources.length - 1 - position]!)
+      );
+    if (!valid) {
+      throw new Error(
+        `Applied change-set ref ${appliedRef} does not carry the authoritative integration trailers; refusing to accept it.`
+      );
+    }
+  }
+
+  /** Oldest-first integration history entries with committer identity and bodies. */
+  private async integrationHistoryEntries(): Promise<Array<{ revision: string; committerName: string; committerEmail: string; body: string }>> {
+    const history = await this.git(this.path, [
+      "log",
+      "--reverse",
+      "--format=%H%x00%cn%x00%ce%x00%B%x00",
+      `${this.baselineRevision}..HEAD`,
+    ]);
+    const fields = history.stdout.split("\0");
+    const commits: Array<{ revision: string; committerName: string; committerEmail: string; body: string }> = [];
+    for (let index = 0; index + 3 < fields.length; index += 4) {
+      const revision = fields[index].trim();
+      if (revision) {
+        commits.push({
+          revision,
+          committerName: (fields[index + 1] ?? "").trim(),
+          committerEmail: (fields[index + 2] ?? "").trim(),
+          body: fields[index + 3] ?? "",
+        });
+      }
+    }
+    return commits;
+  }
+
+  /**
+   * Bounded recovery over the owned prefix. Returns the longest validated
+   * stamped prefix (possibly complete). Repairs an interrupted unstamped
+   * tip in place when it is provably ours (it is HEAD with no descendants,
+   * the tree is clean, no sequencer is active, and its real marker names
+   * the next source). Refuses anything ambiguous instead of duplicating
+   * changes or silently accepting them.
+   */
+  private async recoverOwnedIntegrationPrefix(
+    changeSet: ChangeSet,
+    requirementIds: readonly string[],
+  ): Promise<{ prefixCount: number; prefixRevision: string | null }> {
+    const sources = changeSet.commits;
+    const commits = await this.integrationHistoryEntries();
+    let count = 0;
+    let end = -1;
+    for (let start = 0; start < commits.length; start += 1) {
+      let run = 0;
+      while (
+        run < sources.length &&
+        start + run < commits.length &&
+        this.isOwnedStampedCommit(commits[start + run]!, changeSet, requirementIds, sources[run]!)
+      ) {
+        run += 1;
+      }
+      if (run > count) {
+        count = run;
+        end = start + run - 1;
+      }
+    }
+    if (count >= sources.length) {
+      return { prefixCount: count, prefixRevision: commits[end]!.revision };
+    }
+    const rest = commits.slice(end + 1);
+    const downstream = new Set<number>();
+    for (const commit of rest) {
+      for (let index = count; index < sources.length; index += 1) {
+        if (commit.body.includes(`(cherry picked from commit ${sources[index]})`)) downstream.add(index);
+      }
+    }
+    if (downstream.size > 0) {
+      const headRevision = await this.head();
+      const head = rest[rest.length - 1]!;
+      const next = sources[count]!;
+      if (
+        downstream.size === 1 &&
+        downstream.has(count) &&
+        head.revision === headRevision &&
+        !this.isOwnedStampedCommit(head, changeSet, requirementIds, next) &&
+        lastMarkerLine(head.body) === `(cherry picked from commit ${next})`
+      ) {
+        // The interrupted pick is the tip with no descendants: amend the
+        // authoritative stamp in place (tree proven clean, no sequencer).
+        const stamped = stampIntegrationTrailers(head.body, {
+          runId: changeSet.runId,
+          taskId: changeSet.taskId,
+          requirementIds,
+          sourceRevision: next,
+        });
+        const amend = await this.execute({
+          cwd: this.path,
+          args: ["commit", "--amend", "-m", stamped],
+          env: RUNNER_IDENTITY,
+          allowFailure: true,
+        });
+        if (amend.exitCode !== 0) {
+          throw new Error(
+            `Change set ${changeSet.id} trailer stamp failed: ${amend.stderr.trim()}`
+          );
+        }
+        this.currentRevision = await this.head();
+        return { prefixCount: count + 1, prefixRevision: this.currentRevision };
+      }
+      throw new Error(
+        `Change set ${changeSet.id} has unexpected downstream integration commits after its owned prefix; refusing to resume.`
+      );
+    }
+    return { prefixCount: count, prefixRevision: count > 0 ? commits[end]!.revision : null };
   }
 
   private async recordAppliedRef(ref: string, revision: string): Promise<void> {
