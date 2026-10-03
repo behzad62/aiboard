@@ -1,6 +1,7 @@
 import {
   computeDigest,
   computePlanReadiness,
+  coverageReviewHoldsReadiness,
   validateAssignmentClaim,
   validateCoverageReview,
   validateCoverageReviewBinding,
@@ -767,10 +768,11 @@ function cloneProjection(projection: PlanningProjection): PlanningProjection {
  * revision — never from model prose. Completed contracts, outstanding work
  * and the next action come from the actual ledger, plan and review state:
  * the persisted ledger completes the ledger contract, each durable plan
- * revision completes a planning contract (a new revision is the
- * planning-turn proof), and open review verdicts/findings plus an
- * unavailable review drive outstanding work. Old checkpoint records stay
- * stored and replayable but no longer feed this index.
+ * revision bound to the CURRENT manifest completes a planning contract (a new
+ * revision is the planning-turn proof; manifest-stale revisions never present
+ * as current completion), and the current request lifecycle, readiness and
+ * the authoritative open blocking findings drive outstanding work. Old
+ * checkpoint records stay stored and replayable but no longer feed this index.
  */
 function resumeIndex(projection: PlanningProjection): PlanningResumeIndex {
   const manifest = projection.source.manifestsById[projection.source.currentManifestId];
@@ -783,9 +785,9 @@ function resumeIndex(projection: PlanningProjection): PlanningResumeIndex {
     .map((section) => section.id);
   const completedPlanningContractIds = [
     ...(projection.ledger ? ["requirement-ledger"] : []),
-    ...(projection.plan ? projection.plan.revisionHistoryIds : []),
+    ...currentBoundRevisionIds(projection, manifest),
   ];
-  const outstandingWork = derivedOutstandingWork(projection, remaining);
+  const outstandingWork = derivedOutstandingWork(projection, manifest, remaining);
   return {
     coveredSourceSectionIds: coveredIds,
     remainingSourceSectionIds: remaining,
@@ -797,9 +799,39 @@ function resumeIndex(projection: PlanningProjection): PlanningResumeIndex {
   };
 }
 
-/** C4 (AR-R13): outstanding planning work from ledger, plan and review state. */
+/**
+ * C4 (AR-R13): plan revision ids bound to the CURRENT manifest revision — a
+ * source amendment invalidates older bindings, so only current-bound
+ * revisions count as completed planning contracts.
+ */
+function currentBoundRevisionIds(
+  projection: PlanningProjection,
+  manifest: ApprovedSourceManifest,
+): string[] {
+  if (!projection.plan) return [];
+  return projection.plan.revisionHistoryIds.filter((id) => {
+    const revision = projection.plan!.revisionsById[id];
+    return revision !== undefined &&
+      revision.sourceManifestId === manifest.manifestId &&
+      revision.sourceManifestDigest === manifest.artifactDigest;
+  });
+}
+
+/**
+ * C4 (AR-R13): outstanding planning work from the CURRENT bindings, the
+ * current request lifecycle, readiness/gates and the authoritative open
+ * blocking findings. Missing ledger, unread source, no plan, a manifest-stale
+ * plan (revise before any review), review required, a bound review pending
+ * its verdict, unavailable/suspended coverage, a passing bound review
+ * awaiting the ready event, and the ready state each read distinctly — an
+ * in-flight or passing review never asks for another review, and
+ * resolved/retired findings never resurface while unresolved historical
+ * findings never disappear. Reuses the existing projection helpers; no new
+ * semantic authority.
+ */
 function derivedOutstandingWork(
   projection: PlanningProjection,
+  manifest: ApprovedSourceManifest,
   remaining: readonly string[],
 ): string[] {
   if (!projection.ledger) return ["Persist the requirement ledger."];
@@ -808,19 +840,129 @@ function derivedOutstandingWork(
     outstanding.push("Draft the execution plan.");
     return outstanding;
   }
-  const review = projection.coverageReview;
-  for (const verdict of review?.obligationVerdicts ?? []) {
-    if (verdict.severity === "blocking" && (verdict.verdict === "missing" || verdict.verdict === "weakened")) {
-      outstanding.push(`Resolve blocking coverage verdict for obligation ${verdict.obligationId} (${verdict.verdict}).`);
+  const revision = projection.plan.revisionsById[projection.plan.currentRevisionId];
+  // Authoritative open blocking findings across recorded history: resolved
+  // and retired findings never resurface, while unresolved historical
+  // findings persist across revisions and amendments until resolved.
+  const findingById = new Map<string, { category: string }>();
+  const recordedReviews = projection.coverageReview
+    ? [...projection.coverageReviewHistory, projection.coverageReview]
+    : [...projection.coverageReviewHistory];
+  for (const review of recordedReviews) {
+    for (const finding of review.findings) {
+      if (!findingById.has(finding.id)) findingById.set(finding.id, { category: finding.category });
     }
   }
-  for (const finding of review?.findings ?? []) {
-    if (finding.severity === "blocking" && finding.disposition?.resolution !== "plan_reconciled") {
-      outstanding.push(`Resolve blocking coverage finding ${finding.id} (${finding.category}).`);
+  const openFindingItems = openBlockingCoverageFindings(projection).map((entry) =>
+    `Resolve blocking coverage finding ${entry.findingId} (${findingById.get(entry.findingId)?.category ?? "blocking"}).`,
+  );
+  if (
+    revision === undefined ||
+    revision.sourceManifestId !== manifest.manifestId ||
+    revision.sourceManifestDigest !== manifest.artifactDigest
+  ) {
+    outstanding.push(...openFindingItems);
+    outstanding.push("Revise the execution plan against the current source manifest.");
+    return outstanding;
+  }
+  if (projection.readiness === "ready") return outstanding;
+  const recordedReviewIds = new Set<string>();
+  if (projection.coverageReview) recordedReviewIds.add(projection.coverageReview.id);
+  for (const review of projection.coverageReviewHistory) recordedReviewIds.add(review.id);
+  const boundReview = projection.coverageReview !== undefined &&
+    projection.coverageReview.planRevisionId === projection.plan.currentRevisionId &&
+    projection.coverageReview.planRevisionDigest === projection.plan.currentDigest &&
+    projection.coverageReview.sourceReadManifestId === manifest.manifestId
+    ? projection.coverageReview
+    : undefined;
+  const currentRevisionId = projection.plan.currentRevisionId;
+  const currentDigest = projection.plan.currentDigest;
+  // C4 R1: a gate is stale only when proven bound to an older revision or
+  // manifest — directly, or via its review request. Unbound gates stay
+  // visible; staleness is never assumed. This mirrors the pump's
+  // gateForCurrent binding check in reverse; no new reducer authority.
+  const unavailableIsStale = (): boolean => {
+    const gate = projection.coverageUnavailable;
+    if (gate === undefined) return true;
+    if (
+      (gate.planRevisionId !== undefined && gate.planRevisionId !== currentRevisionId) ||
+      (gate.sourceManifestId !== undefined && gate.sourceManifestId !== manifest.manifestId)
+    ) {
+      return true;
+    }
+    if (gate.reviewId !== undefined && !recordedReviewIds.has(gate.reviewId)) {
+      const request = projection.coverageRequests[gate.reviewId];
+      if (
+        request !== undefined &&
+        (request.planRevisionId !== currentRevisionId ||
+          request.planRevisionDigest !== currentDigest ||
+          request.sourceManifestId !== manifest.manifestId)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const suspendedIsCurrent = (reviewId: string): boolean => {
+    if (recordedReviewIds.has(reviewId)) return false;
+    const request = projection.coverageRequests[reviewId];
+    if (request === undefined) return true;
+    return request.planRevisionId === currentRevisionId &&
+      request.planRevisionDigest === currentDigest &&
+      request.sourceManifestId === manifest.manifestId;
+  };
+  const gate = unavailableIsStale() ? undefined : projection.coverageUnavailable;
+  const terminalGate = gate !== undefined &&
+      (TERMINAL_COVERAGE_GATE_REASONS as readonly string[]).includes(gate.reason)
+    ? gate
+    : undefined;
+  // Terminal exhaustion (N6) pauses for the owner: only an owner-authorized
+  // resume or retry clears it. Nothing else below is actionable until the
+  // owner acts, so no wait/request/readiness follows.
+  if (terminalGate !== undefined) {
+    outstanding.push(
+      `Coverage review ${terminalGate.reviewId ?? "coverage"} exhausted (${terminalGate.reason}): resume or retry with owner authorization.`,
+    );
+    return outstanding;
+  }
+  if (boundReview !== undefined) {
+    for (const verdict of boundReview.obligationVerdicts) {
+      if (verdict.severity === "blocking" && (verdict.verdict === "missing" || verdict.verdict === "weakened")) {
+        outstanding.push(`Resolve blocking coverage verdict for obligation ${verdict.obligationId} (${verdict.verdict}).`);
+      }
     }
   }
-  if (projection.coverageUnavailable) {
-    outstanding.push(`Resolve unavailable coverage review (${projection.coverageUnavailable.reason}).`);
+  outstanding.push(...openFindingItems);
+  if (gate !== undefined) {
+    outstanding.push(`Resolve unavailable coverage review (${gate.reason}).`);
+  }
+  if (boundReview !== undefined) {
+    if (!coverageReviewHoldsReadiness(boundReview) && openFindingItems.length === 0) {
+      outstanding.push(`Record plan readiness for passing review ${boundReview.id}.`);
+    }
+  } else {
+    const pending = Object.values(projection.coverageRequests).find((request) =>
+      request.planRevisionId === currentRevisionId &&
+      request.planRevisionDigest === currentDigest &&
+      request.sourceManifestId === manifest.manifestId &&
+      !recordedReviewIds.has(request.reviewId)
+    );
+    if (pending !== undefined) {
+      outstanding.push(`Await coverage review ${pending.reviewId} verdict.`);
+    } else {
+      outstanding.push("Request a coverage review.");
+    }
+  }
+  // Ordinary suspension is transient: the pump retries, so the live wait
+  // above stays the action and the suspension rides as a parallel fact.
+  // Stale history (an old binding, or a landed verdict) is not a current
+  // blocked request and stays out.
+  for (const suspended of Object.values(projection.coverageSuspended)) {
+    if (suspendedIsCurrent(suspended.reviewId)) {
+      outstanding.push(
+        `Resolve suspended coverage review ${suspended.reviewId} (${suspended.attempts} suspended attempts: ${suspended.lastReason}).`,
+      );
+    }
   }
   return outstanding;
 }
@@ -1437,7 +1579,9 @@ export function createPlanningProjection(event: PlanningEventInput): PlanningPro
     },
     references: {},
   };
-  return projection;
+  // C4 (AR-R13): the initial index shares the event-derived policy — derive
+  // it through the same helper instead of hardcoding a second listing.
+  return withResume(projection);
 }
 
 export function reducePlanningProjection(

@@ -724,21 +724,16 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     projection: ReturnType<typeof rebuildSchedulerProjection>
   ) {
     const reviewSubmission = await this.reviewSubmission(request, projection);
-    // C4 (AR-R11): docs v2 reads the kernel snapshot at the live base
+    // C4 (AR-R11): docs v2 reads the existing STATE snapshot at the live base
     // revision on eligible turns only; every other policy keeps the exact
-    // legacy artifact loader below. The v1 branch is frozen.
+    // legacy artifact loader below. The v1 branch is frozen. The blob comes
+    // from the audited immutable read at the captured revision — inherited
+    // STATE or a later task integration — never the user's working tree, so
+    // no snapshot-event gate stands between the read and the prompt. A known
+    // revision with a missing blob renders its honest unavailable label.
     const docsV2 = projection.projectDocsPolicyVersion === 2;
     const baseSnapshot = docsV2 && architectBaseSnapshotEligible(request.reason, projection)
       ? await this.loadBaseSnapshot()
-      : undefined;
-    // C4 (AR-R11): only a RECORDED kernel snapshot commit feeds the prompt.
-    // The live revision can be a plain baseline (user-tree bytes) before the
-    // first kernel snapshot; those bytes must never ride labeled as
-    // kernel-rendered. A recorded commit with a missing blob still renders
-    // its honest unavailable label.
-    const recordedSnapshot = baseSnapshot !== undefined &&
-      (projection.projectDocs?.snapshots ?? []).some((record) => record.commit === baseSnapshot.revision)
-      ? baseSnapshot
       : undefined;
     const projectDocsStateText = docsV2
       ? undefined
@@ -803,7 +798,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       evidence,
       recentHistory: [],
       ...(projectDocsStateText !== undefined ? { projectDocsStateText } : {}),
-      ...(recordedSnapshot !== undefined ? { baseSnapshot: recordedSnapshot } : {}),
+      ...(baseSnapshot !== undefined ? { baseSnapshot } : {}),
     };
     if (!this.options.capabilityRegistry) return buildArchitectContext(input);
     return (await assembleContextWithExtensions({

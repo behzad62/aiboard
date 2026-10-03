@@ -25,7 +25,7 @@ import {
   architectBaseSnapshotEligible,
   architectContextSections,
   buildArchitectContext,
-  capBaseSnapshotText,
+  renderArchitectBaseSnapshot,
 } from "../src/agent-prompts.js";
 import {
   DEFAULT_AGENTS_SECTION_BODY,
@@ -326,11 +326,16 @@ test("C4: snapshot is absent on non-planning turns and on docs v1", () => {
     const base = rebuildSchedulerProjection(store.readRun("run_v2_absent"));
     const snapshot = { revision: "r1", content: "Snapshot body." };
     const answered = { ...base, planningTriageDecision: "answer" } as never;
+    // Delivery: the same guidance reason on a ready plan sees no snapshot —
+    // eligibility derives from durable planning state plus reason, never the
+    // reason alone.
+    const readyProjection = { ...base, planning: { ...base.planning, readiness: "ready" as const } };
     for (const [label, projection, reason] of [
       ["answer path", answered, { type: "plan_required" }],
       ["completion turn", { ...base }, { type: "completion_decision_required", runPolicy: "plan_only" }],
       ["review turn", { ...base }, { type: "review_required", taskId: "T1", changeSetId: "cs1" }],
-      ["guidance turn", { ...base }, { type: "user_guidance_required", guidanceId: "g1", version: 1 }],
+      ["delivery guidance", readyProjection, { type: "user_guidance_required", guidanceId: "g1", version: 1 }],
+      ["ready plan turn", readyProjection, { type: "plan_required" }],
     ] as const) {
       assert.equal(architectBaseSnapshotEligible(reason, projection as SchedulerProjection), false, label);
       const pack = buildArchitectContext({
@@ -351,6 +356,28 @@ test("C4: snapshot is absent on non-planning turns and on docs v1", () => {
       );
       assert.ok(!pack.text.includes(ARCHITECT_BASE_SNAPSHOT_SECTION_ID), `${label}: no snapshot text`);
     }
+    // Planning guidance is eligible: pending user guidance routes to the
+    // Architect while the run is still in planning state, so the guidance
+    // turn sees the same bounded context as a plan_required turn.
+    const guidanceReason = { type: "user_guidance_required", guidanceId: "g1", version: 1 };
+    assert.equal(architectBaseSnapshotEligible(guidanceReason, base), true, "planning guidance is eligible");
+    const guidancePack = buildArchitectContext({
+      limits: LIMITS,
+      objective: "Deliver the value module.",
+      reason: guidanceReason,
+      projection: { ...base } as never,
+      instructions: [],
+      skills: [],
+      memories: [],
+      evidence: [],
+      recentHistory: [],
+      baseSnapshot: snapshot,
+    });
+    assert.equal(
+      countOccurrences(guidancePack.text, ARCHITECT_BASE_SNAPSHOT_SECTION_ID),
+      1,
+      "planning guidance carries the snapshot once",
+    );
     // Eligible: docs-v2 plan_required build turn.
     assert.equal(
       architectBaseSnapshotEligible({ type: "plan_required" }, base),
@@ -373,21 +400,68 @@ test("C4: snapshot is absent on non-planning turns and on docs v1", () => {
   }
 });
 
-test("C4: v2 snapshot cap budgets the marker and Unicode bytes; v1 behavior is frozen", () => {
-  assert.equal(capBaseSnapshotText("short"), "short");
-  const ascii = "x".repeat(5000);
-  const capped = capBaseSnapshotText(ascii);
-  assert.ok(capped.endsWith("\n[truncated]"));
-  assert.equal(Buffer.byteLength(capped, "utf8"), ARCHITECT_BASE_SNAPSHOT_CAP_BYTES);
-  const wide = "é".repeat(3000);
-  const cappedWide = capBaseSnapshotText(wide);
-  assert.ok(cappedWide.endsWith("\n[truncated]"));
-  assert.ok(Buffer.byteLength(cappedWide, "utf8") <= ARCHITECT_BASE_SNAPSHOT_CAP_BYTES);
-  assert.ok(cappedWide.startsWith("é".repeat(10)), "kept prefix is intact");
-  const split = `${"a".repeat(4082)}😀${"b".repeat(20)}`;
-  const cappedSplit = capBaseSnapshotText(split);
-  assert.ok(cappedSplit.endsWith("\n[truncated]"));
-  assert.ok(Buffer.byteLength(cappedSplit, "utf8") <= ARCHITECT_BASE_SNAPSHOT_CAP_BYTES);
+test("C4: v2 snapshot section budgets label, text and marker together; v1 behavior is frozen", () => {
+  const rev = "r".repeat(40);
+  const short = renderArchitectBaseSnapshot({ revision: rev, content: "short" });
+  assert.ok(!short.includes("[truncated]"), "short snapshots are intact");
+  assert.ok(short.includes("Committed project context"), "committed-context label");
+  assert.ok(short.includes("UNTRUSTED"), "untrusted label");
+  assert.ok(short.includes(rev), "revision provenance");
+  assert.ok(!short.includes("kernel-rendered"), "no kernel-authorship claim");
+  // Long ASCII: label + text + marker together fill exactly 4KiB.
+  const ascii = renderArchitectBaseSnapshot({ revision: rev, content: "x".repeat(5000) });
+  assert.ok(ascii.endsWith("\n[truncated]"));
+  assert.equal(Buffer.byteLength(ascii, "utf8"), ARCHITECT_BASE_SNAPSHOT_CAP_BYTES);
+  // Long Unicode: the whole assembled section stays within budget.
+  const wide = renderArchitectBaseSnapshot({ revision: rev, content: "é".repeat(3000) });
+  assert.ok(wide.endsWith("\n[truncated]"));
+  assert.ok(Buffer.byteLength(wide, "utf8") <= ARCHITECT_BASE_SNAPSHOT_CAP_BYTES);
+  assert.ok(wide.includes("é".repeat(10)), "kept prefix is intact");
+  // Split multibyte tail: the cut never pushes the section over budget.
+  const split = renderArchitectBaseSnapshot({ revision: rev, content: `${"a".repeat(3900)}😀${"b".repeat(300)}` });
+  assert.ok(split.endsWith("\n[truncated]"));
+  assert.ok(Buffer.byteLength(split, "utf8") <= ARCHITECT_BASE_SNAPSHOT_CAP_BYTES);
+  // Missing blob: the honest unavailable label rides with its revision.
+  const missing = renderArchitectBaseSnapshot({ revision: rev, content: null });
+  assert.ok(missing.includes(rev), "unavailable keeps revision provenance");
+  assert.ok(missing.includes("unavailable"), "unavailable is labelled honestly");
+  // The assembled section content itself — header included, never stripped
+  // before measuring — fits the budget on a real docs-v2 projection.
+  const v2root = mkdtempSync(join(tmpdir(), "aiboard-c4-v2cap-"));
+  const v2store = new SqliteSchedulerStore(join(v2root, "scheduler.sqlite"));
+  seedParityLog(v2store, "run_v2_cap");
+  v2store.append({
+    runId: "run_v2_cap",
+    type: "project_docs.policy_configured",
+    occurredAt: CLOCK,
+    actor: { role: "runner", id: "build-runtime" },
+    idempotencyKey: "project-docs-policy",
+    payload: { version: 2 },
+  });
+  try {
+    const v2base = rebuildSchedulerProjection(v2store.readRun("run_v2_cap"));
+    const v2sections = architectContextSections({
+      limits: LIMITS,
+      objective: "Deliver the value module.",
+      reason: { type: "plan_required" },
+      projection: { ...v2base } as never,
+      instructions: [],
+      skills: [],
+      memories: [],
+      evidence: [],
+      recentHistory: [],
+      baseSnapshot: { revision: rev, content: `${"Ü".repeat(1500)}😀${"z".repeat(2000)}` },
+    });
+    const snapshotSection = v2sections.find((section) => section.id === ARCHITECT_BASE_SNAPSHOT_SECTION_ID)!;
+    assert.ok(snapshotSection, "snapshot section assembles");
+    assert.ok(
+      Buffer.byteLength(snapshotSection.content, "utf8") <= ARCHITECT_BASE_SNAPSHOT_CAP_BYTES,
+      `assembled section stays within 4KiB (${Buffer.byteLength(snapshotSection.content, "utf8")} bytes)`,
+    );
+  } finally {
+    v2store.close();
+    rmSync(v2root, { recursive: true, force: true });
+  }
   // v1 legacy cap still fills 4096 bytes before appending the marker.
   const root = mkdtempSync(join(tmpdir(), "aiboard-c4-v1cap-"));
   const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
@@ -486,9 +560,22 @@ test("C4: write_project_doc refuses every kernel-owned path under v2 only", asyn
       "docs/project/specs/source-fixture.md",
       "docs/project/evidence/proof.md",
     ];
-    // Alias/case variants never reach the kernel check: the existing path
-    // guard refuses them at validation, identically on both versions.
-    const aliasPaths = ["agents.md", "claude.md"];
+    // Admitted remainder-case variants: admission preserves casing after the
+    // docs/project/ prefix, so these reach the kernel check and must refuse.
+    // (On a case-insensitive checkout state.md overwrites STATE.md.)
+    const admittedVariants = [
+      "docs/project/state.md",
+      "docs/project/State.md",
+      "docs/project/Specs/source-fixture.md",
+      "docs/project/SPECS/nested/deep.md",
+      "docs/project/EVIDENCE/proof.md",
+      "docs/project/specs",
+      "docs/project/evidence",
+    ];
+    // Prefix-case and alias spellings never reach the kernel check: the
+    // existing path guard refuses them at validation, identically on both
+    // versions. Alias checks alone are insufficient coverage.
+    const aliasPaths = ["agents.md", "claude.md", "Docs/project/STATE.md"];
     const ordinaryPaths = [
       "docs/project/decisions.md",
       "docs/project/plans/phase-c.md",
@@ -506,6 +593,10 @@ test("C4: write_project_doc refuses every kernel-owned path under v2 only", asyn
     });
     assert.equal(v2doc.description, WRITE_PROJECT_DOC_V2_DESCRIPTION);
     assert.ok(v2doc.description.includes("journal"), "anti-journaling rule stated");
+    const artifactDir = join(root, "artifacts");
+    mkdirSync(artifactDir, { recursive: true });
+    const artifactCount = () => readdirSync(artifactDir).length;
+    const eventCount = () => store.readRun(runId).length;
     for (const path of kernelPaths) {
       const refused = await invokeArchitectTool(v2, "write_project_doc", {
         path,
@@ -514,6 +605,21 @@ test("C4: write_project_doc refuses every kernel-owned path under v2 only", asyn
       }, runId);
       assert.equal(refused.isError, true, path);
       assert.equal(refused.error?.code, "project_doc_kernel_owned", path);
+    }
+    // Admitted case variants refuse through the real validate/execute path
+    // BEFORE any artifact, event or file effect lands.
+    for (const path of admittedVariants) {
+      const beforeArtifacts = artifactCount();
+      const beforeEvents = eventCount();
+      const refused = await invokeArchitectTool(v2, "write_project_doc", {
+        path,
+        content: "# Case-variant journal\n",
+        summary: "variant write",
+      }, runId);
+      assert.equal(refused.isError, true, path);
+      assert.equal(refused.error?.code, "project_doc_kernel_owned", path);
+      assert.equal(artifactCount(), beforeArtifacts, `${path}: no artifact effect`);
+      assert.equal(eventCount(), beforeEvents, `${path}: no event effect`);
     }
     for (const path of aliasPaths) {
       const refused = await invokeArchitectTool(v2, "write_project_doc", {
@@ -539,7 +645,7 @@ test("C4: write_project_doc refuses every kernel-owned path under v2 only", asyn
       v1doc.description,
       "Request a project document write for docs/project/** or the marked AGENTS.md or CLAUDE.md section. Stores the content and records the request. It does not change any project file.",
     );
-    for (const path of ["docs/project/STATE.md", "AGENTS.md", "docs/project/evidence/proof.md"]) {
+    for (const path of ["docs/project/STATE.md", "AGENTS.md", "docs/project/evidence/proof.md", "docs/project/state.md", "docs/project/Specs/source-fixture.md", "docs/project/EVIDENCE/proof.md"]) {
       const ok = await invokeArchitectTool(v1, "write_project_doc", {
         path,
         content: "# Legacy write\n",
@@ -547,13 +653,21 @@ test("C4: write_project_doc refuses every kernel-owned path under v2 only", asyn
       }, runId);
       assert.equal(ok.isError, false, `v1 ${path}: ${ok.error?.message ?? ""}`);
     }
-    // Pure refusal helper: alias/case handling folds before the kernel check.
+    // Pure refusal helper: the admitted canonical path is compared
+    // case-insensitively for the narrow protected set.
     assert.ok(kernelOwnedProjectDocRefusal("docs/project/STATE.md") !== undefined);
+    assert.ok(kernelOwnedProjectDocRefusal("docs/project/state.md") !== undefined);
+    assert.ok(kernelOwnedProjectDocRefusal("docs/project/State.md") !== undefined);
     assert.ok(kernelOwnedProjectDocRefusal("AGENTS.md") !== undefined);
     assert.ok(kernelOwnedProjectDocRefusal("docs/project/specs/a.md") !== undefined);
+    assert.ok(kernelOwnedProjectDocRefusal("docs/project/Specs/a.md") !== undefined);
+    assert.ok(kernelOwnedProjectDocRefusal("docs/project/SPECS") !== undefined);
     assert.ok(kernelOwnedProjectDocRefusal("docs/project/evidence/a.md") !== undefined);
+    assert.ok(kernelOwnedProjectDocRefusal("docs/project/EVIDENCE/a.md") !== undefined);
+    assert.ok(kernelOwnedProjectDocRefusal("docs/project/Evidence") !== undefined);
     assert.equal(kernelOwnedProjectDocRefusal("docs/project/decisions.md"), undefined);
     assert.equal(kernelOwnedProjectDocRefusal("docs/project/README.md"), undefined);
+    assert.equal(kernelOwnedProjectDocRefusal("docs/project/Plans/x.md"), undefined);
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -661,7 +775,7 @@ test("C4: derived index from partial reads, draft, close/reopen", () => {
     appendDraft(store, runId);
     resume = planningOf(store, runId).resume;
     assert.deepEqual(resume.completedPlanningContractIds, ["requirement-ledger", "revision_1"]);
-    assert.deepEqual(resume.outstandingWork, []);
+    assert.deepEqual(resume.outstandingWork, ["Request a coverage review."]);
     assert.equal(resume.nextAction, "Request a coverage review.");
     // Restart: close and reopen keeps the derived index byte-identical.
     const before = JSON.stringify(resume);
@@ -757,6 +871,386 @@ test("C4: derived index names blocking verdicts, findings and unavailable review
       JSON.stringify(resume.outstandingWork),
     );
     assert.ok(resume.nextAction.includes("obl-REQ-MANDATORY"), resume.nextAction);
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C4: derived index names pending review, passing-not-ready, and ready", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c4-lifecycle-"));
+  const database = join(root, "scheduler.sqlite");
+  const runId = "run_c4_lifecycle";
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    const fixture = fixtureWithImpact();
+    store = new SqliteSchedulerStore(database);
+    seedPlanningBase(store, runId, 2);
+    appendLedger(store, runId);
+    appendReads(store, runId, fixture.manifest.sections.map((section) => section.id), "read");
+    appendDraft(store, runId);
+    const revision = planningOf(store, runId).plan!;
+    const append = (
+      type: NewSchedulerEvent["type"],
+      key: string,
+      actor: NewSchedulerEvent["actor"],
+      payload: Record<string, unknown>,
+    ) => store!.append({ runId, type, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
+    // A bound request with no verdict is pending: await it, never re-request.
+    append("planning.coverage_review_requested", "lp:request", { role: "architect", id: "architect" }, {
+      reviewId: "coverage_p",
+      planRevisionId: revision.currentRevisionId,
+      planRevisionDigest: revision.currentDigest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: CLOCK,
+    });
+    let resume = planningOf(store, runId).resume;
+    assert.deepEqual(resume.completedPlanningContractIds, ["requirement-ledger", "revision_1"]);
+    assert.deepEqual(resume.outstandingWork, ["Await coverage review coverage_p verdict."]);
+    assert.equal(resume.nextAction, "Await coverage review coverage_p verdict.");
+    // Restart keeps the pending index byte-identical.
+    const before = JSON.stringify(resume);
+    store.close();
+    store = new SqliteSchedulerStore(database);
+    assert.equal(JSON.stringify(planningOf(store, runId).resume), before);
+    // The passing verdict lands: readiness is now the only work.
+    append("planning.coverage_obligations_recorded", "lp:obligations", { role: "verifier", id: "reviewer" }, {
+      reviewId: "coverage_p",
+      sourceManifestId: fixture.manifest.manifestId,
+      sourceManifestDigest: fixture.manifest.artifactDigest,
+      obligations: structuredClone(fixture.coverageReview.derivedObligations),
+      sectionCoverage: fixture.manifest.sections.map((section) => ({
+        sectionId: section.id,
+        obligationIds: fixture.coverageReview.derivedObligations.map((obligation) => obligation.id),
+      })),
+      recordedAt: CLOCK,
+    });
+    append("planning.coverage_plan_delivered", "lp:delivered", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_p",
+      planRevisionId: revision.currentRevisionId,
+      planRevisionDigest: revision.currentDigest,
+      sourceManifestId: fixture.manifest.manifestId,
+      deliveredAt: CLOCK,
+    });
+    append("planning.coverage_review_recorded", "lp:recorded", { role: "verifier", id: "reviewer" }, {
+      review: { ...structuredClone(fixture.coverageReview), id: "coverage_p" },
+    });
+    resume = planningOf(store, runId).resume;
+    assert.deepEqual(resume.outstandingWork, ["Record plan readiness for passing review coverage_p."]);
+    assert.equal(resume.nextAction, "Record plan readiness for passing review coverage_p.");
+    // The ready event closes the index.
+    append("planning.plan_ready", "lp:ready", { role: "runner", id: "build-runtime" }, {
+      hostCapabilities: fixture.hostCapabilities,
+    });
+    const ready = planningOf(store, runId);
+    assert.equal(ready.readiness, "ready");
+    assert.deepEqual(ready.resume.outstandingWork, []);
+    assert.equal(ready.resume.nextAction, "The plan is ready.");
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C4: derived index names stale plans and keeps unresolved history", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c4-staleplan-"));
+  const database = join(root, "scheduler.sqlite");
+  const runId = "run_c4_staleplan";
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    const fixture = fixtureWithImpact();
+    store = new SqliteSchedulerStore(database);
+    seedPlanningBase(store, runId, 2);
+    appendLedger(store, runId);
+    appendReads(store, runId, fixture.manifest.sections.map((section) => section.id), "read");
+    appendDraft(store, runId);
+    // A passing verdict with one blocking finding, bound to revision_1.
+    appendReviewChain(store, runId, "coverage_hist", {
+      ...structuredClone(fixture.coverageReview),
+      id: "coverage_hist",
+      findings: [{
+        id: "finding-hist",
+        category: "missing_coverage",
+        severity: "blocking",
+        claim: "The plan omits a ledger requirement.",
+      }],
+    } as never, "hist");
+    let resume = planningOf(store, runId).resume;
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("finding-hist")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    // A second amendment invalidates the current revision: completed
+    // contracts drop the stale revision and the index requires a revise —
+    // while the unresolved historical finding persists.
+    const amend2 = {
+      ...structuredClone(fixture.manifest),
+      manifestId: "manifest_amend_2",
+      amendment: {
+        id: "amend-2",
+        priorManifestId: fixture.manifest.manifestId,
+        priorArtifactDigest: fixture.manifest.artifactDigest,
+        authorizedBy: "owner",
+        rationale: "C4 stale-plan probe.",
+        recordedImpact: { addsSectionIds: [], retiresSectionIds: [], addsRequirementIds: [], retiresRequirementIds: [] },
+      },
+    };
+    store.append({
+      runId,
+      type: "planning.source_amended",
+      occurredAt: CLOCK,
+      actor: { role: "user", id: "owner" },
+      idempotencyKey: "source-amend-2",
+      payload: { manifest: amend2 },
+    });
+    resume = planningOf(store, runId).resume;
+    assert.deepEqual(resume.completedPlanningContractIds, ["requirement-ledger"], "stale revisions are not current completion");
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("Revise the execution plan against the current source manifest.")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("finding-hist")),
+      `unresolved history persists: ${JSON.stringify(resume.outstandingWork)}`,
+    );
+    // Restart keeps the stale index byte-identical.
+    const before = JSON.stringify(resume);
+    store.close();
+    store = new SqliteSchedulerStore(database);
+    assert.equal(JSON.stringify(planningOf(store, runId).resume), before);
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C4: derived index names suspended coverage alongside its pending review", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c4-suspended-"));
+  const runId = "run_c4_suspended";
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    const fixture = fixtureWithImpact();
+    store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    seedPlanningBase(store, runId, 2);
+    appendLedger(store, runId);
+    appendReads(store, runId, fixture.manifest.sections.map((section) => section.id), "read");
+    appendDraft(store, runId);
+    const revision = planningOf(store, runId).plan!;
+    const append = (
+      type: NewSchedulerEvent["type"],
+      key: string,
+      actor: NewSchedulerEvent["actor"],
+      payload: Record<string, unknown>,
+    ) => store!.append({ runId, type, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
+    append("planning.coverage_review_requested", "susp:request", { role: "architect", id: "architect" }, {
+      reviewId: "coverage_s",
+      planRevisionId: revision.currentRevisionId,
+      planRevisionDigest: revision.currentDigest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: CLOCK,
+    });
+    append("planning.coverage_review_suspended", "susp:suspended", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_s",
+      reason: "reviewer_overloaded",
+    });
+    const resume = planningOf(store, runId).resume;
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("Await coverage review coverage_s verdict.")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("coverage_s") && item.includes("reviewer_overloaded")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.equal(resume.nextAction, "Await coverage review coverage_s verdict.");
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C4: derived index puts terminal exhaustion before any wait or request", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c4-terminal-"));
+  const runId = "run_c4_terminal";
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    const fixture = fixtureWithImpact();
+    store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    seedPlanningBase(store, runId, 2);
+    appendLedger(store, runId);
+    appendReads(store, runId, fixture.manifest.sections.map((section) => section.id), "read");
+    appendDraft(store, runId);
+    const revision = planningOf(store, runId).plan!;
+    const append = (
+      type: NewSchedulerEvent["type"],
+      key: string,
+      actor: NewSchedulerEvent["actor"],
+      payload: Record<string, unknown>,
+    ) => store!.append({ runId, type, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
+    append("planning.coverage_review_requested", "term:request", { role: "architect", id: "architect" }, {
+      reviewId: "coverage_t",
+      planRevisionId: revision.currentRevisionId,
+      planRevisionDigest: revision.currentDigest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: CLOCK,
+    });
+    append("planning.coverage_review_unavailable", "term:exhausted", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_t",
+      reason: "coverage_review_suspended_exhausted",
+      detail: "Retry budget spent.",
+    });
+    const resume = planningOf(store, runId).resume;
+    assert.ok(
+      resume.nextAction.includes("coverage_t") && resume.nextAction.includes("owner authorization"),
+      resume.nextAction,
+    );
+    assert.ok(
+      !resume.outstandingWork.some((item) => item.includes("Await coverage review")),
+      `exhaustion blocks the wait: ${JSON.stringify(resume.outstandingWork)}`,
+    );
+    assert.ok(
+      !resume.outstandingWork.includes("Request a coverage review."),
+      `exhaustion blocks a duplicate request: ${JSON.stringify(resume.outstandingWork)}`,
+    );
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C4: derived index drops stale gates after a plan revision", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c4-stalegate-"));
+  const runId = "run_c4_stalegate";
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    const fixture = fixtureWithImpact();
+    store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    seedPlanningBase(store, runId, 2);
+    appendLedger(store, runId);
+    appendReads(store, runId, fixture.manifest.sections.map((section) => section.id), "read");
+    appendDraft(store, runId);
+    const revision = planningOf(store, runId).plan!;
+    const append = (
+      type: NewSchedulerEvent["type"],
+      key: string,
+      actor: NewSchedulerEvent["actor"],
+      payload: Record<string, unknown>,
+    ) => store!.append({ runId, type, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
+    append("planning.coverage_review_requested", "stale:request", { role: "architect", id: "architect" }, {
+      reviewId: "coverage_o",
+      planRevisionId: revision.currentRevisionId,
+      planRevisionDigest: revision.currentDigest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: CLOCK,
+    });
+    append("planning.coverage_review_suspended", "stale:suspended", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_o",
+      reason: "reviewer_overloaded",
+    });
+    append("planning.coverage_review_unavailable", "stale:unavailable", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_o",
+      reason: "reviewer_unavailable",
+    });
+    let resume = planningOf(store, runId).resume;
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("Await coverage review coverage_o verdict.")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("coverage_o") && item.includes("reviewer_overloaded")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("reviewer_unavailable")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    // A new revision orphans the old binding: stale history is not a
+    // current blocked request, so the index asks for a fresh review.
+    const registry = new ToolRegistry();
+    for (const tool of createPlanningTools({ store, clock: () => CLOCK })) registry.register(tool);
+    const next = structuredClone(fixture.revision) as unknown as Record<string, unknown>;
+    next.revisionId = "revision_2";
+    delete next.digest;
+    const revised = await registry.invoke({
+      type: "tool_call",
+      callId: "revise:stalegate",
+      name: "revise_planning_plan",
+      arguments: {
+        revision: next,
+        expectedRevisionId: fixture.revision.revisionId,
+        expectedDigest: fixture.revision.digest,
+      },
+    }, { runId, sessionId: "architect:c4", actor: { role: "architect", id: "architect_1" } });
+    assert.equal(revised.isError, false, revised.error?.message ?? "revise failed");
+    resume = planningOf(store, runId).resume;
+    assert.ok(
+      !resume.outstandingWork.some((item) => item.includes("coverage_o")),
+      `stale history stays out: ${JSON.stringify(resume.outstandingWork)}`,
+    );
+    assert.deepEqual(resume.outstandingWork, ["Request a coverage review."]);
+    assert.equal(resume.nextAction, "Request a coverage review.");
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C4: historical checkpoint proofs still permit ready after folded guidance", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c4-histready-"));
+  const runId = "run_c4_histready";
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    const fixture = fixtureWithImpact();
+    store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    // Old-log shape: docs v1 with the same planning policy v1.
+    seedPlanningBase(store, runId, 1);
+    appendLedger(store, runId);
+    appendReads(store, runId, fixture.manifest.sections.map((section) => section.id), "read");
+    appendDraft(store, runId);
+    appendReviewChain(store, runId, "coverage_1", { ...structuredClone(fixture.coverageReview), id: "coverage_1" } as never, "h1");
+    // Fold guidance after the bound review.
+    const append = (
+      type: NewSchedulerEvent["type"],
+      key: string,
+      actor: NewSchedulerEvent["actor"],
+      payload: Record<string, unknown>,
+    ) => store!.append({ runId, type, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
+    append("user.guidance_submitted", "guidance:g1", { role: "user", id: "local-user" }, {
+      guidanceId: "g1", text: "Add an audit log.", version: 1, interruptionProtocolVersion: 1,
+    });
+    append("user.guidance_interruption_completed", "guidance:interrupt:g1", { role: "runner", id: "build-manager" }, {
+      guidanceId: "g1", expectedVersion: 1,
+    });
+    append("user.guidance_acknowledged", "guidance:ack:g1", { role: "architect", id: "architect_1" }, {
+      guidanceId: "g1",
+      expectedVersion: 1,
+      resolution: { type: "folded_into_planning", rationale: "Folds into the plan." },
+    });
+    // The historical checkpoint proof lands AFTER the fold: it stays stored
+    // and replayable, and carries the planning-turn proof.
+    append("planning.checkpoint_recorded", "checkpoint:hist", { role: "architect", id: "architect" }, {
+      checkpoint: {
+        id: "checkpoint-hist",
+        coveredSourceSectionIds: fixture.manifest.sections.map((section) => section.id),
+        completedPlanningContractIds: ["requirement-ledger", "revision_1"],
+        remainingWork: ["Request a coverage review."],
+        nextAction: "Request a coverage review.",
+        recordedAt: CLOCK,
+      },
+    });
+    // A suitably later bound review, then readiness succeeds on the old log.
+    appendReviewChain(store, runId, "coverage_2", {
+      ...structuredClone(fixture.coverageReview),
+      id: "coverage_2",
+    } as never, "h2");
+    append("planning.plan_ready", "ready:hist", { role: "runner", id: "build-runtime" }, {
+      hostCapabilities: fixture.hostCapabilities,
+    });
+    const ready = planningOf(store, runId);
+    assert.equal(ready.readiness, "ready");
+    assert.equal(ready.checkpoints.length, 1, "historical checkpoint stays stored");
+    assert.deepEqual(ready.resume.outstandingWork, []);
+    assert.equal(ready.resume.nextAction, "The plan is ready.");
   } finally {
     store?.close();
     rmSync(root, { recursive: true, force: true });
@@ -1103,45 +1597,9 @@ test("C4: resumed sessions expose the snapshot once on planning turns, never oth
     const artifacts = new ArtifactStore(join(state, "artifacts"));
     scheduler = new SqliteSchedulerStore(join(state, "scheduler.sqlite"));
     seedPlanningBase(scheduler, runId, 2);
-    // The bridge only feeds RECORDED kernel snapshot commits. Pause and
-    // record a stop snapshot (commit S2REV) so the stubbed read carries
-    // provenance; a plain baseline revision would be user-tree bytes.
-    const pauseSequence = scheduler.readRun(runId).length + 1;
-    scheduler.append({
-      runId,
-      type: "run.paused",
-      occurredAt: CLOCK,
-      actor: { role: "user", id: "local-user" },
-      idempotencyKey: "pause:c4-nar",
-      payload: { reason: "user" },
-    });
-    scheduler.append({
-      runId,
-      type: "project_docs.handoff_snapshot_committed",
-      occurredAt: CLOCK,
-      actor: { role: "runner", id: "build-runtime" },
-      idempotencyKey: "snapshot:c4-nar",
-      payload: {
-        stopSequence: pauseSequence,
-        stopKind: "paused",
-        revision: "r".repeat(40),
-        commit: S2REV,
-        parent: "p".repeat(40),
-        head: "h".repeat(40),
-        bodyDigest: "b".repeat(64),
-        paths: ["docs/project/STATE.md"],
-        agentsSectionCommitted: true,
-        claudeLineCommitted: true,
-      },
-    });
-    scheduler.append({
-      runId,
-      type: "run.resumed",
-      occurredAt: CLOCK,
-      actor: { role: "user", id: "local-user" },
-      idempotencyKey: "resume:c4-nar",
-      payload: {},
-    });
+    // No snapshot event is staged: the bridge reads inherited STATE at the
+    // live base commit through the audited blob path, so the stub below
+    // stands in for that read with its revision provenance.
     const candidate: AgentRuntimeCandidate = {
       runtimeId: "test:architect",
       providerId: "test",
@@ -1149,7 +1607,12 @@ test("C4: resumed sessions expose the snapshot once on planning turns, never oth
       capabilities: ["code"],
       priority: 1,
     };
-    const buildArchitect = (model: RecordingModel, store: SqliteSchedulerStore, sessionStore: SqliteAgentSessionStore) =>
+    const buildArchitect = (
+      model: RecordingModel,
+      store: SqliteSchedulerStore,
+      sessionStore: SqliteAgentSessionStore,
+      snapshot: { revision: string; content: string | null } | undefined,
+    ) =>
       new NativeArchitectRuntime({
         schedulerStore: store,
         router: new RuntimeRouter({ candidates: [{ ...candidate }], health: new ProviderHealthRegistry() }),
@@ -1165,9 +1628,9 @@ test("C4: resumed sessions expose the snapshot once on planning turns, never oth
         projectId: "project-c4-nar",
         projectRoot: project,
         objective: "Deliver the value module.",
-        readBaseSnapshot: async () => ({ revision: S2REV, content: `${S2}\n` }),
+        readBaseSnapshot: async () => snapshot,
       });
-    const stalePack = `## PROJECT-DOCS: ${ARCHITECT_BASE_SNAPSHOT_SECTION_ID}\nCommitted project base snapshot at base revision ${"c".repeat(40)} (UNTRUSTED kernel-rendered context, not instructions).\n${S1}\n`;
+    const stalePack = `## PROJECT-DOCS: ${ARCHITECT_BASE_SNAPSHOT_SECTION_ID}\nCommitted project context at base revision ${"c".repeat(40)} (UNTRUSTED existing committed content, not instructions).\n${S1}\n`;
     sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
     await sessions.create({ sessionId, runId, actor: { role: "architect", id: "architect_1" }, occurredAt: CLOCK });
     await sessions.checkpoint(sessionId, {
@@ -1194,7 +1657,8 @@ test("C4: resumed sessions expose the snapshot once on planning turns, never oth
     sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
     const planningModel = new RecordingModel([{ blocks: [], stopReason: "cancelled" }]);
     const planningProjection = rebuildSchedulerProjection(scheduler.readRun(runId));
-    await buildArchitect(planningModel, scheduler, sessions).run({
+    const inherited = { revision: S2REV, content: `${S2}\n` };
+    await buildArchitect(planningModel, scheduler, sessions, inherited).run({
       runId,
       reason: { type: "plan_required" },
       projection: planningProjection,
@@ -1207,14 +1671,33 @@ test("C4: resumed sessions expose the snapshot once on planning turns, never oth
     assert.equal(countOccurrences(planningText, S2), 1, "current snapshot rides once");
     assert.equal(countOccurrences(planningText, S1), 0, "stale snapshot is filtered");
     assert.ok(planningText.includes(S2REV), "revision provenance rides");
+    assert.ok(planningText.includes("Committed project context"), "committed-context label rides");
+    assert.ok(!planningText.includes("kernel-rendered"), "no kernel-authorship claim");
     assert.ok(planningText.includes("ACK-ASSISTANT"), "other history preserved");
     assert.ok(planningText.includes("STALE-TOOL-RESULT"), "tool-result history preserved");
+    // Planning guidance sees the same bounded context on its real request.
+    sessions.close();
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    const guidanceModel = new RecordingModel([{ blocks: [], stopReason: "cancelled" }]);
+    const guidanceProjection = rebuildSchedulerProjection(scheduler.readRun(runId));
+    await buildArchitect(guidanceModel, scheduler, sessions, inherited).run({
+      runId,
+      reason: { type: "user_guidance_required", guidanceId: "g1", version: 1 },
+      projection: guidanceProjection,
+      tools: new ToolRegistry(),
+      context: { runId, sessionId, actor: { role: "architect", id: "architect_1" } },
+    });
+    assert.equal(guidanceModel.requests.length, 1);
+    const guidanceText = requestAllText(guidanceModel.requests[0]!);
+    assert.equal(countOccurrences(guidanceText, ARCHITECT_BASE_SNAPSHOT_SECTION_ID), 1, "guidance exposes the snapshot once");
+    assert.equal(countOccurrences(guidanceText, S2), 1, "guidance carries current content");
+    assert.equal(countOccurrences(guidanceText, S1), 0, "stale snapshot stays filtered");
     // Restart again, then a non-planning turn: no snapshot anywhere.
     sessions.close();
     sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
     const completionModel = new RecordingModel([{ blocks: [], stopReason: "cancelled" }]);
     const completionProjection = rebuildSchedulerProjection(scheduler.readRun(runId));
-    await buildArchitect(completionModel, scheduler, sessions).run({
+    await buildArchitect(completionModel, scheduler, sessions, inherited).run({
       runId,
       reason: { type: "completion_decision_required", runPolicy: "plan_only" },
       projection: completionProjection,
@@ -1228,26 +1711,46 @@ test("C4: resumed sessions expose the snapshot once on planning turns, never oth
     assert.equal(countOccurrences(completionText, S1), 0, "stale snapshot stays gone");
     assert.ok(completionText.includes("ACK-ASSISTANT"), "history still preserved");
     assert.ok(completionText.includes("STALE-TOOL-RESULT"), "tool results still preserved");
-    // An unrecorded revision is user-tree bytes by definition: even an
-    // eligible turn omits it rather than mislabeling it kernel-rendered.
+    // A missing blob at a known revision is honestly unavailable: the
+    // section still rides once with its revision, naming the absence.
     sessions.close();
     sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
-    const evilModel = new RecordingModel([{ blocks: [], stopReason: "cancelled" }]);
-    const evilProjection = rebuildSchedulerProjection(scheduler.readRun(runId));
-    const evilArchitect = buildArchitect(evilModel, scheduler, sessions);
-    (evilArchitect as unknown as { options: { readBaseSnapshot: unknown } }).options.readBaseSnapshot =
-      async () => ({ revision: "e".repeat(40), content: "EVIL-USER-TREE" });
-    await evilArchitect.run({
+    const missingModel = new RecordingModel([{ blocks: [], stopReason: "cancelled" }]);
+    const missingProjection = rebuildSchedulerProjection(scheduler.readRun(runId));
+    await buildArchitect(missingModel, scheduler, sessions, { revision: S2REV, content: null }).run({
       runId,
       reason: { type: "plan_required" },
-      projection: evilProjection,
+      projection: missingProjection,
       tools: new ToolRegistry(),
       context: { runId, sessionId, actor: { role: "architect", id: "architect_1" } },
     });
-    assert.equal(evilModel.requests.length, 1);
-    const evilText = requestAllText(evilModel.requests[0]!);
-    assert.equal(countOccurrences(evilText, ARCHITECT_BASE_SNAPSHOT_SECTION_ID), 0, "unrecorded revision omitted");
-    assert.equal(countOccurrences(evilText, "EVIL-USER-TREE"), 0, "user-tree bytes never ride");
+    assert.equal(missingModel.requests.length, 1);
+    const missingText = requestAllText(missingModel.requests[0]!);
+    assert.equal(countOccurrences(missingText, ARCHITECT_BASE_SNAPSHOT_SECTION_ID), 1, "unavailable rides once");
+    assert.ok(missingText.includes(S2REV), "unavailable keeps revision provenance");
+    assert.ok(missingText.includes("unavailable"), "absence is labelled honestly");
+    assert.equal(countOccurrences(missingText, S2), 0, "older content stays filtered");
+    // A differing user-tree decoy never leaks: the blob read carries exact
+    // provenance, so only the blob bytes ride.
+    sessions.close();
+    sessions = new SqliteAgentSessionStore(join(state, "sessions.sqlite"), artifacts);
+    const DECOY = "USER TREE DECOY — never the base snapshot.\n";
+    mkdirSync(join(project, "docs", "project"), { recursive: true });
+    writeFileSync(join(project, "docs", "project", "STATE.md"), DECOY);
+    const decoyModel = new RecordingModel([{ blocks: [], stopReason: "cancelled" }]);
+    const decoyProjection = rebuildSchedulerProjection(scheduler.readRun(runId));
+    await buildArchitect(decoyModel, scheduler, sessions, inherited).run({
+      runId,
+      reason: { type: "plan_required" },
+      projection: decoyProjection,
+      tools: new ToolRegistry(),
+      context: { runId, sessionId, actor: { role: "architect", id: "architect_1" } },
+    });
+    assert.equal(decoyModel.requests.length, 1);
+    const decoyText = requestAllText(decoyModel.requests[0]!);
+    assert.equal(countOccurrences(decoyText, ARCHITECT_BASE_SNAPSHOT_SECTION_ID), 1, "blob snapshot rides once");
+    assert.equal(countOccurrences(decoyText, S2), 1, "blob bytes ride");
+    assert.equal(countOccurrences(decoyText, "USER TREE DECOY"), 0, "user-tree bytes never ride");
   } finally {
     sessions?.close();
     scheduler?.close();
@@ -1470,16 +1973,26 @@ test("C4 CD-7: factory runtime plans without the checkpoint tool or docs templat
         .filter((message) => message.role === "user" && message.id.startsWith("context:"))
         .map((message) => (typeof message.content === "string" ? message.content : ""))
         .join("\n");
-    // Triage + reads + ledger with no kernel snapshot yet: the baseline
-    // revision is user-tree bytes, so eligible turns omit the section.
+    // Triage + reads + ledger with no STATE blob at the baseline revision:
+    // eligible turns carry the honestly-unavailable snapshot at the live
+    // revision. The baseline holds only user-tree bytes, so no tree content
+    // rides — only exact blob provenance does.
     await stepUntil("ledger persisted", (projection) => projection.planning?.ledger !== undefined);
     assert.ok(model.requests.length >= 1, "pre-snapshot turns ran");
+    let unavailableSeen = false;
     for (const request of model.requests) {
       const text = contextText(request);
       assert.ok(text.length > 0, "each turn carries a context pack");
-      assert.equal(countOccurrences(text, ARCHITECT_BASE_SNAPSHOT_SECTION_ID), 0, "baseline bytes never ride");
+      const exposures = countOccurrences(text, ARCHITECT_BASE_SNAPSHOT_SECTION_ID);
+      assert.ok(exposures <= 1, "at most one snapshot exposure per turn");
+      if (exposures === 1) {
+        unavailableSeen = true;
+        assert.ok(text.includes("unavailable"), "missing blob is labelled honestly");
+        assert.ok(text.includes(baseline.revision), "live baseline revision provenance rides");
+      }
       assert.ok(!text.includes("USER TREE DECOY"), "user tree never leaks into context");
     }
+    assert.ok(unavailableSeen, "honest availability rides on real pre-snapshot requests");
     // Pre-first-integration pause -> kernel stop snapshot S1 with open work.
     await manager.pause(RUN, "user", "pause:c4-first");
     const s1 = manager.events(RUN).find((event) => event.type === "project_docs.handoff_snapshot_committed")!;
@@ -1487,7 +2000,7 @@ test("C4 CD-7: factory runtime plans without the checkpoint tool or docs templat
     const s1commit = String((s1.payload as { commit: string }).commit);
     const s1blob = await gitText(integrationRepoPath(state), ["show", `${s1commit}:docs/project/STATE.md`]);
     assert.ok(s1blob.length > 0, "S1 holds a STATE.md blob");
-    assert.ok(!s1blob.includes("USER TREE DECOY"), "S1 is kernel-rendered, not the user tree");
+    assert.ok(!s1blob.includes("USER TREE DECOY"), "S1 matches the committed blob, not the user tree");
     await manager.resume(RUN, "resume:c4-first");
     // Resume -> probe refuses, draft lands; the planning request carries S1 once.
     await stepUntil("plan drafted", (projection) => projection.planning?.plan !== undefined);
@@ -1508,10 +2021,11 @@ test("C4 CD-7: factory runtime plans without the checkpoint tool or docs templat
     const snapshotRest = draftContext.slice(snapshotStart + snapshotHeader.length);
     const snapshotEnd = snapshotRest.indexOf("\n## ");
     const snapshotChunk = snapshotEnd === -1 ? snapshotRest : snapshotRest.slice(0, snapshotEnd);
-    const snapshotBody = snapshotChunk.slice(snapshotChunk.indexOf("\n") + 1);
+    // The whole assembled section — header included, never stripped before
+    // measuring — fits the 4KiB budget.
     assert.ok(
-      Buffer.byteLength(snapshotBody, "utf8") <= ARCHITECT_BASE_SNAPSHOT_CAP_BYTES,
-      `snapshot body stays within 4KiB (${Buffer.byteLength(snapshotBody, "utf8")} bytes)`,
+      Buffer.byteLength(snapshotChunk, "utf8") <= ARCHITECT_BASE_SNAPSHOT_CAP_BYTES,
+      `assembled snapshot section stays within 4KiB (${Buffer.byteLength(snapshotChunk, "utf8")} bytes)`,
     );
     // Second pause -> S2; the next planning turn carries S2 and drops stale S1.
     await manager.pause(RUN, "user", "pause:c4-second");

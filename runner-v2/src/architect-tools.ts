@@ -416,8 +416,9 @@ function writeProjectDocTool(
       if (denied) return denied;
       // C4 (AR-R12): under docs v2 the kernel owns STATE.md, spec copies,
       // the marked AGENTS.md/CLAUDE.md sections and docs/project/evidence/**.
-      // The canonical path (alias/case-folded by validateProjectDocPath)
-      // decides; ordinary product docs are untouched. v1 refuses nothing new.
+      // The admitted canonical path decides, compared case-insensitively
+      // for the narrow protected set; ordinary product docs are untouched.
+      // v1 refuses nothing new.
       if (docsV2) {
         const kernelOwned = kernelOwnedProjectDocRefusal(input.path);
         if (kernelOwned !== undefined) {
@@ -502,22 +503,27 @@ export const WRITE_PROJECT_DOC_V2_DESCRIPTION =
 
 /**
  * C4 (AR-R12): kernel-owned project-doc paths under docs v2. Takes the
- * canonical path from validateProjectDocPath (aliases and case variants
- * already folded), so `agents.md` and `DOCS/PROJECT/state.md`-style inputs
- * cannot slip past. Returns the refusal reason, or undefined for ordinary
- * product docs. No broad filesystem policy: only these kernel paths refuse.
+ * ALREADY ADMITTED canonical path from validateProjectDocPath and compares
+ * it lower-cased: admission folds only the `docs/project/` prefix and the
+ * AGENTS.md/CLAUDE.md aliases, while the remainder keeps its input casing —
+ * so admitted `docs/project/state.md`, `docs/project/Specs/x.md` and
+ * `docs/project/EVIDENCE/x.md` spellings must still refuse here (on a
+ * case-insensitive checkout `state.md` overwrites `STATE.md`). Only this
+ * narrow protected set is compared; ordinary product docs and path admission
+ * itself are untouched, and v1 refuses nothing new.
  */
 export function kernelOwnedProjectDocRefusal(canonicalPath: string): string | undefined {
-  if (canonicalPath === "docs/project/STATE.md") {
+  const lower = canonicalPath.toLowerCase();
+  if (lower === "docs/project/state.md") {
     return "docs/project/STATE.md is kernel-owned under docs policy v2: the kernel snapshots it; model writes are refused.";
   }
-  if (canonicalPath === "AGENTS.md" || canonicalPath === "CLAUDE.md") {
+  if (lower === "agents.md" || lower === "claude.md") {
     return `${canonicalPath} is kernel-owned under docs policy v2: the kernel writes the marked section; model writes are refused.`;
   }
-  if (canonicalPath === "docs/project/specs" || canonicalPath.startsWith("docs/project/specs/")) {
+  if (lower === "docs/project/specs" || lower.startsWith("docs/project/specs/")) {
     return "docs/project/specs/** is kernel-owned under docs policy v2: the kernel records approved-source spec copies; model writes are refused.";
   }
-  if (canonicalPath === "docs/project/evidence" || canonicalPath.startsWith("docs/project/evidence/")) {
+  if (lower === "docs/project/evidence" || lower.startsWith("docs/project/evidence/")) {
     return "docs/project/evidence/** is kernel-owned under docs policy v2: evidence is recorded through evidence tools; model writes are refused.";
   }
   return undefined;
