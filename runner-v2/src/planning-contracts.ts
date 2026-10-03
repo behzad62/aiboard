@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   type ApprovedSourceManifest,
@@ -2407,12 +2408,9 @@ export function computePlanReadiness(input: PlanReadinessInput): PlanReadinessRe
  * model may omit them — the kernel stamps them from actual run, source
  * and revision state — but any supplied value must exactly match the
  * actual, or the submission is refused. `createdAt` is the kernel clock
- * at submission; `coverageReviewId` / `repairBudgetLineageId` carry the
- * current (prior) revision's recorded binding forward (then authoritative
- * absence — no other durable source names them, and the live review is
- * never stamped onto an unevaluated revision). Omission is the field
- * being absent: an
-
+ * at submission. An unevaluated revision has no coverage-review binding;
+ * repair-budget lineage may continue from its prior revision. Omission
+ * means absence: an
  * explicit blank, null or wrong-typed value is a supplied value and is
  * refused, never silently repaired. Historical validation, canonical
  * serialization and stored digests are untouched — normalization runs
@@ -2446,17 +2444,10 @@ export interface PlanSubmissionActuals {
   readonly createdAt: string;
   readonly coverageReviewId?: string;
   readonly repairBudgetLineageId?: string;
-  /**
-   * The durable current revision's decision/disposition timestamps when
-   * revising (absent when drafting): an omitted submission timestamp
-   * stamps the matching durable record's time when its identity already
-   * exists, else the kernel submission time (createdAt).
-   */
-  readonly priorRevision?: {
-    readonly planningDecisions: readonly { readonly id: string; readonly decidedAt: string }[];
-    readonly nonNormativeSections?: readonly { readonly sectionId: string; readonly decidedAt: string }[];
-    readonly retiredRequirementIds?: readonly { readonly requirementId: string; readonly decidedAt: string }[];
-  };
+  /** Durable semantics are compared before reusing their decision times. */
+  readonly priorRevision?: Pick<ExecutionPlanRevisionWithoutDigest,
+    "requirements" | "planningDecisions" | "nonNormativeSections" | "retiredRequirementIds">;
+  readonly ledgerRequirements?: readonly SourceRequirement[];
 }
 
 
@@ -2479,7 +2470,10 @@ export function requiredBaseForRevision(revisionId: string): string {
  * semantic requirement fields (reference, purpose, outcome, acceptance
  * conditions) stay required.
  */
-export type PlanSubmissionRequirement = Omit<SourceRequirement, "accountablePhaseId" | "contributingTaskIds"> & {
+export type PlanSubmissionRequirement = Omit<SourceRequirement, "accountablePhaseId" | "contributingTaskIds" | "applicability"> & {
+  readonly applicability: Omit<RequirementApplicability, "disposition"> & {
+    readonly disposition?: Omit<RequirementApplicabilityDisposition, "decidedAt"> & { readonly decidedAt?: string };
+  };
   readonly accountablePhaseId?: string;
   readonly contributingTaskIds?: readonly string[];
 };
@@ -2660,77 +2654,65 @@ export function stampPlanSubmissionEnvelope(
 }
 
 /**
- * Stamps omitted decision/disposition timestamps from actuals; refuses a
- * supplied timestamp that does not match. The authoritative actual for an
- * identity the durable prior revision already records is that record's
- * timestamp; for a new semantic record it is the kernel submission time
- * (actuals.createdAt). Semantic id/description/rationale/authorizedBy/
- * amendmentRef stay model-authored and are still required downstream —
- * stamping never infers approval. Malformed entries are left for the
- * downstream validators, which refuse them.
+ * Stamp every decision time at submission only. Reuse a durable time only
+ * for the same semantic decision, including its authorization and basis.
+ * Changed decisions take the submission clock. Approval is never inferred;
+ * all other semantic fields remain subject to the existing strict validators.
  */
 export function stampSubmissionTimestamps(
   revision: PlanSubmissionRevision,
   actuals: PlanSubmissionActuals,
 ): StampedPlanSubmission {
   const copy = structuredClone(revision) as unknown as Record<string, unknown>;
-  const now = actuals.createdAt;
-  const prior = actuals.priorRevision;
+  const withoutTime = (record: Record<string, unknown>): Record<string, unknown> => {
+    const { decidedAt: _time, ...semantic } = record;
+    void _time;
+    return semantic;
+  };
   const stamp = (
-    list: unknown,
-    identity: (record: Record<string, unknown>) => string | undefined,
-    durableAt: (id: string) => string | undefined,
-    describe: (id: string) => string,
+    record: Record<string, unknown>,
+    actual: string,
+    description: string,
   ): PlanSubmissionFailure | undefined => {
-    if (list === undefined || !Array.isArray(list)) return undefined;
-    for (const entry of list) {
-      if (!isRecord(entry)) continue;
-      const id = identity(entry);
-      if (id === undefined) continue;
-      const actual = durableAt(id) ?? now;
-      if (entry["decidedAt"] === undefined) {
-        entry["decidedAt"] = actual;
-        continue;
-      }
-      if (entry["decidedAt"] !== actual) {
-        return {
-          code: "timestamp_mismatch",
-          message: `${describe(id)} supplies decidedAt (${JSON.stringify(entry["decidedAt"])}) but the kernel's actual is (${JSON.stringify(actual)}) — decision timestamps are kernel-owned; omit them or supply the exact actual value.`,
-        };
-      }
+    if (record["decidedAt"] === undefined) record["decidedAt"] = actual;
+    else if (record["decidedAt"] !== actual) {
+      return {
+        code: "timestamp_mismatch",
+        message: `${description} supplies decidedAt (${JSON.stringify(record["decidedAt"])}) but the kernel's actual is (${JSON.stringify(actual)}) — decision timestamps are kernel-owned; omit them or supply the exact actual value.`,
+      };
     }
     return undefined;
   };
-  const textId = (field: string) => (record: Record<string, unknown>): string | undefined =>
-    typeof record[field] === "string" && (record[field] as string).length > 0
-      ? (record[field] as string)
-      : undefined;
-  const failures = [
-    stamp(
-      copy["planningDecisions"],
-      textId("id"),
-      (id) => prior?.planningDecisions.find((candidate) => candidate.id === id)?.decidedAt,
-      (id) => `Planning decision ${id}`,
-    ),
-    stamp(
-      copy["nonNormativeSections"],
-      textId("sectionId"),
-      (id) => prior?.nonNormativeSections?.find((candidate) => candidate.sectionId === id)?.decidedAt,
-      (id) => `Non-normative section ${id}`,
-    ),
-    stamp(
-      copy["retiredRequirementIds"],
-      textId("requirementId"),
-      (id) => prior?.retiredRequirementIds?.find((candidate) => candidate.requirementId === id)?.decidedAt,
-      (id) => `Retired requirement ${id}`,
-    ),
-  ];
-  for (const failure of failures) {
-    if (failure) return { ok: false, failure };
+  for (const key of ["planningDecisions", "nonNormativeSections", "retiredRequirementIds"] as const) {
+    const list = copy[key];
+    if (!Array.isArray(list)) continue;
+    const durable = actuals.priorRevision?.[key] ?? [];
+    for (const record of list) {
+      if (!isRecord(record)) continue;
+      const match = durable.find((candidate) => isDeepStrictEqual(withoutTime(record), withoutTime(candidate as unknown as Record<string, unknown>)));
+      const failure = stamp(record, match?.decidedAt ?? actuals.createdAt, key);
+      if (failure) return { ok: false, failure };
+    }
+  }
+  const requirements = copy["requirements"];
+  if (Array.isArray(requirements)) {
+    const durable = [...(actuals.priorRevision?.requirements ?? []), ...(actuals.ledgerRequirements ?? [])];
+    for (const requirement of requirements) {
+      if (!isRecord(requirement) || !isRecord(requirement["applicability"])) continue;
+      const applicability = requirement["applicability"];
+      const disposition = applicability["disposition"];
+      if (!isRecord(disposition)) continue;
+      const basis = { ...applicability, disposition: withoutTime(disposition) };
+      const match = durable.find((candidate) => candidate.id === requirement["id"]
+        && isDeepStrictEqual(candidate.reference, requirement["reference"])
+        && candidate.applicability.disposition !== undefined
+        && isDeepStrictEqual({ ...candidate.applicability, disposition: withoutTime(candidate.applicability.disposition as unknown as Record<string, unknown>) }, basis));
+      const failure = stamp(disposition, match?.applicability.disposition?.decidedAt ?? actuals.createdAt, `Requirement ${String(requirement["id"])} applicability disposition`);
+      if (failure) return { ok: false, failure };
+    }
   }
   return { ok: true, revision: copy as unknown as ExecutionPlanRevisionWithoutDigest, derived: [] };
 }
-
 
 function linkFailure(failure: PlanSubmissionFailure): StampedPlanSubmission {
   return { ok: false, failure };

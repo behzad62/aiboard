@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { AgentMessage, AgentModel } from "./agent-contracts.js";
 import type {
   AgentProviderRetryEvent,
@@ -152,6 +153,14 @@ export function resolveWorkerTaskContract(
   if (projection.planningPolicyVersion !== 1) return undefined;
   const resolution = resolveTaskContractReference(projection, taskId);
   if (resolution.status === "current") {
+    const task = projection.tasks[taskId];
+    if (resolution.ref.taskId === taskId) {
+      const criteria = (values: readonly { id: string; text: string }[]) => values.map(({ id, text }) => ({ id, text })).sort((left, right) => left.id.localeCompare(right.id));
+      if (!task || task.objective !== resolution.contract.outcome.user
+        || !isDeepStrictEqual(criteria(task.acceptanceCriteria ?? []), criteria(resolution.contract.acceptance.criteria))) {
+        throw new WorkerContractUnavailableError(taskId, "scheduler_contract_mismatch");
+      }
+    }
     return { contract: resolution.contract, ref: resolution.ref };
   }
   throw new WorkerContractUnavailableError(taskId, resolution.status);

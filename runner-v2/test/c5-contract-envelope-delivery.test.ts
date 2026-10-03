@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,7 @@ import {
   normalizePlanSubmission,
   requiredBaseForRevision,
   validateExecutionPlanRevision,
+  validateCoverageReviewBinding,
   type ExecutionPlanRevision,
   type ExecutionPlanRevisionWithoutDigest,
   type PlanSubmissionActuals,
@@ -33,7 +35,7 @@ import { createPlanningTools } from "../src/planning-tools.js";
 import { DELIVERABLE_REVIEW_CONTEXT_LIMITS, NativeDeliverableReviewRuntime, type DeliverableReviewInputs } from "../src/native-deliverable-review.js";
 import { loadDeliverableReviewInputs, type DurableSubmission } from "../src/delivery-execution.js";
 import { ArtifactStore } from "../src/artifact-store.js";
-import { NATIVE_WORKER_CONTEXT_LIMITS } from "../src/native-worker-driver.js";
+import { NATIVE_WORKER_CONTEXT_LIMITS, resolveWorkerTaskContract, WorkerContractUnavailableError } from "../src/native-worker-driver.js";
 import {
   readyPlanIdentity,
   rebuildSchedulerProjection,
@@ -140,6 +142,7 @@ function actualsFor(runId: string, manifest: ApprovedSourceManifest): PlanSubmis
     runId,
     sourceManifestId: manifest.manifestId,
     sourceManifestDigest: manifest.artifactDigest,
+    ledgerRequirements: c5Fixture(runId).requirements,
     workflowPolicyVersion: 1,
     createdAt: CLOCK,
   };
@@ -159,6 +162,9 @@ function strippedSubmission(fixture: C5Fixture, revisionId: string): PlanSubmiss
     if (Array.isArray(records)) {
       for (const record of records) delete (record as Record<string, unknown>)["decidedAt"];
     }
+  }
+  for (const requirement of clone["requirements"] as Array<{ applicability: { disposition?: Record<string, unknown> } }>) {
+    if (requirement.applicability.disposition) delete requirement.applicability.disposition["decidedAt"];
   }
   clone["revisionId"] = revisionId;
   if (revisionId !== "revision_1") {
@@ -688,7 +694,7 @@ test("C5 omitted envelope drafts and revises through the tools with kernel stamp
   );
 });
 
-test("C5 revise carries the prior revision's recorded review/lineage binding forward", async () => {
+test("C5 revise clears prior coverage binding and preserves repair lineage for a fresh review", async () => {
   const runId = "run_c5_carry_tool";
   const fixture = c5Fixture(runId);
   const store = new MemorySchedulerStore();
@@ -717,11 +723,20 @@ test("C5 revise carries the prior revision's recorded review/lineage binding for
   }, runId);
   assert.equal(carried.isError, false, JSON.stringify(carried.error));
   const storedR2 = projectionOf(store, runId).planning!.plan!.revisionsById["revision_2"]!;
-  assert.equal(storedR2.coverageReviewId, "coverage_legacy");
+  assert.equal(storedR2.coverageReviewId, undefined);
+  const freshReview = { ...buildFixtureCoverageReview(storedR2, fixture.manifest, { runId }), id: "coverage_fresh_revision_2" };
+  const binding = validateCoverageReviewBinding(freshReview, storedR2, fixture.manifest);
+  assert.equal(binding.valid, true, JSON.stringify(binding.issues));
+  seedBoundCoverageAndReady(store, runId, {
+    revision: storedR2, manifest: fixture.manifest, review: freshReview,
+    hostCapabilities: fixture.hostCapabilities, occurredAt: CLOCK,
+  });
+  assert.equal(projectionOf(store, runId).planning!.readiness, "ready");
+  assert.equal(projectionOf(store, runId).planning!.plan!.revisionsById[boundR1.revisionId]!.digest, boundR1.digest);
   assert.equal(storedR2.repairBudgetLineageId, "lineage_legacy");
-  // A different supplied binding is refused against the carried actual.
+  // Any supplied old review binding is refused for an unevaluated revision.
   const plan = projectionOf(store, runId).planning!.plan!;
-  const rival = { ...strippedSubmission(fixture, "revision_3"), coverageReviewId: "coverage_other" } as unknown as PlanSubmissionRevision;
+  const rival = { ...strippedSubmission(fixture, "revision_3"), coverageReviewId: "coverage_legacy" } as unknown as PlanSubmissionRevision;
   const refused = await invokePlanningTool(tools, "revise_planning_plan", {
     revision: rival,
     expectedRevisionId: plan.currentRevisionId,
@@ -1526,13 +1541,30 @@ test("C5 reviewer resolves current authority before any loader or provider call"
     const result = await runtime.review({ runId, taskId: "T1" });
     assert.equal(reasonOf(result), "delivery_inputs_unavailable");
   }
-  // A reference without substance is refused.
+  // A matching reference with no loader contract is bound from durable authority.
   {
     const { runtime } = reviewWith(store, async ({ projection }) => buildInputs(projection, (inputs) => {
       delete (inputs as unknown as Record<string, unknown>)["contract"];
     }));
     const result = await runtime.review({ runId, taskId: "T1" });
-    assert.equal(reasonOf(result), "delivery_inputs_unavailable");
+    assert.equal(reasonOf(result), "delivery_identity_unavailable");
+  }
+  // Missing both optional copies cannot bypass semantic checks.
+  for (const changed of [false, true]) {
+    const { runtime } = reviewWith(store, async ({ projection }) => buildInputs(projection, (inputs) => {
+      delete inputs.contract;
+      delete inputs.contractRef;
+      if (changed) inputs.criteria = inputs.criteria.map((criterion) => ({ ...criterion, text: `${criterion.text} (edited)` }));
+    }));
+    assert.equal(reasonOf(await runtime.review({ runId, taskId: "T1" })), changed ? "delivery_inputs_unavailable" : "delivery_identity_unavailable");
+  }
+  // A supplied contract-only copy is also checked, not silently replaced.
+  {
+    const { runtime } = reviewWith(store, async ({ projection }) => buildInputs(projection, (inputs) => {
+      delete inputs.contractRef;
+      inputs.contract = { ...inputs.contract!, outcome: { ...inputs.contract!.outcome, user: "forged" } };
+    }));
+    assert.equal(reasonOf(await runtime.review({ runId, taskId: "T1" })), "delivery_inputs_unavailable");
   }
   // A superseded plan (revised but not re-readied) fails closed before
   // the loader runs at all.
@@ -1593,6 +1625,19 @@ test("C5 actual factory journey pins the current accepted contract in real worke
     "required base accepted plan revision revision_value",
     "Create src/value.mjs exporting value = 2.",
     "- c1: src/value.mjs exports value = 2 and the tests pass.",
+    "Outcome (system): The value module exports 2.",
+    "Scope includes: src/value.mjs",
+    "Scope excludes: test/value.test.mjs",
+    "Inputs: accepted plan revision",
+    "Outputs: src/value.mjs",
+    "Writable surfaces: src/value.mjs",
+    "Forbidden surfaces: test/value.test.mjs",
+    "Steps:\n1. Write the module.\n2. Run the tests.",
+    "Definition of done: Tests pass.",
+    "Targeted validation: The value test.",
+    "Affected-scope validation: The module only.",
+    "Negative proof: not applicable — A new module has no prior-incorrect case.",
+    "Cleanup: None. / Recovery: Retry. / Rollback: Revert.",
   ]) {
     assert.ok(workerText.includes(required), `real worker requests carry ${required}`);
   }
@@ -1612,10 +1657,34 @@ test("C5 actual factory journey pins the current accepted contract in real worke
   assert.ok(!obligations.includes("Unified diff"), "obligations precedes the diff");
   for (const pass of ["delivery-findings-system", "delivery-verdict-system"] as const) {
     const text = byPass.get(pass)!;
-    for (const required of ["Authoritative plan contract T1", provenance, "- c1: src/value.mjs exports value = 2 and the tests pass."]) {
+    for (const required of [
+      "Authoritative plan contract T1", provenance,
+      "- c1: src/value.mjs exports value = 2 and the tests pass.",
+      "Scope includes: src/value.mjs", "Scope excludes: test/value.test.mjs",
+      "Definition of done: Tests pass.",
+      "Review criteria:\n- Independent review confirms the value.",
+      "Integration checks:\n- Post-integration tests.",
+      "Targeted validation rationale: The value test.",
+      "Affected-scope validation rationale: The module only.",
+      "Negative proof: not applicable — A new module has no prior-incorrect case.",
+    ]) {
       assert.ok(text.includes(required), `real reviewer ${pass} carries ${required}`);
     }
     assert.ok(!text.includes("(unpinned)"), `real reviewer ${pass} is pinned`);
+  }
+  // Bind each persisted worker/reviewer manifest to the actual transport
+  // request bytes, rather than trusting its own reported digest/counts.
+  const actualMessages = [...workerRequests, ...reviewerRequests].flatMap((request) => request.messages);
+  for (const manifest of manifests.filter((entry) => entry.purpose === "worker:task" || entry.purpose.startsWith("delivery:"))) {
+    const message = actualMessages.find((entry) => entry.id === `context:${manifest.packDigest}`);
+    assert.ok(message, `${manifest.purpose} durable pack reached the actual model transport`);
+    assert.equal(typeof message.content, "string");
+    const text = message.content as string;
+    const bytes = Buffer.byteLength(text, "utf8");
+    assert.equal(createHash("sha256").update(text, "utf8").digest("hex"), manifest.packDigest);
+    assert.equal(bytes, manifest.byteLength);
+    assert.equal(Math.ceil(bytes / 4), manifest.estimatedTokens);
+    console.log(`C5 actual ${manifest.purpose}: ${bytes} B, ${manifest.estimatedTokens} estimated tokens, SHA256 ${manifest.packDigest}`);
   }
   // The durable context manifest store records the actual packs within caps.
   const workerManifests = manifests.filter((manifest) => manifest.purpose === "worker:task");
@@ -1658,5 +1727,71 @@ test("C5 required contract facts fail closed instead of truncating under caps", 
   } catch (error) {
     assert.ok(error instanceof ProtectedContextOverflowError, `expected ProtectedContextOverflowError, got ${error}`);
     assert.ok(error.requiredSectionIds.includes("task-contract"), "the contract block is protected");
+  }
+});
+
+test("C5 nested applicability decision times reuse only matching durable authorization and basis", () => {
+  const runId = "run_c5_nested_time";
+  const fixture = c5Fixture(runId);
+  const actuals = { ...actualsFor(runId, fixture.manifest), ledgerRequirements: fixture.requirements };
+  const source = fixture.requirements.find((requirement) => requirement.applicability.disposition)!;
+  assert.ok(source);
+  const submit = () => strippedSubmission(fixture, "revision_1");
+  const disposition = (revision: PlanSubmissionRevision) => revision.requirements.find((requirement) => requirement.id === source.id)!.applicability.disposition!;
+  const omitted = normalizePlanSubmission(submit(), actuals);
+  assertOk(omitted);
+  assert.equal(omitted.revision.requirements.find((requirement) => requirement.id === source.id)!.applicability.disposition!.decidedAt, source.applicability.disposition!.decidedAt);
+  for (const time of ["wrong", "", null, 42]) {
+    const revision = submit();
+    (disposition(revision) as unknown as Record<string, unknown>)["decidedAt"] = time;
+    const result = normalizePlanSubmission(revision, actuals);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.failure.code, "timestamp_mismatch");
+  }
+  const changed = submit();
+  (disposition(changed) as unknown as Record<string, unknown>)["rationale"] += " Newly decided basis.";
+  const fresh = normalizePlanSubmission(changed, actuals);
+  assertOk(fresh);
+  assert.equal(fresh.revision.requirements.find((requirement) => requirement.id === source.id)!.applicability.disposition!.decidedAt, CLOCK);
+  (disposition(changed) as unknown as Record<string, unknown>)["decidedAt"] = source.applicability.disposition!.decidedAt;
+  assert.equal(normalizePlanSubmission(changed, actuals).ok, false, "a changed decision cannot backdate itself");
+  const noApproval = submit();
+  delete (disposition(noApproval) as unknown as Record<string, unknown>)["authorizedBy"];
+  const normalized = normalizePlanSubmission(noApproval, actuals);
+  assertOk(normalized);
+  assert.equal(validateExecutionPlanRevision(buildExecutionPlanRevision(normalized.revision), fixture.manifest).valid, false);
+});
+
+test("C5 same decision id with changed semantics takes a new time and preserves history", () => {
+  const runId = "run_c5_changed_decision";
+  const fixture = c5Fixture(runId);
+  const before = JSON.stringify(fixture.revision);
+  const actuals = { ...actualsFor(runId, fixture.manifest), priorRevision: fixture.revision };
+  const omitted = normalizePlanSubmission(strippedSubmission(fixture, "revision_2"), actuals);
+  assertOk(omitted);
+  assert.equal(omitted.revision.planningDecisions[0]!.decidedAt, fixture.revision.planningDecisions[0]!.decidedAt);
+  const changed = strippedSubmission(fixture, "revision_2");
+  (changed.planningDecisions[0] as unknown as Record<string, unknown>)["description"] += " New decision.";
+  const fresh = normalizePlanSubmission(changed, actuals);
+  assertOk(fresh);
+  assert.equal(fresh.revision.planningDecisions[0]!.decidedAt, CLOCK);
+  (changed.planningDecisions[0] as unknown as Record<string, unknown>)["decidedAt"] = fixture.revision.planningDecisions[0]!.decidedAt;
+  assert.equal(normalizePlanSubmission(changed, actuals).ok, false);
+  assert.equal(JSON.stringify(fixture.revision), before);
+});
+
+test("C5 worker refuses conflicting scheduler semantic copies before context/provider admission", async () => {
+  const runId = "run_c5_worker_semantics";
+  const fixture = c5Fixture(runId);
+  const store = new MemorySchedulerStore();
+  await readyJourneyStore(runId, fixture, store);
+  const projection = projectionOf(store, runId);
+  assert.ok(resolveWorkerTaskContract(projection, "T1"));
+  for (const field of ["objective", "criteria"] as const) {
+    const changed = structuredClone(projection);
+    const task = changed.tasks["T1"]!;
+    if (field === "objective") task.objective += " stale copy";
+    else task.acceptanceCriteria = task.acceptanceCriteria!.map((criterion) => ({ ...criterion, text: `${criterion.text} stale copy` }));
+    assert.throws(() => resolveWorkerTaskContract(changed, "T1"), (error: unknown) => error instanceof WorkerContractUnavailableError && error.resolution === "scheduler_contract_mismatch");
   }
 });

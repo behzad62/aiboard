@@ -122,8 +122,8 @@ export interface DeliverableReviewInputs {
   /**
    * C5 (AR-R16): the authoritative accepted contract from durable state,
    * rendered as the required compact contract block on the findings and
-   * verdict passes. Absent only on legacy/test paths, which carry no
-   * plan contracts.
+   * verdict passes. Optional loader copies are checked against the current
+   * durable authority; review() always supplies the authoritative pair.
    */
   contract?: ExecutionTaskContract;
   /** The accepted revision/digest/task identity the contract was resolved at. */
@@ -279,7 +279,7 @@ export class NativeDeliverableReviewRuntime {
     try {
       inputs = await this.options.loadInputs({ runId: request.runId, task, projection });
       assertInputs(inputs, task);
-      assertContractAuthority(inputs, task, authority);
+      inputs = bindContractAuthority(inputs, task, authority);
     } catch (error) {
       return { status: "unavailable", reason: "delivery_inputs_unavailable", detail: message(error) };
     }
@@ -759,34 +759,20 @@ function assertInputs(inputs: DeliverableReviewInputs, task: BuildTask): void {
 }
 
 /**
- * C5 (AR-R16): the loader must carry the exact current authority
- * resolved in review() — never a historical or alternate contract —
- * and the submitted scheduler copies must agree with it. A loader that
- * carries no contract takes the legacy/test path (unchanged above); a
- * reference without substance is refused. Direct members carry the
- * contract's own objective and criterion ids/text (a same-id changed
- * text is a mismatch); kernel repair tasks keep their own durable
- * objective/criteria but still ride the exact resolved parent contract
- * and ref. Anything else is refused before any provider call, so every
- * actual reviewer pass sees consistent current authoritative criteria.
+ * Bind the current durable authority regardless of optional loader copies.
+ * Supplied copies are assertions, never alternate authority. Direct tasks'
+ * scheduler and input objective/criteria must match the accepted semantics;
+ * repair tasks keep their own durable semantics and the resolved parent ref.
  */
-function assertContractAuthority(
+function bindContractAuthority(
   inputs: DeliverableReviewInputs,
   task: BuildTask,
   authority: { readonly ref: TaskContractRef; readonly contract: ExecutionTaskContract },
-): void {
-  if (!inputs.contract && !inputs.contractRef) return;
-  if (!inputs.contract || !inputs.contractRef) {
-    throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs name an accepted contract reference without its substance.");
-  }
-  if (
-    inputs.contractRef.revisionId !== authority.ref.revisionId ||
-    inputs.contractRef.digest !== authority.ref.digest ||
-    inputs.contractRef.taskId !== authority.ref.taskId
-  ) {
+): DeliverableReviewInputs {
+  if (inputs.contractRef !== undefined && !isDeepStrictEqual(inputs.contractRef, authority.ref)) {
     throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs carry a contract reference that is not the current accepted reference.");
   }
-  if (!isDeepStrictEqual(inputs.contract, authority.contract)) {
+  if (inputs.contract !== undefined && !isDeepStrictEqual(inputs.contract, authority.contract)) {
     throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs carry a contract that is not the current accepted contract.");
   }
   const direct = authority.ref.taskId === task.id;
@@ -798,7 +784,11 @@ function assertContractAuthority(
   if (want.length === 0 || JSON.stringify(got) !== JSON.stringify(want)) {
     throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs must carry the current authoritative acceptance criteria (criterion ids and text).");
   }
-  if (direct && inputs.objective !== authority.contract.outcome.user) {
+  const schedulerCriteria = (task.acceptanceCriteria ?? []).map((criterion) => `${criterion.id}\n${criterion.text}`).sort();
+  if (direct && JSON.stringify(schedulerCriteria) !== JSON.stringify(want)) {
+    throw new DeliverableReviewInputsUnavailableError("Scheduler criteria no longer match the current authoritative contract.");
+  }
+  if (direct && (inputs.objective !== authority.contract.outcome.user || task.objective !== authority.contract.outcome.user)) {
     throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs must carry the current authoritative task objective.");
   }
   // Claims parse from the authoritative criteria above: a claim citing
@@ -811,6 +801,7 @@ function assertContractAuthority(
       throw new DeliverableReviewInputsUnavailableError("Deliverable review claims must cite the current authoritative acceptance criteria.");
     }
   }
+  return { ...inputs, contract: authority.contract, contractRef: authority.ref };
 }
 
 function section(id: string, kind: string, content: string): ContextSection {

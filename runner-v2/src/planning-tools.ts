@@ -640,17 +640,9 @@ function revisePlanTool(
 }
 
 /**
- * C5 (AR-R15): the kernel actuals a plan submission envelope is stamped
- * from — the submitting run, its current source manifest, the run's
- * planning policy version, the kernel clock, and the durable
- * review/lineage bindings. `coverageReviewId` / `repairBudgetLineageId`
- * carry the current (prior) revision's binding forward when one is
- * recorded, else authoritative absence. The live coverage review is
- * deliberately NOT used: it evaluated the prior revision, so stamping
- * its id onto a new revision would claim a binding the coverage-review
- * events cannot prove (validateCoverageReviewBinding would refuse the
- * next review). A new submission therefore never invents a review
- * binding; it only continues a recorded one.
+ * Kernel actuals at submission. The new revision has not been reviewed,
+ * so coverageReviewId is authoritatively absent. Budget lineage continues;
+ * existing semantic decision times come from durable plan/ledger records.
  */
 function submissionActuals(
   projection: SchedulerProjection,
@@ -668,42 +660,12 @@ function submissionActuals(
     sourceManifestDigest: manifest.artifactDigest,
     workflowPolicyVersion: projection.planningPolicyVersion ?? 1,
     createdAt: clock(),
-    ...(currentRevision?.coverageReviewId !== undefined
-      ? { coverageReviewId: currentRevision.coverageReviewId }
-      : {}),
+
     ...(currentRevision?.repairBudgetLineageId !== undefined
       ? { repairBudgetLineageId: currentRevision.repairBudgetLineageId }
       : {}),
-    // C5 (AR-R15): the durable decision/disposition timestamps an omitted
-    // submission timestamp stamps from — matching identity keeps its
-    // durable time, a new semantic record takes the submission time above.
-    ...(currentRevision !== undefined
-      ? {
-        priorRevision: {
-          planningDecisions: currentRevision.planningDecisions.map((decision) => ({
-            id: decision.id,
-            description: decision.description,
-            decidedAt: decision.decidedAt,
-          })),
-          ...(currentRevision.nonNormativeSections !== undefined
-            ? {
-              nonNormativeSections: currentRevision.nonNormativeSections.map((record) => ({
-                sectionId: record.sectionId,
-                decidedAt: record.decidedAt,
-              })),
-            }
-            : {}),
-          ...(currentRevision.retiredRequirementIds !== undefined
-            ? {
-              retiredRequirementIds: currentRevision.retiredRequirementIds.map((record) => ({
-                requirementId: record.requirementId,
-                decidedAt: record.decidedAt,
-              })),
-            }
-            : {}),
-        },
-      }
-      : {}),
+    ledgerRequirements: planning?.ledger?.requirements,
+    ...(currentRevision !== undefined ? { priorRevision: currentRevision } : {}),
   };
 }
 
