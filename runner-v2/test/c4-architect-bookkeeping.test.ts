@@ -1118,6 +1118,164 @@ test("C4: derived index puts terminal exhaustion before any wait or request", ()
   }
 });
 
+test("C4: derived index keeps findings and verdicts under terminal exhaustion", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c4-terminal-facts-"));
+  const runId = "run_c4_terminal_facts";
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    const fixture = fixtureWithImpact();
+    store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    seedPlanningBase(store, runId, 2);
+    appendLedger(store, runId);
+    appendReads(store, runId, fixture.manifest.sections.map((section) => section.id), "read");
+    appendDraft(store, runId);
+    const blocking = {
+      ...structuredClone(fixture.coverageReview),
+      id: "coverage_tf",
+      obligationVerdicts: fixture.coverageReview.obligationVerdicts.map((verdict) =>
+        verdict.obligationId === "obl-REQ-MANDATORY"
+          ? { ...verdict, verdict: "missing", severity: "blocking", rationale: "No task covers it." }
+          : verdict,
+      ),
+      findings: [{
+        id: "finding-tf",
+        category: "missing_coverage",
+        severity: "blocking",
+        claim: "The plan omits the mandatory obligation.",
+      }],
+    };
+    appendReviewChain(store, runId, "coverage_tf", blocking as never, "blocking");
+    const append = (
+      type: NewSchedulerEvent["type"],
+      key: string,
+      actor: NewSchedulerEvent["actor"],
+      payload: Record<string, unknown>,
+    ) => store!.append({ runId, type, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
+    append("planning.coverage_review_unavailable", "term:exhausted", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_tf",
+      reason: "coverage_review_suspended_exhausted",
+      detail: "Retry budget spent.",
+    });
+    const resume = planningOf(store, runId).resume;
+    // The owner resume/retry instruction stays the next action, while the
+    // known bound blocking verdict and the authoritative open finding ride
+    // as parallel facts - never dropped to prioritize the owner.
+    assert.ok(
+      resume.nextAction.includes("coverage_tf") && resume.nextAction.includes("owner authorization"),
+      resume.nextAction,
+    );
+    assert.equal(resume.outstandingWork[0], resume.nextAction);
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("obl-REQ-MANDATORY") && item.includes("missing")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("finding-tf")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.ok(
+      !resume.outstandingWork.some((item) => item.includes("Await coverage review")),
+      `exhaustion keeps no wait: ${JSON.stringify(resume.outstandingWork)}`,
+    );
+    assert.ok(
+      !resume.outstandingWork.includes("Request a coverage review."),
+      `exhaustion keeps no duplicate request: ${JSON.stringify(resume.outstandingWork)}`,
+    );
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("C4: derived index withholds readiness while an unavailable gate blocks", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-c4-gatedready-"));
+  const runId = "run_c4_gatedready";
+  let store: SqliteSchedulerStore | undefined;
+  try {
+    const fixture = fixtureWithImpact();
+    store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"));
+    seedPlanningBase(store, runId, 2);
+    appendLedger(store, runId);
+    appendReads(store, runId, fixture.manifest.sections.map((section) => section.id), "read");
+    appendDraft(store, runId);
+    const revision = planningOf(store, runId).plan!;
+    const append = (
+      type: NewSchedulerEvent["type"],
+      key: string,
+      actor: NewSchedulerEvent["actor"],
+      payload: Record<string, unknown>,
+    ) => store!.append({ runId, type, occurredAt: CLOCK, actor, idempotencyKey: key, payload });
+    append("planning.coverage_review_requested", "gr:request", { role: "architect", id: "architect" }, {
+      reviewId: "coverage_g",
+      planRevisionId: revision.currentRevisionId,
+      planRevisionDigest: revision.currentDigest,
+      sourceManifestId: fixture.manifest.manifestId,
+      requestedAt: CLOCK,
+    });
+    append("planning.coverage_obligations_recorded", "gr:obligations", { role: "verifier", id: "reviewer" }, {
+      reviewId: "coverage_g",
+      sourceManifestId: fixture.manifest.manifestId,
+      sourceManifestDigest: fixture.manifest.artifactDigest,
+      obligations: structuredClone(fixture.coverageReview.derivedObligations),
+      sectionCoverage: fixture.manifest.sections.map((section) => ({
+        sectionId: section.id,
+        obligationIds: fixture.coverageReview.derivedObligations.map((obligation) => obligation.id),
+      })),
+      recordedAt: CLOCK,
+    });
+    append("planning.coverage_plan_delivered", "gr:delivered", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_g",
+      planRevisionId: revision.currentRevisionId,
+      planRevisionDigest: revision.currentDigest,
+      sourceManifestId: fixture.manifest.manifestId,
+      deliveredAt: CLOCK,
+    });
+    append("planning.coverage_review_recorded", "gr:recorded", { role: "verifier", id: "reviewer" }, {
+      review: { ...structuredClone(fixture.coverageReview), id: "coverage_g" },
+    });
+    // Sanity: without a gate the passing bound review recommends readiness.
+    let resume = planningOf(store, runId).resume;
+    assert.deepEqual(resume.outstandingWork, ["Record plan readiness for passing review coverage_g."]);
+    // A current non-exempt gate blocks the kernel readiness path, so the
+    // index names the gate and withholds the readiness recommendation.
+    append("planning.coverage_review_unavailable", "gr:unavailable", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_g",
+      reason: "reviewer_unavailable",
+      detail: "No reviewer capacity.",
+    });
+    resume = planningOf(store, runId).resume;
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("Resolve unavailable coverage review (reviewer_unavailable)")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.ok(
+      !resume.outstandingWork.some((item) => item.includes("Record plan readiness")),
+      `readiness withheld while gated: ${JSON.stringify(resume.outstandingWork)}`,
+    );
+    assert.equal(resume.nextAction, "Resolve unavailable coverage review (reviewer_unavailable).");
+    // Narrow retry exception: a plan_ready_blocked gate bound to this same
+    // revision, manifest and review is a cached re-evaluation signal, so
+    // readiness stays recommended alongside it.
+    append("planning.coverage_review_unavailable", "gr:blocked", { role: "runner", id: "build-runtime" }, {
+      reviewId: "coverage_g",
+      reason: "plan_ready_blocked",
+      detail: "Readiness re-evaluation cached.",
+    });
+    resume = planningOf(store, runId).resume;
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("Resolve unavailable coverage review (plan_ready_blocked)")),
+      JSON.stringify(resume.outstandingWork),
+    );
+    assert.ok(
+      resume.outstandingWork.some((item) => item.includes("Record plan readiness for passing review coverage_g")),
+      JSON.stringify(resume.outstandingWork),
+    );
+  } finally {
+    store?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("C4: derived index drops stale gates after a plan revision", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-c4-stalegate-"));
   const runId = "run_c4_stalegate";
@@ -1878,6 +2036,7 @@ test("C4 CD-7: factory runtime plans without the checkpoint tool or docs templat
   mkdirSync(project, { recursive: true });
   mkdirSync(state, { recursive: true });
   const RUN = "run_c4_factory";
+  const COMMITTED_BASE = "COMMITTED BASE STATE - immutable base snapshot content.\n";
   const DECOY = "USER TREE DECOY — never the base snapshot.\n";
   let factory: NativeBuildFactory | undefined;
   let manager: NativeBuildManager | undefined;
@@ -1885,8 +2044,12 @@ test("C4 CD-7: factory runtime plans without the checkpoint tool or docs templat
   try {
     writeFileSync(join(project, "package.json"), JSON.stringify({ name: "c4-factory-fixture", version: "1.0.0", type: "module" }, null, 2));
     mkdirSync(join(project, "docs", "project"), { recursive: true });
-    writeFileSync(join(project, "docs", "project", "STATE.md"), DECOY);
+    writeFileSync(join(project, "docs", "project", "STATE.md"), COMMITTED_BASE);
     const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: RUN });
+    // The working tree diverges after the baseline capture: the committed
+    // STATE above is the legitimate immutable base content, while this
+    // uncommitted decoy must never ride into context.
+    writeFileSync(join(project, "docs", "project", "STATE.md"), DECOY);
     const fixture = fixtureWithImpact();
     const baseBytes = Buffer.from(C4_SOURCE_BASE_LINES.join("\n"), "utf8");
     const amendedBytes = Buffer.from(C4_SOURCE_AMENDED_TEXT, "utf8");
@@ -1973,26 +2136,28 @@ test("C4 CD-7: factory runtime plans without the checkpoint tool or docs templat
         .filter((message) => message.role === "user" && message.id.startsWith("context:"))
         .map((message) => (typeof message.content === "string" ? message.content : ""))
         .join("\n");
-    // Triage + reads + ledger with no STATE blob at the baseline revision:
-    // eligible turns carry the honestly-unavailable snapshot at the live
-    // revision. The baseline holds only user-tree bytes, so no tree content
-    // rides — only exact blob provenance does.
+    // Triage + reads + ledger against the committed baseline: eligible turns
+    // carry the committed base STATE at the live revision, labelled
+    // untrusted committed content. The working tree holds only a differing
+    // uncommitted decoy after capture, so no tree content rides - only the
+    // exact blob and its revision provenance do.
     await stepUntil("ledger persisted", (projection) => projection.planning?.ledger !== undefined);
     assert.ok(model.requests.length >= 1, "pre-snapshot turns ran");
-    let unavailableSeen = false;
+    let baseSeen = false;
     for (const request of model.requests) {
       const text = contextText(request);
       assert.ok(text.length > 0, "each turn carries a context pack");
       const exposures = countOccurrences(text, ARCHITECT_BASE_SNAPSHOT_SECTION_ID);
       assert.ok(exposures <= 1, "at most one snapshot exposure per turn");
       if (exposures === 1) {
-        unavailableSeen = true;
-        assert.ok(text.includes("unavailable"), "missing blob is labelled honestly");
+        baseSeen = true;
+        assert.ok(text.includes("COMMITTED BASE STATE"), "committed base content rides");
+        assert.ok(text.includes("UNTRUSTED"), "committed base is labelled untrusted");
         assert.ok(text.includes(baseline.revision), "live baseline revision provenance rides");
       }
-      assert.ok(!text.includes("USER TREE DECOY"), "user tree never leaks into context");
+      assert.ok(!text.includes("USER TREE DECOY"), "uncommitted user-tree decoy never leaks into context");
     }
-    assert.ok(unavailableSeen, "honest availability rides on real pre-snapshot requests");
+    assert.ok(baseSeen, "committed base rides on real pre-snapshot requests");
     // Pre-first-integration pause -> kernel stop snapshot S1 with open work.
     await manager.pause(RUN, "user", "pause:c4-first");
     const s1 = manager.events(RUN).find((event) => event.type === "project_docs.handoff_snapshot_committed")!;

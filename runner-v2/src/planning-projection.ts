@@ -916,28 +916,45 @@ function derivedOutstandingWork(
       (TERMINAL_COVERAGE_GATE_REASONS as readonly string[]).includes(gate.reason)
     ? gate
     : undefined;
-  // Terminal exhaustion (N6) pauses for the owner: only an owner-authorized
-  // resume or retry clears it. Nothing else below is actionable until the
-  // owner acts, so no wait/request/readiness follows.
-  if (terminalGate !== undefined) {
-    outstanding.push(
-      `Coverage review ${terminalGate.reviewId ?? "coverage"} exhausted (${terminalGate.reason}): resume or retry with owner authorization.`,
-    );
-    return outstanding;
-  }
-  if (boundReview !== undefined) {
+  const pushBoundBlockingVerdicts = (): void => {
+    if (boundReview === undefined) return;
     for (const verdict of boundReview.obligationVerdicts) {
       if (verdict.severity === "blocking" && (verdict.verdict === "missing" || verdict.verdict === "weakened")) {
         outstanding.push(`Resolve blocking coverage verdict for obligation ${verdict.obligationId} (${verdict.verdict}).`);
       }
     }
+  };
+  // Terminal exhaustion (N6) pauses for the owner: only an owner-authorized
+  // resume or retry clears it, so the owner instruction stays the next
+  // action while the known bound blocking verdicts and the authoritative
+  // open findings ride as parallel facts. No wait/request/readiness follows.
+  if (terminalGate !== undefined) {
+    outstanding.push(
+      `Coverage review ${terminalGate.reviewId ?? "coverage"} exhausted (${terminalGate.reason}): resume or retry with owner authorization.`,
+    );
+    pushBoundBlockingVerdicts();
+    outstanding.push(...openFindingItems);
+    return outstanding;
   }
+  pushBoundBlockingVerdicts();
   outstanding.push(...openFindingItems);
   if (gate !== undefined) {
     outstanding.push(`Resolve unavailable coverage review (${gate.reason}).`);
   }
+  // The plan_ready reducer refuses readiness under any other outstanding
+  // gate, with one narrow retry exception: a plan_ready_blocked gate bound
+  // to this same revision, manifest and review is a cached re-evaluation
+  // signal that clears when readiness lands. While any other current gate
+  // blocks, readiness is withheld, never recommended alongside it.
+  const readinessBlockedByGate = gate !== undefined &&
+    !(
+      gate.reason === "plan_ready_blocked" &&
+      gate.planRevisionId === currentRevisionId &&
+      gate.sourceManifestId === manifest.manifestId &&
+      (gate.reviewId === undefined || (boundReview !== undefined && gate.reviewId === boundReview.id))
+    );
   if (boundReview !== undefined) {
-    if (!coverageReviewHoldsReadiness(boundReview) && openFindingItems.length === 0) {
+    if (!coverageReviewHoldsReadiness(boundReview) && openFindingItems.length === 0 && !readinessBlockedByGate) {
       outstanding.push(`Record plan readiness for passing review ${boundReview.id}.`);
     }
   } else {
