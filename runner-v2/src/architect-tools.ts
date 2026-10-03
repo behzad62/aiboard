@@ -114,6 +114,13 @@ export interface ArchitectToolsOptions {
    */
   triageTools?: boolean;
   /**
+   * C4 (AR-R12): the run's durable docs policy version. Set to 2 for
+   * docs-v2 turns so write_project_doc refuses kernel-owned paths and
+   * states the anti-journaling rule. Omit (or set 1) to keep the exact v1
+   * tool behavior.
+   */
+  projectDocsPolicyVersion?: number;
+  /**
    * T9 repair cycle 1 (B3): when true, the turn also offers
    * `acknowledge_user_guidance` for inline acknowledgement of pending user
    * guidance. The runner sets it only on new-policy `plan_required` turns
@@ -385,10 +392,13 @@ function writeProjectDocTool(
   store: SchedulerStore,
   clock: () => string,
   artifacts: ArtifactStore,
+  docsV2 = false,
 ): NativeTool<WriteProjectDocInput> {
   return lifecycleTool({
     name: "write_project_doc",
-    description: "Request a project document write for docs/project/** or the marked AGENTS.md or CLAUDE.md section. Stores the content and records the request. It does not change any project file.",
+    // C4 (AR-R12): under docs v2 the description states the anti-journaling
+    // rule and the kernel-owned refusals. The v1 text below is frozen.
+    description: docsV2 ? WRITE_PROJECT_DOC_V2_DESCRIPTION : "Request a project document write for docs/project/** or the marked AGENTS.md or CLAUDE.md section. Stores the content and records the request. It does not change any project file.",
     schema: objectSchema({
       path: { type: "string", minLength: 1 },
       content: { type: "string" },
@@ -404,6 +414,16 @@ function writeProjectDocTool(
     execute: async (input, context) => {
       const denied = architectOnly(context);
       if (denied) return denied;
+      // C4 (AR-R12): under docs v2 the kernel owns STATE.md, spec copies,
+      // the marked AGENTS.md/CLAUDE.md sections and docs/project/evidence/**.
+      // The canonical path (alias/case-folded by validateProjectDocPath)
+      // decides; ordinary product docs are untouched. v1 refuses nothing new.
+      if (docsV2) {
+        const kernelOwned = kernelOwnedProjectDocRefusal(input.path);
+        if (kernelOwned !== undefined) {
+          return errorOutput("project_doc_kernel_owned", kernelOwned);
+        }
+      }
       const contentBytes = Buffer.byteLength(input.content, "utf8");
       if (contentBytes !== input.contentBytes || contentBytes > PROJECT_DOC_MAX_BYTES) {
         return errorOutput(
@@ -470,6 +490,37 @@ function writeProjectDocTool(
       };
     },
   });
+}
+
+/**
+ * C4 (AR-R12): docs-v2 write_project_doc description. States the
+ * anti-journaling rule: the kernel snapshots STATE.md itself, so the model
+ * keeps no journal and never writes kernel-owned paths.
+ */
+export const WRITE_PROJECT_DOC_V2_DESCRIPTION =
+  "Request a project document write for ordinary product docs under docs/project/**. The kernel-owned docs/project/STATE.md, docs/project/specs/** and docs/project/evidence/** paths and the marked AGENTS.md/CLAUDE.md sections are refused. Stores the content and records the request. It does not change any project file. You do not need to keep a journal: the kernel snapshots STATE.md itself.";
+
+/**
+ * C4 (AR-R12): kernel-owned project-doc paths under docs v2. Takes the
+ * canonical path from validateProjectDocPath (aliases and case variants
+ * already folded), so `agents.md` and `DOCS/PROJECT/state.md`-style inputs
+ * cannot slip past. Returns the refusal reason, or undefined for ordinary
+ * product docs. No broad filesystem policy: only these kernel paths refuse.
+ */
+export function kernelOwnedProjectDocRefusal(canonicalPath: string): string | undefined {
+  if (canonicalPath === "docs/project/STATE.md") {
+    return "docs/project/STATE.md is kernel-owned under docs policy v2: the kernel snapshots it; model writes are refused.";
+  }
+  if (canonicalPath === "AGENTS.md" || canonicalPath === "CLAUDE.md") {
+    return `${canonicalPath} is kernel-owned under docs policy v2: the kernel writes the marked section; model writes are refused.`;
+  }
+  if (canonicalPath === "docs/project/specs" || canonicalPath.startsWith("docs/project/specs/")) {
+    return "docs/project/specs/** is kernel-owned under docs policy v2: the kernel records approved-source spec copies; model writes are refused.";
+  }
+  if (canonicalPath === "docs/project/evidence" || canonicalPath.startsWith("docs/project/evidence/")) {
+    return "docs/project/evidence/** is kernel-owned under docs policy v2: evidence is recorded through evidence tools; model writes are refused.";
+  }
+  return undefined;
 }
 
 function validateWriteProjectDoc(input: unknown): ValidationResult<WriteProjectDocInput> {
@@ -624,6 +675,7 @@ export function createArchitectTools(
       options.store,
       clock,
       options.artifacts,
+      options.projectDocsPolicyVersion === 2,
     ),
   ];
 }

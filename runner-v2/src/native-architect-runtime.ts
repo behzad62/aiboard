@@ -19,8 +19,11 @@ import {
 } from "./agent-loop.js";
 import {
   REPAIR_APPROACH_DECISION_INSTRUCTIONS,
+  ARCHITECT_BASE_SNAPSHOT_SECTION_ID,
+  architectBaseSnapshotEligible,
   buildArchitectContext,
   architectContextSections,
+  type ArchitectBaseSnapshot,
   type ArchitectReviewSubmission,
   type PromptEvidence,
 } from "./agent-prompts.js";
@@ -148,6 +151,15 @@ export interface NativeArchitectRuntimeOptions {
    */
   answerCommandRevision?: string;
   execution?: OneShotCommandExecutor;
+  /**
+   * C4 (AR-R11): live base-snapshot read for docs-v2 triage/planning turns.
+   * Evaluated for each eligible context (never captured at construction):
+   * the factory captures IntegrationManager.revision at call time and reads
+   * `docs/project/STATE.md` from that immutable commit through the audited
+   * Git path. Returns undefined when no snapshot is available; content null
+   * labels an honestly missing or unreadable blob at a known revision.
+   */
+  readBaseSnapshot?: () => Promise<{ revision: string; content: string | null } | undefined>;
 }
 
 export interface ArchitectCommandWorkspaceProvider {
@@ -263,6 +275,14 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     } else {
       const recovered = await this.options.sessions.load(sessionId);
       if (recovered.checkpoint) messages = [...recovered.checkpoint.messages];
+    }
+    // C4 (AR-R11): on docs-v2 runs, earlier context packs can carry snapshot
+    // text into later requests. The fresh pack below carries the snapshot
+    // exactly once on eligible turns and never otherwise, so stale
+    // snapshot-bearing packs are dropped here. Tool results, assistant turns
+    // and every other message survive untouched; v1 runs skip this entirely.
+    if (projection.projectDocsPolicyVersion === 2) {
+      messages = filterStaleBaseSnapshotPacks(messages);
     }
     const contextMessage: AgentMessage = {
       id: `context:${context.digest}`,
@@ -704,7 +724,25 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
     projection: ReturnType<typeof rebuildSchedulerProjection>
   ) {
     const reviewSubmission = await this.reviewSubmission(request, projection);
-    const projectDocsStateText = await this.loadCommittedStateText(request.runId, projection);
+    // C4 (AR-R11): docs v2 reads the kernel snapshot at the live base
+    // revision on eligible turns only; every other policy keeps the exact
+    // legacy artifact loader below. The v1 branch is frozen.
+    const docsV2 = projection.projectDocsPolicyVersion === 2;
+    const baseSnapshot = docsV2 && architectBaseSnapshotEligible(request.reason, projection)
+      ? await this.loadBaseSnapshot()
+      : undefined;
+    // C4 (AR-R11): only a RECORDED kernel snapshot commit feeds the prompt.
+    // The live revision can be a plain baseline (user-tree bytes) before the
+    // first kernel snapshot; those bytes must never ride labeled as
+    // kernel-rendered. A recorded commit with a missing blob still renders
+    // its honest unavailable label.
+    const recordedSnapshot = baseSnapshot !== undefined &&
+      (projection.projectDocs?.snapshots ?? []).some((record) => record.commit === baseSnapshot.revision)
+      ? baseSnapshot
+      : undefined;
+    const projectDocsStateText = docsV2
+      ? undefined
+      : await this.loadCommittedStateText(request.runId, projection);
     const [instructions, metadata] = await Promise.all([
       discoverProjectInstructions({ projectRoot: this.options.projectRoot }),
       this.options.skillCatalog.discover(),
@@ -765,6 +803,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       evidence,
       recentHistory: [],
       ...(projectDocsStateText !== undefined ? { projectDocsStateText } : {}),
+      ...(recordedSnapshot !== undefined ? { baseSnapshot: recordedSnapshot } : {}),
     };
     if (!this.options.capabilityRegistry) return buildArchitectContext(input);
     return (await assembleContextWithExtensions({
@@ -787,6 +826,20 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       },
       artifacts: this.options.artifacts,
     })).pack;
+  }
+
+  /**
+   * C4 (AR-R11): read the docs-v2 base snapshot through the live factory
+   * callback. Undefined when no bridge is wired or the read fails; a null
+   * content labels an honestly missing or unreadable blob at its revision.
+   */
+  private async loadBaseSnapshot(): Promise<ArchitectBaseSnapshot | undefined> {
+    if (!this.options.readBaseSnapshot) return undefined;
+    try {
+      return await this.options.readBaseSnapshot();
+    } catch {
+      return undefined;
+    }
   }
 
   private async loadCommittedStateText(
@@ -872,6 +925,21 @@ export async function loadArchitectReviewSubmission(
         }
       : {}),
   };
+}
+
+/**
+ * C4 (AR-R11): drop recovered user context packs that carry a docs-v2 base
+ * snapshot. Only `context:*` user messages whose text holds the snapshot
+ * section marker match; tool results, assistant turns, reminders and legacy
+ * packs are preserved untouched.
+ */
+function filterStaleBaseSnapshotPacks(messages: AgentMessage[]): AgentMessage[] {
+  return messages.filter((message) =>
+    message.role !== "user" ||
+    !message.id.startsWith("context:") ||
+    typeof message.content !== "string" ||
+    !message.content.includes(ARCHITECT_BASE_SNAPSHOT_SECTION_ID)
+  );
 }
 
 export function architectInspectionWorkspace(

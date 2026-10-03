@@ -3902,6 +3902,11 @@ export class BuildRuntime {
         reason,
         sequence: projection.lastSequence,
       },
+      // C4 (AR-R12): docs-v2 turns refuse kernel-owned project-doc paths
+      // and state the anti-journaling rule. v1 turns keep exact behavior.
+      ...(projection.projectDocsPolicyVersion === 2
+        ? { projectDocsPolicyVersion: 2 as const }
+        : {}),
       ...(projection.planningPolicyVersion === 1
         ? {
             planningTools: {
@@ -5401,7 +5406,6 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "reconcile_plan",
   "record_answer",
   "record_external_blocker",
-  "record_planning_checkpoint",
   "record_repair_approach_decision",
   "record_triage",
   "request_coverage_review",

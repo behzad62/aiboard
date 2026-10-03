@@ -156,6 +156,24 @@ export const PLANNING_EVENT_TRANSITIONS: Readonly<Record<PlanningEventType, stri
   "planning.acceptance_reopened": "accepted -> reopened",
 };
 
+/**
+ * C4 (AR-R14): unproduced T2 planning event types, frozen. No `src/`
+ * producer may append one without removing its name here first — the static
+ * guard test enforces that. Declarations, actor/transition tables, reducer
+ * branches and gate sets keep naming them so old logs replay; the live
+ * assignment events and `task`/`phase.acceptance_recorded` are NOT reserved.
+ */
+export const PLANNING_RESERVED_EVENT_TYPES: readonly string[] = Object.freeze([
+  "planning.validation_intent_recorded",
+  "planning.validation_observed",
+  "planning.validation_interrupted",
+  "planning.validation_reconciled",
+  "planning.recovery_reconciled",
+  "planning.reference_recorded",
+  "planning.acceptance_recorded",
+  "planning.acceptance_reopened",
+]);
+
 export interface PlanningReferenceRecord {
   readonly kind: "gate" | "evidence" | "review" | "integration" | "worktree" | "commit" | "repair";
   readonly id: string;
@@ -392,9 +410,9 @@ export interface PlanningProjection {
    * T9 repair cycle 3 (B4-r3): sequence of the latest Architect planning
    * turn — a plan draft, plan revision, or planning checkpoint. `plan_ready`
    * is refused while the latest folded-into-planning acknowledgement
-   * postdates every such turn: the Architect must demonstrably see the
-   * folded guidance (by revising, or by recording a checkpoint reviewed
-   * against it) before the plan can go ready.
+   * postdates every such turn. C4 (AR-R13): the checkpoint tool is gone, so
+   * on new-policy runs the proof is always a plan draft or revision;
+   * checkpoint turns persist only in replayed history.
    */
   readonly lastPlanningTurnSequence?: number;
   /** T3b: recorded blind obligations (record-before-verdict) by review id. */
@@ -743,34 +761,68 @@ function cloneProjection(projection: PlanningProjection): PlanningProjection {
   return structuredClone(projection);
 }
 
+/**
+ * C4 (AR-R13): the derived resume/inventory index. Covered and remaining
+ * sections come from verified read receipts at the CURRENT manifest
+ * revision — never from model prose. Completed contracts, outstanding work
+ * and the next action come from the actual ledger, plan and review state:
+ * the persisted ledger completes the ledger contract, each durable plan
+ * revision completes a planning contract (a new revision is the
+ * planning-turn proof), and open review verdicts/findings plus an
+ * unavailable review drive outstanding work. Old checkpoint records stay
+ * stored and replayable but no longer feed this index.
+ */
 function resumeIndex(projection: PlanningProjection): PlanningResumeIndex {
   const manifest = projection.source.manifestsById[projection.source.currentManifestId];
-  const latest = projection.checkpoints.at(-1);
-  const currentSectionDigests = new Map(manifest.sections.map((section) => [section.id, section.digest]));
-  const covered = new Set<string>();
-  for (const record of projection.checkpoints) {
-    for (const sectionId of record.checkpoint.coveredSourceSectionIds) {
-      if (record.sectionDigests[sectionId] === currentSectionDigests.get(sectionId)) covered.add(sectionId);
-    }
-  }
-  const remaining = manifest.sections.map((section) => section.id).filter((id) => !covered.has(id));
-  const coveredIds = [...covered];
-  const outstandingWork = latest?.checkpoint.remainingWork.length
-    ? [...latest.checkpoint.remainingWork]
-    : remaining.map((sectionId) => `Cover source section ${sectionId}.`);
+  const reads = projection.sourceReadIndex[manifest.manifestId] ?? {};
+  const coveredIds = manifest.sections
+    .filter((section) => reads[section.id] === section.digest)
+    .map((section) => section.id);
+  const remaining = manifest.sections
+    .filter((section) => reads[section.id] !== section.digest)
+    .map((section) => section.id);
+  const completedPlanningContractIds = [
+    ...(projection.ledger ? ["requirement-ledger"] : []),
+    ...(projection.plan ? projection.plan.revisionHistoryIds : []),
+  ];
+  const outstandingWork = derivedOutstandingWork(projection, remaining);
   return {
     coveredSourceSectionIds: coveredIds,
     remainingSourceSectionIds: remaining,
     ...(remaining[0] === undefined ? {} : { nextSourceSectionId: remaining[0] }),
-    completedPlanningContractIds: [...(latest?.checkpoint.completedPlanningContractIds ?? [])],
+    completedPlanningContractIds,
     outstandingWork,
-    nextAction: latest?.checkpoint.nextAction ??
-      (!projection.ledger
-        ? "Persist the requirement ledger."
-        : remaining[0] === undefined
-          ? "Draft the execution plan."
-          : `Cover source section ${remaining[0]}.`),
+    nextAction: outstandingWork[0] ??
+      (projection.readiness === "ready" ? "The plan is ready." : "Request a coverage review."),
   };
+}
+
+/** C4 (AR-R13): outstanding planning work from ledger, plan and review state. */
+function derivedOutstandingWork(
+  projection: PlanningProjection,
+  remaining: readonly string[],
+): string[] {
+  if (!projection.ledger) return ["Persist the requirement ledger."];
+  const outstanding = remaining.map((sectionId) => `Cover source section ${sectionId}.`);
+  if (!projection.plan) {
+    outstanding.push("Draft the execution plan.");
+    return outstanding;
+  }
+  const review = projection.coverageReview;
+  for (const verdict of review?.obligationVerdicts ?? []) {
+    if (verdict.severity === "blocking" && (verdict.verdict === "missing" || verdict.verdict === "weakened")) {
+      outstanding.push(`Resolve blocking coverage verdict for obligation ${verdict.obligationId} (${verdict.verdict}).`);
+    }
+  }
+  for (const finding of review?.findings ?? []) {
+    if (finding.severity === "blocking" && finding.disposition?.resolution !== "plan_reconciled") {
+      outstanding.push(`Resolve blocking coverage finding ${finding.id} (${finding.category}).`);
+    }
+  }
+  if (projection.coverageUnavailable) {
+    outstanding.push(`Resolve unavailable coverage review (${projection.coverageUnavailable.reason}).`);
+  }
+  return outstanding;
 }
 
 function withResume(projection: PlanningProjection): PlanningProjection {

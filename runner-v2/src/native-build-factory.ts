@@ -1038,6 +1038,30 @@ export class NativeBuildFactory {
       // baseline, since answered runs have no integration revision yet.
       answerCommandRevision: integrationManager.revision,
       execution: commandExecution,
+      // C4 (AR-R11): live base-snapshot read for docs-v2 triage/planning
+      // turns. The revision is captured HERE, at each eligible context —
+      // never at factory construction — through the audited Git read path
+      // with case guards. No user-tree or unbound-HEAD read: only the
+      // immutable blob at the manager's current revision. A missing or
+      // unreadable blob reports null content at its revision (honestly
+      // unavailable); a read failure reports no snapshot at all.
+      readBaseSnapshot: async () => {
+        let revision: string;
+        try {
+          revision = integrationManager.revision;
+        } catch {
+          return undefined;
+        }
+        try {
+          const stored = await integrationManager.readHandoffSnapshotFile({
+            commit: revision,
+            path: "docs/project/STATE.md",
+          });
+          return { revision, content: stored.content };
+        } catch {
+          return undefined;
+        }
+      },
     });
     const verifierWorkspaceProvider = {
       workspaceKind: "independent-verifier" as const,

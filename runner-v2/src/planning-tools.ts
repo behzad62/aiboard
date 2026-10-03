@@ -8,11 +8,9 @@ import type { ArtifactStore } from "./artifact-store.js";
 import {
   buildExecutionPlanRevision,
   validateExecutionPlanRevision,
-  validatePlanningCheckpoint,
   validateRequirementLedger,
   type ExecutionPlanPhase,
   type ExecutionPlanRevisionWithoutDigest,
-  type PlanningCheckpoint,
   type SourceRequirement,
   type SourceSectionDisposition,
 } from "./planning-contracts.js";
@@ -35,8 +33,10 @@ import { createRequestCoverageReviewTool } from "./planning-review.js";
  *
  * These tools drive T2's planning events for a NEW-POLICY run
  * (planningPolicyVersion 1): bounded section-by-section source reads,
- * skeleton-ledger persistence before task generation, planning checkpoints,
- * and plan draft/revise. Every tool validates with T1's validators and
+ * skeleton-ledger persistence before task generation, plan draft/revise,
+ * and coverage review requests. C4 derives the resume index from the
+ * durable read index and plan/review state instead of recording planning
+ * checkpoints. Every tool validates with T1's validators and
  * appends through T2's events — there is no second authority. The scheduler
  * reducer re-validates everything; tool-side checks only produce clearer
  * errors earlier.
@@ -54,7 +54,6 @@ export const PLANNING_TOOL_NAMES = Object.freeze([
   "draft_planning_plan",
   "persist_planning_ledger",
   "read_planning_source_section",
-  "record_planning_checkpoint",
   "request_coverage_review",
   "revise_planning_plan",
 ]);
@@ -89,10 +88,6 @@ interface PersistLedgerInput {
   nonNormativeSections?: readonly SourceSectionDisposition[];
 }
 
-interface RecordCheckpointInput {
-  checkpoint: PlanningCheckpoint;
-}
-
 interface DraftPlanInput {
   revision: ExecutionPlanRevisionWithoutDigest;
 }
@@ -120,7 +115,6 @@ export function createPlanningTools(
   return [
     readSourceSectionTool(options.store, readSource, clock),
     persistLedgerTool(options.store, clock),
-    recordCheckpointTool(options.store, clock),
     draftPlanTool(options.store, clock),
     revisePlanTool(options.store, clock),
     createRequestCoverageReviewTool({ store: options.store, clock }),
@@ -142,7 +136,7 @@ function readSourceSectionTool(
       "Read one approved-source section in full over the manifest's complete section inventory, " +
       "or list the inventory when sectionId is omitted. Bounded: a section larger than the byte " +
       "cap is refused, never truncated. A full verified read appends a durable read record that " +
-      "record_planning_checkpoint requires before the section counts as covered.",
+      "the derived resume index counts as covered; the inventory listing exposes the full derived index.",
     schema: {
       type: "object",
       properties: {
@@ -183,8 +177,10 @@ function readSourceSectionTool(
           `Source read cites manifest ${input.manifestId}, but the current manifest is ${manifest.manifestId}.`,
         );
       }
-      // Inventory listing: the complete trusted section inventory plus durable
-      // read progress, with no content. The Architect reads every section.
+      // Inventory listing: the complete trusted section inventory plus the
+      // derived resume index (covered and remaining sections, completed
+      // contracts, outstanding work, next action), with no content. The
+      // Architect reads every section.
       if (input.sectionId === undefined) {
         return {
           content: [{
@@ -206,6 +202,9 @@ function readSourceSectionTool(
               ...(planning.resume.nextSourceSectionId !== undefined
                 ? { nextSourceSectionId: planning.resume.nextSourceSectionId }
                 : {}),
+              completedPlanningContractIds: [...planning.resume.completedPlanningContractIds],
+              outstandingWork: [...planning.resume.outstandingWork],
+              nextAction: planning.resume.nextAction,
             },
           }],
           isError: false,
@@ -409,118 +408,7 @@ function persistLedgerTool(
   });
 }
 
-function recordCheckpointTool(
-  store: SchedulerStore,
-  clock: () => string,
-): NativeTool<RecordCheckpointInput> {
-  return lifecycleTool({
-    name: "record_planning_checkpoint",
-    description:
-      "Record a planning checkpoint: covered source sections, completed contracts, remaining work, " +
-      "and next action. A section counts as covered only when this run's read tool actually read it " +
-      "in full against the current manifest; an unread or truncated section is refused.",
-    schema: {
-      type: "object",
-      properties: {
-        checkpoint: {
-          type: "object",
-          properties: {
-            id: { type: "string", minLength: 1 },
-            coveredSourceSectionIds: { type: "array", items: { type: "string" } },
-            completedPlanningContractIds: { type: "array", items: { type: "string" } },
-            remainingWork: { type: "array", items: { type: "string" } },
-            nextAction: { type: "string", minLength: 1 },
-            recordedAt: { type: "string", minLength: 1 },
-          },
-          required: [
-            "id",
-            "coveredSourceSectionIds",
-            "completedPlanningContractIds",
-            "remainingWork",
-            "nextAction",
-            "recordedAt",
-          ],
-          additionalProperties: false,
-        },
-      },
-      required: ["checkpoint"],
-      additionalProperties: false,
-    },
-    validate: (input) =>
-      validateObject(input, (value) => {
-        if (!isRecord(value.checkpoint) || !nonEmpty(value.checkpoint.id)) return null;
-        return { checkpoint: value.checkpoint as unknown as PlanningCheckpoint };
-      }, "checkpoint with an id is required."),
-    execute: async (input, context) => {
-      const denied = architectOnly(context);
-      if (denied) return denied;
-      const projection = rebuildSchedulerProjection(store.readRun(context.runId));
-      if (projection.planningPolicyVersion !== 1 || !projection.planning) {
-        return errorOutput(
-          "planning_not_configured",
-          "Planning checkpoints require a new-policy run with a registered approved source.",
-        );
-      }
-      const triage = triageBuildRequired(projection);
-      if (triage) return triage;
-      const planning = projection.planning;
-      if (!planning.ledger) {
-        return errorOutput(
-          "ledger_required",
-          "Planning checkpoints require the persisted requirement ledger first.",
-        );
-      }
-      const checkpointValidation = validatePlanningCheckpoint(input.checkpoint);
-      if (!checkpointValidation.valid) {
-        return errorOutput(
-          "invalid_planning_checkpoint",
-          `Planning checkpoint is invalid: ${checkpointValidation.issues.map((issue) => issue.message).join(" ")}`,
-          checkpointValidation.issues.map((issue) => issue.message),
-        );
-      }
-      const manifest = planning.source.manifestsById[planning.source.currentManifestId];
-      const knownSections = new Map(manifest.sections.map((section) => [section.id, section.digest]));
-      const unknown = input.checkpoint.coveredSourceSectionIds.filter(
-        (id) => !knownSections.has(id),
-      );
-      if (unknown.length > 0) {
-        return errorOutput(
-          "unknown_manifest_section",
-          `Planning checkpoint covers unknown source section(s): ${unknown.join(", ")}.`,
-        );
-      }
-      // T3b (N2): the receipt check is a durable projection check. Every
-      // covered section needs a full verified read recorded at the current
-      // manifest revision — reads survive restart, so no re-read is needed.
-      const durableReads = planning.sourceReadIndex[manifest.manifestId] ?? {};
-      const missing = input.checkpoint.coveredSourceSectionIds.filter(
-        (id) => durableReads[id] !== knownSections.get(id),
-      );
-      if (missing.length > 0) {
-        return errorOutput(
-          "unread_source_section",
-          `Planning checkpoint counts unread source section(s) as covered: ${missing.join(", ")}. ` +
-            "Read each section in full through read_planning_source_section first.",
-        );
-      }
-      return appendEvent(store, {
-        runId: context.runId,
-        type: "planning.checkpoint_recorded",
-        occurredAt: clock(),
-        actor: { role: "architect", id: context.actor.id },
-        idempotencyKey: `planning-checkpoint:${input.checkpoint.id}`,
-        payload: {
-          checkpoint: structuredClone(input.checkpoint),
-        },
-      }, {
-        type: "architect_action",
-        action: "plan_created",
-        referenceId: input.checkpoint.id,
-      });
-    },
-  });
-}
-
+// C4 (AR-R13): record_planning_checkpoint is removed from the new-policy surface. The resume index is derived from the durable read index and plan/review state; old checkpoint events still reduce and replay. No replacement bookkeeping tool.
 function draftPlanTool(
   store: SchedulerStore,
   clock: () => string,

@@ -1268,8 +1268,10 @@ function answeredRunReadiness(projection: SchedulerProjection): string[] {
  * before the guidance, plus an evidence-free ack, would ready an unchanged
  * plan that never reflects it. Returns the refusal reason, or undefined when
  * no folded acknowledgement exists (legacy and pre-T9 runs are untouched) or
- * when the bound review was requested after the acknowledgement and an
- * Architect planning turn (draft, revision, or checkpoint) postdates it too.
+ * when the bound review was requested after the acknowledgement and a new
+ * plan revision postdates it too. C4 (AR-R13): the checkpoint tool is gone,
+ * so every tool-driven post-fold turn is a plan draft or revision; recorded
+ * checkpoint turns still reduce (replay) without a tool behind them.
  * The same gate covers the re-planning window after a ready plan drops back
  * to not-ready: any stale binding or missing post-fold turn refuses again.
  */
@@ -1288,10 +1290,12 @@ function foldedGuidancePlanReadyBlocked(current: SchedulerProjection): string | 
   }
   const turnSequence = planning?.lastPlanningTurnSequence ?? 0;
   if (turnSequence <= folded.sequence) {
-    return "Plan readiness is refused: no Architect planning turn (plan draft, plan revision, " +
-      `or planning checkpoint) was recorded after user guidance ${folded.guidanceId} ` +
-      "was acknowledged as folded_into_planning; revise the plan or record a checkpoint " +
-      "reviewed against the guidance, then request a new coverage review.";
+    // C4 (AR-R13): a new plan revision is the planning-turn proof. The
+    // checkpoint tool is gone, so the refusal no longer offers a checkpoint.
+    return "Plan readiness is refused: no Architect planning turn (a new plan revision) " +
+      `was recorded after user guidance ${folded.guidanceId} ` +
+      "was acknowledged as folded_into_planning; draft or revise the plan against " +
+      "the guidance, then request a new coverage review.";
   }
   return undefined;
 }
