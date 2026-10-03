@@ -196,6 +196,7 @@ import { TypeScriptIntelligence } from "./typescript-intelligence.js";
 import { SchedulerVerifierVerdictAuthority } from "./verifier-verdict-authority.js";
 import { WorkspaceManager } from "./workspace-manager.js";
 import { VerificationWorkspaceManager } from "./verification-workspace.js";
+import { verifyHandoffSnapshotDigest } from "./handoff-snapshot.js";
 import { createChildEnvironmentFactory } from "./child-environment.js";
 import {
   createExecutionGrantAuthority,
@@ -662,12 +663,31 @@ export class NativeBuildFactory {
     constructionResources.add("integration_workspace", () => integrationManager.cleanup());
     await integrationManager.initialize();
     await this.options.runtimeConstructionHooks?.afterAcquire?.("integration_workspace");
+    const docsV2 = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).projectDocsPolicyVersion === 2;
+    const snapshotVerificationOptions = docsV2 ? {
+      validateCanonicalState: async (input: { targetRevision: string; canonicalRevision: string }) =>
+        validateKernelSnapshotVerificationAdvance({
+          ...input,
+          projection: rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)),
+          integrationManager,
+          execute: requireGitRunner(gitContext).lifecycle("verification").run,
+        }),
+    } : {};
+    const verificationRevisionSource = docsV2 ? {
+      get revision(): string {
+        const revision = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).integrationRevision;
+        if (!revision) throw new Error("Final verification requires the authoritative canonical revision.");
+        return revision;
+      },
+    } : integrationManager;
     initializationStage = "verification_workspace";
     const verificationWorkspace = new VerificationWorkspaceManager({
       execute: requireGitRunner(gitContext).lifecycle("verification").run,
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
+      integrationManager: verificationRevisionSource,
+      ...snapshotVerificationOptions,
     });
     constructionResources.add("verification_workspace", () => verificationWorkspace.cleanup());
     await this.options.runtimeConstructionHooks?.afterAcquire?.("verification_workspace");
@@ -677,7 +697,9 @@ export class NativeBuildFactory {
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
+      ...(!docsV2 ? { integrationManager } : {}),
       kind: "independent-verifier",
+      ...snapshotVerificationOptions,
     });
     // Every caller pins the exact scheduler-derived target revision, so no
     // live-tip default: after a kernel snapshot the tip is a snapshot, not
@@ -687,6 +709,7 @@ export class NativeBuildFactory {
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
+      ...(!docsV2 ? { integrationManager } : {}),
       kind: "independent-verifier",
       workspaceSuffix: "architect-commands",
     });
@@ -727,6 +750,7 @@ export class NativeBuildFactory {
       repositoryRoot: integrationManager.path,
       stateDirectory: this.options.stateDirectory,
       runId: spec.runId,
+      ...(!docsV2 ? { integrationManager } : {}),
       kind: "independent-verifier",
       workspaceSuffix: "baseline",
     });
@@ -1484,19 +1508,30 @@ export class NativeBuildFactory {
     // must compare against the canonical value to stay exact.
     const canonicalIntegrationRevision = (): string =>
       rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).integrationRevision ?? "";
+    const assertCurrentVerificationGeneration = (input: { generationId: string; targetRevision: string }): void => {
+      if (!docsV2) return;
+      const projection = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
+      const generation = projection.finalVerification?.current;
+      if (!projection.integrationRevision || projection.integrationRevision !== input.targetRevision ||
+          generation?.generationId !== input.generationId || generation.targetRevision !== input.targetRevision) {
+        throw new Error("Final verification generation does not match the authoritative canonical revision.");
+      }
+    };
     const finalVerificationDriver: FinalVerificationCheckDriver = {
       executeCheck: async (input) => {
         // C3c/F1: pin the workspace to the scheduler-authorized generation
         // target. The shared manager resolves the live physical tip, which
         // kernel snapshots advance mid-verification; remaining checks must
         // still execute on the exact canonical revision.
-        const generationWorkspace = new VerificationWorkspaceManager({
+        assertCurrentVerificationGeneration(input);
+        const generationWorkspace = docsV2 ? new VerificationWorkspaceManager({
           execute: requireGitRunner(gitContext).lifecycle("verification").run,
           repositoryRoot: integrationManager.path,
           stateDirectory: this.options.stateDirectory,
           runId: spec.runId,
           targetRevision: input.targetRevision,
-        });
+          ...snapshotVerificationOptions,
+        }) : verificationWorkspace;
         const verification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
           workspaceManager: generationWorkspace,
@@ -1509,7 +1544,7 @@ export class NativeBuildFactory {
           ambientNodeOptions: ambientNodeOptions(),
           ...policyTempRecorders(),
           checkCategory: input.category,
-          currentIntegrationRevision: () => canonicalIntegrationRevision() || input.targetRevision,
+          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return docsV2 ? canonicalIntegrationRevision() : integrationManager.revision; },
           managedProcessService: this.liveManagedProcesses(),
           managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
           browserBackend: this.browserBackend,
@@ -1575,15 +1610,17 @@ export class NativeBuildFactory {
           }
           return { status: "unsupported", note: `Flaky rerun cannot filter ${command.label}: only node --test commands (direct or the package test script) support failing-test selection.` };
         }
+        assertCurrentVerificationGeneration(input);
         const rerunVerification = new FinalVerificationRuntime({
           git: requireGitRunner(gitContext).lifecycle("verification").run,
-          workspaceManager: new VerificationWorkspaceManager({
+          workspaceManager: docsV2 ? new VerificationWorkspaceManager({
             execute: requireGitRunner(gitContext).lifecycle("verification").run,
             repositoryRoot: integrationManager.path,
             stateDirectory: this.options.stateDirectory,
             runId: spec.runId,
             targetRevision: input.targetRevision,
-          }),
+            ...snapshotVerificationOptions,
+          }) : verificationWorkspace,
           artifacts: this.artifacts,
           evidenceStore,
           runId: input.runId,
@@ -1594,7 +1631,7 @@ export class NativeBuildFactory {
           ...(testNamePattern !== undefined ? { testNamePattern } : {}),
           ...policyTempRecorders(),
           checkCategory: "tests",
-          currentIntegrationRevision: () => canonicalIntegrationRevision() || input.targetRevision,
+          currentIntegrationRevision: () => { assertCurrentVerificationGeneration(input); return docsV2 ? canonicalIntegrationRevision() : integrationManager.revision; },
           managedProcessService: this.liveManagedProcesses(),
           managedProcessAuthority: { executionGrants, permissionProfile: spec.permissionProfile },
           browserBackend: this.browserBackend,
@@ -3984,4 +4021,45 @@ function deliveryProbeFileSystem(workspacePath: string): MutationFileSystem {
     cleanupDisposableCopy: () => undefined,
     join: (root, path) => join(root, path),
   };
+}
+
+
+/** Verify the exact linear kernel snapshot chain against durable, tree-bound receipts. */
+export async function validateKernelSnapshotVerificationAdvance(input: {
+  targetRevision: string;
+  canonicalRevision: string;
+  projection: SchedulerProjection;
+  integrationManager: IntegrationManager;
+  execute: import("./git-repository.js").GitRunner;
+}): Promise<void> {
+  const { projection, integrationManager, targetRevision, canonicalRevision } = input;
+  const refuse = (): never => { throw new Error("Canonical checkout revision changed without exact kernel snapshot authority."); };
+  if (projection.projectDocsPolicyVersion !== 2 || !projection.integrationRevision || projection.integrationRevision !== targetRevision) refuse();
+  if (canonicalRevision === targetRevision) return;
+  const ancestor = await input.execute({ cwd: integrationManager.path, args: ["merge-base", "--is-ancestor", targetRevision, canonicalRevision], allowFailure: true });
+  if (ancestor.exitCode !== 0) refuse();
+  const history = await input.execute({ cwd: integrationManager.path, args: ["log", "--reverse", "--format=%H%x00%P%x00", `${targetRevision}..${canonicalRevision}`] });
+  const fields = history.stdout.split("\0");
+  let parent = targetRevision;
+  let count = 0;
+  for (let index = 0; index + 1 < fields.length; index += 2) {
+    const commit = fields[index]!.trim();
+    if (!commit) continue;
+    const parents = fields[index + 1]!.trim();
+    const matches = (projection.projectDocs?.snapshots ?? []).filter((record) => record.commit === commit);
+    if (matches.length !== 1 || parents !== parent || matches[0]!.parent !== parent) refuse();
+    const receipt = matches[0]!;
+    let audited = await integrationManager.findHandoffSnapshotCommit({ snapshotKey: `stop-snapshot:${receipt.stopSequence}` });
+    if (!audited || audited.commit !== commit) audited = await integrationManager.findHandoffSnapshotCommit({ snapshotKey: `handoff-snapshot:${receipt.stopSequence}` });
+    if (!audited || audited.commit !== commit || audited.parent !== parent) refuse();
+    const stored = await integrationManager.readHandoffSnapshotFile({ commit, path: "docs/project/STATE.md" });
+    if (JSON.stringify([...stored.paths].sort()) !== JSON.stringify([...receipt.paths].sort())) refuse();
+    if (receipt.bodyDigest) {
+      if (!stored.content || !verifyHandoffSnapshotDigest(stored.content) ||
+          !stored.content.split(/\r?\n/)[0]!.endsWith(`body_sha256: ${receipt.bodyDigest}`)) refuse();
+    } else if (!receipt.stateSkippedReason) refuse();
+    parent = commit;
+    count += 1;
+  }
+  if (count === 0 || parent !== canonicalRevision) refuse();
 }

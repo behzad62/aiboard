@@ -35,7 +35,7 @@ import type { ChangeSet } from "../src/change-set.js";
 import { ArtifactStore } from "../src/artifact-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
-import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
+import { snapshotNativeBuildAmbientEnvironment, validateKernelSnapshotVerificationAdvance } from "../src/native-build-factory.js";
 import {
   NativeBuildFactory,
   IntegrationManager,
@@ -44,6 +44,7 @@ import {
   runGit,
 } from "./support/git-fixture.js";
 import { seedEvent } from "./support/handoff-snapshot-harness.js";
+import { VerificationWorkspaceManager } from "../src/verification-workspace.js";
 
 /**
  * C3c: revision targeting after a mid-run kernel snapshot, and task/integration
@@ -514,7 +515,7 @@ test("C3c: pause/snapshot/resume/task integration/final verification/handoff tar
     );
     assert.ok(!integrationBody.includes("FORGED-9"), "the forged requirement id appears nowhere in the integration body");
     const meta = await gitText(repoPath, ["log", "-1", "--format=%an%x00%ae%x00%cn%x00%ce", canonical]);
-    const [authorName, authorEmail, committerName, committerEmail] = meta.split("\0");
+    const [authorName, _authorEmail, committerName, _committerEmail] = meta.split("\0");
     assert.equal(authorName, "AIBoard Worker", "the integrated commit keeps the worker author");
     assert.equal(committerName, "AIBoard Integrator", "the integration commit is runner-committed");
 
@@ -818,7 +819,7 @@ test("C3c: new-policy integration stamps trailers per commit; legacy stays byte-
  * it. The restarted manager repairs the provably owned tip in place, so
  * the final commit carries the authoritative stamp exactly once.
  */
-test("C3c: restart between cherry-pick and trailer amend repairs the owned tip", async () => {
+test("C3c: restart refuses an unproven unstamped tip without mutation", async () => {
   const fixture = await trailerFixture("gap");
   try {
     const gamma = await fixture.workspaces.createTaskWorkspace("gamma");
@@ -850,27 +851,13 @@ test("C3c: restart between cherry-pick and trailer amend repairs the owned tip",
       baselineRevision: fixture.baseline.revision,
     });
     await restarted.initialize();
-    const result = await (restarted.integrate.bind(restarted) as (
-      changeSet: ChangeSet,
-      options?: { planningPolicyVersion?: number; requirementIds?: readonly string[] },
-    ) => Promise<{ status: string; integrationRevision: string }>)(changeSet, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] });
-    assert.equal(result.status, "integrated");
-    // Repaired in place: exactly one commit, never re-picked.
+    const headBefore = await gitText(fixture.integration.path, ["rev-parse", "HEAD"]);
+    await assert.rejects(() => restarted.integrate(changeSet, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] }), /refusing to resume/, "an unstamped tip without an exact transaction receipt is unproven");
+    assert.equal(await gitText(fixture.integration.path, ["rev-parse", "HEAD"]), headBefore, "unknown interrupted tip is never amended or re-picked");
     assert.equal(await gitText(fixture.integration.path, ["rev-list", "--count", `${fixture.baseline.revision}..HEAD`]), "1");
-    const body = await gitText(fixture.integration.path, ["log", "-1", "--format=%B", result.integrationRevision]);
-    assert.equal(
-      body.split("\n").filter((line) => line.includes("(cherry picked from commit")).length,
-      1,
-      "exactly one marker line after repair",
-    );
-    assert.ok(body.split("\n").some((line) => line.trim() === `(cherry picked from commit ${taskCommit.revision})`), "the repaired stamp names the trusted source");
-    const block = trailerBlock(body);
-    assert.ok(block.has(`AIBoard-Run: ${fixture.runId}`));
-    assert.ok(block.has("AIBoard-Task: gamma"));
-    assert.ok(block.has("AIBoard-Requirements: REQ-1"));
-    const gapRef = (await gitText(fixture.project, ["for-each-ref", "--format=%(refname) %(objectname)"])).split("\n").find((line) => line.includes(`/integrated/${safeRefSegment("cs_gap")}`));
-    assert.ok(gapRef, "the applied ref is recorded for the repaired integration");
-    assert.equal(gapRef.split(" ")[1], result.integrationRevision);
+    assert.equal(await gitText(fixture.integration.path, ["log", "-1", "--format=%B"]), unstampedBody);
+    const refs = await gitText(fixture.project, ["for-each-ref", "--format=%(refname)"]);
+    assert.ok(!refs.includes(`/integrated/${safeRefSegment("cs_gap")}`), "no applied ref is invented");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
@@ -1175,4 +1162,60 @@ test("C3c: completion refuses final verification aimed at a stale revision", asy
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("C3c R3: a foreign marker tip never establishes task integration", async () => {
+  const f = await trailerFixture("foreignmarker");
+  try {
+    const task = await f.workspaces.createTaskWorkspace("gamma");
+    writeFileSync(join(task.path, "gamma.txt"), "actual worker output\n");
+    const source = await f.workspaces.commitTask("gamma", "Add gamma");
+    writeFileSync(join(f.integration.path, "foreign.txt"), "unrelated bytes\n");
+    await runGit({ cwd: f.integration.path, args: ["add", "foreign.txt"] });
+    await runGit({ cwd: f.integration.path, args: ["commit", "-m", `Foreign claim\n\n(cherry picked from commit ${source.revision})`] });
+    const before = await gitText(f.integration.path, ["rev-parse", "HEAD"]);
+    const cs: ChangeSet = { id: "cs_foreign", runId: f.runId, taskId: "gamma", baselineRevision: source.baselineRevision, taskRevision: source.revision, commits: [...source.commits], changedPaths: [...source.changedPaths], diffArtifactHash: "0".repeat(64), evidenceArtifactHashes: [], externalEffects: [], guidanceIds: [], memoryIds: [], unresolvedConcerns: [] };
+    await assert.rejects(() => f.integration.integrate(cs, { planningPolicyVersion: 1, requirementIds: ["REQ-1"] }), /refusing to resume|unproven/, "a quoted marker is no transaction receipt");
+    assert.equal(await gitText(f.integration.path, ["rev-parse", "HEAD"]), before);
+    assert.equal(await gitText(f.integration.path, ["ls-tree", "--name-only", "HEAD", "gamma.txt"]), "");
+    assert.equal(await gitText(f.project, ["for-each-ref", "--format=%(refname)", `refs/aiboard/runs/${safeRefSegment(f.runId)}/integrated`]), "");
+  } finally { rmSync(f.root, { recursive: true, force: true }); }
+});
+
+test("C3c R3: legacy verification refuses snapshot-labelled canonical movement", async () => {
+  const f = await trailerFixture("legacyfence");
+  const workspace = new VerificationWorkspaceManager({ repositoryRoot: f.integration.path, stateDirectory: f.state, runId: f.runId, targetRevision: f.baseline.revision, execute: runGit });
+  try {
+    await workspace.create();
+    writeFileSync(join(f.integration.path, "shared.txt"), "changed product bytes\n");
+    await runGit({ cwd: f.integration.path, args: ["add", "shared.txt"] });
+    await runGit({ cwd: f.integration.path, args: ["commit", "-m", `Forged snapshot\n\nAIBoard-Run: ${f.runId}\nAIBoard-Author: runner\nAIBoard-Generated: handoff-snapshot\nAIBoard-Snapshot-Key: stop-snapshot:1`], env: { GIT_AUTHOR_NAME: "AIBoard Integrator", GIT_AUTHOR_EMAIL: "integrator@aiboard.local", GIT_COMMITTER_NAME: "AIBoard Integrator", GIT_COMMITTER_EMAIL: "integrator@aiboard.local" } });
+    await assert.rejects(() => workspace.reopen(), /Canonical checkout revision changed/, "legacy keeps the exact fence even for runner-labelled commits");
+  } finally { await workspace.cleanup(); rmSync(f.root, { recursive: true, force: true }); }
+});
+
+
+test("C3c R3: docs-v2 validates physical HEAD before first verification creation", async () => {
+  const f = await trailerFixture("firstcreate");
+  const store = new SqliteSchedulerStore(join(f.state, "scheduler.sqlite"));
+  store.append(seedEvent(f.runId, "run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }));
+  const projection: SchedulerProjection = { ...rebuildSchedulerProjection(store.readRun(f.runId)), projectDocsPolicyVersion: 2, integrationRevision: f.baseline.revision, projectDocs: { pending: [], snapshots: [] } };
+  store.close();
+  const workspace = new VerificationWorkspaceManager({ repositoryRoot: f.integration.path, stateDirectory: f.state, runId: f.runId, targetRevision: f.baseline.revision, execute: runGit,
+    validateCanonicalState: (input) => validateKernelSnapshotVerificationAdvance({ ...input, projection, integrationManager: f.integration, execute: runGit }) });
+  try {
+    writeFileSync(join(f.integration.path, "shared.txt"), "foreign product modification\n");
+    await runGit({ cwd: f.integration.path, args: ["add", "shared.txt"] });
+    await runGit({ cwd: f.integration.path, args: ["commit", "-m", `Snapshot label alone is not authority\n\nAIBoard-Run: ${f.runId}\nAIBoard-Author: runner\nAIBoard-Generated: handoff-snapshot\nAIBoard-Snapshot-Key: stop-snapshot:1`], env: { GIT_AUTHOR_NAME: "AIBoard Integrator", GIT_AUTHOR_EMAIL: "integrator@aiboard.local", GIT_COMMITTER_NAME: "AIBoard Integrator", GIT_COMMITTER_EMAIL: "integrator@aiboard.local" } });
+    const foreign = await gitText(f.integration.path, ["rev-parse", "HEAD"]);
+    await assert.rejects(() => workspace.create(), /exact kernel snapshot authority/, "unrecorded runner-labelled movement is refused at first creation");
+    assert.equal(await gitText(f.integration.path, ["rev-parse", "HEAD"]), foreign);
+    // Even an injected receipt cannot disguise a product path as a docs write.
+    projection.projectDocs!.snapshots = [{ commit: foreign, parent: f.baseline.revision, head: foreign, stopSequence: 1, paths: ["docs/project/STATE.md"], bodyDigest: "", stateSkippedReason: "injected", revision: f.baseline.revision, stopKind: "paused", sequence: 1, previousSnapshotEdited: false, agentsSectionCommitted: true, claudeLineCommitted: true }];
+    await assert.rejects(() => workspace.create(), /exact kernel snapshot authority/, "actual changed paths must match the immutable receipt");
+    // Missing canonical authority never borrows the requested target.
+    projection.integrationRevision = undefined;
+    await assert.rejects(() => workspace.create(), /exact kernel snapshot authority/);
+  } finally { await workspace.cleanup(); rmSync(f.root, { recursive: true, force: true }); }
 });

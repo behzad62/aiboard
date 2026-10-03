@@ -182,51 +182,6 @@ function isAuthoritativeIntegrationBody(
   );
 }
 
-/** The last non-empty message line carrying a cherry-pick marker, if any. */
-function lastMarkerLine(body: string): string | null {
-  const lines = body.split(/\r?\n/);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]!;
-    if (line.trim() === "") continue;
-    return CHERRY_PICK_LINE_PATTERN.test(line) ? line.trim() : null;
-  }
-  return null;
-}
-
-/**
- * Whether a commit is a legitimate kernel-only handoff snapshot for a run:
- * fully runner-authored, carrying the snapshot trailers for that run, with
- * no cherry-pick line and no task trailer. An integrated worker commit can
- * never satisfy this (its cherry-pick line and task trailer exclude it),
- * and a forged snapshot claim without the runner identity is not enough.
- */
-export function isKernelHandoffSnapshotCommit(input: {
-  authorName: string;
-  authorEmail: string;
-  committerName: string;
-  committerEmail: string;
-  body: string;
-  runId: string;
-}): boolean {
-  if (
-    input.authorName !== RUNNER_IDENTITY.GIT_AUTHOR_NAME ||
-    input.authorEmail !== RUNNER_IDENTITY.GIT_AUTHOR_EMAIL ||
-    input.committerName !== RUNNER_IDENTITY.GIT_COMMITTER_NAME ||
-    input.committerEmail !== RUNNER_IDENTITY.GIT_COMMITTER_EMAIL
-  ) {
-    return false;
-  }
-  const block = commitTrailerBlock(input.body);
-  return (
-    block.has(`AIBoard-Run: ${input.runId}`) &&
-    block.has("AIBoard-Author: runner") &&
-    block.has("AIBoard-Generated: handoff-snapshot") &&
-    [...block].some((line) => line.startsWith("AIBoard-Snapshot-Key: ")) &&
-    !CHERRY_PICK_LINE_PATTERN.test(input.body) &&
-    ![...block].some((line) => line.startsWith("AIBoard-Task:"))
-  );
-}
-
 /** Kernel handoff snapshot commit (docs policy v2, C2a: STATE.md only). */
 export interface HandoffSnapshotCommitRequest {
   writes: readonly ProjectDocWrite[];
@@ -732,8 +687,8 @@ export class IntegrationManager {
 
       // F2: bounded recovery over the owned prefix (new-policy only). A
       // restart after a stamped prefix resumes exactly at the gap without
-      // duplicating changes; an interrupted unstamped tip is repaired in
-      // place; anything ambiguous is refused. Legacy keeps text-only reuse.
+      // duplicating changes; an interrupted unstamped tip is refused without mutation;
+      // anything ambiguous is refused. Legacy keeps text-only reuse.
       let prefixCount = 0;
       if (newPolicy) {
         const recovered = await this.recoverOwnedIntegrationPrefix(changeSet, trustedRequirementIds);
@@ -807,7 +762,9 @@ export class IntegrationManager {
           };
         }
       } else {
-        // C3c: one commit at a time so every cherry-picked commit carries
+        // C3c: stage one source patch, then publish one fully stamped commit.
+        // No unstamped HEAD is published between pick and trailer creation.
+        // Every integrated commit carries
         // the authoritative runner trailers (from the trusted ready-plan
         // contract, never worker text). A mid-loop failure resets to the
         // pre-integration revision, preserving the legacy atomicity fence.
@@ -817,7 +774,7 @@ export class IntegrationManager {
         for (const revision of changeSet.commits.slice(prefixCount)) {
           const cherryPick = await this.execute({
             cwd: this.path,
-            args: ["cherry-pick", "-x", revision],
+            args: ["cherry-pick", "--no-commit", revision],
             env: RUNNER_IDENTITY,
             allowFailure: true,
           });
@@ -848,7 +805,8 @@ export class IntegrationManager {
               conflictPaths,
             };
           }
-          const picked = (await this.git(this.path, ["log", "-1", "--format=%B", "HEAD"])).stdout;
+          const picked = (await this.git(this.path, ["log", "-1", "--format=%B", revision])).stdout;
+          const author = (await this.git(this.path, ["log", "-1", "--format=%an <%ae>", revision])).stdout.trim();
           const stamped = stampIntegrationTrailers(picked, {
             runId: changeSet.runId,
             taskId: changeSet.taskId,
@@ -857,7 +815,7 @@ export class IntegrationManager {
           });
           const amend = await this.execute({
             cwd: this.path,
-            args: ["commit", "--amend", "-m", stamped],
+            args: ["commit", "--author", author, "-m", stamped],
             env: RUNNER_IDENTITY,
             allowFailure: true,
           });
@@ -4069,10 +4027,8 @@ export class IntegrationManager {
 
   /**
    * Bounded recovery over the owned prefix. Returns the longest validated
-   * stamped prefix (possibly complete). Repairs an interrupted unstamped
-   * tip in place when it is provably ours (it is HEAD with no descendants,
-   * the tree is clean, no sequencer is active, and its real marker names
-   * the next source). Refuses anything ambiguous instead of duplicating
+   * stamped prefix (possibly complete). Never repairs an unstamped tip from message claims alone: without a
+   * durable exact transaction receipt it is unproven. Refuses ambiguity instead of duplicating
    * changes or silently accepting them.
    */
   private async recoverOwnedIntegrationPrefix(
@@ -4108,38 +4064,6 @@ export class IntegrationManager {
       }
     }
     if (downstream.size > 0) {
-      const headRevision = await this.head();
-      const head = rest[rest.length - 1]!;
-      const next = sources[count]!;
-      if (
-        downstream.size === 1 &&
-        downstream.has(count) &&
-        head.revision === headRevision &&
-        !this.isOwnedStampedCommit(head, changeSet, requirementIds, next) &&
-        lastMarkerLine(head.body) === `(cherry picked from commit ${next})`
-      ) {
-        // The interrupted pick is the tip with no descendants: amend the
-        // authoritative stamp in place (tree proven clean, no sequencer).
-        const stamped = stampIntegrationTrailers(head.body, {
-          runId: changeSet.runId,
-          taskId: changeSet.taskId,
-          requirementIds,
-          sourceRevision: next,
-        });
-        const amend = await this.execute({
-          cwd: this.path,
-          args: ["commit", "--amend", "-m", stamped],
-          env: RUNNER_IDENTITY,
-          allowFailure: true,
-        });
-        if (amend.exitCode !== 0) {
-          throw new Error(
-            `Change set ${changeSet.id} trailer stamp failed: ${amend.stderr.trim()}`
-          );
-        }
-        this.currentRevision = await this.head();
-        return { prefixCount: count + 1, prefixRevision: this.currentRevision };
-      }
       throw new Error(
         `Change set ${changeSet.id} has unexpected downstream integration commits after its owned prefix; refusing to resume.`
       );
