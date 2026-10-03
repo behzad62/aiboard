@@ -7,6 +7,7 @@ import type {
 } from "./scheduler-store.js";
 import {
   assertApprovedSourceManifest,
+  assertManifestMatchesBytes,
   buildSourceManifest,
   computeArtifactDigest,
   validateApprovedSourceManifest,
@@ -100,6 +101,11 @@ export function validateApprovedSourceInput(
   input: unknown,
 ): ValidatedApprovedSource {
   if (!isRecord(input)) fail("Approved source must be an object.");
+  for (const key of Object.keys(input)) {
+    if (key !== "version" && key !== "approval" && key !== "bytesBase64" && key !== "mediaType" && key !== "encoding" && key !== "sections") {
+      fail(`Approved source has an unknown field: ${key}.`);
+    }
+  }
   if (input.version !== 1) fail("Approved source version must be 1.");
   if (input.approval !== "approved_spec") {
     fail("Approved source requires explicit approval 'approved_spec'.");
@@ -173,6 +179,11 @@ function normalizeSourceSections(
   let expectedNext = 0;
   for (const entry of sections) {
     if (!isRecord(entry)) fail("Approved source section must be an object.");
+    for (const key of Object.keys(entry)) {
+      if (key !== "id" && key !== "title" && key !== "startByte" && key !== "endByte") {
+        fail(`Approved source section has an unknown field: ${key}.`);
+      }
+    }
     const { id, title, startByte, endByte } = entry as {
       id: unknown;
       title: unknown;
@@ -277,14 +288,101 @@ export function buildApprovedSourceManifest(input: {
     encoding: input.validated.encoding,
     sections: input.validated.sections,
   });
+  const approver =
+    input.approvedBy === undefined
+      ? T7A_APPROVED_SOURCE_ACTOR_ID
+      : validateApproverName(input.approvedBy);
   return buildSourceManifest(input.validated.bytes, input.validated.sections, {
     manifestId,
     sourceId,
     mediaType: input.validated.mediaType,
     encoding: input.validated.encoding,
-    authority: `user:${input.approvedBy ?? T7A_APPROVED_SOURCE_ACTOR_ID}`,
+    authority: `user:${approver}`,
     createdAt: input.createdAt,
   });
+}
+
+/**
+ * Reads the authenticated user id out of a kernel manifest authority
+ * (`user:<id>`). Anything else � missing prefix, empty id, non-user
+ * provenance � is refused; callers must never silently fall back to a
+ * default approver.
+ */
+export function parseApprovedSourceAuthority(authority: string, manifestId: string): string {
+  if (typeof authority !== "string" || !authority.startsWith("user:")) {
+    throw new Error(
+      `Approved source ${manifestId} carries no authenticated user approval authority.`,
+    );
+  }
+  const id = authority.slice("user:".length);
+  if (!id || /[\s:]/.test(id)) {
+    throw new Error(
+      `Approved source ${manifestId} carries an invalid approval authority.`,
+    );
+  }
+  return id;
+}
+
+/**
+ * Validates an approver name for the typed preparation seam. The value comes
+ * from the authenticated route (never request bytes); malformed values are
+ * refused before any effect.
+ */
+export function validateApproverName(approvedBy: unknown): string {
+  if (typeof approvedBy !== "string" || !approvedBy || /[\s:]/.test(approvedBy)) {
+    throw new Error("Approved-source approver must be a non-empty name without whitespace or colons.");
+  }
+  return approvedBy;
+}
+
+/**
+ * Enforces the supported initial-source rules over actually stored bytes and
+ * the manifest layout: supported media/encoding, decoded size bound, valid
+ * UTF-8, and section boundaries on UTF-8 character boundaries. Original bytes
+ * (BOM, newlines) are never transcoded or truncated.
+ */
+export function assertSupportedInitialSourceBytes(
+  bytes: Uint8Array,
+  manifest: ApprovedSourceManifest,
+): void {
+  if (
+    manifest.mediaType !== "text/plain" &&
+    manifest.mediaType !== "text/markdown"
+  ) {
+    throw new Error(
+      `Approved source ${manifest.manifestId} mediaType ${manifest.mediaType} is not supported for initial provisioning.`,
+    );
+  }
+  if (manifest.encoding !== T7A_SUPPORTED_SOURCE_ENCODING) {
+    throw new Error(
+      `Approved source ${manifest.manifestId} encoding ${manifest.encoding} is not supported for initial provisioning.`,
+    );
+  }
+  if (bytes.length > T7A_MAX_APPROVED_SOURCE_BYTES) {
+    throw new Error(
+      `Approved source ${manifest.manifestId} exceeds the ${T7A_MAX_APPROVED_SOURCE_BYTES}-byte decoded limit.`,
+    );
+  }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error(
+      `Approved source ${manifest.manifestId} bytes are not valid UTF-8.`,
+    );
+  }
+  for (const section of manifest.sections) {
+    for (const boundary of [section.startByte, section.endByte]) {
+      try {
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          bytes.subarray(0, boundary),
+        );
+      } catch {
+        throw new Error(
+          `Approved source ${manifest.manifestId} section ${section.id} boundary does not fall on a UTF-8 character boundary.`,
+        );
+      }
+    }
+  }
 }
 
 /**
@@ -297,6 +395,7 @@ export function verifyPreparedApprovedSource(input: {
   runId: string;
   manifest: ApprovedSourceManifest;
   storedBytes: Uint8Array;
+  createdAt: string;
 }): void {
   assertApprovedSourceManifest(input.manifest);
   if (input.manifest.amendment) {
@@ -304,6 +403,14 @@ export function verifyPreparedApprovedSource(input: {
       "A prepared build spec carries the initial approved source only; amendments travel as planning events.",
     );
   }
+  assertSupportedInitialSourceBytes(input.storedBytes, input.manifest);
+  assertManifestMatchesBytes(input.manifest, input.storedBytes);
+  if (input.manifest.createdAt !== input.createdAt) {
+    throw new Error(
+      `Approved source ${input.manifest.manifestId} is not bound to the saved spec creation time.`,
+    );
+  }
+  parseApprovedSourceAuthority(input.manifest.authority, input.manifest.manifestId);
   if (computeArtifactDigest(input.storedBytes) !== input.manifest.artifactDigest) {
     throw new Error(
       `Approved source ${input.manifest.manifestId} does not match the stored artifact bytes (source drift).`,
@@ -367,7 +474,13 @@ export function ensurePlanningProvisioningPrefix(
   },
   clock: () => string = () => new Date().toISOString(),
 ): { mode: PlanningProvisioningMode } {
-  if (spec.planningPolicy?.version !== 1) return { mode: "legacy" };
+  if (spec.planningPolicy?.version !== 1) {
+    const prior = store.readRun(spec.runId);
+    if (prior.some((event) => event.type === "planning.policy_configured")) {
+      fail("Planning provisioning refuses a policy downgrade: a run without the explicit planningPolicy version 1 opt-in cannot recover against a recorded planning.policy_configured prefix.");
+    }
+    return { mode: "legacy" };
+  }
   const events = store.readRun(spec.runId);
   if (events.length === 0) {
     appendDocsPolicy(store, spec.runId, clock());
@@ -376,7 +489,7 @@ export function ensurePlanningProvisioningPrefix(
     return { mode: "provisioned" };
   }
   const [docs, init, planning, ...rest] = events;
-  assertProvisioningDocsEvent(docs);
+  assertProvisioningDocsEvent(docs, spec.runId);
   if (init === undefined) {
     if (rest.length > 0) fail("Planning provisioning refuses an ambiguous scheduler prefix.");
     appendRunInitialized(store, spec, clock());
@@ -389,7 +502,7 @@ export function ensurePlanningProvisioningPrefix(
     appendPlanningPolicy(store, spec.runId, clock());
     return { mode: "provisioned" };
   }
-  assertProvisioningPlanningEvent(planning);
+  assertProvisioningPlanningEvent(planning, spec.runId);
   return { mode: "reused" };
 }
 
@@ -440,13 +553,18 @@ function appendPlanningPolicy(
   });
 }
 
-function assertProvisioningDocsEvent(event: SchedulerEvent | undefined): void {
+function assertProvisioningDocsEvent(event: SchedulerEvent | undefined, runId: string): void {
   if (
     !event ||
+    event.runId !== runId ||
+    event.sequence !== 1 ||
     event.type !== "project_docs.policy_configured" ||
     event.actor.role !== "runner" ||
+    event.actor.id !== "build-runtime" ||
+    event.idempotencyKey !== DOCS_POLICY_KEY ||
     !isRecord(event.payload) ||
-    event.payload.version !== 2
+    event.payload.version !== 2 ||
+    Object.keys(event.payload).length !== 1
   ) {
     fail(
       "Planning provisioning refuses a non-matching scheduler prefix: a new-policy run cannot recover against a legacy or foreign prefix.",
@@ -456,29 +574,38 @@ function assertProvisioningDocsEvent(event: SchedulerEvent | undefined): void {
 
 function assertProvisioningInitEvent(
   event: SchedulerEvent,
-  spec: { readonly objective?: string },
+  spec: { readonly runId: string; readonly objective?: string },
 ): void {
   if (
+    event.runId !== spec.runId ||
+    event.sequence !== 2 ||
     event.type !== "run.initialized" ||
     event.actor.role !== "runner" ||
+    event.actor.id !== "build-runtime" ||
+    event.idempotencyKey !== RUN_INITIALIZED_KEY ||
     !isRecord(event.payload)
   ) {
     fail("Planning provisioning refuses a non-matching scheduler prefix.");
   }
-  const objective = (event.payload as Record<string, unknown>).objective;
-  if (
-    typeof objective === "string" &&
-    spec.objective !== undefined &&
-    objective !== spec.objective
-  ) {
-    fail("Planning provisioning refuses a scheduler prefix for a different objective.");
+  const payload = event.payload as Record<string, unknown>;
+  const keys = Object.keys(payload);
+  if (spec.objective !== undefined) {
+    if (keys.length !== 1 || payload.objective !== spec.objective || typeof payload.objective !== "string") {
+      fail("Planning provisioning refuses a scheduler prefix for a different objective.");
+    }
+  } else if (keys.length !== 0) {
+    fail("Planning provisioning refuses a scheduler prefix carrying an objective the saved request does not have.");
   }
 }
 
-function assertProvisioningPlanningEvent(event: SchedulerEvent): void {
+function assertProvisioningPlanningEvent(event: SchedulerEvent, runId: string): void {
   if (
+    event.runId !== runId ||
+    event.sequence !== 3 ||
     event.type !== "planning.policy_configured" ||
     event.actor.role !== "runner" ||
+    event.actor.id !== "build-runtime" ||
+    event.idempotencyKey !== PLANNING_POLICY_KEY ||
     !isRecord(event.payload) ||
     event.payload.version !== 1 ||
     Object.keys(event.payload).length !== 1
@@ -510,6 +637,13 @@ export function registerApprovedSource(
   if (manifest.amendment) {
     fail("The first source registration cannot be an amendment.");
   }
+  const authorityId = parseApprovedSourceAuthority(manifest.authority, manifest.manifestId);
+  if (approvedBy !== authorityId) {
+    fail(
+      `Planning source registration actor ${approvedBy} does not match the manifest approval authority ${manifest.authority}; approval is never manufactured on recovery.`,
+    );
+  }
+  const expectedKey = `source-registered:${manifest.manifestId}`;
   const existing = store
     .readRun(runId)
     .filter((event) => event.type === "planning.source_registered");
@@ -518,6 +652,8 @@ export function registerApprovedSource(
     const recorded = (existing[0]!.payload as Record<string, unknown>).manifest;
     if (
       existing[0]!.actor.role !== "user" ||
+      existing[0]!.actor.id !== authorityId ||
+      existing[0]!.idempotencyKey !== expectedKey ||
       JSON.stringify(recorded) !== JSON.stringify(manifest)
     ) {
       fail("Planning source cannot be registered twice.");
@@ -528,11 +664,28 @@ export function registerApprovedSource(
     runId,
     type: "planning.source_registered",
     occurredAt: manifest.createdAt,
-    actor: { role: "user", id: approvedBy },
-    idempotencyKey: `source-registered:${manifest.manifestId}`,
+    actor: { role: "user", id: authorityId },
+    idempotencyKey: expectedKey,
     payload: { manifest: JSON.parse(JSON.stringify(manifest)) as Record<string, unknown> },
   });
   return { mode: "registered" };
+}
+
+/**
+ * Fail-closed validation of the typed preparation seam itself: unknown
+ * option keys are refused and the approver name is validated before any
+ * capability, artifact, or save effect.
+ */
+export function validateProvisioningPrepareOptions(
+  options: ProvisioningPrepareOptions | undefined,
+): void {
+  if (options === undefined) return;
+  for (const key of Object.keys(options)) {
+    if (key !== "approvedSourceInput" && key !== "approvedBy") {
+      throw new Error(`Provisioning preparation has an unknown option: ${key}.`);
+    }
+  }
+  if (options.approvedBy !== undefined) validateApproverName(options.approvedBy);
 }
 
 /**
@@ -550,11 +703,7 @@ export interface ProvisioningPrepareOptions {
  * (`user:<id>`). Never accepts an external actor field as trusted.
  */
 export function approvedSourceApprover(manifest: ApprovedSourceManifest): string {
-  const authority = manifest.authority;
-  if (authority.startsWith("user:") && authority.length > "user:".length) {
-    return authority.slice("user:".length);
-  }
-  return T7A_APPROVED_SOURCE_ACTOR_ID;
+  return parseApprovedSourceAuthority(manifest.authority, manifest.manifestId);
 }
 
 export interface StableProvisioningRequest {

@@ -62,7 +62,7 @@ import {
   projectIndependentVerifierObservability,
 } from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
-import { cloneBuildSpec, type NativeBuildSpec } from "./build-spec.js";
+import { cloneBuildSpec, validateBuildSpec, type NativeBuildSpec } from "./build-spec.js";
 import {
   assertManifestMatchesBytes,
   computeArtifactDigest,
@@ -73,8 +73,10 @@ import {
   ensurePlanningProvisioningPrefix,
   registerApprovedSource,
   validateApprovedSourceInput,
+  validateProvisioningPrepareOptions,
   verifyPreparedApprovedSource,
   type ProvisioningPrepareOptions,
+  type ValidatedApprovedSource,
 } from "./native-planning-provisioner.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
@@ -399,6 +401,19 @@ export class NativeBuildFactory {
     options?: ProvisioningPrepareOptions,
   ): Promise<NativeBuildSpec> {
     if (this.closed) throw new Error("Native Build factory is closed.");
+    validateProvisioningPrepareOptions(options);
+    let validated: ValidatedApprovedSource | undefined;
+    if (options?.approvedSourceInput !== undefined) {
+      if (spec.planningPolicy?.version !== 1) {
+        throw new Error("An approved source requires explicit planningPolicy version 1 opt-in; refusing to change the run default.");
+      }
+      if (spec.approvedSource !== undefined) {
+        throw new Error(
+          "Specify either raw approved-source bytes or a prepared approvedSource manifest, not both.",
+        );
+      }
+      validated = validateApprovedSourceInput(options.approvedSourceInput);
+    }
     const config = this.capabilitiesConfig();
     const prepared = {
       ...cloneBuildSpec(spec),
@@ -408,18 +423,14 @@ export class NativeBuildFactory {
         { commandSearchDirectory: this.options.projectRoot, environment: this.options.executionHost?.filteredEnvironmentSource() ?? {} },
       ),
     };
-    if (options?.approvedSourceInput === undefined) return prepared;
-    if (prepared.planningPolicy?.version !== 1) {
-      throw new Error("An approved source requires explicit planningPolicy version 1 opt-in; refusing to change the run default.");
-    }
-    const validated = validateApprovedSourceInput(options.approvedSourceInput);
+    if (validated === undefined) return prepared;
     const artifactDigest = computeArtifactDigest(validated.bytes);
     await this.artifacts.put(validated.bytes, validated.mediaType, `approved-source:${spec.runId}`);
     const manifest = buildApprovedSourceManifest({
       runId: spec.runId,
       validated,
       artifactDigest,
-      ...(options.approvedBy !== undefined ? { approvedBy: options.approvedBy } : {}),
+      ...(options?.approvedBy !== undefined ? { approvedBy: options.approvedBy } : {}),
       createdAt: spec.createdAt,
     });
     return { ...prepared, approvedSource: manifest };
@@ -437,6 +448,7 @@ export class NativeBuildFactory {
   async create(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle> {
     if (this.closed) throw new Error("Native Build factory is closed.");
     await this.closeIncompleteConstructionResources();
+    validateBuildSpec(spec);
     if (!spec.capabilityContract) {
       throw new Error("Native Build runtime requires a Runner-prepared capability contract.");
     }
@@ -640,8 +652,12 @@ export class NativeBuildFactory {
     // opening scheduler storage and before any factory consumer reads
     // planning/docs policy or creates run integration/context resources.
     // Legacy specs (no planningPolicy) pass through untouched.
-    ensurePlanningProvisioningPrefix(schedulerStore, spec);
     if (spec.approvedSource !== undefined) {
+      if (spec.planningPolicy?.version !== 1) {
+        throw new Error(
+          "Build spec approvedSource requires explicit planningPolicy version 1 opt-in.",
+        );
+      }
       let storedBytes: Uint8Array;
       try {
         storedBytes = await this.artifacts.get(spec.approvedSource.artifactDigest);
@@ -655,7 +671,11 @@ export class NativeBuildFactory {
         runId: spec.runId,
         manifest: spec.approvedSource,
         storedBytes,
+        createdAt: spec.createdAt,
       });
+    }
+    ensurePlanningProvisioningPrefix(schedulerStore, spec);
+    if (spec.approvedSource !== undefined) {
       registerApprovedSource(
         schedulerStore,
         spec.runId,

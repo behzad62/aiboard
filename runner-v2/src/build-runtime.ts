@@ -1578,6 +1578,16 @@ export class BuildRuntime {
       // the ready plan identity exists. A requested coverage review is driven
       // here; otherwise the Architect plans. (T9: triage precedes all of
       // this — the planning tools and events refuse until triage is `build`.)
+      // T7a: a build-triaged run without a registered approved source pauses
+      // for the owner before any planning effect. The run never invents an
+      // approved manifest from the objective and never spins Architect turns
+      // waiting for one: exactly one bounded pause asks for source approval.
+      if (
+        projection.planningTriageDecision === "build" &&
+        projection.planning?.source?.currentManifestId === undefined
+      ) {
+        return this.pauseForMissingApprovedSource();
+      }
       if (!readyPlanIdentity(projection)) {
         const coverage = await this.advanceCoverageReview(projection);
         if (coverage) return coverage;
@@ -4664,6 +4674,21 @@ export class BuildRuntime {
    * the owner's normal resume re-drives the retry (and clears a terminal
    * N6 gate — see resumeInternal).
    */
+  private pauseForMissingApprovedSource(): BuildStepResult {
+    this.store.append({
+      runId: this.runId,
+      type: "run.paused",
+      occurredAt: this.clock(),
+      actor: { role: "runner", id: "build-runtime" },
+      idempotencyKey: `planning-source-missing:${this.projection().lastSequence}`,
+      payload: {
+        reason: "planning_source_missing",
+        detail: "This run opted into evidence-gated planning without an approved source. Approve the specification bytes to continue; the run cannot plan from the objective alone.",
+      },
+    });
+    return { status: "paused", action: "planning_source_missing" };
+  }
+
   private pauseForCoverageGate(reviewId: string, reason: string): BuildStepResult {
     this.store.append({
       runId: this.runId,

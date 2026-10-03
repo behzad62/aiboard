@@ -12,7 +12,7 @@ import type {
   BuildControlPlane,
   UserGuidanceControlInput,
 } from "./build-runtime-registry.js";
-import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
+import { validateBuildSpec, type BuildSpecStore, type NativeBuildSpec } from "./build-spec.js";
 import {
   stableProvisioningRequestsMatch,
   type ProvisioningPrepareOptions,
@@ -124,8 +124,11 @@ interface NativeBuildHandleShutdownState {
 function readExistingBuildSpec(specs: BuildSpecStore, runId: string): NativeBuildSpec | undefined {
   try {
     return specs.get(runId);
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (error instanceof Error && error.message === `Unknown Build spec ${runId}.`) {
+      return undefined;
+    }
+    throw error;
   }
 }
 
@@ -295,6 +298,7 @@ export class NativeBuildManager implements BuildControlPlane {
     options?: ProvisioningPrepareOptions,
   ): Promise<SchedulerProjection> {
     return await this.serialized(async () => {
+      validateBuildSpec(spec);
       const existing = readExistingBuildSpec(this.options.specs, spec.runId);
       if (existing) {
         if (
