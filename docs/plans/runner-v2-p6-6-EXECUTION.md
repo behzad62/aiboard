@@ -376,7 +376,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   `delivery.review_started`, the boundary and `task.acceptance_recorded`. Depends: T7a-INV (and T7a-OK
   if the default changes). Touch: run creation, provisioning, `native-build-factory.ts`. P: yes
   (production defaults). G: no.
-- [ ] **T7b** code — SOURCE: SRC-A "T7b", SRC-P T7, FX-2 review r2 F1. DoD: authenticated, idempotent
+- [ ] **T7b** code — IN_PROGRESS 2026-10-03, isolated `.worktrees/p66-t7b`, branch `codex/p66-t7b`, accepted T7a source `e9b5a79b` / docs base `65d8ffdc`; sole Muse Spark medium implementation, fresh GPT-6.1 Sol high independent reviewer. Authenticated source/amendment/current-ready explicit-start/export controls and exact selection requirement API/client parity; only dedicated packet tests plus static checks, full/broad coverage deferred T8. Owner opt-in/default-off preserved; separate D6 choice remains T7c. SOURCE: SRC-A "T7b", SRC-P T7, FX-2 review r2 F1. DoD: authenticated, idempotent
   source, plan-readiness and explicit-start controls; a stale reconnect cannot start an old plan; an
   unauthorized user or worker cannot mutate acceptance; on-demand export API through C1; verifier and
   Architect selection answers name the requirement they answer and a stale answer is refused. Depends:
