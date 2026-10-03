@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { ARCHITECT_PROJECT_DOC_WRITE_LINE } from "../src/agent-prompts.js";
+import { DEFAULT_STATE_TEMPLATE } from "../src/project-docs.js";
 
 import type {
   AgentModel,
@@ -85,6 +88,24 @@ const BUILD_RUN = "run-phase-c-exit-build";
 const ANSWER_RUN = "run-phase-c-exit-answer";
 const CLOCK = "2026-09-25T00:00:00.000Z";
 const SOURCE_TEXT = "SECTION 1: MANDATORY. The value module must export the value 2.";
+/** Exact fixture files, including ignored/untracked bytes, without Git internals. */
+function fileFingerprint(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  const walk = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory).sort()) {
+      if (entry === ".git") continue;
+      const absolute = join(directory, entry);
+      const path = prefix ? `${prefix}/${entry}` : entry;
+      const stat = lstatSync(absolute);
+      if (stat.isSymbolicLink()) files[path] = `symlink:${readlinkSync(absolute)}`;
+      else if (stat.isDirectory()) walk(absolute, path);
+      else files[path] = createHash("sha256").update(readFileSync(absolute)).digest("hex");
+    }
+  };
+  walk(root, "");
+  return files;
+}
+
 const LOW_CONTENT = "export const value = 2;\n";
 const VALUE_TEST = "import test from 'node:test'; import assert from 'node:assert/strict'; import { value } from '../src/value.mjs'; test('value', () => assert.equal(value, 2));\n";
 const NOTES_TEXT = "Next: keep the value module as is. Trap: do not hand-edit docs/project/STATE.md. Try: run the value test.";
@@ -558,6 +579,14 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
     assert.equal(authorName, "AIBoard Worker", "the integrated commit keeps the worker author");
     assert.equal(committerName, "AIBoard Integrator", "the integration commit is runner-committed");
 
+    assert.ok(architectRequests.length > 0, "the actual Architect made model calls");
+    for (const request of architectRequests.filter((request) => request.tools.length > 0)) {
+      assert.equal(request.tools.some((tool) => tool.name === "record_planning_checkpoint"), false, "checkpoint producer is absent from actual Architect tools");
+      const text = requestText(request);
+      assert.ok(!text.includes(DEFAULT_STATE_TEMPLATE), "actual Architect context omits the legacy STATE template");
+      assert.ok(!text.includes("record_planning_checkpoint"), "actual Architect context omits checkpoint instructions");
+      assert.ok(text.includes(ARCHITECT_PROJECT_DOC_WRITE_LINE), "actual Architect receives the bounded semantic-doc write instruction");
+    }
     // C5: the real worker/reviewer model requests carry the current accepted
     // contract, tied to the accepted plan identity — never unpinned.
     assert.ok(workerRequests.length >= 1, "the real worker made model calls");
@@ -574,6 +603,10 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
       "Writable surfaces: src/value.mjs",
       "Forbidden surfaces: test/value.test.mjs",
       "Definition of done: Tests pass.",
+      "Scope includes: src/value.mjs", "Scope excludes: test/value.test.mjs",
+      "Steps:\n1. Write the module.\n2. Run the tests.",
+      "Inputs: accepted plan revision", "Outputs: src/value.mjs",
+      "Targeted validation: The value test.", "Affected-scope validation: The module only.",
     ]) {
       assert.ok(workerText.includes(required), `real worker requests carry ${required}`);
     }
@@ -594,6 +627,9 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
       const text = byPass.get(pass)!;
       assert.ok(text.includes("Authoritative plan contract T1"), `real reviewer ${pass} carries the contract`);
       assert.ok(text.includes(provenance), `real reviewer ${pass} carries the accepted identity`);
+      for (const fact of ["Scope includes: src/value.mjs", "Scope excludes: test/value.test.mjs", "Review criteria:\n- Independent review confirms the value.", "Integration checks:\n- Post-integration tests.", "Targeted validation rationale: The value test.", "Affected-scope validation rationale: The module only."]) {
+        assert.ok(text.includes(fact), `real reviewer ${pass} carries ${fact}`);
+      }
       assert.ok(!text.includes("(unpinned)"), `real reviewer ${pass} is pinned`);
     }
     // Each persisted worker/reviewer pack is bound to the actual transport
@@ -667,6 +703,13 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
     );
     const beforeHandoff = runtime!.projection();
     assert.equal(beforeHandoff.projectHandoff?.status, "requested", "the run pauses for the explicit owner handoff choice");
+    assert.equal(beforeHandoff.status, "paused", "handoff requires an explicit owner choice even under Full access");
+    const architectCallsAtHandoff = architectRequests.length;
+    assert.equal((await runtime!.step()).status, "paused", "another step cannot choose or complete the handoff");
+    assert.equal(runtime!.projection().projectHandoff?.status, "requested");
+    assert.equal(runtime!.projection().status, "paused");
+    assert.equal(architectRequests.length, architectCallsAtHandoff, "owner pause admits no extra model turn");
+    assert.equal(manager.events(BUILD_RUN).some((event) => event.type === "project.handoff_selected" || event.type === "run.completed"), false);
     const finished = beforeHandoff.finalVerification!.current!;
     assert.equal(finished.targetRevision, canonical, "verification still targets the canonical revision");
     assert.equal(finished.submission?.targetRevision, canonical);
@@ -739,6 +782,15 @@ test("PHASE-C-EXIT: seeded new-policy factory run pauses/resumes to explicit own
       "the handed-off tree is exactly baseline plus the product module plus the kernel handoff files",
     );
     assert.deepEqual(kernelFiles, ["AGENTS.md", "CLAUDE.md", HANDOFF_STATE_PATH]);
+    assert.deepEqual((await gitText(repoPath, ["diff", "--name-status", baseline.revision, handoffCommit])).split("\n").sort(),
+      ["AGENTS.md", "CLAUDE.md", HANDOFF_STATE_PATH, "src/value.mjs"].map((path) => `A\t${path}`).sort(),
+      "only intended product and kernel files were added; baseline files unchanged");
+    assert.equal((await runGit({ cwd: repoPath, args: ["show", `${handoffCommit}:src/value.mjs`] })).stdout, LOW_CONTENT, "product bytes are exact");
+    for (const path of [".gitignore", "package.json", "test/value.test.mjs"]) {
+      assert.equal(await gitText(repoPath, ["rev-parse", `${handoffCommit}:${path}`]), await gitText(project, ["rev-parse", `${baseline.revision}:${path}`]), `baseline blob ${path} is unchanged`);
+    }
+    assert.equal(await gitText(repoPath, ["status", "--porcelain=v1", "--untracked-files=all"]), "", "integration worktree is clean");
+    assert.deepEqual(Object.keys(fileFingerprint(repoPath)).sort(), finalFiles, "no ignored or untracked fixture files ride beside the committed tree");
     for (const path of finalFiles) {
       assert.ok(
         !/(^|\/)(evidence|diary|diaries|progress|test-output|notes)(\/|$|\.)/i.test(path),
@@ -793,6 +845,12 @@ test("PHASE-C-EXIT: answered run through real triage/answer tools writes nothing
   writeFileSync(join(project, "shared.txt"), "baseline\n");
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: "phase-c-answer-fixture", version: "1.0.0", type: "module" }, null, 2));
   const baseline = await captureGitBaseline({ projectPath: project, stateDirectory: state, runId: ANSWER_RUN });
+  const initialProject = {
+    head: await gitText(project, ["rev-parse", "HEAD"]),
+    tree: await gitText(project, ["rev-parse", "HEAD^{tree}"]),
+    status: await gitText(project, ["status", "--porcelain=v1", "--untracked-files=all"]),
+    files: fileFingerprint(project),
+  };
   // Pre-triage pause with no triage decision yet: docs v2 plus policies only.
   const seed = (runId: string): NewSchedulerEvent[] => [
     seedEvent(runId, "project_docs.policy_configured", "docs-policy", "runner", "build-runtime", { version: 2 }),
@@ -913,6 +971,10 @@ test("PHASE-C-EXIT: answered run through real triage/answer tools writes nothing
     }
     assert.ok(answered, "the answered run reaches handoff");
     assert.equal(answered.projectHandoff?.status, "requested", "the answered run pauses for the explicit owner choice");
+    assert.equal(answered.status, "paused");
+    assert.equal((await runtime!.step()).status, "paused", "answer handoff also waits for the owner");
+    assert.equal(runtime!.projection().projectHandoff?.status, "requested");
+    assert.equal(manager.events(ANSWER_RUN).some((event) => event.type === "project.handoff_selected" || event.type === "run.completed"), false);
     assert.deepEqual(calledTools, ["record_triage", "record_answer", "complete_run"], "the answer path makes zero product/doc calls");
     assert.equal(workerCalls, 0, "no worker turn runs on the answered run");
     assert.equal(reviewerCalls, 0, "no reviewer turn runs on the answered run");
@@ -960,6 +1022,15 @@ test("PHASE-C-EXIT: answered run through real triage/answer tools writes nothing
       assert.equal(before.integrationHead, baseline.revision, "the integration branch revision equals the baseline after the answer");
     }
     assert.equal(before.revCount, "0", "the answered run commits nothing");
+    assert.equal(before.projectHead, initialProject.head, "creation/resume/answer moves no project commit");
+    assert.equal(before.projectTree, initialProject.tree, "creation/resume/answer changes no project tree");
+    assert.equal(before.projectUntracked, initialProject.status, "creation/resume/answer leaves the original clean status");
+    assert.deepEqual(fileFingerprint(project), initialProject.files, "creation/resume/answer changes no project bytes, including ignored files");
+    if (repoPath !== undefined) {
+      assert.equal(before.integrationTree, initialProject.tree);
+      assert.equal(await gitText(repoPath, ["status", "--porcelain=v1", "--untracked-files=all"]), "");
+      assert.deepEqual(fileFingerprint(repoPath), initialProject.files, "answer integration bytes match the original baseline");
+    }
     const selected = await manager.selectProjectHandoff(ANSWER_RUN, "apply_to_project", "handoff:phase-c-answer");
     assert.equal(selected.status, "completed");
     assert.equal(selected.projectHandoff?.status, "selected");
@@ -968,6 +1039,7 @@ test("PHASE-C-EXIT: answered run through real triage/answer tools writes nothing
     assert.equal(await gitText(project, ["rev-parse", "HEAD"]), before.projectHead, "apply moves no project commit");
     assert.equal(await gitText(project, ["diff", "--name-only"]), before.projectDiff, "apply leaves no project diff");
     assert.equal((await runGit({ cwd: project, args: ["status", "--porcelain=v1", "--untracked-files=all"] })).stdout.trim(), before.projectUntracked, "apply leaves no untracked files");
+    assert.deepEqual(fileFingerprint(project), initialProject.files, "owner apply writes no file relative to the pre-run baseline");
     // Settled-run cleanup may remove the untouched integration repo; what
     // matters is that apply creates nothing and moves nothing.
     const afterEntries = existsSync(integrationRoot) ? readdirSync(integrationRoot) : [];
@@ -977,6 +1049,8 @@ test("PHASE-C-EXIT: answered run through real triage/answer tools writes nothing
       assert.equal(await gitText(repoPath, ["rev-parse", "HEAD"]), before.integrationHead, "apply moves no integration commit");
       assert.equal(await gitText(repoPath, ["rev-parse", "HEAD^{tree}"]), before.integrationTree, "apply changes no integration tree");
       assert.equal(await gitText(repoPath, ["rev-list", "--count", `${baseline.revision}..HEAD`]), "0", "apply still commits nothing");
+      assert.equal(await gitText(repoPath, ["status", "--porcelain=v1", "--untracked-files=all"]), "");
+      assert.deepEqual(fileFingerprint(repoPath), initialProject.files);
     }
   } finally {
     await manager?.close();
@@ -993,7 +1067,9 @@ test("PHASE-C-EXIT: answered run through real triage/answer tools writes nothing
  */
 test("PHASE-C-EXIT: recorded old-policy log replays to unchanged state/revision/policy", () => {
   const fixturePath = fileURLToPath(new URL("./support/pre-capability-run.fixture.json", import.meta.url));
-  const parsed: unknown = JSON.parse(readFileSync(fixturePath, "utf8"));
+  const fixtureBytes = readFileSync(fixturePath);
+  assert.equal(createHash("sha256").update(fixtureBytes).digest("hex"), "cc18719f05160e6e432187ae5dd2d7571976bb89240b7edfa65c5561fefde236", "historical fixture bytes are immutable");
+  const parsed: unknown = JSON.parse(fixtureBytes.toString("utf8"));
   assert.equal(typeof parsed, "object");
   const fixture = parsed as {
     baseRevision: string;
@@ -1006,6 +1082,7 @@ test("PHASE-C-EXIT: recorded old-policy log replays to unchanged state/revision/
   assert.equal(fixture.schedulerEvents.length, 26, "the recorded log holds 26 scheduler events");
   const recorded = fixture.schedulerProjection;
   const checkNamed = (replayed: SchedulerProjection, via: string): void => {
+    assert.deepEqual(JSON.parse(JSON.stringify(replayed)), recorded, `${via} matches the entire independently captured durable projection`);
     assert.equal(replayed.runId, "run-pre-capability", `${via} keeps the run identity`);
     assert.equal(replayed.status, "running", `${via} keeps the run state`);
     assert.equal(replayed.runPolicy, "finish", `${via} keeps the run policy`);
