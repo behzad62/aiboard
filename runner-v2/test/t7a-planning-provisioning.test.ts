@@ -23,6 +23,9 @@ import {
   type NativeBuildSpec,
 } from "../src/build-spec.js";
 import { ArtifactStore } from "../src/artifact-store.js";
+import { ControlServer } from "../src/control-server.js";
+import { RunSupervisor } from "../src/run-supervisor.js";
+import { SqliteEventStore } from "../src/sqlite-event-store.js";
 import { createExecutionHost } from "../src/execution-host.js";
 import {
   NativeBuildFactory,
@@ -561,6 +564,28 @@ test("T7a F2: a no-policy spec refuses a recorded planning prefix without restam
       "run.initialized",
       "planning.policy_configured",
     ]);
+  } finally {
+    store.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("T7a F2: absent-policy recovery refuses every interrupted docs2 prefix without mutation", () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-t7a-f2-partial-downgrade-"));
+  const store = openScheduler(root);
+  try {
+    for (const size of [1, 2, 3]) {
+      const runId = `run_t7a_partial_downgrade_${size}`;
+      const original = `run_t7a_partial_original_${size}`;
+      ensurePlanningProvisioningPrefix(store, t7aSpec(original, "O."), advancingClock());
+      for (const event of store.readRun(original).slice(0, size)) {
+        store.append({ runId, type: event.type, occurredAt: event.occurredAt,
+          actor: event.actor, idempotencyKey: event.idempotencyKey, payload: event.payload });
+      }
+      const before = store.readRun(runId);
+      assert.throws(() => ensurePlanningProvisioningPrefix(store, { runId, objective: "O." }), /downgrade/i);
+      assert.deepEqual(store.readRun(runId), before, `size ${size}: rejected recovery appends nothing`);
+    }
   } finally {
     store.close();
     rmSync(root, { recursive: true, force: true });
@@ -1504,6 +1529,8 @@ test("T7a product: unseeded opt-in provisioning plans, covers, builds, and accep
     artifacts: new ArtifactStore(join(state, "artifacts")),
     ambientEnvironment: snapshotNativeBuildAmbientEnvironment(),
   });
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(state, "events.sqlite")), { clock: () => T7A_CLOCK });
+  let server: ControlServer | undefined;
   let factory: FixtureNativeBuildFactory | undefined;
   let manager: NativeBuildManager | undefined;
   let runtime: { step: () => Promise<{ status: string; action?: string }>; projection: () => SchedulerProjection } | undefined;
@@ -1535,23 +1562,30 @@ test("T7a product: unseeded opt-in provisioning plans, covers, builds, and accep
       }),
       prepareSpec: (spec, options) => factory!.prepareSpec(spec, options),
     });
-    // Actual fresh product provisioning: explicit opt-in plus approved bytes,
-    // never an inferred default.
-    await manager.create(
-      {
-        ...baseSpec(T7A_RUN, {
-          projectId: "t7a-journey-fixture",
-          createdAt: T7A_CLOCK,
-          idempotencyKey: "t7a-journey",
-        }),
-        planningPolicy: { version: 1 },
-        planCritique: "off",
-      },
-      {
-        approvedSourceInput: sourceInput(T7A_SOURCE, [...t7aJourneySections()]),
-        approvedBy: "local-user",
-      },
-    );
+    // The actual authenticated production route forwards owner input into
+    // the real manager, saved spec, factory, scheduler and model transports.
+    server = new ControlServer({ supervisor, token: "t7a-control-token",
+      builds: manager, buildProvisioner: manager,
+      checkGit: async () => ({ available: true, version: "fixture-git", code: "git_ready", reason: null }),
+      bootstrapRun: async () => ({ baselineRevision: baseline.revision, baselineRef: baseline.ref }),
+    });
+    const address = await server.start(0);
+    const body = { runId: T7A_RUN, projectPath: project, permissionProfile: "full",
+      idempotencyKey: "t7a-journey", build: {
+        projectId: "t7a-journey-fixture", objective: "Deliver the value module.",
+        architectRuntimeId: "arch:architect", workerRuntimeIds: ["work:worker"], verifierRuntimeIds: ["rev:reviewer"],
+        alwaysRequireIndependentVerifier: false, maxConcurrency: 1, runPolicy: "finish", budgetLimits: {},
+        planningPolicy: { version: 1 }, approvedSource: sourceInput(T7A_SOURCE, [...t7aJourneySections()]),
+      } };
+    const create = () => fetch(`${address.url}/v2/runs`, { method: "POST",
+      headers: { Authorization: "Bearer t7a-control-token", "Content-Type": "application/json" },
+      body: JSON.stringify(body) });
+    const created = await create();
+    assert.equal(created.status, 201, await created.text());
+    const originalEvents = manager.events(T7A_RUN);
+    const retry = await create();
+    assert.equal(retry.status, 201, await retry.text());
+    assert.deepEqual(manager.events(T7A_RUN), originalEvents, "HTTP retry reuses exact saved approval and policy");
     // The first three scheduler events are the T7a prefix, before factory consumers.
     let events = manager.events(T7A_RUN);
     assert.deepEqual(events.slice(0, 3).map((event) => event.type), [
@@ -1639,9 +1673,55 @@ test("T7a product: unseeded opt-in provisioning plans, covers, builds, and accep
     assert.equal(types.filter((type) => type.startsWith("final_verification.")).length, 0, "no repeated final verification journey");
     assert.equal(accepted.status, "running", "the run stops at acceptance, it does not complete itself");
   } finally {
+    await server?.close();
+    supervisor.close();
     await manager?.close().catch(() => undefined);
     await factory?.close().catch(() => undefined);
     await executionHost?.close().catch(() => undefined);
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("T7a HTTP: invalid or unapproved source refuses before Git bootstrap and durable run creation", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aiboard-t7a-http-refusal-"));
+  const supervisor = new RunSupervisor(new SqliteEventStore(join(root, "events.sqlite")));
+  let gitChecks = 0;
+  let bootstraps = 0;
+  const server = new ControlServer({ supervisor, token: "t7a-http-token",
+    checkGit: async () => { gitChecks += 1; return { available: true, version: "unused", code: "git_ready", reason: null }; },
+    bootstrapRun: async () => { bootstraps += 1; throw new Error("invalid source must not bootstrap"); },
+  });
+  try {
+    const address = await server.start(0);
+    const good = sourceInput(T7A_TEXT);
+    const cases = [
+      { source: good, policy: undefined },
+      { source: { ...good, approval: "attached" }, policy: { version: 1 } },
+      { source: { ...good, authority: "user:forged" }, policy: { version: 1 } },
+      { source: { ...good, manifest: {} }, policy: { version: 1 } },
+      { source: { ...good, mediaType: "application/pdf" }, policy: { version: 1 } },
+      { source: { ...good, bytesBase64: "/w==" }, policy: { version: 1 } },
+      { source: { ...good, bytesBase64: "Zg" }, policy: { version: 1 } },
+      { source: { ...good, sections: [{ id: "s", startByte: 1, endByte: 10 }] }, policy: { version: 1 } },
+    ];
+    for (const [index, item] of cases.entries()) {
+      const body = { runId: `run_t7a_http_bad_${index}`, projectPath: join(root, "project"),
+        permissionProfile: "full", idempotencyKey: `http-bad-${index}`, build: {
+          projectId: "http-refusal", objective: "Build.", architectRuntimeId: "a", workerRuntimeIds: ["w"],
+          verifierRuntimeIds: ["v"], alwaysRequireIndependentVerifier: false, maxConcurrency: 1,
+          runPolicy: "finish", budgetLimits: {}, planningPolicy: item.policy, approvedSource: item.source,
+        } };
+      const response = await fetch(`${address.url}/v2/runs`, { method: "POST",
+        headers: { Authorization: "Bearer t7a-http-token", "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      assert.equal(response.status, 400, await response.text());
+      assert.equal(gitChecks, 0);
+      assert.equal(bootstraps, 0);
+      assert.deepEqual(supervisor.listRuns(), []);
+    }
+  } finally {
+    await server.close();
+    supervisor.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

@@ -476,8 +476,9 @@ export function ensurePlanningProvisioningPrefix(
 ): { mode: PlanningProvisioningMode } {
   if (spec.planningPolicy?.version !== 1) {
     const prior = store.readRun(spec.runId);
-    if (prior.some((event) => event.type === "planning.policy_configured")) {
-      fail("Planning provisioning refuses a policy downgrade: a run without the explicit planningPolicy version 1 opt-in cannot recover against a recorded planning.policy_configured prefix.");
+    if (prior.some((event) => event.type === "planning.policy_configured" ||
+      (event.type === "project_docs.policy_configured" && event.payload.version === 2))) {
+      fail("Planning provisioning refuses a policy downgrade: a run without the explicit planningPolicy version 1 opt-in cannot recover against a recorded docs2/planning1 prefix.");
     }
     return { mode: "legacy" };
   }
