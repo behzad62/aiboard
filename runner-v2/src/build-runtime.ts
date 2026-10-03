@@ -6,7 +6,11 @@ import type {
 import type { NativeTool, ToolExecutionContext } from "./agent-contracts.js";
 import { createArchitectTools, type ArchitectToolsOptions } from "./architect-tools.js";
 import { ANSWER_PATH_LIFECYCLE_TOOLS, ARCHITECT_LIFECYCLE_TOOLS } from "./role-capabilities.js";
-import type { NativeBuildRunPolicy } from "./build-spec.js";
+import type {
+  NativeBuildPlanningPolicy,
+  NativeBuildRunPolicy,
+} from "./build-spec.js";
+import { ensurePlanningProvisioningPrefix } from "./native-planning-provisioner.js";
 import type {
   BuildRiskAssessmentProjection,
   HandoffFilesOption,
@@ -430,6 +434,13 @@ export interface BuildRuntimeOptions {
    */
   planningSourceReader?: PlanningSourceReader;
   /**
+   * T7a explicit evidence-gated planning opt-in for this construction. When
+   * version 1, the constructor establishes the shared provisioning prefix
+   * (docs policy v2, run.initialized, planning.policy_configured) instead of
+   * the legacy docs1+init pair. Absent means legacy behavior, unchanged.
+   */
+  planningPolicy?: NativeBuildPlanningPolicy;
+  /**
    * T3b: drives the independent source-coverage review for new-policy runs.
    * When absent, a requested review records an explicit outstanding gate
    * instead of running. Legacy runs never consult it.
@@ -851,6 +862,7 @@ export class BuildRuntime {
   private readonly reviewOutcomeRecorder: BuildRuntimeOptions["reviewOutcomeRecorder"];
   private readonly architectLifecycleProbe?: BuildRuntimeOptions["architectLifecycleProbe"];
   private readonly planningSourceReader?: PlanningSourceReader;
+  private readonly provisioningPolicyVersion: 1 | undefined;
   private readonly coverageReview?: CoverageReviewDriver;
   private readonly answerReview?: AnswerReviewDriver;
   private readonly answerAuthority: AnswerReviewAuthority;
@@ -911,6 +923,7 @@ export class BuildRuntime {
     this.reviewOutcomeRecorder = options.reviewOutcomeRecorder;
     this.architectLifecycleProbe = options.architectLifecycleProbe;
     this.planningSourceReader = options.planningSourceReader;
+    this.provisioningPolicyVersion = options.planningPolicy?.version === 1 ? 1 : undefined;
     this.coverageReview = options.coverageReview;
     this.answerReview = options.answerReview;
     this.answerAuthority = new SchedulerAnswerReviewAuthority(options.store);
@@ -2419,6 +2432,20 @@ export class BuildRuntime {
   }
 
   private initializeRun(): void {
+    // T7a: explicit-policy construction provisions through the shared
+    // initializer (factory construction already did; this validates/reuses).
+    if (this.provisioningPolicyVersion === 1) {
+      ensurePlanningProvisioningPrefix(
+        this.store,
+        {
+          runId: this.runId,
+          ...(this.initialObjective !== undefined ? { objective: this.initialObjective } : {}),
+          planningPolicy: { version: 1 },
+        },
+        this.clock,
+      );
+      return;
+    }
     const events = this.store.readRun(this.runId);
     const durable = events.filter((event) => event.type !== "project_docs.policy_configured");
     if (durable.length > 0) {
@@ -2449,6 +2476,9 @@ export class BuildRuntime {
   }
 
   private configureProjectDocsPolicy(): void {
+    // T7a: explicit-policy construction owns its docs policy stamp through
+    // the shared provisioning prefix; the legacy docs1 stamp never applies.
+    if (this.provisioningPolicyVersion === 1) return;
     const events = this.store.readRun(this.runId);
     if (events.length > 0) return;
     this.store.append({

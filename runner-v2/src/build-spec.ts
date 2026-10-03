@@ -10,6 +10,10 @@ import {
   PLAN_CRITIQUE_MODES,
   type PlanCritiqueMode,
 } from "./plan-critique-contracts.js";
+import {
+  validateApprovedSourceManifest,
+  type ApprovedSourceManifest,
+} from "./source-manifest.js";
 
 export type NativeBuildRunPolicy = "finish" | "budgeted" | "plan_only";
 
@@ -88,6 +92,13 @@ export interface NativeBuildSpec {
   benchmark?: NativeBuildBenchmarkPolicy;
   /** Opt-in only, set at provisioning; absent means legacy (pre-evidence-gated-planning) behavior. */
   planningPolicy?: NativeBuildPlanningPolicy;
+  /**
+   * T7a kernel-approved initial source manifest. Present only on explicitly
+   * opted-in (`planningPolicy.version: 1`) runs; derived by the kernel from
+   * validated owner bytes at provisioning time, never chosen by a caller.
+   * Amendments travel as planning events, never as a second manifest here.
+   */
+  approvedSource?: ApprovedSourceManifest;
 }
 
 export type LegacyNativeBuildSpec = Omit<
@@ -209,6 +220,24 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
       throw new Error(`Build spec planningPolicy has unknown fields: ${extraKeys.join(", ")}.`);
     }
   }
+  if (spec.approvedSource !== undefined) {
+    if (spec.planningPolicy?.version !== 1) {
+      throw new Error(
+        "Build spec approvedSource requires explicit planningPolicy version 1 opt-in."
+      );
+    }
+    const sourceValidation = validateApprovedSourceManifest(spec.approvedSource);
+    if (!sourceValidation.valid) {
+      throw new Error(
+        `Build spec approvedSource is invalid: ${sourceValidation.issues.map((issue) => issue.code).join(", ")}.`
+      );
+    }
+    if (spec.approvedSource.amendment) {
+      throw new Error(
+        "Build spec approvedSource carries the initial registration only; amendments travel as planning events."
+      );
+    }
+  }
   if (spec.benchmark) {
     if (!spec.benchmark.attemptId.trim()) {
       throw new Error("Build spec benchmark attempt identity is incomplete.");
@@ -302,6 +331,9 @@ export function cloneBuildSpec(spec: NativeBuildSpec): NativeBuildSpec {
     ...(spec.verifierTwoPass !== undefined ? { verifierTwoPass: spec.verifierTwoPass } : {}),
     ...(spec.planningPolicy !== undefined
       ? { planningPolicy: { version: spec.planningPolicy.version } }
+      : {}),
+    ...(spec.approvedSource !== undefined
+      ? { approvedSource: structuredClone(spec.approvedSource) }
       : {}),
     ...(spec.benchmark
       ? {

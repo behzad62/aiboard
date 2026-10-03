@@ -13,6 +13,11 @@ import type {
   UserGuidanceControlInput,
 } from "./build-runtime-registry.js";
 import type { BuildSpecStore, NativeBuildSpec } from "./build-spec.js";
+import {
+  stableProvisioningRequestsMatch,
+  type ProvisioningPrepareOptions,
+} from "./native-planning-provisioner.js";
+export type { ApprovedSourceInputV1 } from "./native-planning-provisioner.js";
 import type { NativeBuildUsageProjection } from "./model-usage-projection.js";
 import type {
   ProjectHandoffChoice,
@@ -76,7 +81,10 @@ export interface NativeBuildManagerOptions {
   specs: BuildSpecStore;
   createRuntime(spec: NativeBuildSpec): Promise<NativeBuildRuntimeHandle>;
   /** Stamps runner-owned durable identity before a new Build spec is persisted. */
-  prepareSpec?(spec: NativeBuildSpec): Promise<NativeBuildSpec>;
+  prepareSpec?(
+    spec: NativeBuildSpec,
+    options?: ProvisioningPrepareOptions,
+  ): Promise<NativeBuildSpec>;
   /** Rejects a stored spec before recovery can construct its runtime or model clients. */
   validateRecoveredSpec?(spec: NativeBuildSpec): Promise<void>;
   /** Allows callers with an authoritative lifecycle store to omit settled runs from recovery. */
@@ -111,6 +119,14 @@ type NativeBuildHandleShutdownPhase =
 
 interface NativeBuildHandleShutdownState {
   phase: NativeBuildHandleShutdownPhase;
+}
+
+function readExistingBuildSpec(specs: BuildSpecStore, runId: string): NativeBuildSpec | undefined {
+  try {
+    return specs.get(runId);
+  } catch {
+    return undefined;
+  }
 }
 
 export class NativeBuildManager implements BuildControlPlane {
@@ -274,10 +290,38 @@ export class NativeBuildManager implements BuildControlPlane {
     return { failures: Object.freeze([...failures]) };
   }
 
-  async create(spec: NativeBuildSpec): Promise<SchedulerProjection> {
+  async create(
+    spec: NativeBuildSpec,
+    options?: ProvisioningPrepareOptions,
+  ): Promise<SchedulerProjection> {
     return await this.serialized(async () => {
+      const existing = readExistingBuildSpec(this.options.specs, spec.runId);
+      if (existing) {
+        if (
+          !stableProvisioningRequestsMatch(existing, spec, options?.approvedSourceInput)
+        ) {
+          throw new Error(`Build spec idempotency conflict for ${spec.runId}.`);
+        }
+        const handle = await this.ensureRuntime(existing);
+        return handle.runtime.projection();
+      }
+      if (options?.approvedSourceInput !== undefined) {
+        if (spec.planningPolicy?.version !== 1) {
+          throw new Error(
+            "An approved source requires explicit planningPolicy version 1 opt-in; refusing to change the run default."
+          );
+        }
+        if (spec.approvedSource !== undefined) {
+          throw new Error(
+            "Specify either raw approved-source bytes or a prepared approvedSource manifest, not both."
+          );
+        }
+        if (!this.options.prepareSpec) {
+          throw new Error("Approved-source provisioning requires a spec preparation hook.");
+        }
+      }
       const prepared = this.options.prepareSpec
-        ? await this.options.prepareSpec(spec)
+        ? await this.options.prepareSpec(spec, options)
         : spec;
       const saved = this.options.specs.save(prepared);
       const handle = await this.ensureRuntime(saved);

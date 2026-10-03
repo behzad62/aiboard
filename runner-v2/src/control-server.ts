@@ -23,6 +23,11 @@ import {
   assertBuildRunPolicyLimits,
   type NativeBuildSpec,
 } from "./build-spec.js";
+import {
+  validateApprovedSourceInput,
+  type ApprovedSourceInputV1,
+  type ProvisioningPrepareOptions,
+} from "./native-planning-provisioner.js";
 import { assertBudgetLimits } from "./budget-policy.js";
 import { type GitPreflightResult } from "./git-preflight.js";
 import type {
@@ -48,7 +53,7 @@ export interface ControlServerOptions {
   heartbeatMs?: number;
   builds?: BuildControlPlane;
   buildProvisioner?: {
-    create(spec: NativeBuildSpec): Promise<unknown>;
+    create(spec: NativeBuildSpec, options?: ProvisioningPrepareOptions): Promise<unknown>;
     listSpecs(projectId?: string): NativeBuildSpec[];
   };
   providerConfigs?: ProviderConfigStore;
@@ -93,6 +98,13 @@ interface CreateRunBody {
     runPolicy: NativeBuildSpec["runPolicy"];
     budgetLimits: NativeBuildSpec["budgetLimits"];
     benchmark?: NativeBuildSpec["benchmark"];
+    /** T7a explicit opt-in only; absent retains the current product default. */
+    planningPolicy?: { version: 1 };
+    /**
+     * T7a request-only approved-source bytes/intent. Refused without the
+     * planningPolicy opt-in above; never silently opts the run in.
+     */
+    approvedSource?: ApprovedSourceInputV1;
   };
 }
 
@@ -408,9 +420,24 @@ export class ControlServer {
                   },
                 }
               : {}),
+            // T7a opt-in only: the kernel stamps planningPolicy solely from
+            // this explicit field; a missing field keeps the current default.
+            // The manifest itself is kernel-derived — never caller-chosen.
+            ...(body.build.planningPolicy !== undefined
+              ? { planningPolicy: { version: 1 as const } }
+              : {}),
             createdAt: projection.createdAt,
             idempotencyKey: `build:${body.idempotencyKey}`,
-          });
+          },
+          body.build.approvedSource !== undefined
+            ? {
+                approvedSourceInput: body.build.approvedSource,
+                // Supported authentication on this route is the local
+                // control token, hence user/local-user; the caller cannot
+                // pick an approval authority.
+                approvedBy: "local-user",
+              }
+            : undefined);
         }
         sendJson(response, 201, projection);
         return;
@@ -1182,6 +1209,24 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
       !isUniqueNonEmptyStringArray(body.benchmark.hiddenPaths) ||
       !isUniqueNonEmptyStringArray(body.benchmark.protectedPaths)
     ) invalidBody();
+  }
+  if (body.planningPolicy !== undefined) {
+    if (
+      !body.planningPolicy ||
+      typeof body.planningPolicy !== "object" ||
+      (body.planningPolicy as { version?: unknown }).version !== 1 ||
+      Object.keys(body.planningPolicy).length !== 1
+    ) invalidBody();
+  }
+  if (body.approvedSource !== undefined) {
+    // T7a: an approved source without the explicit opt-in is inconsistent —
+    // refuse it rather than silently changing the run default.
+    if (body.planningPolicy?.version !== 1) invalidBody();
+    try {
+      validateApprovedSourceInput(body.approvedSource);
+    } catch {
+      invalidBody();
+    }
   }
 }
 

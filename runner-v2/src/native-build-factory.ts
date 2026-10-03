@@ -63,6 +63,19 @@ import {
 } from "./build-observability.js";
 import { PlaywrightBrowserBackend } from "./browser-tools.js";
 import { cloneBuildSpec, type NativeBuildSpec } from "./build-spec.js";
+import {
+  assertManifestMatchesBytes,
+  computeArtifactDigest,
+} from "./source-manifest.js";
+import {
+  approvedSourceApprover,
+  buildApprovedSourceManifest,
+  ensurePlanningProvisioningPrefix,
+  registerApprovedSource,
+  validateApprovedSourceInput,
+  verifyPreparedApprovedSource,
+  type ProvisioningPrepareOptions,
+} from "./native-planning-provisioner.js";
 import { IntegrationManager } from "./integration-manager.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
 import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNodeTestCommand } from "./flaky-rerun.js";
@@ -381,10 +394,13 @@ export class NativeBuildFactory {
     );
   }
 
-  async prepareSpec(spec: NativeBuildSpec): Promise<NativeBuildSpec> {
+  async prepareSpec(
+    spec: NativeBuildSpec,
+    options?: ProvisioningPrepareOptions,
+  ): Promise<NativeBuildSpec> {
     if (this.closed) throw new Error("Native Build factory is closed.");
     const config = this.capabilitiesConfig();
-    return {
+    const prepared = {
       ...cloneBuildSpec(spec),
       capabilityContract: await createRunnerCapabilityContractSnapshot(
         config,
@@ -392,6 +408,21 @@ export class NativeBuildFactory {
         { commandSearchDirectory: this.options.projectRoot, environment: this.options.executionHost?.filteredEnvironmentSource() ?? {} },
       ),
     };
+    if (options?.approvedSourceInput === undefined) return prepared;
+    if (prepared.planningPolicy?.version !== 1) {
+      throw new Error("An approved source requires explicit planningPolicy version 1 opt-in; refusing to change the run default.");
+    }
+    const validated = validateApprovedSourceInput(options.approvedSourceInput);
+    const artifactDigest = computeArtifactDigest(validated.bytes);
+    await this.artifacts.put(validated.bytes, validated.mediaType, `approved-source:${spec.runId}`);
+    const manifest = buildApprovedSourceManifest({
+      runId: spec.runId,
+      validated,
+      artifactDigest,
+      ...(options.approvedBy !== undefined ? { approvedBy: options.approvedBy } : {}),
+      createdAt: spec.createdAt,
+    });
+    return { ...prepared, approvedSource: manifest };
   }
 
   async validateRecoveryCapabilityContract(spec: NativeBuildSpec): Promise<void> {
@@ -605,6 +636,33 @@ export class NativeBuildFactory {
     });
     constructionResources.add("scheduler_store", () => schedulerStore.close(), true);
     await this.options.runtimeConstructionHooks?.afterAcquire?.("scheduler_store");
+    // T7a: early explicit-policy/source provisioning — immediately after
+    // opening scheduler storage and before any factory consumer reads
+    // planning/docs policy or creates run integration/context resources.
+    // Legacy specs (no planningPolicy) pass through untouched.
+    ensurePlanningProvisioningPrefix(schedulerStore, spec);
+    if (spec.approvedSource !== undefined) {
+      let storedBytes: Uint8Array;
+      try {
+        storedBytes = await this.artifacts.get(spec.approvedSource.artifactDigest);
+      } catch (error) {
+        throw new Error(
+          `Approved source artifact ${spec.approvedSource.artifactDigest} is not provisioned for ${spec.runId}.`,
+          { cause: error },
+        );
+      }
+      verifyPreparedApprovedSource({
+        runId: spec.runId,
+        manifest: spec.approvedSource,
+        storedBytes,
+      });
+      registerApprovedSource(
+        schedulerStore,
+        spec.runId,
+        spec.approvedSource,
+        approvedSourceApprover(spec.approvedSource),
+      );
+    }
     const schedulerEvents = schedulerStore.readRun(spec.runId);
     initializationStage = "session_store";
     // T6b repair (OA-17): Runner-private durable creation records for
@@ -1781,6 +1839,16 @@ export class NativeBuildFactory {
         coverageCandidateRuntimeIds: spec.verifierRuntimeIds,
         recordedAt: new Date().toISOString(),
       }),
+      // T7a: the kernel-approved source bytes for planning reads, verified
+      // against the manifest digest on every read (drift fails closed).
+      planningSourceReader: async (manifest) => {
+        const bytes = await this.artifacts.get(manifest.artifactDigest);
+        assertManifestMatchesBytes(manifest, bytes);
+        return new Uint8Array(bytes);
+      },
+      ...(spec.planningPolicy !== undefined
+        ? { planningPolicy: { version: spec.planningPolicy.version } }
+        : {}),
       repairPlanLimit: spec.repairPlanLimit,
       projectId: spec.projectId,
       flakyIsolation,
