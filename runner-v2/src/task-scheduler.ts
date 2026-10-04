@@ -52,6 +52,7 @@ export type WorkerOutcome =
   | {
       type: "submitted";
       reviewSignals?: import("./review-integrity.js").ReviewSignalsRecord;
+      encodingSubmission?: import("./encoding-safety.js").EncodingSubmissionRecord;
       submissionScope?: import("./submission-scope-contracts.js").SubmissionScopeRecord;
       changeSetId: string;
       criterionEvidenceLinks?: CriterionEvidenceLink[];
@@ -525,6 +526,7 @@ export class TaskScheduler {
       // tasks can reuse its files/resources (best-effort, idempotent).
       this.transition(taskId, "submitted", attempt, {
         ...(outcome.reviewSignals ? { reviewSignals: structuredClone(outcome.reviewSignals) } : {}),
+        ...(outcome.encodingSubmission ? { encodingSubmission: structuredClone(outcome.encodingSubmission) } : {}),
         ...(outcome.submissionScope ? { submissionScope: structuredClone(outcome.submissionScope) } : {}),
         changeSetId: outcome.changeSetId,
         ...(outcome.criterionEvidenceLinks

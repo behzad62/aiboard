@@ -299,6 +299,7 @@ export class NativeDeliverableReviewRuntime {
       };
     }
     const authorIdentity = canonicalModelIdentity(author.modelId);
+    if (projection.encodingSafetyPolicyVersion === 1 && (!task.encodingSubmission || task.encodingSubmission.taskRevision !== inputs.taskRevision || task.encodingSubmission.baselineRevision !== inputs.baselineRevision)) throw new DeliverableReviewInputsUnavailableError("Exact submitted encoding facts unavailable.");
     if (projection.reviewIntegrityPolicyVersion === 1) {
       const history = projection.runtime.workerAssignmentHistory?.[`${task.id}:${task.attempt}`];
       if (!history?.length) throw new DeliverableReviewInputsUnavailableError("Captured attempt author history unavailable.");
@@ -554,6 +555,9 @@ export class NativeDeliverableReviewRuntime {
       ));
     }
     if (pass === "obligations") return sections;
+    if (durable?.runnerEncoding) {
+      sections.push(section("submission-encoding-findings", "contract", "Runner encoding byte facts (blocking changes require an Architect disposition or repair):\n" + JSON.stringify(durable.runnerEncoding, null, 2) + "\nThese facts remain blocking when you return no findings. Do not use reserved submission-encoding IDs. Your verdict must be unsatisfied while a runner encoding finding remains unresolved."));
+    }
     if (context.reviewIntegrityPolicyVersion === 1) {
       const record = this.projection(context.request.runId).tasks[inputs.taskId]?.reviewSignals;
       if (!record || record.changeSetId !== inputs.changeSetId) throw new DeliverableReviewInputsUnavailableError("Exact runner signals unavailable for review context.");

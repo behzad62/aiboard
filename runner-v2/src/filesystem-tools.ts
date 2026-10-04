@@ -1,4 +1,5 @@
 import { languageInvocation } from "./language-intelligence.js";
+import { preserveUtf8Bom } from "./encoding-safety.js";
 import { createHash } from "node:crypto";
 import { fencedWrite, fencedPatch, fencedMove, fencedDelete, filesystemMutationFailure,
   FilesystemMutationError, isFilesystemMutation } from "./filesystem-mutation-fence.js";
@@ -334,7 +335,7 @@ export function createFilesystemTools(
           if (matchesPolicyPath(context, path, options.protectedPaths)) {
             return protectedPathError(context, path);
           }
-          const bytes = fencedWrite(context, path, Buffer.from(input.content as string),
+          const bytes = fencedWrite(context, path, (original) => preserveUtf8Bom(original, Buffer.from(input.content as string)),
             input.expectedSha256, input.createDirectories === true);
           return await successRevision(context, path, bytes, options.diagnostics);
         }),
@@ -381,7 +382,7 @@ export function createFilesystemTools(
                 : edit.replace;
               nextText = nextText.replace(search, replacement);
             }
-            return Buffer.from(nextText);
+            return preserveUtf8Bom(bytes, Buffer.from(nextText));
           });
           return await successRevision(context, path, next, options.diagnostics);
         }),

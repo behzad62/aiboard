@@ -391,9 +391,9 @@ function write(record: Authorized, path: string, expected: unknown, createDirect
   finally { fs.closeSync(read.fd); }
   publish(record, path, bytes, expected, true); return bytes;
 }
-export function fencedWrite(context: FilesystemMutationContext, path: string, bytes: Buffer,
+export function fencedWrite(context: FilesystemMutationContext, path: string, bytes: Buffer | ((original: Buffer) => Buffer),
   expectedSha256: unknown, createDirectories: boolean): Buffer {
-  return perform(context, "fs.write", [path], (record) => write(record, path, expectedSha256, createDirectories, () => bytes));
+  return perform(context, "fs.write", [path], (record) => write(record, path, expectedSha256, createDirectories, typeof bytes === "function" ? bytes : () => bytes));
 }
 export function fencedPatch(context: FilesystemMutationContext, path: string, expectedSha256: unknown,
   transform: (original: Buffer) => Buffer): Buffer {

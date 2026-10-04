@@ -56,6 +56,7 @@ import {
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import { validateSubmissionScopeRecord } from "./submission-scope-capture.js";
 import { validateReviewSignals } from "./review-integrity.js";
+import { validateEncodingSubmission, encodingFindingFacts } from "./encoding-safety.js";
 import type { ExecutionPlanRevision, ExecutionTaskContract } from "./planning-contracts.js";
 import {
   planFinalVerification,
@@ -947,6 +948,7 @@ export interface SchedulerProjection {
   /** E2 activation is stamped only on fresh runs; old logs retain absent shape. */
   submissionScopePolicyVersion?: 1;
   reviewIntegrityPolicyVersion?: 1;
+  encodingSafetyPolicyVersion?: 1;
   guidance: Record<string, GuidanceProjection>;
   userGuidance: Record<string, UserGuidanceItem>;
   userGuidanceVersion: number;
@@ -3300,7 +3302,8 @@ export function reduceSchedulerEvent(
       if (event.payload.testIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1)) throw new Error("Invalid test-integrity initialization authority or version.");
       if (event.payload.submissionScopePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.submissionScopePolicyVersion !== 1)) throw new Error("Invalid submission-scope initialization authority or version.");
       if (event.payload.reviewIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.reviewIntegrityPolicyVersion !== 1)) throw new Error("Invalid review-integrity initialization authority or version.");
-      return { ...emptySchedulerProjection(event), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
+      if (event.payload.encodingSafetyPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.encodingSafetyPolicyVersion !== 1)) throw new Error("Invalid encoding-safety initialization authority or version.");
+      return { ...emptySchedulerProjection(event), ...(event.payload.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1 as const } : {}), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
     }
     if (event.type === "run.policy_configured") {
       if (event.actor.role !== "runner") {
@@ -3597,6 +3600,10 @@ export function reduceSchedulerEvent(
         current.runPolicy === undefined
       ) {
         const initialObjective = event.payload.objective;
+        if (event.payload.encodingSafetyPolicyVersion !== undefined) {
+          if (event.actor.role !== "runner" || event.payload.encodingSafetyPolicyVersion !== 1) throw new Error("Invalid encoding-safety initialization authority or version.");
+          next.encodingSafetyPolicyVersion = 1;
+        }
         if (event.payload.reviewIntegrityPolicyVersion !== undefined) {
           if (event.actor.role !== "runner" || event.payload.reviewIntegrityPolicyVersion !== 1) throw new Error("Invalid review-integrity initialization authority or version.");
           next.reviewIntegrityPolicyVersion = 1;
@@ -4850,6 +4857,12 @@ export function reduceSchedulerEvent(
         transitionPatch.submissionScope = validateSubmissionScopeRecord(current, taskId, requiredString(transitionPatch as Record<string, unknown>, "changeSetId"), transitionPatch.submissionScope);
       }
       if (transitionPatch.reviewSignals !== undefined && (status !== "submitted" || current.reviewIntegrityPolicyVersion !== 1)) throw new Error("Review signals apply only to activated submissions.");
+      if (transitionPatch.encodingSubmission !== undefined && (status !== "submitted" || current.encodingSafetyPolicyVersion !== 1)) throw new Error("Encoding facts apply only to activated submissions.");
+      if (status === "submitted" && current.encodingSafetyPolicyVersion === 1) {
+        if (event.actor.role !== "runner" || event.actor.id !== "scheduler" || !task.workspaceBaselineRevision) throw new Error("Encoding submission requires the trusted scheduler and baseline.");
+        transitionPatch.encodingSubmission = validateEncodingSubmission(transitionPatch.encodingSubmission, { runId: current.runId, taskId, baselineRevision: task.workspaceBaselineRevision, changeSetId: requiredString(transitionPatch as Record<string, unknown>, "changeSetId") });
+        if (transitionPatch.reviewSignals && transitionPatch.encodingSubmission.taskRevision !== transitionPatch.reviewSignals.taskRevision || transitionPatch.submissionScope && transitionPatch.encodingSubmission.taskRevision !== transitionPatch.submissionScope.taskRevision) throw new Error("Encoding and other submission revisions differ.");
+      }
       if (status === "submitted" && current.reviewIntegrityPolicyVersion === 1) {
         if (event.actor.role !== "runner" || event.actor.id !== "scheduler" || !task.workspaceBaselineRevision) throw new Error("Review-integrity submission requires the trusted scheduler and baseline.");
         transitionPatch.reviewSignals = validateReviewSignals(transitionPatch.reviewSignals, { runId: current.runId, taskId, baselineRevision: task.workspaceBaselineRevision, changeSetId: requiredString(transitionPatch as Record<string, unknown>, "changeSetId") });
@@ -6999,6 +7012,10 @@ function deliveryReviewStarted(
     throw new Error(`Deliverable review requires submitted task ${taskId}.`);
   }
   if (current.submissionScopePolicyVersion === 1 && (!task.submissionScope || task.submissionScope.changeSetId !== task.changeSetId || task.submissionScope.attempt !== task.attempt)) throw new Error("Deliverable review requires the exact guarded submission scope record.");
+  if (current.encodingSafetyPolicyVersion === 1) {
+    if (!task.workspaceBaselineRevision) throw new Error("Deliverable review requires its encoding baseline.");
+    validateEncodingSubmission(task.encodingSubmission, { runId: current.runId, taskId, baselineRevision: task.workspaceBaselineRevision, changeSetId: task.changeSetId });
+  }
   const attempt = requiredPositiveInteger(event.payload, "attempt");
   const changeSetId = requiredString(event.payload, "changeSetId");
   if (attempt !== task.attempt || changeSetId !== task.changeSetId) {
@@ -7081,6 +7098,7 @@ function deliveryReviewStarted(
     architectModelIdentity,
     ...(current.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
     ...(current.submissionScopePolicyVersion === 1 ? { runnerScope: structuredClone(task.submissionScope!) } : {}),
+    ...(current.encodingSafetyPolicyVersion === 1 ? { runnerEncoding: structuredClone(task.encodingSubmission!) } : {}),
     stage: "started",
     startedSequence: event.sequence,
     sessionIds: [],
@@ -7218,6 +7236,8 @@ function deliveryFindingsRecorded(state: DeliveryState, event: SchedulerEvent): 
   const findings = validateDeliveryFindings(event.payload.findings);
   if (review.runnerScope && findings.some((finding) => finding.id.startsWith("submission-scope:"))) throw new Error("Reviewer findings cannot use reserved runner scope identities.");
   for (const fact of review.runnerScope?.findings ?? []) findings.push({ id: fact.id, category: "scope_creep", severity: "blocking", location: fact.path, claim: fact.message, evidenceRefs: [review.runnerScope!.changeSetId] });
+  if (review.runnerEncoding && findings.some((finding) => finding.id.startsWith("submission-encoding:"))) throw new Error("Reviewer findings cannot use reserved runner encoding identities.");
+  for (const fact of review.runnerEncoding ? encodingFindingFacts(review.runnerEncoding) : []) findings.push({ id: fact.id, category: "weakened_obligation", severity: "blocking", location: fact.path, claim: fact.message, evidenceRefs: [review.runnerEncoding!.changeSetId] });
   const depth = parseDeliveryDepth(event.payload.depth);
   const required = deliveryReviewDepthForTier(review.risk!.tier, review.reviewIntegrityPolicyVersion);
   if (required.repositoryInspection && depth.inspectionToolCalls < 1) {
@@ -10964,6 +10984,7 @@ function cloneBuildTask(task: BuildTask): BuildTask {
     ...task,
     ...(task.submissionScope ? { submissionScope: structuredClone(task.submissionScope) } : {}),
     ...(task.reviewSignals ? { reviewSignals: structuredClone(task.reviewSignals) } : {}),
+    ...(task.encodingSubmission ? { encodingSubmission: structuredClone(task.encodingSubmission) } : {}),
     dependencies: [...task.dependencies],
     requiredCapabilities: [...task.requiredCapabilities],
     ...(task.acceptanceCriteria

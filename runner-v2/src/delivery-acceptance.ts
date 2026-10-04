@@ -176,6 +176,7 @@ export interface DeliveryRiskRecord {
 }
 
 export interface DeliveryReviewRecord {
+  runnerEncoding?: import("./encoding-safety.js").EncodingSubmissionRecord;
   reviewIntegrityPolicyVersion?: 1;
   taskId: string;
   reviewId: string;

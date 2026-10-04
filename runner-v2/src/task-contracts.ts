@@ -90,6 +90,7 @@ export interface TaskContractRef {
 
 export interface BuildTask {
   reviewSignals?: import("./review-integrity.js").ReviewSignalsRecord;
+  encodingSubmission?: import("./encoding-safety.js").EncodingSubmissionRecord;
   submissionScope?: SubmissionScopeRecord;
   id: string;
   /** Legacy implementation tasks omit this field; final verification is explicit. */

@@ -395,6 +395,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           type: "submitted",
           ...(result.changeSet?.reviewSignals ? { reviewSignals: structuredClone(result.changeSet.reviewSignals) } : {}),
           ...(result.changeSet?.submissionScope ? { submissionScope: structuredClone(result.changeSet.submissionScope) } : {}),
+          ...(result.changeSet?.encodingSubmission ? { encodingSubmission: structuredClone(result.changeSet.encodingSubmission) } : {}),
           changeSetId: result.loop.changeSetId,
           ...(result.changeSet?.criterionEvidenceLinks
             ? {

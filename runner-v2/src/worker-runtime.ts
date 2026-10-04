@@ -371,6 +371,7 @@ export async function runWorkerTask(
       };
     }
     producedChangeSet = await createChangeSet({
+      ...(currentSubmissionProjection?.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1, executeBytes: options.git?.lifecycle("inspection").runBytes } : {}),
       ...(schedulerState(options)?.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
       ...(scopeIdentity ? { submissionScopeIdentity: scopeIdentity } : {}),
       execute: options.git?.lifecycle("inspection").run,

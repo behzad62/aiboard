@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { captureEncodingSubmission, type EncodingSubmissionRecord } from "./encoding-safety.js";
+import type { GitBinaryRunner } from "./git-command.js";
 import { captureReviewSignals, type ReviewSignalsRecord } from "./review-integrity.js";
 
 import type { ArtifactStore } from "./artifact-store.js";
@@ -22,6 +24,7 @@ export interface ExternalEffectReference {
 }
 
 export interface ChangeSet {
+  encodingSubmission?: EncodingSubmissionRecord;
   reviewSignals?: ReviewSignalsRecord;
   submissionScope?: SubmissionScopeRecord;
   id: string;
@@ -44,6 +47,8 @@ export interface ChangeSet {
 }
 
 export interface CreateChangeSetOptions {
+  encodingSafetyPolicyVersion?: 1;
+  executeBytes?: GitBinaryRunner;
   reviewIntegrityPolicyVersion?: 1;
   submissionScopeIdentity?: SubmissionScopeIdentity;
   execute?: GitRunner;
@@ -145,6 +150,7 @@ export async function createChangeSet(
     .update(`${commit.runId}\0${commit.taskId}\0${commit.revision}`)
     .digest("hex")}`;
   return {
+    ...(options.encodingSafetyPolicyVersion === 1 ? { encodingSubmission: await captureEncodingSubmission({ git: requireGitRunner(options.execute), gitBytes: requireGitRunner(options.executeBytes), workspacePath: options.workspacePath, runId: commit.runId, taskId: commit.taskId, baselineRevision: commit.baselineRevision, taskRevision: commit.revision }) } : {}),
     ...(options.reviewIntegrityPolicyVersion === 1 ? { reviewSignals: await captureReviewSignals({ git: requireGitRunner(options.execute), workspacePath: options.workspacePath, runId: commit.runId, taskId: commit.taskId, baselineRevision: commit.baselineRevision, taskRevision: commit.revision }) } : {}),
     ...(submissionScope ? { submissionScope } : {}),
     id,
