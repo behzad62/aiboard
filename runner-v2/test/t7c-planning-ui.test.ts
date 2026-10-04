@@ -801,4 +801,3 @@ test("T7c browser configuration: fresh options persist while attached saved poli
     assert.equal(result.refused, true); assert.deepEqual(result.legacy, {});
   } finally { await browser.close(); }
 });
-
