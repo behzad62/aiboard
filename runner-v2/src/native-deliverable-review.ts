@@ -1,3 +1,4 @@
+import { captureReviewReads } from "./review-evidence.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
@@ -619,6 +620,7 @@ export class NativeDeliverableReviewRuntime {
       `The worker's report (a claim, not evidence):\nSummary: ${inputs.workerSummary}\n` +
         `Unresolved concerns:\n${inputs.unresolvedConcerns.length > 0 ? inputs.unresolvedConcerns.map((item) => `- ${item}`).join("\n") : "- none"}`,
     ));
+    if (durable?.reviewEvidencePolicyVersion === 1) sections.push(section("review-evidence-policy", "contract", "Every verified claim requires citations: [{path, line}] or [{evidenceId}], backed by successful fs.read, inspect_evidence or complete artifact.read in THIS fresh verdict session. Earlier pass reads and context prose grant no citation authority. Surviving mutants are reserved blocking findings. Release only with survivorDispositions: [{findingId, disposition: \"not_a_real_gap\", rationale}] explaining why each survivor is not a real gap; otherwise return unsatisfied."));
     sections.push(section(
       "worker-claims",
       "claims",
@@ -712,6 +714,9 @@ export class NativeDeliverableReviewRuntime {
       runtimeId: context.candidate.runtimeId,
       sessionId,
       clock: this.clock,
+      ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
+      evidenceStore: this.options.evidenceStore,
+      sessions: this.options.sessions,
       ...(this.options.defectRecorder ? { defects: { ...this.options.defectRecorder } } : {}),
     };
   }
@@ -904,6 +909,9 @@ export interface DeliveryLifecycleToolOptions {
   sessionId: string;
   clock: () => string;
   defects?: ReviewDefectRecorder;
+  ledger?: ToolInvocationLedger;
+  evidenceStore?: EvidenceStore;
+  sessions?: SqliteAgentSessionStore;
 }
 
 function assertDeliveryReviewerContext(context: ToolExecutionContext, options: DeliveryLifecycleToolOptions): void {
@@ -925,6 +933,19 @@ function appendAsReviewer(
 ): ToolExecutionOutput {
   try {
     assertDeliveryReviewerContext(context, options);
+    if (type === "delivery.review_recorded") {
+      const review = rebuildSchedulerProjection(options.store.readRun(options.runId)).delivery?.reviews[options.taskId];
+      if (review?.reviewEvidencePolicyVersion === 1) {
+        if (!options.ledger) throw new Error("Verified claim read capture requires the native tool ledger.");
+        if (review.reviewId !== options.reviewId || review.reviewerRuntimeId !== options.runtimeId || review.stage !== "report_delivered" || options.sessionId !== deliverySessionId(options.runId, options.reviewId, "verdict", options.runtimeId, review.independence!)) throw new Error("Read capture requires the current bound review.");
+        const sessionEvents = options.sessions?.events(options.sessionId) ?? [];
+        const created = sessionEvents[0];
+        const actor = created?.payload.actor as { role?: string; id?: string } | undefined;
+        if (created?.type !== "session.created" || created.payload.runId !== options.runId || actor?.role !== "verifier" || actor.id !== options.runtimeId || sessionEvents.some((event) => event.type === "session.completed" || event.type === "session.submitted" || event.type === "session.suspended") || review.sessionIds.includes(options.sessionId)) throw new Error("Read capture requires the active fresh native verdict session.");
+        const capture = captureReviewReads(options.ledger, { runId: options.runId, taskId: options.taskId, reviewId: options.reviewId, changeSetId: review.changeSetId, submissionAttempt: review.submissionAttempt, reviewerRuntimeId: options.runtimeId, reviewerModelIdentity: review.reviewerModelIdentity!, sessionId: options.sessionId }, options.evidenceStore);
+        options.store.append({ runId: options.runId, type: "delivery.reads_captured", occurredAt: options.clock(), actor: { role: "runner", id: DELIVERY_REVIEW_RUNNER_ID }, idempotencyKey: `delivery-reads:${options.reviewId}:${options.sessionId}:${createHash("sha256").update(JSON.stringify(capture)).digest("hex")}`, payload: { taskId: options.taskId, reviewId: options.reviewId, sessionId: options.sessionId, capture } });
+      }
+    }
     options.store.append({
       runId: options.runId,
       type: type as Parameters<SchedulerStore["append"]>[0]["type"],
@@ -1088,6 +1109,7 @@ interface SubmitDeliverableVerdictInput {
   claimVerdicts: unknown[];
   priorFindingChecks?: unknown[];
   testConsolidation?: Record<string, unknown>;
+  survivorDispositions?: unknown[];
 }
 
 export function createSubmitDeliverableVerdictTool(
@@ -1115,11 +1137,13 @@ export function createSubmitDeliverableVerdictTool(
               minimumExecuted: { type: "integer", minimum: 1 },
             }, required: ["id", "disposition", "affectedTestIds", "behaviorProof", "reason", "planRevisionId", "planDigest", "baselinePinDigest", "candidatePinDigest", "allowedChanges", "minimumExecuted"],
           },
+          survivorDispositions: { type: "array", items: { type: "object", properties: { findingId: { type: "string", minLength: 1 }, disposition: { type: "string", enum: ["not_a_real_gap"] }, rationale: { type: "string", minLength: 1 } }, required: ["findingId", "disposition", "rationale"], additionalProperties: false } },
           claimVerdicts: {
             type: "array",
             items: {
               type: "object",
               properties: {
+                citations: { type: "array", minItems: 1, items: { oneOf: [{ type: "object", properties: { path: { type: "string", minLength: 1 }, line: { type: "integer", minimum: 1 } }, required: ["path", "line"], additionalProperties: false }, { type: "object", properties: { evidenceId: { type: "string", minLength: 1 } }, required: ["evidenceId"], additionalProperties: false }] } },
                 claimId: { type: "string", minLength: 1 },
                 status: { type: "string", enum: ["verified", "unverified"] },
                 rationale: { type: "string", minLength: 1 },
@@ -1157,6 +1181,7 @@ export function createSubmitDeliverableVerdictTool(
       if (value.priorFindingChecks !== undefined && !Array.isArray(value.priorFindingChecks)) {
         return { ok: false, issues: ["priorFindingChecks must be an array"] };
       }
+      if (value.survivorDispositions !== undefined && !Array.isArray(value.survivorDispositions)) return { ok: false, issues: ["survivorDispositions must be an array"] };
       if (value.testConsolidation !== undefined && !objectInput(value.testConsolidation)) return { ok: false, issues: ["testConsolidation must be an object"] };
       return {
         ok: true,
@@ -1165,6 +1190,7 @@ export function createSubmitDeliverableVerdictTool(
           satisfied: value.satisfied,
           claimVerdicts: value.claimVerdicts,
           ...(value.priorFindingChecks !== undefined ? { priorFindingChecks: value.priorFindingChecks as unknown[] } : {}),
+          ...(value.survivorDispositions !== undefined ? { survivorDispositions: value.survivorDispositions as unknown[] } : {}),
           ...(value.testConsolidation !== undefined ? { testConsolidation: value.testConsolidation as Record<string, unknown> } : {}),
         },
       };
@@ -1179,6 +1205,7 @@ export function createSubmitDeliverableVerdictTool(
         satisfied: input.satisfied,
         claimVerdicts: input.claimVerdicts,
         ...(input.priorFindingChecks !== undefined ? { priorFindingChecks: input.priorFindingChecks } : {}),
+        ...(input.survivorDispositions !== undefined ? { survivorDispositions: input.survivorDispositions } : {}),
         ...(input.testConsolidation !== undefined ? { testConsolidation: input.testConsolidation } : {}),
       },
       { type: "verifier_verdict_submitted", reviewId: options.reviewId, satisfied: input.satisfied },

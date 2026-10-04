@@ -365,6 +365,7 @@ export class ToolBroker implements AgentToolRuntime {
       ...(extensionId ? { extensionId } : {}),
       runId: context.runId,
       sessionId: context.sessionId,
+      actor: { ...context.actor },
       replaySafe: tool.definition.readOnly === true && tool.definition.effect === "none",
       effect: tool.definition.effect,
       access,

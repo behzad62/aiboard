@@ -55,6 +55,7 @@ export interface DeliveryClaim {
 }
 
 export interface DeliveryClaimVerdict {
+  citations?: import("./review-evidence.js").ReviewCitation[];
   claimId: string;
   claim: string;
   status: "verified" | "unverified";
@@ -176,6 +177,9 @@ export interface DeliveryRiskRecord {
 }
 
 export interface DeliveryReviewRecord {
+  reviewEvidencePolicyVersion?: 1;
+  readCapture?: import("./review-evidence.js").ReviewReadCapture;
+  survivorDispositions?: Array<{ findingId: string; disposition: "not_a_real_gap"; rationale: string }>;
   runnerEncoding?: import("./encoding-safety.js").EncodingSubmissionRecord;
   reviewIntegrityPolicyVersion?: 1;
   taskId: string;
@@ -501,7 +505,7 @@ export function validateDeliveryObligations(value: unknown, recordedAt: string):
 
 export function openBlockingFindings(review: DeliveryReviewRecord | undefined): PlanningFinding[] {
   return (review?.findings ?? []).filter(
-    (finding) => finding.severity === "blocking" && (review?.runnerScope?.findings.some((fact) => fact.id === finding.id)
+    (finding) => finding.severity === "blocking" && !review?.survivorDispositions?.some((item) => item.findingId === finding.id) && (review?.runnerScope?.findings.some((fact) => fact.id === finding.id)
       ? finding.disposition?.resolution !== "plan_reconciled" || !finding.disposition.resolvedInRevisionDigest
       : finding.disposition === undefined),
   );

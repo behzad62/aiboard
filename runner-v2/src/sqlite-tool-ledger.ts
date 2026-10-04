@@ -83,6 +83,7 @@ export class SqliteToolLedger implements ToolInvocationLedger {
           ...(input.extensionId ? { extensionId: input.extensionId } : {}),
           effect: input.effect,
           access: input.access,
+          ...(input.actor ? { actor: input.actor } : {}),
           outsideWorkspace: input.outsideWorkspace,
         })
       );
@@ -221,6 +222,7 @@ function decodeEvent(
     metadata?.effect === "external"
       ? { effect: metadata.effect }
       : {}),
+    ...(isAgentActor(metadata?.actor) ? { actor: metadata.actor } : {}),
     ...(isAccessRequest(metadata?.access)
       ? { access: metadata.access }
       : {}),
@@ -261,4 +263,10 @@ function decodeResult(row: EventRow): ToolResult {
       cause: error,
     });
   }
+}
+
+function isAgentActor(value: unknown): value is import("./agent-contracts.js").AgentActor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const actor = value as Record<string, unknown>;
+  return typeof actor.id === "string" && actor.id.length > 0 && ["architect", "worker", "subagent", "verifier"].includes(actor.role as string);
 }

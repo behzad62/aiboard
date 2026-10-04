@@ -1,3 +1,4 @@
+import { validateReadCapture, validateCitations, isMutationSurvivorFindingId } from "./review-evidence.js";
 import {
   DELIVERY_ACCEPTANCE_RUNNER_ID,
   DELIVERY_REVIEW_RUNNER_ID,
@@ -251,6 +252,7 @@ export type SchedulerEventType =
   | "delivery.review_requested"
   | "delivery.obligations_recorded"
   | "delivery.criteria_and_diff_delivered"
+  | "delivery.reads_captured"
   | "delivery.findings_recorded"
   | "delivery.report_delivered"
   | "delivery.review_recorded"
@@ -949,6 +951,7 @@ export interface SchedulerProjection {
   submissionScopePolicyVersion?: 1;
   reviewIntegrityPolicyVersion?: 1;
   encodingSafetyPolicyVersion?: 1;
+  reviewEvidencePolicyVersion?: 1;
   guidance: Record<string, GuidanceProjection>;
   userGuidance: Record<string, UserGuidanceItem>;
   userGuidanceVersion: number;
@@ -3302,8 +3305,9 @@ export function reduceSchedulerEvent(
       if (event.payload.testIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1)) throw new Error("Invalid test-integrity initialization authority or version.");
       if (event.payload.submissionScopePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.submissionScopePolicyVersion !== 1)) throw new Error("Invalid submission-scope initialization authority or version.");
       if (event.payload.reviewIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.reviewIntegrityPolicyVersion !== 1)) throw new Error("Invalid review-integrity initialization authority or version.");
+      if (event.payload.reviewEvidencePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.reviewEvidencePolicyVersion !== 1)) throw new Error("Invalid review-evidence initialization authority or version.");
       if (event.payload.encodingSafetyPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.encodingSafetyPolicyVersion !== 1)) throw new Error("Invalid encoding-safety initialization authority or version.");
-      return { ...emptySchedulerProjection(event), ...(event.payload.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1 as const } : {}), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
+      return { ...emptySchedulerProjection(event), ...(event.payload.reviewEvidencePolicyVersion === 1 ? { reviewEvidencePolicyVersion: 1 as const } : {}), ...(event.payload.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1 as const } : {}), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
     }
     if (event.type === "run.policy_configured") {
       if (event.actor.role !== "runner") {
@@ -3600,6 +3604,10 @@ export function reduceSchedulerEvent(
         current.runPolicy === undefined
       ) {
         const initialObjective = event.payload.objective;
+        if (event.payload.reviewEvidencePolicyVersion !== undefined) {
+          if (event.actor.role !== "runner" || event.payload.reviewEvidencePolicyVersion !== 1) throw new Error("Invalid review-evidence initialization authority or version.");
+          next.reviewEvidencePolicyVersion = 1;
+        }
         if (event.payload.encodingSafetyPolicyVersion !== undefined) {
           if (event.actor.role !== "runner" || event.payload.encodingSafetyPolicyVersion !== 1) throw new Error("Invalid encoding-safety initialization authority or version.");
           next.encodingSafetyPolicyVersion = 1;
@@ -5790,6 +5798,7 @@ export function reduceSchedulerEvent(
     case "delivery.criteria_and_diff_delivered":
     case "delivery.findings_recorded":
     case "delivery.report_delivered":
+    case "delivery.reads_captured":
     case "delivery.review_recorded":
     case "delivery.boundary_started":
     case "delivery.boundary_checked":
@@ -6915,6 +6924,14 @@ function reduceDeliveryEvent(
     case "delivery.report_delivered":
       deliveryReportDelivered(state, event);
       return;
+    case "delivery.reads_captured": {
+      requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+      const review = requireDeliveryReview(state, event, ["report_delivered"]);
+      if (review.reviewEvidencePolicyVersion !== 1) throw new Error("Review evidence capture requires activated policy.");
+      const sessionId = requireFreshDeliverySession(state, event);
+      review.readCapture = validateReadCapture(event.payload.capture, { runId: event.runId, taskId: review.taskId, reviewId: review.reviewId, changeSetId: review.changeSetId, submissionAttempt: review.submissionAttempt, reviewerRuntimeId: review.reviewerRuntimeId!, reviewerModelIdentity: review.reviewerModelIdentity!, sessionId });
+      return;
+    }
     case "delivery.review_recorded":
       deliveryReviewRecorded(current, state, event);
       return;
@@ -7096,6 +7113,7 @@ function deliveryReviewStarted(
     authorModelIdentity,
     architectRuntimeId,
     architectModelIdentity,
+    ...(current.reviewEvidencePolicyVersion === 1 ? { reviewEvidencePolicyVersion: 1 } : {}),
     ...(current.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
     ...(current.submissionScopePolicyVersion === 1 ? { runnerScope: structuredClone(task.submissionScope!) } : {}),
     ...(current.encodingSafetyPolicyVersion === 1 ? { runnerEncoding: structuredClone(task.encodingSubmission!) } : {}),
@@ -7249,6 +7267,15 @@ function deliveryFindingsRecorded(state: DeliveryState, event: SchedulerEvent): 
   if (required.probe && !depth.probe) {
     throw new Error("A high-tier deliverable review requires the OA-11 probe result.");
   }
+  if (review.reviewEvidencePolicyVersion === 1) {
+    if (findings.some((finding) => isMutationSurvivorFindingId(finding.id))) throw new Error("Reviewer findings cannot use reserved mutation survivor identities.");
+    if (depth.probe?.rung === "builtin_mutator" && (depth.probe.survivors.length > depth.probe.mutantsExecuted - depth.probe.mutantsCaught || depth.probe.mutantsExecuted > depth.probe.mutantsGenerated)) throw new Error("Survivors must be actually executed probe mutants.");
+    if (depth.probe?.rung === "builtin_mutator" && depth.probe.mutantsExecuted > 0) for (const [index, survivor] of (depth.probe?.survivors ?? []).entries()) {
+      const location = /^\S+ (.+:\d+): /.exec(survivor)?.[1];
+      if (!location) throw new Error("Mutation survivor lacks changed-line location.");
+      findings.push({ id: `mutation-survivor:${index}`, category: "weakened_obligation", severity: "blocking", location, claim: `Mutation survived: ${survivor}`, evidenceRefs: [...depth.probe!.evidenceIds] });
+    }
+  }
   review.findings = findings;
   review.depth = depth;
   review.sessionIds.push(sessionId);
@@ -7298,7 +7325,12 @@ function deliveryReviewRecorded(current: SchedulerProjection, state: DeliverySta
     if (candidate.status !== "verified" && candidate.status !== "unverified") {
       throw new Error(`Worker claim ${claimId} verdict status is invalid.`);
     }
-    return { claimId, claim: claim.text, status: candidate.status, rationale: requiredString(candidate, "rationale") };
+    let citations;
+    if (review.reviewEvidencePolicyVersion === 1 && candidate.status === "verified") {
+      if (review.readCapture?.sessionId !== sessionId) throw new Error("Verified claim citation requires current session read capture.");
+      citations = validateCitations(candidate.citations, review.readCapture);
+    }
+    return { claimId, claim: claim.text, status: candidate.status, rationale: requiredString(candidate, "rationale"), ...(citations ? { citations } : {}) };
   });
   if (!sameValue(verdicts.map((verdict) => verdict.claimId).sort(), claims.map((claim) => claim.id).sort())) {
     throw new Error("Deliverable review verdict must judge every worker claim exactly once.");
@@ -7329,7 +7361,7 @@ function deliveryReviewRecorded(current: SchedulerProjection, state: DeliverySta
     for (const check of checks) {
       if (check.resolution !== "outstanding") continue;
       const priorFinding = prior.findings?.find((finding) => finding.id === check.findingId);
-      if (!priorFinding || priorFinding.severity !== "blocking" || priorFinding.disposition) continue;
+      if (!priorFinding || priorFinding.severity !== "blocking" || priorFinding.disposition || prior.survivorDispositions?.some((item) => item.findingId === priorFinding.id)) continue;
       findings.push({
         id: `carried:${priorFinding.id}`,
         category: priorFinding.category,
@@ -7344,7 +7376,19 @@ function deliveryReviewRecorded(current: SchedulerProjection, state: DeliverySta
   } else if (event.payload.priorFindingChecks !== undefined) {
     throw new Error("Only a fix re-review checks prior findings.");
   }
-  const blocked = findings.some((finding) => finding.severity === "blocking") ||
+  if (review.reviewEvidencePolicyVersion === 1 && event.payload.survivorDispositions !== undefined) {
+    if (!Array.isArray(event.payload.survivorDispositions)) throw new Error("Survivor dispositions must be an array.");
+    const seen = new Set<string>();
+    review.survivorDispositions = event.payload.survivorDispositions.map((value) => {
+      if (!isRecord(value)) throw new Error("Invalid survivor disposition.");
+      const findingId = requiredString(value, "findingId");
+      const finding = findings.find((item) => item.id === findingId);
+      if (!finding || !isMutationSurvivorFindingId(findingId) || seen.has(findingId) || value.disposition !== "not_a_real_gap") throw new Error("Invalid or duplicate survivor disposition.");
+      seen.add(findingId);
+      return { findingId, disposition: "not_a_real_gap" as const, rationale: requiredString(value, "rationale") };
+    });
+  }
+  const blocked = findings.some((finding) => finding.severity === "blocking" && !review.survivorDispositions?.some((item) => item.findingId === finding.id)) ||
     verdicts.some((verdict) => verdict.status === "unverified");
   if (event.payload.satisfied === blocked) {
     throw new Error(
@@ -7479,6 +7523,7 @@ function applyDeliveryDispositions(
     for (const raw of findingDispositions) {
       if (!isRecord(raw)) throw new Error("Deliverable finding disposition is invalid.");
       const findingId = requiredString(raw, "findingId");
+      if (review.reviewEvidencePolicyVersion === 1 && isMutationSurvivorFindingId(findingId)) throw new Error("Mutation survivors require the independent reviewer disposition.");
       if (!open.has(findingId)) {
         throw new Error(`Deliverable finding ${findingId} is not an open blocking finding.`);
       }
