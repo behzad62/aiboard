@@ -51,6 +51,7 @@ export interface WorkerAssignment {
 export type WorkerOutcome =
   | {
       type: "submitted";
+      reviewSignals?: import("./review-integrity.js").ReviewSignalsRecord;
       submissionScope?: import("./submission-scope-contracts.js").SubmissionScopeRecord;
       changeSetId: string;
       criterionEvidenceLinks?: CriterionEvidenceLink[];
@@ -523,6 +524,7 @@ export class TaskScheduler {
       // T4: the worker is done writing — release the packet claim so later
       // tasks can reuse its files/resources (best-effort, idempotent).
       this.transition(taskId, "submitted", attempt, {
+        ...(outcome.reviewSignals ? { reviewSignals: structuredClone(outcome.reviewSignals) } : {}),
         ...(outcome.submissionScope ? { submissionScope: structuredClone(outcome.submissionScope) } : {}),
         changeSetId: outcome.changeSetId,
         ...(outcome.criterionEvidenceLinks

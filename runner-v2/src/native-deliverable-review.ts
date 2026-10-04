@@ -299,6 +299,15 @@ export class NativeDeliverableReviewRuntime {
       };
     }
     const authorIdentity = canonicalModelIdentity(author.modelId);
+    if (projection.reviewIntegrityPolicyVersion === 1) {
+      const history = projection.runtime.workerAssignmentHistory?.[`${task.id}:${task.attempt}`];
+      if (!history?.length) throw new DeliverableReviewInputsUnavailableError("Captured attempt author history unavailable.");
+      for (const assignment of history) {
+        const candidate = this.candidateById.get(assignment.runtimeId);
+        if (!candidate || canonicalModelIdentity(candidate.modelId) !== assignment.modelIdentity) throw new DeliverableReviewInputsUnavailableError("Captured author model identity differs from configured runtime.");
+      }
+      if (!task.reviewSignals || task.reviewSignals.taskRevision !== inputs.taskRevision || task.reviewSignals.baselineRevision !== inputs.baselineRevision) throw new DeliverableReviewInputsUnavailableError("Exact submitted review signals unavailable.");
+    }
     const generation = nextGeneration(projection, task.id);
     const reviewId = deliveryReviewId(task.id, task.attempt, generation);
     this.append(request.runId, "delivery.review_started", `${reviewId}:started`, {
@@ -321,6 +330,7 @@ export class NativeDeliverableReviewRuntime {
       ? modelTrackRecordSnapshot(this.options.defectRecorder.modelOutcomes(this.options.defectRecorder.projectId, request.runId))
       : undefined;
     const riskInput = {
+      ...(projection.reviewIntegrityPolicyVersion === 1 ? { runnerSignals: structuredClone(task.reviewSignals!.signals) } : {}),
       authorModelId: authorIdentity,
       changedFiles: [...inputs.changedPaths],
       ...diffLineCounts(inputs.diffText),
@@ -362,8 +372,8 @@ export class NativeDeliverableReviewRuntime {
       ...(prior ? { priorReviewId: prior.reviewId } : {}),
     });
     const tier = risk.tier;
-    const depth = deliveryReviewDepthForTier(tier);
-    const context: PassContext = { request, reviewId, inputs, candidate, model, independence, tier, defectClasses: this.resolveDefectClasses() };
+    const depth = deliveryReviewDepthForTier(tier, projection.reviewIntegrityPolicyVersion);
+    const context: PassContext = { request, reviewId, inputs, candidate, model, independence, tier, ...(projection.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}), defectClasses: this.resolveDefectClasses() };
     let workspace: { path: string } | undefined;
     try {
       if (depth.obligationsFirst) {
@@ -443,7 +453,7 @@ export class NativeDeliverableReviewRuntime {
       recordedAt: this.clock(),
     });
     const messages: AgentMessage[] = [
-      { id: `delivery-${pass}-system`, role: "system", content: deliveryReviewerSystemPrompt(pass, context.tier) },
+      { id: `delivery-${pass}-system`, role: "system", content: deliveryReviewerSystemPrompt(pass, context.tier, context.reviewIntegrityPolicyVersion) },
       { id: `context:${pack.digest}`, role: "user", content: pack.text },
     ];
     // Fresh-context device: every pass opens a new session whose event list
@@ -544,6 +554,11 @@ export class NativeDeliverableReviewRuntime {
       ));
     }
     if (pass === "obligations") return sections;
+    if (context.reviewIntegrityPolicyVersion === 1) {
+      const record = this.projection(context.request.runId).tasks[inputs.taskId]?.reviewSignals;
+      if (!record || record.changeSetId !== inputs.changeSetId) throw new DeliverableReviewInputsUnavailableError("Exact runner signals unavailable for review context.");
+      sections.push(section("runner-signals", "depth", `Runner submission signals (mechanical reference facts; inspect their implications):\n${JSON.stringify(record.signals, null, 2)}`));
+    }
     if (durable?.runnerScope) {
       sections.push(section("submission-scope-findings", "contract",
         "Runner submission scope findings (blocking; only the Architect can resolve them against the current plan):\n" +
@@ -733,6 +748,7 @@ export class NativeDeliverableReviewRuntime {
 }
 
 interface PassContext {
+  reviewIntegrityPolicyVersion?: 1;
   request: NativeDeliverableReviewRequest;
   reviewId: string;
   inputs: DeliverableReviewInputs;
@@ -847,7 +863,7 @@ export const DELIVERABLE_REVIEWER_INVARIANTS = [
   "Your records are durable evidence; another reviewer may audit them without seeing your session.",
 ].join("\n");
 
-export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTier): string {
+export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTier, reviewIntegrityPolicyVersion?: 1): string {
   const instructions = pass === "obligations"
     ? [
         "You see the acceptance criteria only. You have NOT seen the diff yet.",
@@ -856,7 +872,7 @@ export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTie
     : pass === "findings"
       ? [
           "Inspect the task-revision checkout with your read tools and judge the diff against every criterion.",
-          tier === "low"
+          tier === "low" && reviewIntegrityPolicyVersion !== 1
             ? "Record your findings with record_deliverable_findings exactly once."
             : "At this risk tier you must use at least one inspection tool before record_deliverable_findings; the kernel refuses findings without a real inspection.",
           "Severity blocking means a criterion is not met or the change is unsafe; advisory means a gap worth noting. An empty list means the change checks out.",

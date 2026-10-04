@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { captureReviewSignals, type ReviewSignalsRecord } from "./review-integrity.js";
 
 import type { ArtifactStore } from "./artifact-store.js";
 import {
@@ -21,6 +22,7 @@ export interface ExternalEffectReference {
 }
 
 export interface ChangeSet {
+  reviewSignals?: ReviewSignalsRecord;
   submissionScope?: SubmissionScopeRecord;
   id: string;
   runId: string;
@@ -42,6 +44,7 @@ export interface ChangeSet {
 }
 
 export interface CreateChangeSetOptions {
+  reviewIntegrityPolicyVersion?: 1;
   submissionScopeIdentity?: SubmissionScopeIdentity;
   execute?: GitRunner;
   workspacePath: string;
@@ -142,6 +145,7 @@ export async function createChangeSet(
     .update(`${commit.runId}\0${commit.taskId}\0${commit.revision}`)
     .digest("hex")}`;
   return {
+    ...(options.reviewIntegrityPolicyVersion === 1 ? { reviewSignals: await captureReviewSignals({ git: requireGitRunner(options.execute), workspacePath: options.workspacePath, runId: commit.runId, taskId: commit.taskId, baselineRevision: commit.baselineRevision, taskRevision: commit.revision }) } : {}),
     ...(submissionScope ? { submissionScope } : {}),
     id,
     runId: commit.runId,

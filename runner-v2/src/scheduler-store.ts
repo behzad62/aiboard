@@ -55,6 +55,7 @@ import {
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import { validateSubmissionScopeRecord } from "./submission-scope-capture.js";
+import { validateReviewSignals } from "./review-integrity.js";
 import type { ExecutionPlanRevision, ExecutionTaskContract } from "./planning-contracts.js";
 import {
   planFinalVerification,
@@ -347,6 +348,7 @@ export interface ProviderHealthProjection {
 }
 
 export interface WorkerRuntimeAssignmentProjection {
+  modelIdentity?: string;
   taskId: string;
   attempt: number;
   runtimeId: string;
@@ -366,6 +368,7 @@ export interface ArchitectHandoffProjection {
 }
 
 export interface RuntimeProjection {
+  workerAssignmentHistory?: Record<string, WorkerRuntimeAssignmentProjection[]>;
   providerHealth: Record<string, ProviderHealthProjection>;
   workerAssignments: Record<string, WorkerRuntimeAssignmentProjection>;
   architect: {
@@ -943,6 +946,7 @@ export interface SchedulerProjection {
   tasks: Record<string, BuildTask>;
   /** E2 activation is stamped only on fresh runs; old logs retain absent shape. */
   submissionScopePolicyVersion?: 1;
+  reviewIntegrityPolicyVersion?: 1;
   guidance: Record<string, GuidanceProjection>;
   userGuidance: Record<string, UserGuidanceItem>;
   userGuidanceVersion: number;
@@ -3295,7 +3299,8 @@ export function reduceSchedulerEvent(
       }
       if (event.payload.testIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1)) throw new Error("Invalid test-integrity initialization authority or version.");
       if (event.payload.submissionScopePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.submissionScopePolicyVersion !== 1)) throw new Error("Invalid submission-scope initialization authority or version.");
-      return { ...emptySchedulerProjection(event), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
+      if (event.payload.reviewIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.reviewIntegrityPolicyVersion !== 1)) throw new Error("Invalid review-integrity initialization authority or version.");
+      return { ...emptySchedulerProjection(event), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
     }
     if (event.type === "run.policy_configured") {
       if (event.actor.role !== "runner") {
@@ -3458,6 +3463,7 @@ export function reduceSchedulerEvent(
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
+      ...(current.runtime.workerAssignmentHistory ? { workerAssignmentHistory: structuredClone(current.runtime.workerAssignmentHistory) } : {}),
       architect: { ...current.runtime.architect },
     },
     lastSequence: event.sequence,
@@ -3591,6 +3597,10 @@ export function reduceSchedulerEvent(
         current.runPolicy === undefined
       ) {
         const initialObjective = event.payload.objective;
+        if (event.payload.reviewIntegrityPolicyVersion !== undefined) {
+          if (event.actor.role !== "runner" || event.payload.reviewIntegrityPolicyVersion !== 1) throw new Error("Invalid review-integrity initialization authority or version.");
+          next.reviewIntegrityPolicyVersion = 1;
+        }
         if (event.payload.submissionScopePolicyVersion !== undefined) {
           if (event.actor.role !== "runner" || event.payload.submissionScopePolicyVersion !== 1) throw new Error("Invalid submission-scope initialization authority or version.");
           next.submissionScopePolicyVersion = 1;
@@ -4839,6 +4849,12 @@ export function reduceSchedulerEvent(
         if (event.actor.role !== "runner" || event.actor.id !== "scheduler") throw new Error("Activated submission requires the trusted scheduler actor.");
         transitionPatch.submissionScope = validateSubmissionScopeRecord(current, taskId, requiredString(transitionPatch as Record<string, unknown>, "changeSetId"), transitionPatch.submissionScope);
       }
+      if (transitionPatch.reviewSignals !== undefined && (status !== "submitted" || current.reviewIntegrityPolicyVersion !== 1)) throw new Error("Review signals apply only to activated submissions.");
+      if (status === "submitted" && current.reviewIntegrityPolicyVersion === 1) {
+        if (event.actor.role !== "runner" || event.actor.id !== "scheduler" || !task.workspaceBaselineRevision) throw new Error("Review-integrity submission requires the trusted scheduler and baseline.");
+        transitionPatch.reviewSignals = validateReviewSignals(transitionPatch.reviewSignals, { runId: current.runId, taskId, baselineRevision: task.workspaceBaselineRevision, changeSetId: requiredString(transitionPatch as Record<string, unknown>, "changeSetId") });
+        if (transitionPatch.submissionScope && transitionPatch.reviewSignals.taskRevision !== transitionPatch.submissionScope.taskRevision) throw new Error("Submission guard revisions differ.");
+      }
       if (status === "assigned" && task.acceptanceCriteria) {
         requiredAssignedWorkerId(transitionPatch.assignedWorkerId, "Task assignment");
       }
@@ -5625,7 +5641,18 @@ export function reduceSchedulerEvent(
         attempt,
         runtimeId: requiredString(event.payload, "runtimeId"),
         sessionId,
+        ...(current.reviewIntegrityPolicyVersion === 1 ? { modelIdentity: canonicalIdentity(event.payload, "modelIdentity") } : {}),
       };
+      if (current.reviewIntegrityPolicyVersion === 1) {
+        if (event.actor.id !== "runtime-router" || task.status !== "running") throw new Error("Review-integrity assignments require the trusted runtime router and running attempt.");
+        const history = next.runtime.workerAssignmentHistory ?? {};
+        const key = `${taskId}:${attempt}`;
+        const assignment = next.runtime.workerAssignments[key]!;
+        const existing = history[key] ?? [];
+        if (existing.some((entry) => entry.runtimeId === assignment.runtimeId && entry.modelIdentity !== assignment.modelIdentity)) throw new Error("An attempt runtime model identity cannot change.");
+        history[key] = [...existing, { ...assignment }];
+        next.runtime.workerAssignmentHistory = history;
+      }
       break;
     }
     case "architect.runtime_assigned": {
@@ -7030,6 +7057,15 @@ function deliveryReviewStarted(
       existing.stage === "completed" ? existing : { ...existing, stage: "abandoned" },
     ];
   }
+  if (current.reviewIntegrityPolicyVersion === 1) {
+    const assignments = current.runtime.workerAssignmentHistory?.[`${taskId}:${attempt}`];
+    if (!assignments?.length || assignments.at(-1)?.runtimeId !== authorRuntimeId || assignments.at(-1)?.modelIdentity !== authorModelIdentity) throw new Error("Review requires the exact captured attempt author history.");
+    for (const coauthor of assignments) {
+      if (!coauthor.modelIdentity) throw new Error("Review author history has no model identity.");
+      if (state.authorModelIdentities[coauthor.runtimeId] && state.authorModelIdentities[coauthor.runtimeId] !== coauthor.modelIdentity) throw new Error("Review author model identity changed during the run.");
+      state.authorModelIdentities[coauthor.runtimeId] = coauthor.modelIdentity;
+    }
+  }
   state.authorModelIdentities[authorRuntimeId] = authorModelIdentity;
   state.reviews[taskId] = {
     taskId,
@@ -7043,6 +7079,7 @@ function deliveryReviewStarted(
     authorModelIdentity,
     architectRuntimeId,
     architectModelIdentity,
+    ...(current.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
     ...(current.submissionScopePolicyVersion === 1 ? { runnerScope: structuredClone(task.submissionScope!) } : {}),
     stage: "started",
     startedSequence: event.sequence,
@@ -7123,6 +7160,11 @@ function deliveryReviewRequested(current: SchedulerProjection, state: DeliverySt
     linesRemoved,
     attempts,
     acceptedFailuresUsed: riskInput.acceptedFailuresUsed,
+    ...(current.reviewIntegrityPolicyVersion === 1 ? { runnerSignals: (() => {
+      const record = current.tasks[review.taskId]?.reviewSignals;
+      if (!record || record.changeSetId !== review.changeSetId || JSON.stringify(riskInput.runnerSignals) !== JSON.stringify(record.signals)) throw new Error("Review risk must use the exact submitted runner signals.");
+      return structuredClone(record.signals);
+    })() } : {}),
     ...(riskInput.trackRecord !== undefined ? { trackRecord: readTrackRecordSnapshot(riskInput.trackRecord) } : {}),
   });
   if (risk.tier !== tier || risk.digest !== requiredString(event.payload, "riskDigest")) {
@@ -7177,9 +7219,9 @@ function deliveryFindingsRecorded(state: DeliveryState, event: SchedulerEvent): 
   if (review.runnerScope && findings.some((finding) => finding.id.startsWith("submission-scope:"))) throw new Error("Reviewer findings cannot use reserved runner scope identities.");
   for (const fact of review.runnerScope?.findings ?? []) findings.push({ id: fact.id, category: "scope_creep", severity: "blocking", location: fact.path, claim: fact.message, evidenceRefs: [review.runnerScope!.changeSetId] });
   const depth = parseDeliveryDepth(event.payload.depth);
-  const required = deliveryReviewDepthForTier(review.risk!.tier);
+  const required = deliveryReviewDepthForTier(review.risk!.tier, review.reviewIntegrityPolicyVersion);
   if (required.repositoryInspection && depth.inspectionToolCalls < 1) {
-    throw new Error("A medium/high deliverable review requires at least one real inspection tool call.");
+    throw new Error("This deliverable review requires at least one real inspection tool call.");
   }
   if (required.affectedTests && !depth.affectedTests) {
     throw new Error("A high-tier deliverable review requires the affected-test run.");
@@ -10921,6 +10963,7 @@ function cloneBuildTask(task: BuildTask): BuildTask {
   return {
     ...task,
     ...(task.submissionScope ? { submissionScope: structuredClone(task.submissionScope) } : {}),
+    ...(task.reviewSignals ? { reviewSignals: structuredClone(task.reviewSignals) } : {}),
     dependencies: [...task.dependencies],
     requiredCapabilities: [...task.requiredCapabilities],
     ...(task.acceptanceCriteria

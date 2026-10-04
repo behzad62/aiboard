@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { assessChangeRisk, type ChangeRiskInput, type ChangeRiskLevel, type ModelTrackRecordSnapshot } from "./change-risk.js";
 import {
   PLANNING_FINDING_CATEGORIES,
@@ -175,6 +176,7 @@ export interface DeliveryRiskRecord {
 }
 
 export interface DeliveryReviewRecord {
+  reviewIntegrityPolicyVersion?: 1;
   taskId: string;
   reviewId: string;
   generation: number;
@@ -315,7 +317,7 @@ export function phaseAcceptanceKey(planRevisionId: string, phaseId: string): str
 }
 
 /** OA-4: review depth by the deterministic T5 risk tier. */
-export function deliveryReviewDepthForTier(tier: DeliveryReviewTier): {
+export function deliveryReviewDepthForTier(tier: DeliveryReviewTier, reviewIntegrityPolicyVersion?: 1): {
   obligationsFirst: boolean;
   repositoryInspection: boolean;
   affectedTests: boolean;
@@ -323,7 +325,7 @@ export function deliveryReviewDepthForTier(tier: DeliveryReviewTier): {
 } {
   return {
     obligationsFirst: tier === "high",
-    repositoryInspection: tier !== "low",
+    repositoryInspection: reviewIntegrityPolicyVersion === 1 || tier !== "low",
     affectedTests: tier === "high",
     probe: tier === "high",
   };
@@ -331,6 +333,7 @@ export function deliveryReviewDepthForTier(tier: DeliveryReviewTier): {
 
 /** The T5 risk inputs a review request records; the kernel recomputes the tier from them. */
 export interface DeliveryRiskInput {
+  runnerSignals?: { unreferencedSourceFiles: string[]; testOnlyDiff: boolean };
   authorModelId: string;
   changedFiles: string[];
   linesAdded: number;
@@ -352,6 +355,19 @@ export function assessDeliveryRisk(input: DeliveryRiskInput): DeliveryRiskRecord
     ...(input.trackRecord ? { trackRecordSnapshot: input.trackRecord } : {}),
   };
   const assessment = assessChangeRisk(riskInput);
+  if (input.runnerSignals) {
+    const signals = input.runnerSignals;
+    if (!Array.isArray(signals.unreferencedSourceFiles) || signals.unreferencedSourceFiles.some((path) => typeof path !== "string" || !input.changedFiles.includes(path)) || typeof signals.testOnlyDiff !== "boolean") throw new Error("Invalid runner review signals.");
+    const raised = signals.testOnlyDiff || signals.unreferencedSourceFiles.length > 0;
+    return {
+      tier: raised && assessment.tier === "low" ? "medium" : assessment.tier,
+      score: raised ? Math.max(2, assessment.score) : assessment.score,
+      digest: createHash("sha256").update(JSON.stringify([assessment.digest, signals])).digest("hex"),
+      signals: [...assessment.signals.map((signal) => `${signal.signal}:${signal.points}`),
+        ...(signals.unreferencedSourceFiles.length ? [`unreferenced_source:${signals.unreferencedSourceFiles.join(",")}`] : []),
+        ...(signals.testOnlyDiff ? ["test_only_diff:medium_floor"] : [])],
+    };
+  }
   return {
     tier: assessment.tier,
     score: assessment.score,

@@ -105,6 +105,7 @@ export async function loadDeliverableReviewInputs(input: {
     throw new Error(`Submitted change set ${task.changeSetId} is unavailable.`);
   }
   if (task.submissionScope && JSON.stringify(task.submissionScope) !== JSON.stringify(changeSet.submissionScope)) throw new Error("Submitted scope record differs from its durable kernel binding.");
+  if (task.reviewSignals && JSON.stringify(task.reviewSignals) !== JSON.stringify(changeSet.reviewSignals)) throw new Error("Submitted review signals differ from their durable kernel binding.");
   const diffText = (await input.artifacts.get(changeSet.diffArtifactHash)).toString("utf8");
   const criteria = (task.acceptanceCriteria ?? []).map((criterion) => ({ id: criterion.id, text: criterion.text }));
   return {

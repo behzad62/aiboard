@@ -20,6 +20,10 @@ For an executable build, **Start current plan** approves exactly the displayed p
 
 Model-pass records distinguish reported/estimated usage from estimated context-pack sizes. Missing or ambiguous per-pass attribution is shown as unavailable; account-backed calls do not imply a metered API cost. Historical reviews remain labelled separately from current records. A notice identifies a STATE snapshot edited outside the runner; durable runner records continue to determine readiness and completion.
 
+Fresh planning runs retain every model assigned to a task attempt, including contributors replaced during failover. Independent delivery review excludes all of those models and their aliases. Every delivery review requires at least one real repository inspection, including low-risk changes. Historical runs retain their recorded review policy.
+
+The runner inspects the committed candidate for new product source files without a product reference and for changes containing only tests or test configuration. Either signal raises review to at least medium and appears in the reviewer's protected context. These are conservative facts for review: JavaScript and TypeScript imports use the parser; simple C-family includes are recognized, while raw literals, line splices and unsupported reference syntax retain an unreferenced signal. A signal does not decide whether the work is complete.
+
 ## Export, copy and resume
 
 **Inspect export** reads a snapshot without starting workers or changing project files. The STATE text comes from the same bounded renderer used for docs-v2 handoff snapshots. **Copy STATE snapshot** copies that text; **Download planning export** downloads a JSON envelope with source/requirement/task/evidence traceability, phase/contracts/dependencies/ownership, resume index, report template, recorded policies, reviews, decisions and copy-ready reference cards. Choose a project location yourself if you want to save the downloaded file there.

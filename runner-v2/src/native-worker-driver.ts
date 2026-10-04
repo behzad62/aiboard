@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { canonicalModelIdentity } from "./verifier-contracts.js";
 import type { AgentMessage, AgentModel } from "./agent-contracts.js";
 import type {
   AgentProviderRetryEvent,
@@ -392,6 +393,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         this.recordSuccess(assignment.runId, candidate.providerId);
         return {
           type: "submitted",
+          ...(result.changeSet?.reviewSignals ? { reviewSignals: structuredClone(result.changeSet.reviewSignals) } : {}),
           ...(result.changeSet?.submissionScope ? { submissionScope: structuredClone(result.changeSet.submissionScope) } : {}),
           changeSetId: result.loop.changeSetId,
           ...(result.changeSet?.criterionEvidenceLinks
@@ -500,6 +502,8 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         attempt: assignment.attempt,
         runtimeId,
         sessionId,
+        ...(rebuildSchedulerProjection(this.options.schedulerStore.readRun(assignment.runId)).reviewIntegrityPolicyVersion === 1
+          ? { modelIdentity: canonicalModelIdentity(this.candidateById.get(runtimeId)!.modelId) } : {}),
       },
     });
   }

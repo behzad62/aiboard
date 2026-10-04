@@ -371,6 +371,7 @@ export async function runWorkerTask(
       };
     }
     producedChangeSet = await createChangeSet({
+      ...(schedulerState(options)?.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
       ...(scopeIdentity ? { submissionScopeIdentity: scopeIdentity } : {}),
       execute: options.git?.lifecycle("inspection").run,
       workspacePath: options.workspace.path,
