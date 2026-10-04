@@ -350,3 +350,11 @@ mutating the plan while keeping a stale coverage review (even with the same
 disposition, an applicable requirement whose only delivery is an
 investigation task, and silently marking a non-conditional obligation
 `not_applicable` without an owner amendment.
+
+### Command identity and stale evidence (P6.6 V1)
+
+New command facts retain a command-time working-tree identity built with a separate Git index outside the project. The owner staging index and refs are untouched. A command that changes its tree, a subdirectory grant that cannot cover the whole repository, or a failed/unsupported capture records an explicit unknown identity. Original facts remain immutable. At submission, links whose recorded tree differs from the submitted commit tree say `stale: taken before later edits`; the worker claims, independent reviewer and Architect receive that marker. Historical facts without these fields retain their original shapes. This is a mechanical freshness disclosure, not a completeness decision.
+
+The child-environment envelope records hashes of the actual prepared environment and relevant lockfiles, plus available runtime identity. A Node version is identified only for the same absolute executable as the running Node process and is labelled with that source. Other runtimes stay unknown. Provider execution records available provider/image identities and a prepared-input digest, while its effective image environment/runtime remain explicitly unavailable. Incomplete identities cannot authorize evidence reuse; V1 implements no reuse. Environment values and credentials never enter the audit. Project children remove runner-installation/dependency PATH entries and `npm_*`/`INIT_CWD`, including explicit overrides and case variants, while retaining legitimate project/system paths. Scrub decisions contain only names and removal counts.
+
+The initial-suite Git inventory adapter returns bounded command output without prepared runtime-environment metadata, and the managed runtime-smoke observation returns lifecycle/output facts without that metadata. Their new envelopes therefore explicitly mark child environment/runtime components unavailable. They retain any safely captured command tree, and cannot qualify for later exact-identity reuse until a trusted execution seam supplies those components.

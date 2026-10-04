@@ -433,11 +433,11 @@ export function diffLineCounts(diffText: string): { linesAdded: number; linesRem
 export function deliveryClaimsFromSubmission(input: {
   summary: string;
   criteria: readonly { id: string; text: string }[];
-  links: readonly { criterionId: string; evidenceId: string }[];
+  links: readonly { criterionId: string; evidenceId: string; freshness?: import("./acceptance-contracts.js").CriterionEvidenceLink["freshness"] }[];
 }): DeliveryClaim[] {
   const claims: DeliveryClaim[] = input.criteria.map((criterion) => ({
     id: `claim:${criterion.id}`,
-    text: `Criterion ${criterion.id} is satisfied: ${criterion.text}`,
+    text: `Criterion ${criterion.id} is satisfied: ${criterion.text}` + input.links.filter((link) => link.criterionId === criterion.id && link.freshness && link.freshness.status !== "current").map((link) => `\nEvidence ${link.evidenceId}: ${link.freshness!.status}: ${link.freshness!.reason} (submitted tree ${link.freshness!.submittedTreeId ?? "unknown"}; evidence tree ${link.freshness!.evidenceTreeId ?? "unknown"}).`).join(""),
     evidenceIds: [...new Set(input.links
       .filter((link) => link.criterionId === criterion.id)
       .map((link) => link.evidenceId))].sort(),

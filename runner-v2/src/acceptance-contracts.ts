@@ -17,6 +17,8 @@ export interface AcceptanceCriterion {
 }
 
 export interface CriterionEvidenceLink {
+  /** Kernel-generated at submission; model values are always overwritten. */
+  freshness?: { status: "current" | "stale" | "unknown"; submittedTreeId?: string; evidenceTreeId?: string; reason?: string };
   criterionId: string;
   evidenceId: string;
   artifactHashes: string[];

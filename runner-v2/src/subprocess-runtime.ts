@@ -149,6 +149,8 @@ class GrantVault {
   }
 }
 export interface SubprocessInvocation {
+  /** Private trusted observation of the exact prepared launch environment. */
+  readonly onPreparedEnvironment?: (environment: Readonly<Record<string, string>>) => void | Promise<void>;
   /** Invocation-local observer, never durable/replayed; callback failure is a
    * normal observed-effect failure and cannot certify partial output. */
   readonly onOutput?: (stream: OutputStream, bytes: Uint8Array) => void;
@@ -643,6 +645,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     let preparedEnvironment;
     try {
       preparedEnvironment = this.options.environments.prepare({
+        workingDirectory: request.intent.workingDirectory,
         ambient: request.ambientEnvironment,
         explicitOverrides: request.explicitEnvironment,
         runId: request.intent.runId,
@@ -662,6 +665,7 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
       removedNames: [...preparedEnvironment.audit.removedNames],
       explicitSafeNames: [...preparedEnvironment.audit.explicitSafeNames],
       grantedNames: [...preparedEnvironment.audit.grantedNames],
+      scrubDecisions: preparedEnvironment.audit.decisions.map((decision) => ({...decision})),
     };
     record = this.current(record.invocationId);
     record = this.mutate({
@@ -703,8 +707,9 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
     const launchPromise = this.fencedEffect(record.invocationId, (fence) =>
       this.options.environments.withChildEnvironment(
         preparedEnvironment.capability,
-        (environment) =>
-          selected.backend.launch(
+        async (environment) => {
+          await request.onPreparedEnvironment?.(environment);
+          return await selected.backend.launch(
             deepFreeze({
               intent: request.intent,
               grant,
@@ -712,7 +717,8 @@ class RunnerSubprocessRuntime implements SubprocessRuntime {
               outputOwnerId: record.outputOwnerId,
               fence,
             }),
-          ),
+          );
+        },
       ),
     );
     let rawLaunch: unknown;
@@ -2160,6 +2166,7 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
       "explicitEnvironment",
       "credentialGrantId",
       "onOutput",
+      "onPreparedEnvironment",
       "signal",
       "deadline",
     ]),
@@ -2186,6 +2193,8 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
     o.credentialGrantId === undefined
       ? undefined
       : safeText(o.credentialGrantId, "credentialGrantId");
+  const onPreparedEnvironment = o.onPreparedEnvironment;
+  if (onPreparedEnvironment !== undefined && typeof onPreparedEnvironment !== "function") throw new Error("Invocation environment observer is invalid.");
   const onOutput = o.onOutput;
   if (onOutput !== undefined && typeof onOutput !== "function") throw new Error("Invocation output observer is invalid.");
   const signal = o.signal === undefined ? undefined : o.signal;
@@ -2203,6 +2212,7 @@ function snapshotInvocation(value: unknown): SnapshotInvocation {
     ambientEnvironment,
     ...(explicitEnvironment ? { explicitEnvironment } : {}),
     ...(credentialGrantId ? { credentialGrantId } : {}),
+    ...(onPreparedEnvironment ? {onPreparedEnvironment: onPreparedEnvironment as NonNullable<SubprocessInvocation["onPreparedEnvironment"]>} : {}),
     ...(onOutput ? { onOutput: onOutput as NonNullable<SubprocessInvocation["onOutput"]> } : {}),
     ...(signal ? { signal } : {}),
     ...(deadline ? { deadline: new Date(deadline) } : {}),

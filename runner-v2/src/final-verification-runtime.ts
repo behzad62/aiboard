@@ -1,3 +1,4 @@
+import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { TempRecordSink } from "./cleanup-ownership.js";
 import { readFile } from "node:fs/promises";
@@ -691,6 +692,7 @@ export class FinalVerificationRuntime {
         } catch { /* bookkeeping never breaks verification */ }
       }
       const startState = await repositoryState(input.workspace.path, this.git);
+      const workingTreeIdentity = await workingTreeForRunner(this.git, input.workspace.path);
       const startedAt = this.clock();
       const execution = await executeCommand(
         runCommand,
@@ -720,6 +722,9 @@ export class FinalVerificationRuntime {
       const executionErrorCode = stableExecutionErrorCode(execution.startError);
       const fact: FinalVerificationCommandFact = {
         kind: "command",
+        workingTreeIdentity: settleWorkingTreeIdentity(workingTreeIdentity, await workingTreeForRunner(this.git, input.workspace.path)),
+        childEnvironmentIdentity: execution.routed?.childEnvironmentIdentity ?? unknownChildEnvironment(),
+        ...(execution.routed?.childEnvironmentAudit ? {childEnvironmentAudit: execution.routed.childEnvironmentAudit} : {}),
         category: executableCategory,
         label: command.label,
         executable: command.executable,
@@ -858,6 +863,7 @@ export class FinalVerificationRuntime {
     }
     validateRuntimeSmoke(smoke, this.maximumTimeoutMs);
 
+    const workingTreeIdentity = await workingTreeForRunner(this.git, input.workspace.path);
     const startedAt = this.clock();
     const startState = await repositoryState(input.workspace.path, this.git);
     let observation: FinalVerificationManagedProcessObservation | undefined;
@@ -927,6 +933,8 @@ export class FinalVerificationRuntime {
     );
     const fact: FinalVerificationCommandFact = {
       kind: "command",
+      workingTreeIdentity: settleWorkingTreeIdentity(workingTreeIdentity, await workingTreeForRunner(this.git, input.workspace.path)),
+      childEnvironmentIdentity: unknownChildEnvironment(),
       category: "runtime_smoke",
       label: smoke.label,
       executable: smoke.executable,

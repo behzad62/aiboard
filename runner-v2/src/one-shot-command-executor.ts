@@ -1,3 +1,4 @@
+import { fingerprintChildEnvironment, unknownChildEnvironment, type ChildEnvironmentIdentity } from "./command-evidence-identity.js";
 import type { ToolExecutionContext } from "./agent-contracts.js";
 import {
   freezeExecutionLifecycleRequirements,
@@ -96,6 +97,8 @@ export function createBoundedProcessOutputFactory(input: {
 }
 
 export interface OneShotCommandResult {
+  readonly childEnvironmentIdentity?: ChildEnvironmentIdentity;
+  readonly childEnvironmentAudit?: import("./child-environment.js").ChildEnvironmentAudit;
   readonly capturedOutput?: Readonly<{ stdout: Uint8Array; stderr: Uint8Array; complete: boolean }>;
   readonly process: GenericProcessResult;
   readonly enforcement:
@@ -184,30 +187,15 @@ export function createRuntimeBackedOneShotCommandExecutor(
       let selection: ExecutionIsolationSelection | undefined;
       let process: GenericProcessResult | undefined;
       let runtimeGrantIssued = false;
+      let effectiveEnvironment: Readonly<Record<string, string>> = {};
+      let childEnvironmentAudit: import("./child-environment.js").ChildEnvironmentAudit | undefined;
       try {
-        if (options.permissionProfile === "full") {
-          selection = await options.isolation.acquire({
-            permissionProfile: options.permissionProfile,
-            intent: originalIntent,
-            grant: claims,
-          });
-        } else {
-          const prepared = options.environments.prepare({
-            ambient: options.ambientEnvironment,
-            explicitOverrides: request.explicitEnvironment,
-            runId: originalIntent.runId,
-            invocationId,
-          });
-          selection = await options.environments.withChildEnvironment(
-            prepared.capability,
-            async (environment) => await options.isolation.acquire({
-              permissionProfile: options.permissionProfile,
-              intent: originalIntent,
-              grant: claims,
-              environment,
-            }),
-          );
-        }
+        const prepared = options.environments.prepare({ workingDirectory: request.workingDirectory, ambient: options.ambientEnvironment, explicitOverrides: request.explicitEnvironment, runId: originalIntent.runId, invocationId });
+        childEnvironmentAudit = prepared.audit;
+        effectiveEnvironment = options.environments.withChildEnvironment(prepared.capability, (environment) => environment);
+        selection = await options.isolation.acquire({
+          permissionProfile: options.permissionProfile, intent: originalIntent, grant: claims, environment: effectiveEnvironment,
+        });
         const launchIntent = await options.isolation.prepareExecution(
           selection,
           originalIntent,
@@ -221,6 +209,8 @@ export function createRuntimeBackedOneShotCommandExecutor(
           access: claims.access,
         });
         runtimeGrantIssued = true;
+        let childEnvironmentIdentity = selection.enforcement === "write_confinement_exact_grant" ? await fingerprintChildEnvironment({ environment: effectiveEnvironment, executable: request.executable, cwd: request.workingDirectory,
+          ...(selection.enforcement === "write_confinement_exact_grant" ? {provider: {providerId: selection.providerId, implementationDigest: selection.implementationDigest, ...(selection.lease.immutableImageId ? {immutableImageId: selection.lease.immutableImageId} : {})}} : {}) }) : unknownChildEnvironment();
         process = await options.runtime.invoke({
           intent: launchIntent,
           ...(capture ? { onOutput: capture.write } : {}),
@@ -228,14 +218,17 @@ export function createRuntimeBackedOneShotCommandExecutor(
           ambientEnvironment: options.permissionProfile === "full"
             ? options.ambientEnvironment
             : {},
-          ...(options.permissionProfile === "full" && request.explicitEnvironment
-            ? { explicitEnvironment: request.explicitEnvironment }
-            : {}),
+          ...(options.permissionProfile === "full" && request.explicitEnvironment ? {explicitEnvironment: request.explicitEnvironment} : {}),
+          ...(selection.enforcement === "unconfined_explicit_full" ? {onPreparedEnvironment: async (environment: Readonly<Record<string, string>>) => {
+            childEnvironmentIdentity = await fingerprintChildEnvironment({environment, executable: launchIntent.executable, cwd: launchIntent.workingDirectory});
+          }} : {}),
           ...(request.context.signal ? { signal: request.context.signal } : {}),
           deadline: new Date(clock().getTime() + request.timeoutMs),
         });
         return {
           process,
+          childEnvironmentIdentity,
+          childEnvironmentAudit,
           ...(capture ? { capturedOutput: capture.result(process) } : {}),
           enforcement: selection.enforcement,
           disclosure: selection.disclosure,

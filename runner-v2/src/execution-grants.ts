@@ -49,6 +49,8 @@ export interface ExecutionGrantAccessRequest {
 }
 
 export interface ExecutionGrantIssueRequest extends ExecutionGrantBinding {
+  /** Trusted composition may shorten authority, never extend the configured TTL. */
+  readonly expiresNoLaterThan?: string;
   readonly workspacePath: string;
   readonly access: readonly ExecutionGrantAccessRequest[];
   /** Names only; credential values never enter an execution grant. */
@@ -179,7 +181,9 @@ export function createExecutionGrantAuthority(
       await options.beforeIssueCommit?.();
       if (request.signal?.aborted || epoch !== issuanceEpoch) throw grantError("grant_revoked");
       const issued = clock();
-      const expires = new Date(issued.getTime() + ttlMs);
+      const limit = request.expiresNoLaterThan === undefined ? issued.getTime() + ttlMs : Date.parse(request.expiresNoLaterThan);
+      if (!Number.isFinite(limit) || limit <= issued.getTime()) throw grantError("grant_expired");
+      const expires = new Date(Math.min(issued.getTime() + ttlMs, limit));
       const claims = deepFreeze({
         ...binding,
         grantId: `execution-grant-${randomUUID()}`,

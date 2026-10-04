@@ -7,6 +7,9 @@ import type {
 
 export interface CommandEvidenceFact {
   kind: "command";
+  workingTreeIdentity?: import("./command-evidence-identity.js").WorkingTreeIdentity;
+  childEnvironmentAudit?: import("./child-environment.js").ChildEnvironmentAudit;
+  childEnvironmentIdentity?: import("./command-evidence-identity.js").ChildEnvironmentIdentity;
   label: string;
   command: string;
   args: string[];

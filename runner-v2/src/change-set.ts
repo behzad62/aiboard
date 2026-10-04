@@ -103,6 +103,24 @@ export async function createChangeSet(
         : {}),
     });
   }
+  if (criterionEvidenceLinks) {
+    let submittedTreeId: string | undefined;
+    try {
+      const result = await requireGitRunner(options.execute)({cwd: options.workspacePath, args: ["rev-parse", "--verify", `${commit.revision}^{tree}`]});
+      if (result.exitCode === 0 && /^[a-f0-9]{40,64}$/.test(result.stdout.trim())) submittedTreeId = result.stdout.trim();
+    } catch { /* Unknown identities never imply freshness. */ }
+    criterionEvidenceLinks = criterionEvidenceLinks.map((link) => {
+      const record = options.evidenceRecords?.find((entry) => entry.id === link.evidenceId);
+      if (record?.fact.kind !== "command" || record.fact.workingTreeIdentity === undefined) {
+        const {freshness: _untrusted, ...legacy} = link; void _untrusted; return legacy;
+      }
+      const identity = record.fact.workingTreeIdentity;
+      const evidenceTreeId = identity.status === "known" ? identity.treeId : identity.capturedTreeId;
+      const status = evidenceTreeId && submittedTreeId ? evidenceTreeId === submittedTreeId ? identity.status === "known" ? "current" : "unknown" : "stale" : "unknown";
+      return {...link, freshness: {status, ...(submittedTreeId ? {submittedTreeId} : {}), ...(evidenceTreeId ? {evidenceTreeId} : {}),
+        ...(status === "stale" ? {reason: "taken before later edits"} : status === "unknown" ? {reason: "working-tree identity unavailable"} : {})}};
+    });
+  }
   const evidence = hasCriteria
     ? unique(criterionEvidenceLinks!.flatMap((link) => link.artifactHashes))
     : unique(options.evidenceArtifactHashes ?? []);

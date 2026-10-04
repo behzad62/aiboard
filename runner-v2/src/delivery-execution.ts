@@ -1,3 +1,4 @@
+import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import { randomUUID, createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
@@ -806,6 +807,7 @@ async function runDeliveryProbe(input: {
       run: async (command) => {
         ordinal += 1;
         const callId = `probe-${ordinal}`;
+        const workingTreeIdentity = await workingTreeForRunner(input.options.git, command.cwd);
         const startedAt = input.clock();
         const executed = await input.options.execution.execute({
           executable: command.command,
@@ -833,6 +835,9 @@ async function runDeliveryProbe(input: {
         ]);
         const fact: CommandEvidenceFact = {
           kind: "command",
+          workingTreeIdentity: settleWorkingTreeIdentity(workingTreeIdentity, await workingTreeForRunner(input.options.git, command.cwd)),
+          childEnvironmentIdentity: executed.childEnvironmentIdentity ?? unknownChildEnvironment(),
+          ...(executed.childEnvironmentAudit ? {childEnvironmentAudit: executed.childEnvironmentAudit} : {}),
           label: `OA-11 probe ${ordinal}`,
           command: command.command,
           args: [...command.args],
@@ -908,6 +913,7 @@ export function createDeliveryBoundaryDriver(options: {
           const profile = await inspectFinalVerificationExecutionProfile({ repositoryRoot: initial.path, targetRevision: revision, execute: options.git });
           const pin = await inspectTestIntegrityPin({ git: options.git, repositoryRoot: initial.path, revision, commands: profile.commands.tests ?? [] });
           if (!pin.commands.length && pin.script === undefined && pin.hasTestSignals === false) {
+            const workingTreeIdentity = await workingTreeForRunner(options.git, initial.path);
             const startedAt = new Date().toISOString(); const args = ["ls-tree", "-r", "-z", revision];
             // Use the owned, audited Git primitive, which settles bounded binary/NUL
             // inventory output and throws on cancellation/output loss/unknown completion.
@@ -917,7 +923,7 @@ export function createDeliveryBoundaryDriver(options: {
             const [out, err] = await Promise.all([options.artifacts.put(Buffer.from(observed.stdout), "application/octet-stream", "immutable initial test inventory"), options.artifacts.put(Buffer.from(observed.stderr), "text/plain", "initial test inventory stderr")]);
             const inventory = observed.stdout;
             assertNoConfiguredTestSuite(pin, inventory, out.hash);
-            const fact: CommandEvidenceFact = { kind: "command", label: "initial test-suite inventory", command: "git", args, cwd: initial.path, startedAt, finishedAt: new Date().toISOString(), exitCode: observed.exitCode, signal: null, timedOut: false, cancelled: false, outputTruncated: false, stdoutArtifactHash: out.hash, stderrArtifactHash: err.hash, repositoryRevision: revision };
+            const fact: CommandEvidenceFact = { kind: "command", workingTreeIdentity: settleWorkingTreeIdentity(workingTreeIdentity, await workingTreeForRunner(options.git, initial.path)), childEnvironmentIdentity: unknownChildEnvironment(), label: "initial test-suite inventory", command: "git", args, cwd: initial.path, startedAt, finishedAt: new Date().toISOString(), exitCode: observed.exitCode, signal: null, timedOut: false, cancelled: false, outputTruncated: false, stdoutArtifactHash: out.hash, stderrArtifactHash: err.hash, repositoryRevision: revision };
             const record = options.evidenceStore.record({ runId: options.runId, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" }, fact, createdAt: fact.finishedAt, idempotencyKey: `test-integrity:${taskId}:initial-tests:inventory:${randomUUID()}` });
             options.testIntegrity!.recordBaseline(taskId, { kind: "no_configured_test_suite", pin, pinDigest: testIntegrityPinDigest(pin), inventory, inventoryDigest: out.hash, evidenceIds: [record.id] });
             return;

@@ -84,7 +84,7 @@ export function createExecutionHostManagedRuntime(options: Readonly<{
           if (options.permissionProfile !== "full" && !imageExecutable) {
             throw new ManagedProcessError("process_launch_failed", "Managed strict isolation cannot represent the host executable inside the configured image; launch is unavailable before process creation.");
           }
-          const prepared = environments.prepare({ ambient: options.environment, explicitOverrides: request.environment });
+          const prepared = environments.prepare({ workingDirectory: cwd, ambient: options.environment, explicitOverrides: request.environment });
           const executable = options.permissionProfile === "full"
             ? await environments.withChildEnvironment(prepared.capability, environment =>
                 resolveLanguageServerExecutable(request.command, { commandSearchDirectory: cwd, environment }))

@@ -256,6 +256,7 @@ export function createExecutionHostStreamingGraph(
       assertOpenRequest(request, options.permissionProfile);
       if (pending.has(request.launchId)) throw new Error(`Streaming launch ${request.launchId} is already pending.`);
       const prepared = options.environments.prepare({
+        workingDirectory: request.intent.workingDirectory,
         ambient: options.ambientEnvironment,
         explicitOverrides: request.explicitEnvironment,
         runId: request.intent.runId,

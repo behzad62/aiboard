@@ -1,3 +1,6 @@
+import { realpathSync, existsSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isSensitiveKey } from "./sensitive-redaction.js";
 
 export interface RunnerOwnedChildEnvironmentCredentialGrant {
@@ -16,6 +19,7 @@ export interface RunnerOwnedChildEnvironmentCredentialResolver {
 }
 
 export type ChildEnvironmentDecision =
+  | { readonly kind: "removed_runner_path"; readonly name: string; readonly count: number }
   | { readonly kind: "removed_ambient"; readonly name: string }
   | { readonly kind: "removed_explicit"; readonly name: string }
   | { readonly kind: "applied_explicit"; readonly name: string }
@@ -31,6 +35,7 @@ export interface ChildEnvironmentAudit {
 }
 
 export interface PrepareChildEnvironmentInput {
+  readonly workingDirectory?: string;
   readonly ambient: Readonly<Record<string, string | undefined>>;
   readonly explicitOverrides?: Readonly<Record<string, string | undefined>>;
   readonly runId?: string;
@@ -58,10 +63,12 @@ export interface ChildEnvironmentFactory {
 export interface CreateChildEnvironmentFactoryOptions {
   readonly credentialResolver: RunnerOwnedChildEnvironmentCredentialResolver;
   readonly now?: () => Date;
+  readonly runnerInstallRoot?: string;
 }
 
 interface EnvironmentEntry { readonly name: string; readonly value: string }
 interface PrepareChildEnvironmentSnapshot {
+  readonly workingDirectory?: string;
   readonly ambient: Readonly<Record<string, string | undefined>>;
   readonly explicitOverrides?: Readonly<Record<string, string | undefined>>;
   readonly runId?: string;
@@ -79,6 +86,8 @@ export function createChildEnvironmentFactory(
   const environments = new WeakMap<object, Readonly<Record<string, string>>>();
   const redeemedGrantIds = new Set<string>();
   const now = options.now ?? (() => new Date());
+  const installRoot = canonicalPath(options.runnerInstallRoot ?? defaultRunnerInstallRoot());
+  const installRoots = [installRoot, canonicalPath(resolve(installRoot, "node_modules"))];
 
   return Object.freeze({
     prepare(input: PrepareChildEnvironmentInput): PreparedChildEnvironment {
@@ -129,6 +138,15 @@ export function createChildEnvironmentFactory(
         }
       }
 
+      const path = environment.get("PATH");
+      if (path) {
+        const entries = path.value.split(delimiter);
+        const retained = entries.filter((entry) => !installRoots.some((root) => insideInstall(root, entry, request.workingDirectory)));
+        if (retained.length !== entries.length) {
+          setEnvironment(environment, path.name, retained.join(delimiter));
+          decisions.push({ kind: "removed_runner_path", name: path.name, count: entries.length - retained.length });
+        }
+      }
       const capability = Object.freeze({}) as ChildEnvironmentCapability;
       environments.set(capability, createRawEnvironment(environment));
       return Object.freeze({
@@ -154,6 +172,7 @@ function snapshotPrepareChildEnvironmentInput(
   input: PrepareChildEnvironmentInput,
 ): PrepareChildEnvironmentSnapshot {
   return Object.freeze({
+    workingDirectory: input.workingDirectory,
     ambient: input.ambient,
     explicitOverrides: input.explicitOverrides,
     runId: input.runId,
@@ -222,11 +241,12 @@ function freezeAudit(
 }
 
 function isCredentialGrantName(name: string): boolean {
-  return isEnvironmentName(name) && isSensitiveKey(name) && !isRunnerName(name);
+  return isEnvironmentName(name) && isSensitiveKey(name) && !isRunnerName(name) && !canonicalName(name).startsWith("NPM_") && canonicalName(name) !== "INIT_CWD";
 }
 
 function isForbiddenChildEnvironmentName(name: string): boolean {
-  return isSensitiveKey(name) || isRunnerName(name);
+  const canonical = canonicalName(name);
+  return isSensitiveKey(name) || isRunnerName(name) || canonical.startsWith("NPM_") || canonical === "INIT_CWD";
 }
 
 function isRunnerName(name: string): boolean {
@@ -263,3 +283,25 @@ function sortNames(values: readonly string[]): string[] {
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function invalidGrant(): Error { return new Error("Child environment credential grant is invalid."); }
 function consumedGrant(): Error { return new Error("Child environment credential grant could not be consumed."); }
+
+function defaultRunnerInstallRoot(): string {
+  let directory = dirname(fileURLToPath(import.meta.url));
+  // Source and packaged entry points find the nearest package installation.
+  while (dirname(directory) !== directory) {
+    if (existsSync(resolve(directory, "node_modules"))) return directory;
+    directory = dirname(directory);
+  }
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+}
+function canonicalPath(path: string): string {
+  const absolute = resolve(path);
+  try { return realpathSync.native(absolute); } catch { return absolute; }
+}
+function insideInstall(root: string, entry: string, workingDirectory?: string): boolean {
+  const value = entry.trim().replace(/^"(.*)"$/, "$1");
+  if (!isAbsolute(value) && !workingDirectory) return false;
+  const candidate = canonicalPath(isAbsolute(value) ? value : resolve(workingDirectory!, value));
+  const fold = (path: string) => process.platform === "win32" ? path.toLowerCase() : path;
+  const traversal = relative(fold(root), fold(candidate));
+  return traversal === "" || (traversal !== ".." && !traversal.startsWith(`..${sep}`) && !isAbsolute(traversal));
+}

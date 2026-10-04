@@ -40,6 +40,7 @@ export interface DurableSubprocessHistoryEntry {
   readonly reason?: string;
 }
 export interface DurableEnvironmentAudit {
+  readonly scrubDecisions?: readonly import("./child-environment.js").ChildEnvironmentDecision[];
   readonly inheritedNames: readonly string[];
   readonly removedNames: readonly string[];
   readonly explicitSafeNames: readonly string[];
@@ -2336,6 +2337,7 @@ function parseAudit(value: unknown): DurableEnvironmentAudit {
     o,
     new Set([
       "inheritedNames",
+      "scrubDecisions",
       "removedNames",
       "explicitSafeNames",
       "grantedNames",
@@ -2343,6 +2345,7 @@ function parseAudit(value: unknown): DurableEnvironmentAudit {
     "environment audit",
   );
   return {
+    ...(o.scrubDecisions !== undefined ? {scrubDecisions: parseScrubDecisions(o.scrubDecisions)} : {}),
     inheritedNames: strings(o.inheritedNames),
     removedNames: strings(o.removedNames),
     explicitSafeNames: strings(o.explicitSafeNames),
@@ -2886,4 +2889,20 @@ function resultMatches(record: DurableSubprocessRecord): boolean {
     return false;
   if (record.backendBinding?.startedAt !== result.startedAt) return false;
   return true;
+}
+
+function parseScrubDecisions(value: unknown): import("./child-environment.js").ChildEnvironmentDecision[] {
+  if (!Array.isArray(value)) throw new Error("Invalid scrub audit.");
+  return value.map((entry) => {
+    const o = strictRecord(entry, "scrub decision");
+    if (typeof o.name !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(o.name)) throw new Error("Invalid scrub name.");
+    if (o.kind === "removed_runner_path") {
+      assertKeys(o, new Set(["kind", "name", "count"]), "scrub decision");
+      if (!Number.isSafeInteger(o.count) || (o.count as number) < 1) throw new Error("Invalid path scrub count.");
+      return {kind: "removed_runner_path", name: o.name, count: o.count as number};
+    }
+    assertKeys(o, new Set(["kind", "name"]), "scrub decision");
+    if (!["removed_ambient", "removed_explicit", "applied_explicit", "rejected_explicit", "granted_credential"].includes(o.kind as string)) throw new Error("Invalid scrub decision.");
+    return {kind: o.kind as "removed_ambient", name: o.name};
+  });
 }

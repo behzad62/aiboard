@@ -1,3 +1,4 @@
+import { unknownWorkingTree, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
@@ -154,6 +155,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
       try {
         const cwd = await containedDirectory(context.workspacePath, input.cwd);
         const startedAt = clock();
+        const commandTree = await options.git?.workingTreeForCall?.(context, cwd) ?? unknownWorkingTree();
         const revision = options.git ? await gitRevision(cwd, options.git.forCall(context).run) : undefined;
         if (!options.execution || !context.callId) {
           return failure(
@@ -180,6 +182,8 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
         const execution = options.git
           ? await options.git.executeForCall(context, commandRequest)
           : await options.execution.execute(commandRequest);
+        const postTree = await options.git?.workingTreeForCall?.(context, cwd) ?? unknownWorkingTree();
+        const workingTreeIdentity = settleWorkingTreeIdentity(commandTree, postTree);
         const finishedAt = clock();
         const stdoutOutput = outputFor(execution.process, "stdout");
         const stderrOutput = outputFor(execution.process, "stderr");
@@ -189,6 +193,9 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
         ]);
         const fact: CommandEvidenceFact = {
           kind: "command",
+          workingTreeIdentity,
+          childEnvironmentIdentity: execution.childEnvironmentIdentity ?? unknownChildEnvironment(),
+          ...(execution.childEnvironmentAudit ? {childEnvironmentAudit: execution.childEnvironmentAudit} : {}),
           label: input.label,
           command: input.command,
           args: [...input.args],
