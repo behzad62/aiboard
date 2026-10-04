@@ -388,7 +388,7 @@ for (const mode of ["unchanged", "narrowed_script", "deleted_test", "reviewed_co
           assert.throws(() => reduceSchedulerEvent(stalePlan, { ...reasonEvent, actor: { role: "architect", id: p.testIntegrity!.architectActorId! } }), /current failed identity-bound boundary and plan/);
           const checked = manager.events(E1_RUN).findLast((event) => event.type === "delivery.boundary_checked")!;
           const beforeChecked = rebuildSchedulerProjection(manager.events(E1_RUN).filter((event) => event.sequence < checked.sequence));
-          assert.throws(() => reduceSchedulerEvent(beforeChecked, { ...checked, payload: { ...checked.payload, checks: boundary.checks.map((check) => check.checkId === "test_integrity" ? { ...check, outcome: "passed", exitCode: 0 } : check) } }), /outcome must match kernel recomputation/);
+          assert.throws(() => reduceSchedulerEvent(beforeChecked, { ...checked, payload: { ...checked.payload, passed: true, checks: boundary.checks.map((check) => check.checkId === "test_integrity" ? { ...check, outcome: "passed", exitCode: 0 } : check) } }), /outcome must match kernel recomputation/);
           const accepted = await stepUntil("Architect exact reason and acceptance", (p) => !!p.delivery?.taskAcceptances.T1);
           assert.equal(accepted.delivery!.boundaries.T1!.length, 2);
           assert.equal(accepted.delivery!.boundaries.T1!.at(-1)!.checks.find((check) => check.checkId === "test_integrity")!.outcome, "passed");
