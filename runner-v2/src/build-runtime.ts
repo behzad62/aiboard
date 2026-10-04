@@ -71,6 +71,7 @@ import {
   newPolicyStaleTasksRequireArchitect,
   nextAnswerReviewId,
   readyPlanIdentity,
+  testIntegrityBoundaryIsCurrent,
   currentExplicitStartIdentity,
   explicitStartAuthorizationCovers,
   explicitStartBlocked,
@@ -379,6 +380,7 @@ export interface DeliveryReviewDriver {
  * outcomes (never placeholders; a check that cannot run is `unknown`).
  */
 export interface DeliveryBoundaryDriver {
+  captureInitialBaseline?(taskId: string, signal?: AbortSignal): Promise<void>;
   check(input: {
     runId: string;
     taskId: string;
@@ -391,6 +393,7 @@ export interface DeliveryBoundaryDriver {
     changedFiles: string[];
     selection: { rung: string; selectedTests: string[] };
     checks: DeliveryBoundaryCheck[];
+    testIntegrity?: import("./test-integrity-contracts.js").TestIntegrityBoundary;
   }>;
 }
 export interface BuildRuntimeOptions {
@@ -4376,6 +4379,7 @@ export class BuildRuntime {
         task.id,
         integrationRevision,
         (id) => projection.tasks[id]?.status,
+        (boundary) => testIntegrityBoundaryIsCurrent(projection, boundary),
       );
       if (action.type === "wait") continue;
       if (action.type === "accept") {
@@ -4468,6 +4472,7 @@ export class BuildRuntime {
           changedFiles: [...outcome.changedFiles],
           selection: { rung: outcome.selection.rung, selectedTests: [...outcome.selection.selectedTests] },
           checks: outcome.checks.map((check) => ({ ...check, evidenceIds: [...check.evidenceIds] })),
+          ...(outcome.testIntegrity ? { testIntegrity: outcome.testIntegrity } : {}),
           passed: outcome.checks.every((check) => check.outcome === "passed"),
         },
       });
@@ -5681,6 +5686,7 @@ export const ARCHITECT_LIFECYCLE_SURFACE: readonly string[] = Object.freeze([
   "record_answer",
   "record_external_blocker",
   "record_repair_approach_decision",
+  "record_test_integrity_reason",
   "record_triage",
   "request_coverage_review",
   "request_integration",

@@ -7,6 +7,7 @@ import {
   type RequiredCheckRef,
 } from "./planning-contracts.js";
 import type { ReviewerIndependence } from "./verifier-contracts.js";
+import type { TestIntegrityBoundary, TestConsolidationDisposition } from "./test-integrity-contracts.js";
 
 /**
  * T6a (P6.6, OA-3/OA-4/OA-10/OA-11/OA-13): mandatory deliverable review and
@@ -202,6 +203,7 @@ export interface DeliveryReviewRecord {
   summary?: string;
   satisfied?: boolean;
   completedSequence?: number;
+  testConsolidation?: TestConsolidationDisposition;
 }
 
 export interface DeliveryBoundaryCheck {
@@ -242,6 +244,7 @@ export interface DeliveryBoundaryRecord {
   resolution?: DeliveryBoundaryResolution;
   /** Earlier resolutions superseded after their repairs ended without a new revision. */
   resolutionHistory?: DeliveryBoundaryResolution[];
+  testIntegrity?: TestIntegrityBoundary;
 }
 
 export interface DeliveryTaskAcceptanceRecord {
@@ -582,9 +585,11 @@ export function deliveryBoundaryAction(
   taskId: string,
   integrationRevision: string,
   taskStatus: (taskId: string) => string | undefined = () => undefined,
+  boundaryIsCurrent: (boundary: DeliveryBoundaryRecord) => boolean = () => true,
 ): DeliveryBoundaryAction {
   const boundary = latestBoundary(state, taskId);
   if (!boundary || boundary.integrationRevision !== integrationRevision) return { type: "run" };
+  if (!boundaryIsCurrent(boundary)) return { type: "run" };
   if (boundary.passed) return { type: "accept", boundary };
   if (boundaryNeedsArchitect(boundary, taskStatus)) {
     return { type: "architect", boundary, resolutionGeneration: boundaryResolutionGeneration(boundary) };

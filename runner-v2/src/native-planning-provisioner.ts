@@ -516,6 +516,7 @@ function appendRunInitialized(
     actor: { ...RUNNER_PROVISIONING_ACTOR },
     idempotencyKey: RUN_INITIALIZED_KEY,
     payload: {
+      testIntegrityPolicyVersion: 1,
       ...(spec.objective !== undefined ? { objective: spec.objective } : {}),
     },
   });
@@ -571,7 +572,10 @@ function assertProvisioningInitEvent(
     fail("Planning provisioning refuses a non-matching scheduler prefix.");
   }
   const payload = event.payload as Record<string, unknown>;
-  const keys = Object.keys(payload);
+  const keys = Object.keys(payload).filter((key) => key !== "testIntegrityPolicyVersion");
+  if (payload.testIntegrityPolicyVersion !== undefined && payload.testIntegrityPolicyVersion !== 1) {
+    fail("Planning provisioning refuses an unsupported test-integrity policy version.");
+  }
   if (spec.objective !== undefined) {
     if (keys.length !== 1 || payload.objective !== spec.objective || typeof payload.objective !== "string") {
       fail("Planning provisioning refuses a scheduler prefix for a different objective.");

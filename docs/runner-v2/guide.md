@@ -31,3 +31,12 @@ Exceptional AI-assisted process recovery is a separate explicit path using the c
 Trusted filesystem mutation captures path identity and expected content/revision, rechecks them before publication, and fails typed on conflicts, aliasing, unsupported primitives, or identity changes. It is deliberately **not** an atomic compare-and-swap against an uncontrolled external writer and is not a kernel filesystem sandbox. An external process can still race between checks; atomic replacement preserves complete bytes but does not promise ACL/xattr preservation or crash durability.
 
 See [architecture](./architecture.md) for ownership composition and [security](./security.md) for threat-boundary details.
+## Test integrity in new planning runs
+
+A new opt-in planning run pins its test command and tracked test configuration to an immutable trusted revision. Before independent delivery review, Runner measures the initial suite in a separate owned checkout. It records executed cases as passed plus failed; skipped and selected cases cannot substitute for execution. A completed failing baseline can establish its count. Missing, unsupported, malformed, zero-test or skipped-only reports cannot.
+
+An unexplained command/configuration change stops boundary execution. A smaller measured suite produces a separate integrity failure while the raw test result stays unchanged. The Architect can authorize specific changes with an exact current-plan reason and minimum executed count. An independent reviewer can explicitly accept obsolete or merged tests by naming affected test IDs and where their behavior remains proven. Ordinary approval text grants no exception. Both forms bind the exact plan, submission, baseline and candidate fingerprints, and acceptance checks those identities again.
+
+An initial project with no configured suite uses an immutable Git inventory proof with no invented denominator or report. Its first suite may be introduced, but acceptance still requires a fresh positive machine-readable test report. Detected tests or runner configuration without a usable command remain blocked. A successful task acceptance atomically promotes the trusted baseline; a passed boundary or failed attempt alone cannot.
+
+Historical runs retain their recorded policy and are not automatically upgraded on recovery. These runtime project checks are separate from repository development validation: packet tests run during implementation, and the wider development suite remains scheduled for the final P6.6 gate.

@@ -632,7 +632,7 @@ export function createArchitectTools(
     ? [...verifierRepairPlanning, recordRepairApproachDecisionTool(options.store, clock, options.evidenceStore), recordExternalBlockerTool(options.store, clock, options.evidenceStore)]
     : verifierRepairPlanning;
   const boundaryResolution = options.deliveryBoundaryResolutionAvailable && !answerPath
-    ? [...repairApproach, resolveDeliveryBoundaryFailureTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
+    ? [...repairApproach, recordTestIntegrityReasonTool(options.store, clock), resolveDeliveryBoundaryFailureTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
     : repairApproach;
   const critiqueResolution = options.planCritiqueResolutionAvailable && !answerPath
     ? [...boundaryResolution, resolvePlanCritiqueTool(options.store, clock)]
@@ -1343,6 +1343,26 @@ function planVerifierRepairsTool(
         referenceId: current.reviewId,
       });
     },
+  });
+}
+
+function recordTestIntegrityReasonTool(store: SchedulerStore, clock: () => string): NativeTool<{
+  id: string; taskId: string; reason: string; allowedChanges: string[]; minimumExecuted: number;
+}> {
+  return lifecycleTool({
+    name: "record_test_integrity_reason",
+    description: "Record an explicit test command/configuration/count change reason tied to the current failed boundary and ready plan; then recheck through the normal boundary resolution tool. This cannot fabricate missing test evidence.",
+    schema: objectSchema({ id: { type: "string", minLength: 1 }, taskId: { type: "string", minLength: 1 }, reason: { type: "string", minLength: 1 },
+      allowedChanges: { type: "array", minItems: 1, items: { type: "string", enum: ["test_command_changed", "test_config_changed", "suite_shrank"] } },
+      minimumExecuted: { type: "integer", minimum: 1 } }, ["id", "taskId", "reason", "allowedChanges", "minimumExecuted"]),
+    validate: (input) => validateObject(input, (value) => {
+      if (!nonEmpty(value.id) || !nonEmpty(value.taskId) || !nonEmpty(value.reason) || !Array.isArray(value.allowedChanges) || !value.allowedChanges.length ||
+        value.allowedChanges.some((code) => !["test_command_changed", "test_config_changed", "suite_shrank"].includes(String(code))) || !Number.isSafeInteger(value.minimumExecuted) || Number(value.minimumExecuted) < 1) return null;
+      return { id: value.id, taskId: value.taskId, reason: value.reason, allowedChanges: value.allowedChanges as string[], minimumExecuted: value.minimumExecuted as number };
+    }, "id, taskId, reason, permitted changes and a positive minimum executed count are required"),
+    execute: async (input, context) => appendEvent(store, { runId: context.runId, type: "delivery.test_integrity_exception_recorded",
+      occurredAt: clock(), actor: { role: "architect", id: context.actor.id }, idempotencyKey: `test-integrity-reason:${input.id}`,
+      payload: { ...input } }, { type: "architect_action", action: "test_integrity_reason_recorded", referenceId: input.id }),
   });
 }
 

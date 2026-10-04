@@ -93,6 +93,7 @@ export type AgentLoopResult =
         | "final_verification_review_decided"
         | "verification_repairs_planned"
         | "delivery_boundary_failure_resolved"
+        | "test_integrity_reason_recorded"
         | "user_guidance_acknowledged"
         | "user_question_requested"
         | "plan_critique_resolved"

@@ -128,6 +128,11 @@ export interface DeliverableReviewInputs {
   contract?: ExecutionTaskContract;
   /** The accepted revision/digest/task identity the contract was resolved at. */
   contractRef?: TaskContractRef;
+  testIntegrityReference?: {
+    planRevisionId: string; planDigest: string; baselinePinDigest: string; candidatePinDigest: string;
+    baselineKind: "executed_report" | "no_configured_test_suite"; baselineExecuted?: number; baselineRevision: string;
+    findings: readonly import("./test-integrity.js").TestIntegrityFinding[];
+  };
 }
 
 export class DeliverableReviewInputsUnavailableError extends Error {}
@@ -539,6 +544,11 @@ export class NativeDeliverableReviewRuntime {
       ));
     }
     if (pass === "obligations") return sections;
+    if (inputs.testIntegrityReference) {
+      sections.push(section("test-integrity-reference", "contract",
+        "Runner test-integrity baseline and candidate fingerprints (observational; no automatic exception):\n" + JSON.stringify(inputs.testIntegrityReference, null, 2) +
+        "\nIf tests are legitimately obsolete or merged, independently inspect their replacement behavior. In the verdict, an optional testConsolidation must name affected test IDs, the behavior proof reference, exact plan/fingerprints, permitted changes and a positive minimum executed count. Ordinary approval prose grants no exception. Unexplained command/config changes or suite shrink remain blocking at the boundary."));
+    }
     if (durable?.obligations) {
       sections.push(section(
         "own-obligations",
@@ -1050,6 +1060,7 @@ interface SubmitDeliverableVerdictInput {
   satisfied: boolean;
   claimVerdicts: unknown[];
   priorFindingChecks?: unknown[];
+  testConsolidation?: Record<string, unknown>;
 }
 
 export function createSubmitDeliverableVerdictTool(
@@ -1065,6 +1076,18 @@ export function createSubmitDeliverableVerdictTool(
         properties: {
           summary: { type: "string", minLength: 1 },
           satisfied: { type: "boolean" },
+          testConsolidation: {
+            type: "object", additionalProperties: false,
+            properties: {
+              id: { type: "string", minLength: 1 }, disposition: { type: "string", enum: ["obsolete", "merged"] },
+              affectedTestIds: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
+              behaviorProof: { type: "string", minLength: 1 }, reason: { type: "string", minLength: 1 },
+              planRevisionId: { type: "string", minLength: 1 }, planDigest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+              baselinePinDigest: { type: "string", pattern: "^[a-f0-9]{64}$" }, candidatePinDigest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+              allowedChanges: { type: "array", minItems: 1, items: { type: "string", enum: ["test_command_changed", "test_config_changed", "suite_shrank"] } },
+              minimumExecuted: { type: "integer", minimum: 1 },
+            }, required: ["id", "disposition", "affectedTestIds", "behaviorProof", "reason", "planRevisionId", "planDigest", "baselinePinDigest", "candidatePinDigest", "allowedChanges", "minimumExecuted"],
+          },
           claimVerdicts: {
             type: "array",
             items: {
@@ -1107,6 +1130,7 @@ export function createSubmitDeliverableVerdictTool(
       if (value.priorFindingChecks !== undefined && !Array.isArray(value.priorFindingChecks)) {
         return { ok: false, issues: ["priorFindingChecks must be an array"] };
       }
+      if (value.testConsolidation !== undefined && !objectInput(value.testConsolidation)) return { ok: false, issues: ["testConsolidation must be an object"] };
       return {
         ok: true,
         value: {
@@ -1114,6 +1138,7 @@ export function createSubmitDeliverableVerdictTool(
           satisfied: value.satisfied,
           claimVerdicts: value.claimVerdicts,
           ...(value.priorFindingChecks !== undefined ? { priorFindingChecks: value.priorFindingChecks as unknown[] } : {}),
+          ...(value.testConsolidation !== undefined ? { testConsolidation: value.testConsolidation as Record<string, unknown> } : {}),
         },
       };
     },
@@ -1127,6 +1152,7 @@ export function createSubmitDeliverableVerdictTool(
         satisfied: input.satisfied,
         claimVerdicts: input.claimVerdicts,
         ...(input.priorFindingChecks !== undefined ? { priorFindingChecks: input.priorFindingChecks } : {}),
+        ...(input.testConsolidation !== undefined ? { testConsolidation: input.testConsolidation } : {}),
       },
       { type: "verifier_verdict_submitted", reviewId: options.reviewId, satisfied: input.satisfied },
     ),

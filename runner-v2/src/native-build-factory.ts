@@ -1,4 +1,6 @@
 import { projectPlanningReadiness, buildPlanningExportDocument } from "./planning-controls.js";
+import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
+import { testIntegrityPinDigest, testIntegrityProfileFindings } from "./test-integrity.js";
 import { explicitStartBlocked } from "./scheduler-store.js";
 import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports } from "./execution-host-lsp-transport.js";
 import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
@@ -88,6 +90,7 @@ import { flakyRerunPattern, isPackageRunTestCommand, judgeFlakyRerun, narrowNode
 import { topDefectClasses } from "./defect-history.js";
 import {
   finalVerificationProfileDigest,
+  inspectFinalVerificationExecutionProfile,
   FinalVerificationProfileAuthority,
 } from "./final-verification-profile.js";
 import { FinalVerificationPortAuthority } from "./final-verification-port-authority.js";
@@ -400,6 +403,8 @@ function currentEventRegisteredSourceManifest(
   return current;
 }
 
+const NATIVE_BUILD_ARCHITECT_ACTOR_ID = "architect_1";
+
 export class NativeBuildFactory {
   private readonly artifacts: ArtifactStore;
   private readonly artifactReachability: ArtifactReachabilityGuard;
@@ -704,6 +709,12 @@ export class NativeBuildFactory {
       });
     }
     ensurePlanningProvisioningPrefix(schedulerStore, spec);
+    const integrityInitialization = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).testIntegrity;
+    if (integrityInitialization && integrityInitialization.initialRevision === undefined) {
+      schedulerStore.append({ runId: spec.runId, type: "delivery.test_integrity_initialized", occurredAt: spec.createdAt,
+        actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "test-integrity-initial-revision:v1",
+        payload: { revision: baselineRevision, architectActorId: NATIVE_BUILD_ARCHITECT_ACTOR_ID } });
+    }
     if (spec.approvedSource !== undefined) {
       registerApprovedSource(
         schedulerStore,
@@ -864,6 +875,7 @@ export class NativeBuildFactory {
     });
     const deliveryReviewWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-review"));
     const deliveryBoundaryWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("delivery-boundary"));
+    const testIntegrityBaselineWorkspace = createDeliveryWorkspaceSlot(deliveryWorkspaceFor("test-integrity-baseline"));
     constructionResources.add(
       "independent_verifier_workspace",
       async () => {
@@ -876,7 +888,8 @@ export class NativeBuildFactory {
             try {
               await deliveryReviewWorkspace.cleanup();
             } finally {
-              await deliveryBoundaryWorkspace.cleanup();
+              try { await deliveryBoundaryWorkspace.cleanup(); }
+              finally { await testIntegrityBaselineWorkspace.cleanup(); }
             }
           }
         }
@@ -1528,14 +1541,32 @@ export class NativeBuildFactory {
       artifacts: this.artifacts,
       evidenceStore,
       loadInputs: async ({ task, projection }) => {
+        await deliveryBoundaryDriver.captureInitialBaseline?.(task.id);
         const resolved = resolveReviewContract(projection, task);
-        return await loadDeliverableReviewInputs({
+        const inputs = await loadDeliverableReviewInputs({
           task,
           submission: await durableSubmission(projection, task.id),
           artifacts: this.artifacts,
           contract: resolved.contract,
           contractRef: resolved.ref,
         });
+        const fresh = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
+        if (fresh.testIntegrity?.baseline) {
+          const baseline = fresh.testIntegrity.baseline;
+          const candidateWorkspace = await deliveryReviewWorkspace.create(inputs.taskRevision);
+          const candidatePin = await (async () => {
+            try {
+              const candidateProfile = await inspectFinalVerificationExecutionProfile({ repositoryRoot: candidateWorkspace.path, targetRevision: inputs.taskRevision, execute: deliveryGit });
+              return await inspectTestIntegrityPin({ git: deliveryGit, repositoryRoot: candidateWorkspace.path,
+                revision: inputs.taskRevision, commands: candidateProfile.commands.tests ?? [] });
+            } finally { await deliveryReviewWorkspace.cleanup(); }
+          })();
+          inputs.testIntegrityReference = { planRevisionId: resolved.ref.revisionId, planDigest: resolved.ref.digest,
+            baselinePinDigest: baseline.pinDigest, candidatePinDigest: testIntegrityPinDigest(candidatePin),
+            baselineKind: baseline.kind, ...(baseline.kind === "executed_report" ? { baselineExecuted: baseline.executed } : {}), baselineRevision: baseline.pin.revision,
+            findings: testIntegrityProfileFindings(baseline.pin, candidatePin) };
+        }
+        return inputs;
       },
       workspace: {
         create: async (taskRevision) => ({ path: (await deliveryReviewWorkspace.create(taskRevision)).path }),
@@ -1592,6 +1623,15 @@ export class NativeBuildFactory {
       execution: commandExecution,
       boundaryWorkspace: deliveryBoundaryWorkspace,
       ambientNodeOptions: deliveryNodeOptions,
+      testIntegrity: {
+        projection: () => rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)),
+        baselineWorkspace: testIntegrityBaselineWorkspace,
+        recordBaseline: (taskId, baseline) => {
+          schedulerStore.append({ runId: spec.runId, type: "delivery.test_integrity_baseline_recorded", occurredAt: new Date().toISOString(),
+            actor: { role: "runner", id: "build-runtime" }, idempotencyKey: "test-integrity-initial-report:v1",
+            payload: { taskId, ...baseline } });
+        },
+      },
       changedFilesFor: async (taskId) => {
         const projection = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
         return [...(await durableSubmission(projection, taskId)).changeSet.changedPaths];
@@ -1864,6 +1904,7 @@ export class NativeBuildFactory {
       },
     };
     const runtime = new BuildRuntime({
+      architectId: NATIVE_BUILD_ARCHITECT_ACTOR_ID,
       runId: spec.runId,
       initialObjective: spec.objective,
       runPolicy: spec.runPolicy,
@@ -4104,6 +4145,7 @@ export function nativeBuildCleanupRoots(stateDirectory: string, runId: string): 
     at("architect-commands", "independent-verifier"),
     at("delivery-review", "independent-verifier"),
     at("delivery-boundary", "independent-verifier"),
+    at("test-integrity-baseline", "independent-verifier"),
     at("baseline", "independent-verifier"),
   ];
 }

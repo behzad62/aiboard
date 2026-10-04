@@ -28,7 +28,10 @@ import {
 } from "./mutation-probe.js";
 import type { DeliverableReviewInputs, DeliveryDepthRunner } from "./native-deliverable-review.js";
 import { outputFor, type OneShotCommandExecutor } from "./one-shot-command-executor.js";
-import type { SchedulerProjection } from "./scheduler-store.js";
+import { effectiveTestIntegrityException, readyPlanIdentity, type SchedulerProjection } from "./scheduler-store.js";
+import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
+import { testIntegrityBaselineFindings, assertNoConfiguredTestSuite, executedTestCount, testIntegrityPinDigest, testIntegrityExceptionMatches, unresolvedTestIntegrityFindings } from "./test-integrity.js";
+import type { TestIntegrityBaselineInput, TestIntegrityBoundary } from "./test-integrity-contracts.js";
 import type { BuildTask, TaskContractRef } from "./task-contracts.js";
 import type { ExecutionTaskContract } from "./planning-contracts.js";
 import {
@@ -886,9 +889,53 @@ export function createDeliveryBoundaryDriver(options: {
   boundaryWorkspace: DeliveryWorkspaceSlot;
   changedFilesFor(taskId: string): Promise<string[]>;
   ambientNodeOptions?: () => string | undefined;
+  testIntegrity?: {
+    projection(): SchedulerProjection;
+    baselineWorkspace: DeliveryWorkspaceSlot;
+    recordBaseline(taskId: string, baseline: TestIntegrityBaselineInput): void;
+  };
 }) {
+  const captureInitialBaseline = async (taskId: string, signal?: AbortSignal) => {
+      const trustedProjection = options.testIntegrity?.projection();
+      if (trustedProjection?.testIntegrity && !trustedProjection.testIntegrity.baseline) {
+        const revision = trustedProjection.testIntegrity.initialRevision;
+        if (!revision) throw new Error("Trusted test-integrity baseline revision is unavailable.");
+        const initial = await options.testIntegrity!.baselineWorkspace.create(revision);
+        try {
+          const profile = await inspectFinalVerificationExecutionProfile({ repositoryRoot: initial.path, targetRevision: revision, execute: options.git });
+          const pin = await inspectTestIntegrityPin({ git: options.git, repositoryRoot: initial.path, revision, commands: profile.commands.tests ?? [] });
+          if (!pin.commands.length && pin.script === undefined && pin.hasTestSignals === false) {
+            const startedAt = new Date().toISOString(); const args = ["ls-tree", "-r", "-z", revision];
+            // Use the owned, audited Git primitive, which settles bounded binary/NUL
+            // inventory output and throws on cancellation/output loss/unknown completion.
+            if (signal?.aborted) throw new Error("Initial test inventory was cancelled.");
+            const observed = await options.git({ cwd: initial.path, args, maxOutputBytes: 4 * 1024 * 1024 });
+            if (observed.exitCode !== 0 || signal?.aborted) throw new Error("Initial test inventory command is incomplete.");
+            const [out, err] = await Promise.all([options.artifacts.put(Buffer.from(observed.stdout), "application/octet-stream", "immutable initial test inventory"), options.artifacts.put(Buffer.from(observed.stderr), "text/plain", "initial test inventory stderr")]);
+            const inventory = observed.stdout;
+            assertNoConfiguredTestSuite(pin, inventory, out.hash);
+            const fact: CommandEvidenceFact = { kind: "command", label: "initial test-suite inventory", command: "git", args, cwd: initial.path, startedAt, finishedAt: new Date().toISOString(), exitCode: observed.exitCode, signal: null, timedOut: false, cancelled: false, outputTruncated: false, stdoutArtifactHash: out.hash, stderrArtifactHash: err.hash, repositoryRevision: revision };
+            const record = options.evidenceStore.record({ runId: options.runId, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" }, fact, createdAt: fact.finishedAt, idempotencyKey: `test-integrity:${taskId}:initial-tests:inventory:${randomUUID()}` });
+            options.testIntegrity!.recordBaseline(taskId, { kind: "no_configured_test_suite", pin, pinDigest: testIntegrityPinDigest(pin), inventory, inventoryDigest: out.hash, evidenceIds: [record.id] });
+            return;
+          }
+          const ambientNodeOptions = options.ambientNodeOptions?.();
+          const run = await runDeliveryCategory({ category: "tests", profile, manager: initial.manager,
+            runId: options.runId, evidenceTaskId: `delivery:${taskId}`,
+            generationId: `test-integrity:${taskId}:initial-tests:${randomUUID()}`, git: options.git,
+            artifacts: options.artifacts, evidenceStore: options.evidenceStore, execution: options.execution,
+            ...(ambientNodeOptions !== undefined ? { ambientNodeOptions } : {}), ...(signal ? { signal } : {}) });
+          const executed = executedTestCount(run.report?.counts);
+          if (!run.report || run.report.status === "unknown" || executed === undefined) throw new Error("Trusted initial test baseline has no usable executed-test report.");
+          options.testIntegrity!.recordBaseline(taskId, { kind: "executed_report", pin, pinDigest: testIntegrityPinDigest(pin), executed, report: run.report, evidenceIds: run.evidenceIds });
+        } finally { await options.testIntegrity!.baselineWorkspace.cleanup(); }
+      }
+  };
   return {
+    captureInitialBaseline,
     check: async (input: { runId: string; taskId: string; boundaryId: string; attempt: number; integrationRevision: string; signal?: AbortSignal }) => {
+      await captureInitialBaseline(input.taskId, input.signal);
+      const trustedProjection = options.testIntegrity?.projection();
       const changedFiles = await options.changedFilesFor(input.taskId);
       const workspace = await options.boundaryWorkspace.create(input.integrationRevision);
       try {
@@ -904,6 +951,29 @@ export function createDeliveryBoundaryDriver(options: {
           execute: options.git,
         });
         const checks: DeliveryBoundaryCheck[] = [];
+        let testIntegrity: TestIntegrityBoundary | undefined;
+        if (trustedProjection?.testIntegrity) {
+          const baseline = trustedProjection.testIntegrity.baseline;
+          const ready = readyPlanIdentity(trustedProjection);
+          const review = trustedProjection.delivery?.reviews[input.taskId];
+          if (!baseline || !ready || !review) throw new Error("Test-integrity boundary lacks its trusted identity records.");
+          const candidatePin = await inspectTestIntegrityPin({ git: options.git, repositoryRoot: workspace.path, revision: input.integrationRevision, commands: profile.commands.tests ?? [] });
+          testIntegrity = { version: 1, taskId: input.taskId, integrationRevision: input.integrationRevision,
+            planRevisionId: ready.revisionId, planDigest: ready.digest, baselineRevision: baseline.pin.revision,
+            baselinePinDigest: baseline.pinDigest, candidatePinDigest: testIntegrityPinDigest(candidatePin),
+            submissionAttempt: review.submissionAttempt, changeSetId: review.changeSetId, candidatePin };
+          const explicit = Object.values(trustedProjection.testIntegrity.exceptions).findLast((exception) => testIntegrityExceptionMatches(exception, testIntegrity!));
+          if (explicit) testIntegrity.exceptionId = explicit.id;
+          const findings = unresolvedTestIntegrityFindings({ findings: testIntegrityBaselineFindings(baseline, candidatePin),
+            binding: testIntegrity, exception: effectiveTestIntegrityException(trustedProjection, testIntegrity) });
+          if (findings.length) {
+            // No hidden package/config rewrite and no narrowed candidate script execution.
+            checks.push({ checkId: "tests", evidenceIds: [], exitCode: null, outcome: "unknown",
+              report: { status: "unknown", runner: "not_run", reason: "Test integrity blocked the changed candidate command/configuration before execution." } });
+            checks.push({ checkId: "test_integrity", evidenceIds: [...baseline.evidenceIds], exitCode: 1, outcome: "failed", reason: findings.map((finding) => finding.message).join(" ") });
+            return { changedFiles, selection: { rung: selection.rung, selectedTests: [...selection.tests] }, checks, testIntegrity };
+          }
+        }
         const categories: Array<"build" | "tests"> = profile.commands.build ? ["build", "tests"] : ["tests"];
         for (const category of categories) {
           const ambientNodeOptions = options.ambientNodeOptions?.();
@@ -942,10 +1012,23 @@ export function createDeliveryBoundaryDriver(options: {
             ...(report ? { report } : {}),
           });
         }
+        if (testIntegrity && trustedProjection?.testIntegrity?.baseline) {
+          const baseline = trustedProjection.testIntegrity.baseline;
+          const tests = checks.find((check) => check.checkId === "tests");
+          const candidateExecuted = executedTestCount(tests?.report?.counts);
+          if (candidateExecuted !== undefined) testIntegrity.candidateExecuted = candidateExecuted;
+          const findings = testIntegrityBaselineFindings(baseline, testIntegrity.candidatePin, candidateExecuted);
+          const unresolved = unresolvedTestIntegrityFindings({ findings, binding: testIntegrity,
+            exception: effectiveTestIntegrityException(trustedProjection, testIntegrity), candidateExecuted });
+          checks.push({ checkId: "test_integrity", evidenceIds: [...new Set([...baseline.evidenceIds, ...(tests?.evidenceIds ?? [])])],
+            exitCode: unresolved.length ? 1 : 0, outcome: unresolved.length ? "failed" : "passed",
+            ...(unresolved.length ? { reason: unresolved.map((finding) => finding.message).join(" ") } : {}) });
+        }
         return {
           changedFiles,
           selection: { rung: selection.rung, selectedTests: [...selection.tests] },
           checks,
+          ...(testIntegrity ? { testIntegrity } : {}),
         };
       } finally {
         await options.boundaryWorkspace.cleanup().catch(() => undefined);

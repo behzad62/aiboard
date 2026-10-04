@@ -375,6 +375,7 @@ function requiresAuthoritativeEvidenceStore(
   // T6a: command outcomes of deliverable reviews and boundary checks must
   // resolve to durable evidence.
   if (event.type === "delivery.boundary_checked") return true;
+  if (event.type === "delivery.test_integrity_baseline_recorded") return true;
   if (event.type === "delivery.findings_recorded") {
     const depth = event.payload.depth;
     return typeof depth === "object" && depth !== null && !Array.isArray(depth) &&

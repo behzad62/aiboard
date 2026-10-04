@@ -39,6 +39,8 @@ import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition
 import { createHash } from "node:crypto";
 import { PROJECT_DOC_MAX_BYTES, validateProjectDocPath } from "./project-docs.js";
 import { isDiagnosticRepairCycle } from "./repair-budget-contracts.js";
+import { testIntegrityBaselineFindings, assertNoConfiguredTestSuite, executedTestCount, testIntegrityPinDigest, unresolvedTestIntegrityFindings, type TestIntegrityPin, type TestIntegrityException } from "./test-integrity.js";
+import type { TestIntegrityState, TestIntegrityBoundary, TestConsolidationDisposition } from "./test-integrity-contracts.js";
 
 import {
   isFinalVerificationTask,
@@ -252,6 +254,9 @@ export type SchedulerEventType =
   | "delivery.boundary_started"
   | "delivery.boundary_checked"
   | "delivery.boundary_failure_resolved"
+  | "delivery.test_integrity_initialized"
+  | "delivery.test_integrity_baseline_recorded"
+  | "delivery.test_integrity_exception_recorded"
   | "task.acceptance_recorded"
   | "phase.acceptance_recorded"
   | "planning.policy_configured"
@@ -1002,6 +1007,7 @@ export interface SchedulerProjection {
    * task/phase acceptance. New-policy runs only; legacy runs omit it.
    */
   delivery?: DeliveryState;
+  testIntegrity?: TestIntegrityState;
   planning?: PlanningProjection;
   /** Durable triage decision (T9 `request.triaged`); undefined ("no decision yet") until then. */
   planningTriageDecision?: PlanningTriageDecision;
@@ -2697,7 +2703,7 @@ function validateDeliveryCommandEvidence(
       commandOutcomes.push({
         label: `boundary check ${String(check.checkId)}`,
         evidenceIds: stringArray(check, "evidenceIds"),
-        exitCode: check.exitCode,
+        exitCode: check.checkId === "test_integrity" ? undefined : check.exitCode,
       });
     }
   }
@@ -2743,6 +2749,29 @@ export function validateSchedulerEvidenceEvent(
   evidenceStore: EvidenceStore
 ): void {
   if (!projection) return;
+  if (event.type === "delivery.test_integrity_baseline_recorded") {
+    const evidenceIds = stringArray(event.payload, "evidenceIds");
+    const records = evidenceStore.getByIds({ runId: event.runId, ids: evidenceIds });
+    const taskId = requiredString(event.payload, "taskId");
+    const revision = projection.testIntegrity?.initialRevision;
+    const pin = parseTestIntegrityPin(event.payload.pin);
+    if (!revision || pin.revision !== revision || evidenceIds.length === 0 || records.length !== evidenceIds.length || records.some((record) =>
+      record.fact.kind !== "command" || record.fact.repositoryRevision !== revision ||
+      record.fact.exitCode === null || record.fact.timedOut || record.fact.cancelled ||
+      record.actor.role !== "verifier" || record.actor.id !== "delivery-check-runtime" ||
+      record.taskId !== `delivery:${taskId}` || record.status !== "observed" || !record.idempotencyKey.includes(":initial-tests:"))) {
+      throw new Error("Initial test baseline requires its own completed verifier command evidence at the immutable baseline revision.");
+    }
+    if (event.payload.kind === "no_configured_test_suite") {
+      const record = records[0]!;
+      if (records.length !== 1 || record.fact.kind !== "command" || record.fact.command !== "git" ||
+        !sameValue(record.fact.args, ["ls-tree", "-r", "-z", revision]) || record.fact.exitCode !== 0 ||
+        record.fact.outputTruncated || record.fact.outputLossy || record.fact.stdoutArtifactHash !== event.payload.inventoryDigest) {
+        throw new Error("Unconfigured baseline requires exact complete Git inventory evidence.");
+      }
+    }
+    return;
+  }
   if (event.type === "delivery.findings_recorded" || event.type === "delivery.boundary_checked") {
     validateDeliveryCommandEvidence(event, evidenceStore);
     return;
@@ -3091,6 +3120,11 @@ function validateFinalVerificationEvidenceSet(input: {
 }
 
 export function finalVerificationEventArtifactHashes(event: SchedulerEvent): string[] {
+  if (event.type === "delivery.test_integrity_baseline_recorded") {
+    if (event.payload.kind === "no_configured_test_suite") return [requiredString(event.payload, "inventoryDigest")];
+    const report = event.payload.report;
+    return isRecord(report) && typeof report.artifactHash === "string" ? [report.artifactHash] : [];
+  }
   // T6a (real counts): the test report a delivery record read must exist as
   // a durable artifact.
   if (event.type === "delivery.findings_recorded" || event.type === "delivery.boundary_checked") {
@@ -3256,7 +3290,8 @@ export function reduceSchedulerEvent(
       if (event.actor.role !== "runner" && event.actor.role !== "user") {
         throw new Error("Only the runner or user may initialize a scheduler run.");
       }
-      return emptySchedulerProjection(event);
+      if (event.payload.testIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1)) throw new Error("Invalid test-integrity initialization authority or version.");
+      return { ...emptySchedulerProjection(event), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
     }
     if (event.type === "run.policy_configured") {
       if (event.actor.role !== "runner") {
@@ -3415,6 +3450,7 @@ export function reduceSchedulerEvent(
       : {}),
     ...(current.answerReviews ? { answerReviews: { ...current.answerReviews } } : {}),
     ...(current.delivery ? { delivery: structuredClone(current.delivery) } : {}),
+    ...(current.testIntegrity ? { testIntegrity: structuredClone(current.testIntegrity) } : {}),
     runtime: {
       providerHealth: { ...current.runtime.providerHealth },
       workerAssignments: { ...current.runtime.workerAssignments },
@@ -3551,6 +3587,10 @@ export function reduceSchedulerEvent(
         current.runPolicy === undefined
       ) {
         const initialObjective = event.payload.objective;
+        if (event.payload.testIntegrityPolicyVersion !== undefined) {
+          if (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1) throw new Error("Invalid test-integrity initialization authority or version.");
+          next.testIntegrity = { version: 1, exceptions: {} };
+        }
         if (typeof initialObjective === "string") next.initialObjective = initialObjective;
         break;
       }
@@ -5686,6 +5726,11 @@ export function reduceSchedulerEvent(
       applyProjectDocAbandoned(next, event);
       break;
     }
+    case "delivery.test_integrity_initialized":
+    case "delivery.test_integrity_baseline_recorded":
+    case "delivery.test_integrity_exception_recorded":
+      reduceTestIntegrityEvent(current, next, event);
+      break;
     case "delivery.review_started":
     case "delivery.review_requested":
     case "delivery.obligations_recorded":
@@ -6683,6 +6728,111 @@ function createVerifierRepairTasks(
 // The pure record shapes and shared rules live in delivery-acceptance.ts.
 // ---------------------------------------------------------------------------
 
+function parseTestIntegrityPin(value: unknown): TestIntegrityPin {
+  if (!isRecord(value) || !Array.isArray(value.commands) || !/^[a-f0-9]{64}$/.test(requiredString(value, "configDigest"))) throw new Error("Test-integrity pin is invalid.");
+  return { revision: requiredString(value, "revision"), configDigest: requiredString(value, "configDigest"),
+    ...(typeof value.script === "string" ? { script: value.script } : {}),
+    ...(typeof value.hasTestSignals === "boolean" ? { hasTestSignals: value.hasTestSignals } : {}),
+    commands: value.commands.map((command) => {
+      if (!isRecord(command)) throw new Error("Test-integrity command is invalid.");
+      return { executable: requiredString(command, "executable"), args: stringArray(command, "args") };
+    }) };
+}
+
+function parseTestConsolidation(value: unknown): TestConsolidationDisposition {
+  if (!isRecord(value) || (value.disposition !== "obsolete" && value.disposition !== "merged")) throw new Error("Test consolidation requires an obsolete or merged disposition.");
+  const allowedChanges = stringArray(value, "allowedChanges");
+  if (allowedChanges.length === 0 || allowedChanges.some((code) => !["test_command_changed", "test_config_changed", "suite_shrank"].includes(code))) throw new Error("Test consolidation must specify permitted changes.");
+  const affectedTestIds = stringArray(value, "affectedTestIds");
+  if (affectedTestIds.length === 0) throw new Error("Test consolidation must identify affected tests.");
+  const planDigest = requiredString(value, "planDigest"); const baselinePinDigest = requiredString(value, "baselinePinDigest"); const candidatePinDigest = requiredString(value, "candidatePinDigest");
+  if (![planDigest, baselinePinDigest, candidatePinDigest].every((digest) => /^[a-f0-9]{64}$/.test(digest))) throw new Error("Test consolidation fingerprints are invalid.");
+  return { id: requiredString(value, "id"), disposition: value.disposition, affectedTestIds,
+    behaviorProof: requiredString(value, "behaviorProof"), reason: requiredString(value, "reason"),
+    planRevisionId: requiredString(value, "planRevisionId"), planDigest, baselinePinDigest, candidatePinDigest,
+    allowedChanges: allowedChanges as TestConsolidationDisposition["allowedChanges"], minimumExecuted: requiredPositiveInteger(value, "minimumExecuted") };
+}
+
+export function effectiveTestIntegrityException(current: SchedulerProjection, binding: TestIntegrityBoundary): TestIntegrityException | undefined {
+  const explicit = binding.exceptionId && current.testIntegrity?.exceptions[binding.exceptionId];
+  if (explicit) return explicit;
+  const review = current.delivery?.reviews[binding.taskId];
+  const disposition = review?.testConsolidation;
+  if (!review || review.stage !== "completed" || !review.satisfied || review.changeSetId !== binding.changeSetId ||
+    review.submissionAttempt !== binding.submissionAttempt || !disposition || !review.completedSequence) return undefined;
+  return { ...binding, id: disposition.id, kind: "reviewed_consolidation", reason: disposition.reason,
+    behaviorProof: disposition.behaviorProof, authoritySequence: review.completedSequence,
+    planRevisionId: disposition.planRevisionId, planDigest: disposition.planDigest,
+    baselinePinDigest: disposition.baselinePinDigest, candidatePinDigest: disposition.candidatePinDigest,
+    allowedChanges: disposition.allowedChanges, minimumExecuted: disposition.minimumExecuted };
+}
+
+/** Exact acceptance binding; a changed ready plan or baseline requires fresh boundary evidence. */
+export function testIntegrityBoundaryIsCurrent(current: SchedulerProjection, boundary: DeliveryBoundaryRecord): boolean {
+  if (!current.testIntegrity) return true;
+  const integrity = boundary.testIntegrity;
+  const baseline = current.testIntegrity.baseline;
+  const ready = readyPlanIdentity(current);
+  const review = current.delivery?.reviews[boundary.taskId];
+  if (!integrity || !baseline || !ready || !review ||
+    integrity.taskId !== boundary.taskId || integrity.integrationRevision !== current.integrationRevision ||
+    integrity.planRevisionId !== ready.revisionId || integrity.planDigest !== ready.digest ||
+    integrity.baselineRevision !== baseline.pin.revision || integrity.baselinePinDigest !== baseline.pinDigest ||
+    integrity.changeSetId !== review.changeSetId || integrity.submissionAttempt !== review.submissionAttempt ||
+    integrity.candidatePinDigest !== testIntegrityPinDigest(integrity.candidatePin)) return false;
+  return true;
+}
+
+function reduceTestIntegrityEvent(current: SchedulerProjection, next: SchedulerProjection, event: SchedulerEvent): void {
+  const state = next.testIntegrity;
+  if (!state || current.planningPolicyVersion !== 1) throw new Error("Test-integrity records require activated planning policy.");
+  if (event.type === "delivery.test_integrity_initialized") {
+    requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+    const revision = requiredString(event.payload, "revision");
+    if (state.initialRevision !== undefined) throw new Error("Test-integrity initial baseline is immutable.");
+    state.initialRevision = revision;
+    state.architectActorId = requiredString(event.payload, "architectActorId");
+    return;
+  }
+  if (event.type === "delivery.test_integrity_baseline_recorded") {
+    requireDeliveryRunner(event, DELIVERY_ACCEPTANCE_RUNNER_ID);
+    const pin = parseTestIntegrityPin(event.payload.pin);
+    if (!state.initialRevision || pin.revision !== state.initialRevision || state.baseline) throw new Error("Initial test baseline must reference the immutable run baseline once.");
+    const evidenceIds = stringArray(event.payload, "evidenceIds");
+    if (evidenceIds.length === 0) throw new Error("Initial test baseline requires command evidence.");
+    if (event.payload.kind === "no_configured_test_suite") {
+      const inventory = typeof event.payload.inventory === "string" ? event.payload.inventory : undefined;
+      const inventoryDigest = requiredString(event.payload, "inventoryDigest");
+      if (inventory === undefined || event.payload.report !== undefined || event.payload.executed !== undefined) throw new Error("Unconfigured baseline cannot invent test counts or a report.");
+      assertNoConfiguredTestSuite(pin, inventory, inventoryDigest);
+      state.baseline = { kind: "no_configured_test_suite", pin, pinDigest: testIntegrityPinDigest(pin), inventory, inventoryDigest, evidenceIds, sequence: event.sequence };
+      return;
+    }
+    if (event.payload.kind !== "executed_report") throw new Error("Initial test baseline kind is invalid.");
+    const report = parseDeliveryTestReport(event.payload.report, "Initial test-integrity baseline report");
+    const executed = executedTestCount(report.counts);
+    if (executed === undefined || report.status === "unknown" || !report.path || !report.artifactHash) throw new Error("Initial test baseline requires an actual fresh machine report with executed tests.");
+    state.baseline = { kind: "executed_report", pin, pinDigest: testIntegrityPinDigest(pin), report, executed, evidenceIds, sequence: event.sequence };
+    return;
+  }
+  if (event.type === "delivery.test_integrity_exception_recorded") {
+    if (event.actor.role !== "architect" || event.actor.id !== state.architectActorId) throw new Error("Only the current bound Architect may authorize a test change reason.");
+    const taskId = requiredString(event.payload, "taskId");
+    const boundary = latestBoundary(current.delivery, taskId);
+    const integrity = boundary?.testIntegrity;
+    const ready = readyPlanIdentity(current);
+    if (!boundary || boundary.passed || boundary.integrationRevision !== current.integrationRevision || !integrity ||
+      !ready || integrity.planRevisionId !== ready.revisionId || integrity.planDigest !== ready.digest) throw new Error("Test change reason requires the current failed identity-bound boundary and plan.");
+    const allowedChanges = stringArray(event.payload, "allowedChanges");
+    if (allowedChanges.length === 0 || allowedChanges.some((code) => !["test_command_changed", "test_config_changed", "suite_shrank"].includes(code))) throw new Error("Test change reason must specify permitted changes.");
+    const id = requiredString(event.payload, "id");
+    if (state.exceptions[id]) throw new Error("Test change reason id is already recorded.");
+    state.exceptions[id] = { ...integrity, id, kind: "plan_revision_reason", reason: requiredString(event.payload, "reason"),
+      authoritySequence: event.sequence, allowedChanges: allowedChanges as TestIntegrityException["allowedChanges"],
+      minimumExecuted: requiredPositiveInteger(event.payload, "minimumExecuted") };
+  }
+}
+
 function reduceDeliveryEvent(
   current: SchedulerProjection,
   next: SchedulerProjection,
@@ -6713,7 +6863,7 @@ function reduceDeliveryEvent(
       deliveryReportDelivered(state, event);
       return;
     case "delivery.review_recorded":
-      deliveryReviewRecorded(state, event);
+      deliveryReviewRecorded(current, state, event);
       return;
     case "delivery.boundary_started":
       deliveryBoundaryStarted(current, state, event);
@@ -6726,6 +6876,15 @@ function reduceDeliveryEvent(
       return;
     case "task.acceptance_recorded":
       deliveryTaskAccepted(current, state, event);
+      if (next.testIntegrity) {
+        const boundary = latestBoundary(state, requiredString(event.payload, "taskId"))!;
+        const integrity = boundary.testIntegrity;
+        const tests = boundary.checks.find((check) => check.checkId === "tests");
+        if (!integrity || !tests?.report || integrity.candidateExecuted === undefined) throw new Error("Accepted task must carry complete test-integrity evidence.");
+        next.testIntegrity.baseline = { kind: "executed_report", pin: integrity.candidatePin, pinDigest: integrity.candidatePinDigest,
+          executed: integrity.candidateExecuted, report: tests.report, evidenceIds: tests.evidenceIds,
+          sequence: event.sequence, acceptedTaskId: boundary.taskId };
+      }
       return;
     case "phase.acceptance_recorded":
       deliveryPhaseAccepted(current, state, event);
@@ -7040,7 +7199,7 @@ function deliveryReportDelivered(state: DeliveryState, event: SchedulerEvent): v
   review.stage = "report_delivered";
 }
 
-function deliveryReviewRecorded(state: DeliveryState, event: SchedulerEvent): void {
+function deliveryReviewRecorded(current: SchedulerProjection, state: DeliveryState, event: SchedulerEvent): void {
   const review = requireDeliveryReview(state, event, ["report_delivered"]);
   requireDeliveryReviewer(event, review);
   const sessionId = requireFreshDeliverySession(state, event);
@@ -7120,6 +7279,13 @@ function deliveryReviewRecorded(state: DeliveryState, event: SchedulerEvent): vo
   review.sessionIds.push(sessionId);
   review.stage = "completed";
   review.completedSequence = event.sequence;
+  if (event.payload.testConsolidation !== undefined) {
+    if (!current.testIntegrity || !review.satisfied) throw new Error("Test consolidation requires an activated, satisfied independent review.");
+    const disposition = parseTestConsolidation(event.payload.testConsolidation);
+    const ready = readyPlanIdentity(current);
+    if (!ready || disposition.planRevisionId !== ready.revisionId || disposition.planDigest !== ready.digest) throw new Error("Test consolidation must bind the exact current ready plan.");
+    review.testConsolidation = disposition;
+  }
 }
 
 function parseDeliveryTestReport(value: unknown, label: string): DeliveryTestReport {
@@ -7295,7 +7461,7 @@ function deliveryBoundaryStarted(
   if (integrationRevision !== current.integrationRevision) {
     throw new Error("Boundary runs must target the current integration revision.");
   }
-  if (deliveryBoundaryAction(state, taskId, integrationRevision, (id) => current.tasks[id]?.status).type !== "run") {
+  if (deliveryBoundaryAction(state, taskId, integrationRevision, (id) => current.tasks[id]?.status, (boundary) => testIntegrityBoundaryIsCurrent(current, boundary)).type !== "run") {
     throw new Error(`Task ${taskId} boundary on ${integrationRevision} may not run again.`);
   }
   const boundaryId = requiredString(event.payload, "boundaryId");
@@ -7328,7 +7494,7 @@ function deliveryBoundaryChecked(
   }
   // B4: a failed boundary is never re-run on the same revision without a
   // state change (a new revision, or one Architect recheck grant).
-  const action = deliveryBoundaryAction(state, taskId, integrationRevision, (id) => current.tasks[id]?.status);
+  const action = deliveryBoundaryAction(state, taskId, integrationRevision, (id) => current.tasks[id]?.status, (boundary) => testIntegrityBoundaryIsCurrent(current, boundary));
   if (action.type !== "run") {
     throw new Error(`Task ${taskId} boundary on ${integrationRevision} may not run again (${action.type}).`);
   }
@@ -7393,6 +7559,31 @@ function deliveryBoundaryChecked(
   }
   const selection = event.payload.selection;
   if (!isRecord(selection)) throw new Error("Boundary checks require the affected-test selection.");
+  let testIntegrity: TestIntegrityBoundary | undefined;
+  if (current.testIntegrity) {
+    const recorded = event.payload.testIntegrity;
+    const baseline = current.testIntegrity.baseline;
+    const ready = readyPlanIdentity(current);
+    const review = current.delivery?.reviews[taskId];
+    if (!baseline || !ready || !review || !isRecord(recorded) || recorded.version !== 1) throw new Error("Guarded boundary requires trusted baseline and current test-integrity evidence.");
+    const candidatePin = parseTestIntegrityPin(recorded.candidatePin);
+    const tests = checks.find((check) => check.checkId === "tests");
+    const candidateExecuted = executedTestCount(tests?.report?.counts);
+    testIntegrity = { version: 1, taskId, integrationRevision, planRevisionId: ready.revisionId, planDigest: ready.digest,
+      baselineRevision: baseline.pin.revision, baselinePinDigest: baseline.pinDigest, candidatePinDigest: testIntegrityPinDigest(candidatePin),
+      submissionAttempt: review.submissionAttempt, changeSetId: review.changeSetId, candidatePin,
+      ...(candidateExecuted !== undefined ? { candidateExecuted } : {}),
+      ...(typeof recorded.exceptionId === "string" ? { exceptionId: recorded.exceptionId } : {}) };
+    if (candidatePin.revision !== integrationRevision || !sameValue(recorded, testIntegrity)) throw new Error("Test-integrity record must bind exact current projection and measured counts.");
+    const findings = testIntegrityBaselineFindings(baseline, candidatePin, candidateExecuted);
+    const unresolved = unresolvedTestIntegrityFindings({ findings, binding: testIntegrity,
+      exception: effectiveTestIntegrityException(current, testIntegrity), candidateExecuted });
+    const guard = checks.find((check) => check.checkId === "test_integrity");
+    if (!guard || guard.outcome !== (unresolved.length ? "failed" : "passed") ||
+      (unresolved.length === 0 && guard.exitCode !== 0) || (unresolved.length > 0 && guard.exitCode !== 1)) throw new Error("Test-integrity outcome must match kernel recomputation.");
+  } else if (event.payload.testIntegrity !== undefined || checks.some((check) => check.checkId === "test_integrity")) {
+    throw new Error("Historical delivery policy cannot invent test-integrity records.");
+  }
   const last = previous.at(-1);
   if (last?.resolution?.resolution === "recheck" && last.integrationRevision === integrationRevision) {
     last.resolution = { ...last.resolution, consumed: true };
@@ -7409,6 +7600,7 @@ function deliveryBoundaryChecked(
     checks,
     passed,
     sequence: event.sequence,
+    ...(testIntegrity ? { testIntegrity } : {}),
   }];
 }
 
@@ -7563,7 +7755,8 @@ function deliveryTaskAccepted(
   if (
     !boundary || !boundary.passed ||
     boundary.boundaryId !== requiredString(event.payload, "boundaryId") ||
-    boundary.integrationRevision !== current.integrationRevision
+    boundary.integrationRevision !== current.integrationRevision ||
+    !testIntegrityBoundaryIsCurrent(current, boundary)
   ) {
     throw new Error("Task acceptance requires a passed boundary check on the current integration revision.");
   }
