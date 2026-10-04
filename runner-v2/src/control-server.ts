@@ -643,7 +643,7 @@ export class ControlServer {
         if (!Number.isSafeInteger(body.requiredSequence) || body.requiredSequence < 1) invalidBody();
         // The answer names the exact pending requirement (FX-2 review r2
         // F1); stale identities are refused by the kernel, never rebound.
-        void validateSelectionAnswer(body);
+        try { validateSelectionAnswer(body); } catch { invalidBody(); }
         sendJson(
           response,
           200,
@@ -671,7 +671,7 @@ export class ControlServer {
         if (!Number.isSafeInteger(body.requiredSequence) || body.requiredSequence < 1) invalidBody();
         // The answer names the exact pending requirement (FX-2 review r2
         // F1); stale identities are refused by the kernel, never rebound.
-        void validateSelectionAnswer(body);
+        try { validateSelectionAnswer(body); } catch { invalidBody(); }
         sendJson(
           response,
           200,

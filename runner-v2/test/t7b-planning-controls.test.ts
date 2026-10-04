@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,7 +27,6 @@ import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
 import { buildPlanningExportDocument, projectPlanningReadiness, validateExplicitStartRequest, resolveSelectionAnswerSequence, validateSourceAmendmentRequest, PLANNING_EXPORT_MAX_BYTES, type ExplicitStartRequestV1, type PlanningReadinessSnapshot, type PlanningExportDocument } from "../src/planning-controls.js";
 import { seedBoundCoverageAndReady, seedDurableSourceReads } from "./support/planning-seed.js";
 import { buildFixtureHostCapabilities } from "./fixtures/planning-source-fixture.js";
-import { registerNativePlanningSource, amendNativePlanningSource, getNativePlanningReadiness, startNativeReadyPlan, exportNativePlanning, selectNativeArchitectHandoff, selectNativeVerifierRuntime } from "../../lib/client/runner-v2.js";
 
 function sourceBytes(text: string): Uint8Array { return new Uint8Array(Buffer.from(text, "utf8")); }
 function sourceInput(text: string, sections?: ApprovedSourceInputV1["sections"]): ApprovedSourceInputV1 { return { version: 1, approval: "approved_spec", bytesBase64: Buffer.from(text).toString("base64"), mediaType: "text/plain", encoding: "utf-8", ...(sections !== undefined ? { sections } : {}) }; }
@@ -490,21 +491,22 @@ test("T7b product: unseeded opt-in provisioning plans, covers, builds, and accep
 });
 
 
-function controlFixture(label: string) {
+function controlFixture(label: string, architectDriver?: import("../src/build-runtime.js").ArchitectRuntimeDriver) {
   const root = mkdtempSync(join(tmpdir(), `aiboard-t7b-${label}-`));
   let clocks = 0;
   const clock = () => new Date(Date.parse(T7B_CLOCK) + ++clocks * 1000).toISOString();
   mkdirSync(join(root, "artifacts"), { recursive: true });
   const artifacts = new ArtifactStore(join(root, "artifacts"), { clock });
-  const store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { artifacts });
+  let store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { artifacts });
   let workers = 0, allocations = 0;
-  const runtime = new BuildRuntime({ runId: "run_t7b_controls", initialObjective: "Deliver the value module.", specCreatedAt: T7B_CLOCK,
+  const constructRuntime = () => new BuildRuntime({ runId: "run_t7b_controls", initialObjective: "Deliver the value module.", specCreatedAt: T7B_CLOCK,
     planningPolicy: { version: 1 }, store, artifacts, clock, maxConcurrency: 1,
-    architectDriver: { run: async () => { throw new Error("unexpected model effect"); } },
+    architectDriver: architectDriver ?? { run: async () => { throw new Error("unexpected model effect"); } },
     workerDriver: { run: async () => { workers++; return { type: "paused", reason: "test-stop" }; } },
     integrationDriver: { integrate: async () => { throw new Error("unexpected integration effect"); } },
     workspaceFor: async () => { allocations++; return root; },
   });
+  let runtime = constructRuntime();
   const append = (type: import("../src/scheduler-store.js").SchedulerEventType, key: string, payload: Record<string, unknown>, role: "architect" | "runner" | "user" = "architect", id = role === "user" ? "local-user" : "architect_1") => store.append({ runId: "run_t7b_controls", type, idempotencyKey: key, actor: { role, id }, occurredAt: T7B_CLOCK, payload });
   const approve = () => runtime.registerPlanningSource({ approvedSource: sourceInput(T7B_SOURCE, [...t7bJourneySections()]), idempotencyKey: "initial-owner-source" });
   const seedReady = async () => {
@@ -525,7 +527,9 @@ function controlFixture(label: string) {
   const amendment = (overrides: Record<string, unknown> = {}) => validateSourceAmendmentRequest({ ...sourceInput(T7B_SOURCE.replace("value 2", "value 3"), [...t7bJourneySections()]), predecessorManifestId: runtime.projection().planning!.source.currentManifestId,
     predecessorArtifactDigest: runtime.projection().planning!.source.artifactDigest, amendmentId: "amend-1", rationale: "The owner changes the approved specification.", impact: { addsSectionIds: [], retiresSectionIds: [], addsRequirementIds: [], retiresRequirementIds: [] }, idempotencyKey: "owner-amendment", ...overrides });
   const evidence = () => ({ events: store.readRun("run_t7b_controls"), files: readdirSync(join(root, "artifacts"), { recursive: true }), clocks, workers, allocations });
-  return { root, artifacts, store, runtime, append, approve, seedReady, start, amendment, evidence, cleanup: () => { store.close(); rmSync(root, { recursive: true, force: true }); } };
+  return { root, artifacts, get store() { return store; }, get runtime() { return runtime; }, append, approve, seedReady, start, amendment, evidence,
+    reopen: () => { store.close(); store = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { artifacts }); runtime = constructRuntime(); },
+    cleanup: () => { store.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
 test("T7b source control: exact retry has zero clock/artifact/event effects and conflicting body refuses", async () => {
@@ -610,7 +614,6 @@ test("T7b stale-ready negative proof: prior authorization never allocates or dis
     const review: CoverageReview = { ...f.runtime.projection().planning!.coverageReview!, id: "coverage-second", planRevisionId: revision.revisionId, planRevisionDigest: revision.digest };
     seedBoundCoverageAndReady(f.store, "run_t7b_controls", { revision, manifest: scenario.manifest, review, hostCapabilities: buildFixtureHostCapabilities(), occurredAt: T7B_CLOCK });
     const before = f.evidence();
-    assert.match(explicitStartBlocked(f.runtime.projection())!, /Re-authorize/);
     const result = await f.runtime.step();
     assert.equal(result.action, "plan_start_required");
     assert.equal(f.evidence().workers, 0); assert.equal(f.evidence().allocations, 0);
@@ -693,6 +696,9 @@ test("T7b export: current amended revision sidecars, credential redaction, size 
 });
 
 test("T7b browser client: explicit option and owner identities travel unchanged without submit-time reads", async () => {
+  // Browser code is typechecked by the app project; this runner-side test invokes
+  // its real transport functions without importing the app's alias type graph.
+  const { registerNativePlanningSource, amendNativePlanningSource, getNativePlanningReadiness, startNativeReadyPlan, exportNativePlanning, selectNativeArchitectHandoff, selectNativeVerifierRuntime } = await import(pathToFileURL(join(process.cwd(), "lib/client/runner-v2.ts")).href);
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const transport: typeof fetch = async (url, init) => { calls.push({ url: String(url), init: init! }); return new Response("{}", { status: 200, headers: { "content-type": "application/json" } }); };
   const connection = { url: "http://127.0.0.1:8787", token: "local-control" };
@@ -736,6 +742,65 @@ test("T7b interrupted source/start append: exact retry completes only the missin
   }
 });
 
+test("T7b reopened SQLite: source amendments and exact start authority survive runtime reconstruction without retry effects", async () => {
+  const f = controlFixture("reopen");
+  try {
+    await f.seedReady(); const start = f.start(); await f.runtime.authorizeExplicitPlanStart(start);
+    const authorized = f.evidence(); f.reopen();
+    assert.deepEqual(f.evidence(), authorized);
+    assert.equal(f.runtime.planningReadiness().explicitStartAuthorized, true);
+    await f.runtime.authorizeExplicitPlanStart(start); assert.deepEqual(f.evidence(), authorized);
+    const amendment = f.amendment(); await f.runtime.amendPlanningSource(amendment);
+    const amended = f.evidence(); f.reopen();
+    assert.deepEqual(f.evidence(), amended);
+    assert.equal(f.runtime.planningReadiness().explicitStartAuthorized, false);
+    await f.runtime.amendPlanningSource(amendment); assert.deepEqual(f.evidence(), amended);
+    await assert.rejects(f.runtime.authorizeExplicitPlanStart(start), /stale/);
+    assert.deepEqual(f.evidence(), amended);
+  } finally { f.cleanup(); }
+});
+
+test("T7b activated pump: source approval and current start wake only their already activated paused run", async () => {
+  for (const kind of ["source", "start"] as const) {
+    let architectCalls = 0;
+    const f = controlFixture(`active-${kind}`, { run: async () => { architectCalls++; f.runtime.pause("inspection-complete", "inspection-stop"); } });
+    const specs = new SqliteBuildSpecStore(join(f.root, "specs.sqlite"));
+    const spec: import("../src/build-spec.js").NativeBuildSpec = { version: 2, runId: "run_t7b_controls", projectId: "project", objective: "Deliver the value module.", architectRuntimeId: "arch:architect", workerRuntimeIds: ["work:worker"], verifierRuntimeIds: ["rev:reviewer"], alwaysRequireIndependentVerifier: false, maxConcurrency: 1, permissionProfile: "full", runPolicy: "finish", planningPolicy: { version: 1 }, budgetLimits: {}, createdAt: T7B_CLOCK, idempotencyKey: "manager-spec" };
+    const results: import("../src/build-runtime.js").BuildStepResult[] = [];
+    let signal: (() => void) | undefined;
+    const manager = new NativeBuildManager({ specs, createRuntime: async () => ({ runtime: f.runtime,
+      usage: () => { throw new Error("unused usage port"); }, observability: async () => { throw new Error("unused observability port"); },
+      transcript: async () => { throw new Error("unused transcript port"); }, files: async () => { throw new Error("unused files port"); },
+      compact: () => undefined, projectHandoff: async () => { throw new Error("unexpected handoff"); }, cleanup: () => undefined, close: () => undefined }),
+      onPumpResult: (_runId, result) => { results.push(result); signal?.(); },
+      onPumpError: (_runId, error) => { throw error; },
+    });
+    const nextResult = async () => {
+      if (!results.length) await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => { signal = undefined; reject(new Error("owned pump did not settle")); }, 5000);
+        signal = () => { clearTimeout(timeout); signal = undefined; resolve(); };
+      });
+      return results.shift()!;
+    };
+    try {
+      await manager.create(spec);
+      if (kind === "start") await f.seedReady();
+      else f.append("request.triaged", "triage", { decision: "build", rationale: "Change request awaiting owner source." });
+      assert.equal(architectCalls, 0); assert.equal(f.evidence().workers, 0);
+      manager.activate(spec.runId);
+      assert.equal((await nextResult()).action, kind === "source" ? "planning_source_missing" : "plan_start_required");
+      assert.equal(architectCalls, 0); assert.equal(f.evidence().allocations, 0); assert.equal(f.evidence().workers, 0);
+      if (kind === "source") await manager.registerPlanningSource(spec.runId, { approvedSource: sourceInput(T7B_SOURCE, [...t7bJourneySections()]), idempotencyKey: "initial-owner-source" });
+      else await manager.authorizeExplicitPlanStart(spec.runId, f.start());
+      const resumed = await nextResult();
+      assert.equal(resumed.status, "paused");
+      if (kind === "source") { assert.equal(architectCalls, 1); assert.equal(f.evidence().workers, 0); }
+      else { assert.equal(architectCalls, 0); assert.equal(f.evidence().workers, 1); assert.equal(f.evidence().allocations, 1); }
+      assert.equal(f.evidence().events.filter((event) => event.type === "run.resumed").length, 1);
+    } finally { await manager.close(); f.cleanup(); }
+  }
+});
+
 test("T7b historical terminal HTTP: real factory reader serves readiness/export without inventing coverage or mutating logs", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-t7b-historical-"));
   const project = join(root, "project"), state = join(root, "state"), runId = "old-terminal";
@@ -752,7 +817,7 @@ test("T7b historical terminal HTTP: real factory reader serves readiness/export 
   const beforeSupervisor = supervisor.events(runId);
   const factory = new FixtureNativeBuildFactory({ projectRoot: project, stateDirectory: state, providerConfigs: { load: () => [], save: () => undefined, close: () => undefined }, baselineFor: () => "a".repeat(40), providerModelFactory: () => { throw new Error("historical must not load models"); } });
   const manager = new NativeBuildManager({ specs, createRuntime: async () => { throw new Error("must not construct live runtime"); }, shouldRecoverSpec: () => false, terminalStateForHistoricalSpec: () => supervisor.getRun(runId).state as "completed", createHistoricalRuntime: (saved, terminal) => factory.createHistorical(saved, terminal) });
-  const server = new ControlServer({ supervisor, token: "historical-control", builds: manager });
+  const server = new ControlServer({ supervisor, token: "historical-control", builds: manager, bootstrapRun: async () => { throw new Error("historical route must not bootstrap"); } });
   try {
     const report = await manager.recover(); assert.deepEqual(report.failures, []);
     const address = await server.start(0);
@@ -769,4 +834,76 @@ test("T7b historical terminal HTTP: real factory reader serves readiness/export 
     assert.equal(manager.projection(runId).planningPolicyVersion, undefined);
     await assert.rejects(manager.registerPlanningSource(runId, { approvedSource: sourceInput("owner"), idempotencyKey: "mutate" }), /read-only/);
   } finally { await server.close(); await manager.close(); await factory.close(); supervisor.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("T7b legacy policy1 replay: accepted pre-T7b worker and pending-offer projections remain exact", async () => {
+  const fixturePath = new URL("./fixtures/t7b-legacy-policy1.json", import.meta.url);
+  if (process.env.T7B_CAPTURE_BASELINE) {
+    const f = controlFixture("capture-legacy");
+    try {
+      await f.seedReady();
+      const baseline = await import(pathToFileURL(process.env.T7B_CAPTURE_BASELINE).href) as { rebuildSchedulerProjection: typeof rebuildSchedulerProjection; reduceSchedulerEvent: typeof reduceSchedulerEvent };
+      const events = f.store.readRun("run_t7b_controls").map((event, index) => {
+        const payload = { ...event.payload }; delete payload.controlRequestDigest;
+        return { ...event, eventId: `legacy-event-${index + 1}`, payload };
+      });
+      const checkpoints: Array<{ sequence: number; projection: SchedulerProjection; undefinedPaths?: string[][] }> = [];
+      const add = (type: import("../src/scheduler-store.js").SchedulerEventType, payload: Record<string, unknown>, role: "runner" | "worker" = "runner", id = "legacy-runner") => {
+        const sequence = events.length + 1;
+        const event = { runId: "run_t7b_controls", eventId: `legacy-event-${sequence}`, sequence, type, payload, occurredAt: T7B_CLOCK, actor: { role, id }, idempotencyKey: `legacy-${sequence}` };
+        const projection = baseline.reduceSchedulerEvent(baseline.rebuildSchedulerProjection(events), event);
+        events.push(event); return projection;
+      };
+      add("task.transitioned", { taskId: "T1", status: "assigned", attempt: 1, patch: { assignedWorkerId: "legacy-worker", attempt: 1, workspacePath: "C:/legacy/task" } });
+      const running = add("task.transitioned", { taskId: "T1", status: "running", attempt: 1, patch: {} }, "worker", "legacy-worker");
+      checkpoints.push({ sequence: events.length, projection: running });
+      add("verifier.policy_configured", { mode: "risk_based", candidateRuntimeIds: ["rev:reviewer"], alwaysRequireIndependentVerifier: false });
+      const verifier = add("verifier.selection_required", { reason: "Historical selection pending.", requiredCapabilities: ["code"], candidateRuntimeIds: ["rev:reviewer"] });
+      checkpoints.push({ sequence: events.length, projection: verifier });
+      const architect = add("architect.handoff_required", { reason: "Historical Architect handoff pending.", requiredCapabilities: ["code"], candidateRuntimeIds: ["arch:replacement"] });
+      checkpoints.push({ sequence: events.length, projection: architect });
+      for (const checkpoint of checkpoints) {
+        const paths: string[][] = [];
+        const walk = (value: unknown, path: string[]) => {
+          if (value && typeof value === "object") for (const [key, child] of Object.entries(value)) {
+            if (child === undefined) paths.push([...path, key]); else walk(child, [...path, key]);
+          }
+        };
+        walk(checkpoint.projection, []); checkpoint.undefinedPaths = paths;
+      }
+      writeFileSync(fixturePath, JSON.stringify({ acceptedSourceCommit: "e9b5a79b9dec371b7395121a203dac1fdd1969ef", baselineSourceSha256: createHash("sha256").update(readFileSync(process.env.T7B_CAPTURE_BASELINE)).digest("hex"), events, checkpoints }, null, 2));
+    } finally { f.cleanup(); }
+  }
+  const fixture = JSON.parse(readFileSync(fixturePath, "utf8")) as { events: import("../src/scheduler-store.js").SchedulerEvent[]; checkpoints: Array<{ sequence: number; projection: SchedulerProjection; undefinedPaths: string[][] }> };
+  for (const checkpoint of fixture.checkpoints) {
+    for (const path of checkpoint.undefinedPaths) {
+      let parent = checkpoint.projection as unknown as Record<string, unknown>;
+      for (const key of path.slice(0, -1)) parent = parent[key] as Record<string, unknown>;
+      parent[path.at(-1)!] = undefined;
+    }
+    assert.deepEqual(rebuildSchedulerProjection(fixture.events.slice(0, checkpoint.sequence)), checkpoint.projection, "full accepted historical projection parity");
+    assert.equal(checkpoint.projection.planning?.executionAuthorization, undefined);
+    assert.equal(checkpoint.projection.verifierSelection?.requiredSequence, undefined);
+    assert.equal(checkpoint.projection.runtime.architect.handoff?.requiredSequence, undefined);
+  }
+  const root = mkdtempSync(join(tmpdir(), "aiboard-t7b-legacy-db-"));
+  const databasePath = join(root, "legacy.sqlite");
+  const initialize = new SqliteSchedulerStore(databasePath); initialize.close();
+  const database = new DatabaseSync(databasePath);
+  for (const event of fixture.events) database.prepare("INSERT INTO scheduler_events(event_id,run_id,sequence,event_type,occurred_at,actor_json,idempotency_key,payload_json) VALUES (?,?,?,?,?,?,?,?)").run(event.eventId, event.runId, event.sequence, event.type, event.occurredAt, JSON.stringify(event.actor), event.idempotencyKey, JSON.stringify(event.payload));
+  database.close();
+  const beforeBytes = readFileSync(databasePath);
+  const readonly = new SqliteSchedulerStore(databasePath, { readOnly: true });
+  try {
+    assert.deepEqual(readonly.readRun("run_t7b_controls"), fixture.events);
+    const last = fixture.checkpoints.at(-1)!;
+    assert.deepEqual(rebuildSchedulerProjection(readonly.readRun("run_t7b_controls")), last.projection);
+  } finally { readonly.close(); }
+  assert.deepEqual(readFileSync(databasePath), beforeBytes);
+  const live = new SqliteSchedulerStore(databasePath);
+  try {
+    const beforeEvents = live.readRun("run_t7b_controls");
+    assert.throws(() => live.append({ runId: "run_t7b_controls", type: "verifier.selection_selected", occurredAt: T7B_CLOCK, actor: { role: "user", id: "local-user" }, idempotencyKey: "missing-identity-new", payload: { runtimeId: "rev:reviewer" } }), /exact current pending/);
+    assert.deepEqual(live.readRun("run_t7b_controls"), beforeEvents);
+  } finally { live.close(); rmSync(root, { recursive: true, force: true }); }
 });

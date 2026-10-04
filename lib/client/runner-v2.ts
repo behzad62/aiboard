@@ -1009,6 +1009,17 @@ export type NativeBuildExecutionSafetyObservability =
   | { availability: "unavailable"; reason: "historical_execution_safety_unavailable" };
 
 export interface NativeBuildObservability {
+  /** Optional for older runner projections; never inferred on attachment. */
+  planning?: {
+    optedIn: boolean;
+    readiness: "not_ready" | "ready";
+    planRevisionId?: string;
+    planDigest?: string;
+    sourceManifestId?: string;
+    sourceArtifactDigest?: string;
+    startRequired: boolean;
+    startAuthorized: boolean;
+  };
   runId: string;
   budget: NativeBuildUsageProjection;
   toolCallCount: number;

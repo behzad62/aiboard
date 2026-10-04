@@ -1,3 +1,5 @@
+import { projectPlanningReadiness, buildPlanningExportDocument } from "./planning-controls.js";
+import { explicitStartBlocked } from "./scheduler-store.js";
 import { createExecutionHostLspTransportFactory, cleanupRecoveredLspTransports } from "./execution-host-lsp-transport.js";
 import { createWindowsJobProcessHost } from "./windows-job-process-host.js";
 import type { LspTransportFactory } from "./lsp-transport.js";
@@ -2490,6 +2492,19 @@ export class NativeBuildFactory {
         id: spec.runId,
         projection,
         events: (afterSequence = 0) => readEvents(afterSequence),
+        planningReadiness: () => {
+          const current = projection();
+          return projectPlanningReadiness({ runId: spec.runId, projection: current, explicitStartAuthorized: current.planning?.readiness === "ready" && explicitStartBlocked(current) === undefined });
+        },
+        planningExport: () => {
+          const current = projection();
+          return buildPlanningExportDocument({ runId: spec.runId, projection: current,
+            readiness: projectPlanningReadiness({ runId: spec.runId, projection: current, explicitStartAuthorized: current.planning?.readiness === "ready" && explicitStartBlocked(current) === undefined }),
+            exportedAt: new Date().toISOString() });
+        },
+        registerPlanningSource: async () => readOnlyError(),
+        amendPlanningSource: async () => readOnlyError(),
+        authorizeExplicitPlanStart: async () => readOnlyError(),
         step: async () => readOnlyError(),
         runUntilBlocked: async () => readOnlyError(),
         pause: () => readOnlyError(),
