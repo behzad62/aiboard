@@ -66,6 +66,10 @@ export interface DiscussionSessionSettingsValue {
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
   buildAlwaysRequireIndependentVerifier?: boolean;
+  buildEvidenceGatedPlanning?: boolean;
+  buildAnswerReview?: boolean;
+  buildSpecCopy?: boolean;
+  buildHandoffFiles?: "commit" | "export_only";
 }
 
 interface DiscussionSessionSettingsProps {
@@ -109,6 +113,12 @@ export function DiscussionSessionSettings({
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(
     discussion.reasoningEffort ?? "default"
   );
+  const [planningOptions, setPlanningOptions] = useState({
+    answerReview: discussion.buildAnswerReview ?? false,
+    evidenceGatedPlanning: discussion.buildEvidenceGatedPlanning ?? false,
+    specCopy: discussion.buildSpecCopy ?? true,
+    handoffFiles: discussion.buildHandoffFiles ?? "commit" as "commit" | "export_only",
+  });
   const [buildRunPolicy, setBuildRunPolicy] = useState<BuildRunPolicy>(
     discussion.buildRunPolicy ?? DEFAULT_BUILD_RUN_POLICY
   );
@@ -135,6 +145,7 @@ export function DiscussionSessionSettings({
     setVerbosity(discussion.verbosity ?? "balanced");
     setStyleNote(discussion.styleNote ?? "");
     setReasoningEffort(discussion.reasoningEffort ?? "default");
+    setPlanningOptions({ answerReview: discussion.buildAnswerReview ?? false, evidenceGatedPlanning: discussion.buildEvidenceGatedPlanning ?? false, specCopy: discussion.buildSpecCopy ?? true, handoffFiles: discussion.buildHandoffFiles ?? "commit" });
     setBuildRunPolicy(discussion.buildRunPolicy ?? DEFAULT_BUILD_RUN_POLICY);
     setBuildSkillMode(discussion.buildSkillMode ?? DEFAULT_BUILD_SKILL_MODE);
     setBuildBudgetUsd(discussion.buildBudgetUsd ?? DEFAULT_BUILD_BUDGET_USD);
@@ -216,6 +227,10 @@ export function DiscussionSessionSettings({
       verbosity,
       styleNote,
       reasoningEffort,
+      buildAnswerReview: discussion.mode === "build" ? planningOptions.answerReview : undefined,
+      buildEvidenceGatedPlanning: discussion.mode === "build" ? planningOptions.evidenceGatedPlanning : undefined,
+      buildSpecCopy: discussion.mode === "build" ? planningOptions.specCopy : undefined,
+      buildHandoffFiles: discussion.mode === "build" ? planningOptions.handoffFiles : undefined,
       buildRunPolicy:
         discussion.mode === "build" ? buildRunPolicy : undefined,
       buildSkillMode:
@@ -271,6 +286,7 @@ export function DiscussionSessionSettings({
           {discussion.mode === "build" ? (
             <BuildRunPolicyControl
               value={{
+                ...planningOptions,
                 runPolicy: buildRunPolicy,
                 skillMode: buildSkillMode,
                 budgetUsd: buildBudgetUsd,
@@ -279,6 +295,7 @@ export function DiscussionSessionSettings({
                   buildAlwaysRequireIndependentVerifier,
               }}
               onChange={(next) => {
+                setPlanningOptions({ answerReview: next.answerReview ?? false, evidenceGatedPlanning: next.evidenceGatedPlanning ?? false, specCopy: next.specCopy ?? true, handoffFiles: next.handoffFiles ?? "commit" });
                 setBuildRunPolicy(next.runPolicy);
                 setBuildSkillMode(next.skillMode);
                 setBuildBudgetUsd(next.budgetUsd);
@@ -287,6 +304,7 @@ export function DiscussionSessionSettings({
                   next.alwaysRequireIndependentVerifier
                 );
               }}
+              planningOptionsLocked={Boolean(discussion.nativeBuildRunId && !discussion.nativeBuildRequestedAt)}
               disabled={!canEdit || busy}
             />
           ) : (

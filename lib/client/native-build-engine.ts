@@ -221,7 +221,10 @@ export async function runNativeBuildDiscussion(
         verifierRuntimeIds,
         maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
         ...nativePolicy,
-        ...explicitNativePlanningOptions(planningOptions),
+        ...explicitNativePlanningOptions(planningOptions ?? (discussion.buildEvidenceGatedPlanning === true ? {
+          planningPolicy: { version: 1 }, specCopy: discussion.buildSpecCopy ?? true, answerReview: discussion.buildAnswerReview === true,
+          handoffFiles: discussion.buildHandoffFiles ?? "commit",
+        } : {})),
       },
     });
     updateDiscussion(

@@ -702,6 +702,7 @@ export interface StableProvisioningRequest {
   readonly permissionProfile: string;
   readonly runPolicy: string;
   readonly specCopy: boolean;
+  readonly answerReview: boolean;
   readonly handoffFiles: string;
   readonly contextRecording: string | null;
   readonly planCritique: string | null;
@@ -772,6 +773,7 @@ export function stableProvisioningRequestIdentity(
     permissionProfile: spec.permissionProfile,
     runPolicy: spec.runPolicy,
     specCopy: spec.specCopy ?? true,
+    answerReview: spec.answerReview === true,
     handoffFiles: spec.handoffFiles ?? "commit",
     contextRecording: spec.contextRecording ?? null,
     planCritique: spec.planCritique ?? null,

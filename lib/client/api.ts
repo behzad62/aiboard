@@ -360,6 +360,10 @@ export interface DiscussionConfigInput {
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
   buildAlwaysRequireIndependentVerifier?: boolean;
+  buildEvidenceGatedPlanning?: boolean;
+  buildAnswerReview?: boolean;
+  buildSpecCopy?: boolean;
+  buildHandoffFiles?: "commit" | "export_only";
 }
 
 export function minimumParticipatingModelsForMode(mode: DiscussionMode): number {
@@ -427,6 +431,14 @@ export function updateDiscussionConfig(
         input.buildAlwaysRequireIndependentVerifier ??
         discussion.buildAlwaysRequireIndependentVerifier,
     });
+    // Provisioning choices belong to the next fresh run; attached runs retain
+    // their durable server policy even when other session settings are edited.
+    if (!discussion.nativeBuildRunId || discussion.nativeBuildRequestedAt) {
+      patch.buildAnswerReview = input.buildAnswerReview ?? discussion.buildAnswerReview ?? false;
+      patch.buildEvidenceGatedPlanning = input.buildEvidenceGatedPlanning ?? discussion.buildEvidenceGatedPlanning ?? false;
+      patch.buildSpecCopy = input.buildSpecCopy ?? discussion.buildSpecCopy ?? true;
+      patch.buildHandoffFiles = input.buildHandoffFiles ?? discussion.buildHandoffFiles ?? "commit";
+    }
     patch.buildRunPolicy = buildSettings.runPolicy;
     patch.buildSkillMode = buildSettings.skillMode;
     patch.buildBudgetUsd = buildSettings.budgetUsd;
@@ -502,6 +514,10 @@ export interface CreateDiscussionInput {
   buildBudgetUsd?: number;
   buildTimeLimitMinutes?: number;
   buildAlwaysRequireIndependentVerifier?: boolean;
+  buildEvidenceGatedPlanning?: boolean;
+  buildAnswerReview?: boolean;
+  buildSpecCopy?: boolean;
+  buildHandoffFiles?: "commit" | "export_only";
 }
 
 export function createDiscussion(input: CreateDiscussionInput): { id: string } {
@@ -558,6 +574,10 @@ export function createDiscussion(input: CreateDiscussionInput): { id: string } {
       input.mode === "build"
         ? buildSettings.alwaysRequireIndependentVerifier
         : undefined,
+    buildAnswerReview: input.mode === "build" ? input.buildAnswerReview === true : undefined,
+    buildEvidenceGatedPlanning: input.mode === "build" ? input.buildEvidenceGatedPlanning === true : undefined,
+    buildSpecCopy: input.mode === "build" ? input.buildSpecCopy ?? true : undefined,
+    buildHandoffFiles: input.mode === "build" ? input.buildHandoffFiles ?? "commit" : undefined,
     buildStopReason: null,
     buildStoppedAt: null,
     createdAt: now,

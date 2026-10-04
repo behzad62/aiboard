@@ -13,6 +13,7 @@ import {
 } from "./scheduler-store.js";
 import { isFinalVerificationTask, type BuildTask } from "./task-contracts.js";
 import { readyTaskIds } from "./task-graph.js";
+import type { NativePlanningSchedule } from "./planning-view-contracts.js";
 import type {
   AssignmentClaim,
   ExecutionTaskContract,
@@ -148,6 +149,59 @@ export class TaskScheduler {
 
   activeCount(): number {
     return this.active.size;
+  }
+
+  /** Read-only admission snapshot. Allocation/artifact checks remain pending. */
+  schedulingView(): NativePlanningSchedule {
+    const projection = this.projection();
+    const capacity = typeof this.resourceCapacity === "function" ? this.resourceCapacity() : this.resourceCapacity;
+    const bound = effectiveMaxWorkers({ planningPolicyVersion: projection.planningPolicyVersion, configuredMax: this.maxConcurrency, ...(capacity !== undefined ? { resourceCapacity: capacity } : {}) });
+    const used = this.capacityInUse(projection);
+    const blockers: string[] = [];
+    if (projection.status !== "running") blockers.push(`Run is ${projection.status}`);
+    if (hasPendingUserGuidance(projection)) blockers.push("Pending user guidance");
+    if (projection.blockingArchitectQuestionId) blockers.push(`Architect question ${projection.blockingArchitectQuestionId} requires an answer`);
+    if (Object.values(projection.userGuidance ?? {}).some((guidance) => guidance.interruptionStatus !== "completed")) blockers.push("User guidance interruption pending");
+    if (projection.acceptanceContractStatus === "acceptance_contract_upgrade_required") blockers.push("Acceptance contract upgrade required");
+    if (planCritiquePending(projection)) blockers.push("Plan critique pending");
+    if (newPolicyAdmissionClosed(projection)) blockers.push("No executable ready plan");
+    if (explicitStartBlocked(projection)) blockers.push("Current plan requires explicit owner start");
+    const ready = new Set(readyTaskIds(Object.values(projection.tasks)));
+    const tasks = Object.values(projection.tasks).map((task) => {
+      const active = this.active.has(task.id);
+      const reasons = [...blockers];
+      const contract = this.readyContractFor(projection, task.id);
+      const restart = task.status === "assigned" || task.status === "running";
+      if (active) reasons.push("Worker active in this controller");
+      else if (!ready.has(task.id) && !restart) reasons.push("Task is not ready for worker admission");
+      if ((restart ? this.active.size : used) >= bound && !active) reasons.push("Worker capacity in use");
+      if (!restart && task.attempt >= (task.attemptLimit ?? this.maxTaskAttempts)) reasons.push("Task attempt budget reached");
+      if (newPolicyTaskAdmissionBlocked(projection, task.id)) reasons.push("Task is not bound to the current ready plan");
+      const dependency = this.currentDependencyBlock(projection, task);
+      if (dependency) reasons.push(dependency);
+      const ownership = restart && !active ? this.restartOwnership(projection, task) : undefined;
+      if (ownership) reasons.push(ownership);
+      const conflict = this.claimConflictFor(projection, task, task.workspacePath ?? task.workspaceId ?? "");
+      if (conflict) reasons.push(conflict);
+      return { taskId: task.id, status: task.status, eligible: reasons.length === 0, active, reasons, dependencies: [...(contract?.dependencies ?? task.dependencies)], ...(contract ? { contractId: contract.id } : {}) };
+    });
+    const candidates = tasks.filter((task) => task.eligible).map((row) => projection.tasks[row.taskId]);
+    const conflicts: NativePlanningSchedule["conflicts"] = [];
+    for (let index = 0; index < candidates.length; index++) {
+      const task = candidates[index];
+      // Advisory pair comparison: unknown future worktrees are distinct placeholders,
+      // never recorded ownership. Actual allocation still checks canonical paths.
+      const candidate = schedulerTaskWriteClaim(task, this.readyContractFor(projection, task.id), task.workspacePath ?? task.workspaceId ?? `unallocated-view/${encodeURIComponent(task.id)}`);
+      for (const other of candidates.slice(index + 1)) {
+        const conflict = findClaimConflict(candidate, [schedulerTaskWriteClaim(other, this.readyContractFor(projection, other.id), other.workspacePath ?? other.workspaceId ?? `unallocated-view/${encodeURIComponent(other.id)}`)]);
+        if (conflict) conflicts.push({ taskId: task.id, otherTaskId: other.id, detail: conflict.detail });
+      }
+    }
+    const plan = projection.planning?.plan;
+    const manifest = projection.planning?.source.manifestsById[projection.planning.source.currentManifestId];
+    return { version: 1, runId: this.runId, lastSequence: projection.lastSequence, planRevisionId: plan?.currentRevisionId, planDigest: plan?.currentDigest, sourceManifestId: manifest?.manifestId, sourceArtifactDigest: manifest?.artifactDigest, blockers, configuredMax: this.maxConcurrency, effectiveMax: bound, capacityInUse: used, ...(capacity !== undefined ? { resourceCapacity: capacity } : {}), tasks, conflicts,
+      activeClaims: Object.values(projection.planning?.assignments ?? {}).map((entry) => entry.claim).filter((claim) => claim.state === "claimed").map((claim) => ({ id: claim.id, packetId: claim.packetId, workerOrSessionId: claim.workerOrSessionId, ownershipGeneration: claim.ownershipGeneration, state: claim.state, branchOrWorktree: claim.branchOrWorktree, writableSurfaces: [...claim.writableSurfaces], forbiddenSurfaces: [...claim.forbiddenSurfaces] })),
+    };
   }
 
   async awaitIdle(): Promise<void> {

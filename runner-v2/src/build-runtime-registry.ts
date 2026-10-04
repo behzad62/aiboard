@@ -59,7 +59,9 @@ export interface BuildControlPlane {
     runId: string,
     request: ExplicitStartRequestV1,
   ): Promise<SchedulerProjection>;
+  setAnswerReview(runId: string, optedIn: boolean, idempotencyKey: string): Promise<SchedulerProjection>;
   planningReadiness(runId: string): PlanningReadinessSnapshot;
+  planningSchedule?(runId: string): import("./planning-view-contracts.js").NativePlanningSchedule | undefined;
   planningExport(runId: string): PlanningExportDocument;
   extendRepairCycles(
     runId: string,
@@ -242,8 +244,16 @@ export class BuildRuntimeRegistry implements BuildControlPlane {
     return await this.require(runId).authorizeExplicitPlanStart(request);
   }
 
+  async setAnswerReview(runId: string, optedIn: boolean, idempotencyKey: string): Promise<SchedulerProjection> {
+    return await this.require(runId).setAnswerReview(optedIn, idempotencyKey);
+  }
+
   planningReadiness(runId: string): PlanningReadinessSnapshot {
     return this.require(runId).planningReadiness();
+  }
+
+  planningSchedule(runId: string): import("./planning-view-contracts.js").NativePlanningSchedule {
+    return this.require(runId).planningSchedule();
   }
 
   planningExport(runId: string): PlanningExportDocument {

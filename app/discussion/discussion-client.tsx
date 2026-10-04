@@ -155,6 +155,7 @@ import {
   type CommandRunView,
   type WrittenFileView,
 } from "@/components/BuildTaskBoard";
+import { NativePlanningPanel } from "@/components/NativePlanningPanel";
 import {
   RepoWorkflowPanel,
   type RepoStatusView,
@@ -2248,6 +2249,11 @@ function DiscussionPageInner() {
         </div>
       )}
 
+      {discussion.mode === "build" && (
+        <NativePlanningPanel projection={nativeProjection} usage={nativeObservability?.budget}
+          connection={discussion.runnerUrl && discussion.runnerToken ? { url: discussion.runnerUrl, token: discussion.runnerToken } : undefined}
+          onProjection={(updated) => setNativeProjection((current) => current?.runId === updated.runId && current.lastSequence > updated.lastSequence ? current : updated)} />
+      )}
       {discussion.mode === "build" && (
         <RunnerV2ObservabilityPanel
           snapshot={nativeObservability}

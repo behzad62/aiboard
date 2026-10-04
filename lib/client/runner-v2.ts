@@ -74,6 +74,9 @@ export interface CreateNativeBuildInput {
   idempotencyKey: string;
   build: {
     planningPolicy?: { version: 1 };
+    specCopy?: boolean;
+    answerReview?: boolean;
+    handoffFiles?: "commit" | "export_only";
     approvedSource?: ApprovedSourceInputV1;
     projectId: string;
     objective: string;
@@ -626,6 +629,19 @@ export function contextRecordingView(
 }
 
 export interface NativeBuildProjection {
+  /** Read-only mirrors of scheduler authority; no browser-side reducers. */
+  planningPolicyVersion?: 1;
+  specCopy?: boolean;
+  handoffFiles?: "commit" | "export_only";
+  projectDocsPolicyVersion?: number;
+  planningTriageDecision?: "answer" | "build" | "clarify";
+  planning?: import("../../runner-v2/src/planning-view-contracts").NativePlanningProjection;
+  delivery?: import("../../runner-v2/src/planning-view-contracts").NativeDeliveryProjection;
+  projectDocs?: { snapshots?: readonly { previousSnapshotEdited: boolean }[] };
+  requestAnswer?: import("../../runner-v2/src/planning-view-contracts").NativeRequestAnswer;
+  answerReviewOptIn?: { sequence: number };
+  answerReviews?: Readonly<Record<string, import("../../runner-v2/src/planning-view-contracts").NativeAnswerReview>>;
+  answerReviewUnavailable?: { reason: string };
   runId: string;
   status: "running" | "paused" | "completed" | "failed" | "stopped";
   failureReason?: string;
@@ -1890,4 +1906,16 @@ export async function startNativeReadyPlan(connection: NativeRunnerConnection, r
 }
 export async function exportNativePlanning(connection: NativeRunnerConnection, runId: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<PlanningExportDocument> {
   return request(connection, `/v2/runs/${encodeURIComponent(runId)}/build/planning-export`, { method: "GET", signal }, fetchImpl);
+}
+
+export async function getNativeContextManifests(connection: NativeRunnerConnection, runId: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<NativeContextManifest[]> {
+  const result = await request<{ manifests: NativeContextManifest[] }>(connection, `/v2/runs/${encodeURIComponent(runId)}/build/context-manifests`, { method: "GET", signal }, fetchImpl);
+  return result.manifests;
+}
+export async function setNativeAnswerReview(connection: NativeRunnerConnection, runId: string, optedIn: boolean, idempotencyKey: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<NativeBuildProjection> {
+  return request(connection, `/v2/runs/${encodeURIComponent(runId)}/build/answer-review`, { method: "POST", body: JSON.stringify({ optedIn, idempotencyKey }), signal }, fetchImpl);
+}
+export async function getNativePlanningSchedule(connection: NativeRunnerConnection, runId: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<import("../../runner-v2/src/planning-view-contracts").NativePlanningSchedule | null> {
+  const result = await request<{ schedule: import("../../runner-v2/src/planning-view-contracts").NativePlanningSchedule | null }>(connection, `/v2/runs/${encodeURIComponent(runId)}/build/planning-schedule`, { method: "GET", signal }, fetchImpl);
+  return result.schedule;
 }

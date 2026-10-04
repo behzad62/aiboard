@@ -77,6 +77,7 @@ export interface NativeBuildSpec {
    * stay valid and read exactly as before.
    */
   specCopy?: boolean;
+  answerReview?: boolean;
   handoffFiles?: "commit" | "export_only";
   /** Digest-only manifests by default; "full" also stores rendered pack text. */
   contextRecording?: "manifest" | "full";
@@ -171,6 +172,7 @@ function validateBuildSpecCore(spec: NativeBuildSpec): void {
   if (!(["finish", "budgeted", "plan_only"] as unknown[]).includes(spec.runPolicy)) {
     throw new Error("Build spec run policy is invalid.");
   }
+  if (spec.answerReview !== undefined && (typeof spec.answerReview !== "boolean" || spec.planningPolicy?.version !== 1)) throw new Error("Answer review requires an explicit planningPolicy opt-in and a boolean choice.");
   if (spec.specCopy !== undefined && typeof spec.specCopy !== "boolean") {
     throw new Error("Build spec specCopy must be a boolean.");
   }

@@ -619,8 +619,20 @@ export class NativeBuildManager implements BuildControlPlane {
    * T7b: canonical plan-readiness snapshot. Read-only: works on historical
    * terminals, appends nothing, dispatches nothing.
    */
+  async setAnswerReview(runId: string, optedIn: boolean, idempotencyKey: string): Promise<SchedulerProjection> {
+    const handle = this.requireMutable(runId);
+    const projection = await this.withRuntimeActivity(() => handle.runtime.setAnswerReview(optedIn, idempotencyKey));
+    if (this.activatedRuns.has(runId)) this.wake(runId);
+    return projection;
+  }
+
   planningReadiness(runId: string): PlanningReadinessSnapshot {
     return this.require(runId).runtime.planningReadiness();
+  }
+
+  planningSchedule(runId: string): import("./planning-view-contracts.js").NativePlanningSchedule | undefined {
+    const handle = this.require(runId);
+    return handle.historical ? undefined : handle.runtime.planningSchedule();
   }
 
   /**

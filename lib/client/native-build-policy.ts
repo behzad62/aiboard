@@ -78,6 +78,9 @@ export function effectiveNativeBuildPolicy(
 export interface NativePlanningProvisioningOptions {
   planningPolicy?: { version: 1 };
   approvedSource?: import("./runner-v2").ApprovedSourceInputV1;
+  specCopy?: boolean;
+  answerReview?: boolean;
+  handoffFiles?: "commit" | "export_only";
 }
 
 /** Fresh run choice only. Attachment/reconnect never infers a policy or approval. */
@@ -87,5 +90,8 @@ export function explicitNativePlanningOptions(input: NativePlanningProvisioningO
     return {};
   }
   if (input.planningPolicy.version !== 1) throw new Error("Unsupported planning policy.");
-  return { planningPolicy: { version: 1 }, ...(input.approvedSource !== undefined ? { approvedSource: input.approvedSource } : {}) };
+  return { planningPolicy: { version: 1 }, ...(input.approvedSource !== undefined ? { approvedSource: input.approvedSource } : {}),
+    ...(input.answerReview !== undefined ? { answerReview: input.answerReview } : {}),
+    ...(input.specCopy !== undefined ? { specCopy: input.specCopy } : {}),
+    ...(input.handoffFiles !== undefined ? { handoffFiles: input.handoffFiles } : {}) };
 }

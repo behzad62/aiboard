@@ -60,12 +60,17 @@ export interface BuildRunPolicyValue {
   budgetUsd: number;
   timeLimitMinutes: number;
   alwaysRequireIndependentVerifier: boolean;
+  evidenceGatedPlanning?: boolean;
+  answerReview?: boolean;
+  specCopy?: boolean;
+  handoffFiles?: "commit" | "export_only";
 }
 
 interface BuildRunPolicyControlProps {
   value: BuildRunPolicyValue;
   onChange: (value: BuildRunPolicyValue) => void;
   disabled?: boolean;
+  planningOptionsLocked?: boolean;
 }
 
 function numericValue(value: string): number {
@@ -78,6 +83,7 @@ export function BuildRunPolicyControl({
   value,
   onChange,
   disabled = false,
+  planningOptionsLocked = false,
 }: BuildRunPolicyControlProps) {
   const [budgetUsdInput, setBudgetUsdInput] = useState(() =>
     String(value.budgetUsd)
@@ -187,6 +193,33 @@ export function BuildRunPolicyControl({
           aria-label="Always run independent verification"
         />
       </div>
+
+      {planningOptionsLocked ? <p className="rounded border p-3 text-xs text-muted-foreground">This run uses its recorded planning options. See the planning panel for the runner&apos;s saved policy, specification-copy and handoff settings.</p> : <fieldset className="space-y-3 rounded-lg border p-3" disabled={disabled}>
+        <div className="flex items-center justify-between gap-3">
+          <Label htmlFor="build-evidence-planning">Evidence-gated planning</Label>
+          <Switch id="build-evidence-planning" checked={value.evidenceGatedPlanning === true} onCheckedChange={(checked) => onChange({ ...value, evidenceGatedPlanning: checked })} />
+        </div>
+        <p className="text-xs text-muted-foreground">Approve a specification, inspect the independently reviewed plan, then explicitly start execution. Attaching a document does not enable this option.</p>
+        {planningOptionsLocked && <p className="text-xs">This run uses its saved planning policy and options. Start a new run to choose different options.</p>}
+        {value.evidenceGatedPlanning && <>
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor="build-answer-review">Review answers independently</Label>
+            <Switch id="build-answer-review" checked={value.answerReview === true} onCheckedChange={(checked) => onChange({ ...value, answerReview: checked })} />
+          </div>
+          <p className="text-xs text-muted-foreground">Optional extra review if the request produces an answer rather than a build. May add model calls; choose before the run starts.</p>
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor="build-spec-copy">Save approved specification in project</Label>
+            <Switch id="build-spec-copy" checked={value.specCopy !== false} disabled={disabled || planningOptionsLocked || value.handoffFiles === "export_only"} onCheckedChange={(checked) => onChange({ ...value, specCopy: checked })} />
+          </div>
+          <p className="text-xs text-muted-foreground">Copies the exact approved text into Git when handoff files are saved to the project.</p>
+          <Label htmlFor="build-handoff-files">Handoff files</Label>
+          <select id="build-handoff-files" className="w-full rounded border bg-background p-2 text-sm" value={value.handoffFiles ?? "commit"} onChange={(event) => onChange({ ...value, handoffFiles: event.target.value as "commit" | "export_only" })}>
+            <option value="commit">Save to project</option><option value="export_only">Export only</option>
+          </select>
+          <p className="text-xs text-muted-foreground">Save to project records state at build stops. Export only writes no handoff files or specification copy; implementation files are still written.</p>
+          <p className="text-xs text-muted-foreground">Changes beyond task scope block acceptance for Architect resolution. Secret and key files are refused, with secrets redacted from the reason.</p>
+        </>}
+      </fieldset>}
 
       {usesBuildBudgetControls(value.runPolicy) && (
         <div className="grid gap-3 sm:grid-cols-2">

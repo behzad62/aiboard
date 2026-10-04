@@ -712,6 +712,15 @@ export class NativeBuildFactory {
         approvedSourceApprover(spec.approvedSource),
       );
     }
+    // Authenticated, saved per-run user intent. Before model calls, once only;
+    // a later durable opt-out remains authoritative through restart.
+    if (spec.answerReview === true) {
+      const approvalKey = `${spec.idempotencyKey}:answer-review-opt-in`;
+      if (!schedulerStore.readRun(spec.runId).some((event) => event.idempotencyKey === approvalKey)) {
+        schedulerStore.append({ runId: spec.runId, type: "answer.review_opted_in", occurredAt: spec.createdAt,
+          actor: { role: "user", id: "local-user" }, idempotencyKey: approvalKey, payload: {} });
+      }
+    }
     const schedulerEvents = schedulerStore.readRun(spec.runId);
     // T7b: a saved spec without an initial source may still carry a later
     // owner-registered current source in its durable events (post-creation

@@ -105,6 +105,9 @@ interface CreateRunBody {
     benchmark?: NativeBuildSpec["benchmark"];
     /** T7a explicit opt-in only; absent retains the current product default. */
     planningPolicy?: { version: 1 };
+    specCopy?: boolean;
+    answerReview?: boolean;
+    handoffFiles?: "commit" | "export_only";
     /**
      * T7a request-only approved-source bytes/intent. Refused without the
      * planningPolicy opt-in above; never silently opts the run in.
@@ -426,6 +429,9 @@ export class ControlServer {
                   },
                 }
               : {}),
+            ...(body.build.answerReview !== undefined ? { answerReview: body.build.answerReview } : {}),
+            ...(body.build.specCopy !== undefined ? { specCopy: body.build.specCopy } : {}),
+            ...(body.build.handoffFiles !== undefined ? { handoffFiles: body.build.handoffFiles } : {}),
             // T7a opt-in only: the kernel stamps planningPolicy solely from
             // this explicit field; a missing field keeps the current default.
             // The manifest itself is kernel-derived — never caller-chosen.
@@ -579,6 +585,24 @@ export class ControlServer {
           runEvents: this.supervisor.events(runId),
           buildEvents: builds.events(runId),
         });
+        return;
+      }
+      if (segments.length === 5 && segments[3] === "build" && segments[4] === "answer-review" && request.method === "POST") {
+        const body = await readJson<{ optedIn: boolean; idempotencyKey: string }>(request);
+        assertExactBodyKeys(body, ["optedIn", "idempotencyKey"]);
+        if (typeof body.optedIn !== "boolean" || !isNonEmptyString(body.idempotencyKey) || body.idempotencyKey.length > 200) invalidBody();
+        const projection = await this.serializeRunCommand(runId, () => this.requireBuilds().setAnswerReview(runId, body.optedIn, body.idempotencyKey));
+        sendJson(response, 200, projection); return;
+      }
+      if (segments.length === 5 && segments[3] === "build" && segments[4] === "planning-schedule" && request.method === "GET") {
+        const builds = this.requireBuilds();
+        builds.projection(runId);
+        sendJson(response, 200, { schedule: builds.planningSchedule?.(runId) ?? null }); return;
+      }
+      if (segments.length === 5 && segments[3] === "build" && segments[4] === "context-manifests" && request.method === "GET") {
+        const builds = this.requireBuilds();
+        builds.projection(runId);
+        sendJson(response, 200, { manifests: builds.contextManifests?.(runId) ?? [] });
         return;
       }
       if (
@@ -1322,6 +1346,9 @@ function assertBuildBody(body: NonNullable<CreateRunBody["build"]>): void {
       !isUniqueNonEmptyStringArray(body.benchmark.protectedPaths)
     ) invalidBody();
   }
+  if (body.answerReview !== undefined && (typeof body.answerReview !== "boolean" || body.planningPolicy?.version !== 1)) invalidBody();
+  if (body.specCopy !== undefined && typeof body.specCopy !== "boolean") invalidBody();
+  if (body.handoffFiles !== undefined && body.handoffFiles !== "commit" && body.handoffFiles !== "export_only") invalidBody();
   if (body.planningPolicy !== undefined) {
     if (
       !body.planningPolicy ||
@@ -1420,7 +1447,7 @@ function toHttpError(error: unknown): HttpError {
   if (/^Unknown build runtime /.test(message)) {
     return new HttpError(404, "build_runtime_not_found", message);
   }
-  if (/Scheduler idempotency conflict/i.test(message)) {
+  if (/(?:Scheduler|Build spec) idempotency conflict/i.test(message)) {
     return new HttpError(409, "idempotency_conflict", message);
   }
   if (

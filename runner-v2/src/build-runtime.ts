@@ -1422,6 +1422,23 @@ export class BuildRuntime {
     });
   }
 
+  async setAnswerReview(optedIn: boolean, idempotencyKey: string): Promise<SchedulerProjection> {
+    return this.withPlanningControl(async () => {
+      if (typeof optedIn !== "boolean" || !idempotencyKey || idempotencyKey.length > 200) throw new Error("Invalid answer-review choice.");
+      const type = optedIn ? "answer.review_opted_in" as const : "answer.review_opted_out" as const;
+      const existing = this.store.readRun(this.runId).find((event) => event.idempotencyKey === idempotencyKey);
+      if (existing) {
+        if (existing.type !== type || existing.actor.role !== "user" || existing.actor.id !== "local-user" || Object.keys(existing.payload).length) throw new Error("Answer-review idempotency conflict.");
+      } else {
+        const proposal = { runId: this.runId, type, occurredAt: "", actor: { role: "user" as const, id: "local-user" }, idempotencyKey, payload: {} };
+        this.preflightPlanningControl(proposal);
+        this.store.append({ ...proposal, occurredAt: this.clock() });
+      }
+      if (!optedIn) this.resumePlanningControlPause("answer_reviewer_unavailable", idempotencyKey);
+      return this.projection();
+    });
+  }
+
   private preflightPlanningControl(proposal: import("./scheduler-store.js").NewSchedulerEvent): void {
     reduceSchedulerEvent(this.projection(), { ...proposal, eventId: "planning-control-preflight", sequence: this.projection().lastSequence + 1 });
   }
@@ -1458,6 +1475,10 @@ export class BuildRuntime {
       projection,
       explicitStartAuthorized: this.explicitStartCovered(projection),
     });
+  }
+
+  planningSchedule(): import("./planning-view-contracts.js").NativePlanningSchedule {
+    return this.scheduler.schedulingView();
   }
 
   /**
