@@ -1,4 +1,38 @@
-# Evidence-gated planning (P6.6, T1 contracts)
+# Evidence-gated planning in Runner V2
+
+Build discussions can opt into evidence-gated planning when creating a fresh run. It is off by default. Existing runs keep their recorded policy; attaching a document or reconnecting never enables planning or approves a source automatically.
+
+## Start a planning run
+
+In the Build run options, enable **Evidence-gated planning**. Choose whether to request optional independent answer review, save the approved specification, and save handoff files to the project or export them only. Specification copy defaults on and handoff files default to saving in the project. **Export only** writes neither handoff files nor a specification copy; implementation files are still written during execution. Answer review defaults off and may add model calls.
+
+The Architect first classifies the request as an answer, a build, or a clarification. An answered request shows its answer and addressed question parts. It needs no build specification or worker execution. A clarification requires your response before proceeding. Optional answer review can be requested or withdrawn on a nonterminal run; if the reviewer is unavailable, the run pauses with the reason and withdrawing that optional review clears that specific gate.
+
+For a build, open **Approve a specification**. Select a nonempty UTF-8 plain-text or Markdown file up to 512 KiB, inspect its preview, then check the explicit approval box and submit. The runner preserves original bytes, including line endings and any UTF-8 BOM, and records source/section digests. An optional JSON section layout uses byte offsets over the original file, not character positions. Approval and upload are separate actions.
+
+## Inspect and start the current plan
+
+The planning panel shows source revisions, requirement references and acceptance conditions, owning phases, task dependencies and scopes, review independence and recorded selection/probe rungs. Conditional requirements stay in the total and unresolved count. A ready plan is still **delivery incomplete**. A phase is verified only through its recorded acceptance at the current revision; an intermediate accepted task does not complete the whole program.
+
+Inspect unread source sections and recorded blockers. Worker candidates are advisory: capacity, claim conflicts, current owner approval, source verification, worktree allocation and the runtime's other gates still apply. A displayed dependency graph or copy-ready card grants no assignment authority.
+
+For an executable build, **Start current plan** approves exactly the displayed plan revision/digest, source manifest/artifact digest and policy versions. A stale choice is refused. Refresh and make a new explicit choice when these change. Plan-only runs never expose an execution start. If you amend the source, supply the replacement original file, reason and added/retired section/requirement IDs, then approve the exact displayed predecessor. Source changes require fresh consent and planning reconciliation.
+
+Model-pass records distinguish reported/estimated usage from estimated context-pack sizes. Missing or ambiguous per-pass attribution is shown as unavailable; account-backed calls do not imply a metered API cost. Historical reviews remain labelled separately from current records. A notice identifies a STATE snapshot edited outside the runner; durable runner records continue to determine readiness and completion.
+
+## Export, copy and resume
+
+**Inspect export** reads a snapshot without starting workers or changing project files. The STATE text comes from the same bounded renderer used for docs-v2 handoff snapshots. **Copy STATE snapshot** copies that text; **Download planning export** downloads a JSON envelope with source/requirement/task/evidence traceability, phase/contracts/dependencies/ownership, resume index, report template, recorded policies, reviews, decisions and copy-ready reference cards. Choose a project location yourself if you want to save the downloaded file there.
+
+Exports contain redacted, bounded records and artifact references rather than original source bodies, transcripts, credentials or raw environment. Counts disclose omitted records and text identifies truncation. Sanitized export IDs are display references, so use the live runner controls for approval. For a large or truncated contract, inspect the canonical run's current contract and evidence; an export is not a complete substitute for durable state.
+
+Worker cards name the run/source/plan, phase/task contract, required base, current claim where recorded, validation/report references and standing orders. Workers continue only eligible assigned packets, submit for independent review/integration, never self-accept, and persist a precise handoff when blocked or ending. Controller cards require current ownership, dependencies, serialized surfaces and full gate evidence. A resume-planning card forbids implementation, implementation tests, migrations and workloads until execution is authorized.
+
+Native launch chips are not applicable on the current Runner control plane because it exposes no API for non-executing chip preparation. Copying a card creates no task and dispatches no worker. Legacy runs retain their existing documentation policy and do not gain new coverage or cards on replay. Final project handoff always waits for your choice.
+
+## Contract reference and implementation history
+
+The following describes the original T1 contract foundation. The user-facing runtime and controls above supersede the original contract-only shipment status; validator details remain useful for implementers.
 
 Evidence-gated planning turns an approved application specification into a
 source-traceable implementation plan, using the existing Build kernel rather

@@ -2,6 +2,8 @@
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { PlanningExportView } from "@/components/PlanningExportView";
+import type { PlanningExportDocument } from "@/lib/client/runner-v2";
 import { currentPlanningSchedule, displayedPlanStart, nativePlanningView, planningPassRows } from "@/lib/client/native-planning-view";
 import type { NativePlanningSchedule } from "@/runner-v2/src/planning-view-contracts";
 import { amendNativePlanningSource, exportNativePlanning, getNativeContextManifests, getNativePlanningReadiness, getNativePlanningSchedule, registerNativePlanningSource, setNativeAnswerReview, startNativeReadyPlan, type ApprovedSourceInputV1, type ExplicitStartRequestV1, type NativeBuildProjection, type NativeBuildUsageProjection, type NativeContextManifest, type NativeRunnerConnection, type PlanningReadinessSnapshot } from "@/lib/client/runner-v2";
@@ -64,7 +66,7 @@ function PlanningControls({ projection, connection, usage, onProjection }: { pro
   const [approved, setApproved] = useState(false), [rationale, setRationale] = useState("");
   const approvedPredecessor = useRef<string | undefined>(undefined);
   const [layout, setLayout] = useState(""), [impact, setImpact] = useState('{"addsSectionIds":[],"retiresSectionIds":[],"addsRequirementIds":[],"retiresRequirementIds":[]}');
-  const [exportText, setExportText] = useState(""), [refresh, setRefresh] = useState(0);
+  const [exportDocument, setExportDocument] = useState<PlanningExportDocument>(), [refresh, setRefresh] = useState(0);
   const connectionUrl = connection?.url, connectionToken = connection?.token;
   useEffect(() => {
     setReadiness(undefined); setStart(undefined); setSchedule(null);
@@ -101,7 +103,12 @@ function PlanningControls({ projection, connection, usage, onProjection }: { pro
     {message && <p role="alert" className="text-sm">{message}</p>}
     <div className="flex flex-wrap gap-2">
       <Button size="sm" variant="outline" disabled={busy || !connection} onClick={() => { setMessage(""); setRefresh((value) => value + 1); }}>Refresh plan details</Button>
-      <Button size="sm" variant="outline" disabled={busy || !connection} onClick={() => void act(async (current) => { const document = await exportNativePlanning(connection!, projection.runId); if (current()) setExportText(document.snapshot.text); })}>Inspect export</Button>
+      <Button size="sm" variant="outline" disabled={busy || !connection} onClick={() => void act(async (current) => {
+        const selectedSequence = projection.lastSequence;
+        const document = await exportNativePlanning(connection!, projection.runId);
+        if (current() && latestProjection.current?.lastSequence === selectedSequence) setExportDocument(document);
+        else if (current()) setMessage("The run changed while exporting. Inspect a fresh export of the displayed state.");
+      })}>Inspect export</Button>
       {projection.runPolicy !== "plan_only" && !view.answered && <Button size="sm" disabled={disabled || !currentStart} onClick={() => void act(async (current) => { const displayed = start!; const updated = await startNativeReadyPlan(connection!, projection.runId, displayed); if (!current()) return; setStart(undefined); publish(updated); setRefresh((value) => value + 1); })}>Start current plan</Button>}
       {!isTerminal(projection) && <Button size="sm" variant="outline" disabled={disabled} onClick={() => void act(async (current) => {
         const optedIn = !projection.answerReviewOptIn;
@@ -111,7 +118,7 @@ function PlanningControls({ projection, connection, usage, onProjection }: { pro
       })}>{projection.answerReviewOptIn ? "Withdraw optional answer review" : "Request independent answer review"}</Button>}
     </div>
     {start && <p className="text-xs break-all">Starting approves the displayed plan {start.planRevisionId} and source {start.sourceManifestId}. Execution has not started through this approval yet.</p>}
-    {exportText && <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{exportText}</pre>}
+    {exportDocument && <PlanningExportView key={exportDocument.exportedAt} document={exportDocument} />}
     {!view.answered && <details><summary>{view.manifest ? "Approve a source amendment" : "Approve a specification"}</summary><fieldset disabled={disabled} className="mt-3 space-y-3">
       <label className="block text-sm">Plain text or Markdown specification (up to 512 KiB)<input className="mt-1 block" type="file" accept=".md,.txt,text/plain,text/markdown" onChange={(event) => { const file = event.target.files?.[0]; setSource(undefined); setApproved(false); if (!file) return; void act(async (current) => { const bytes = new Uint8Array(await file.arrayBuffer()); if (!current()) return; if (!bytes.length || bytes.length > 512 * 1024) throw new Error("Choose a nonempty specification of at most 512 KiB."); const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); let binary = ""; for (const byte of bytes) binary += String.fromCharCode(byte); setSource({ version: 1, approval: "approved_spec", bytesBase64: btoa(binary), mediaType: file.name.toLowerCase().endsWith(".md") ? "text/markdown" : "text/plain", encoding: "utf-8" }); setPreview(text); }); }} /></label>
       {source && <><pre className="max-h-48 overflow-auto whitespace-pre-wrap text-xs">{preview}</pre><p className="text-xs">Approval preserves the original file bytes, including line endings. The preview decodes the text for reading.</p></>}

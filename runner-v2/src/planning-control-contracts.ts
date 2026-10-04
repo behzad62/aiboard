@@ -69,6 +69,7 @@ export interface PlanningReadinessSnapshot {
 
 export interface PlanningExportDocument {
   readonly version: 1;
+  readonly references?: import("./planning-export-contracts.js").PlanningReferenceExport;
   readonly runId: string;
   readonly exportedAt: string;
   /** IDs are display text; use the live readiness endpoint for exact control identities. */

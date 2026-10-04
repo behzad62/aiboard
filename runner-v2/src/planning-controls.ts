@@ -20,6 +20,7 @@ import {
   neutralizeSnapshotText,
 } from "./handoff-snapshot.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
+import { buildPlanningReferenceExport } from "./planning-export.js";
 import type { SchedulerProjection } from "./scheduler-store.js";
 
 /**
@@ -672,8 +673,8 @@ export function buildPlanningExportDocument(input: {
   });
   const { sourceSectionIds, unreadSectionIds, blockers, ...identity } = readiness;
   const displayIdentity = Object.fromEntries(Object.entries(identity).map(([key, value]) => [key, typeof value === "string" ? safeExportText(value) : value])) as typeof identity;
-  const result: PlanningExportDocument = {
-    version: T7B_PLANNING_CONTROLS_VERSION,
+  const result = {
+    version: T7B_PLANNING_CONTROLS_VERSION as typeof T7B_PLANNING_CONTROLS_VERSION,
     runId: safeExportText(input.runId), exportedAt: safeExportText(input.exportedAt),
     readiness: { ...displayIdentity, sourceSectionIds: capped((sourceSectionIds ?? []).map(safeExportText)), unreadSectionIds: capped((unreadSectionIds ?? []).map(safeExportText)),
       blockers: capped(blockers.map(safeExportText)), blocked: blockers.length > 0 },
@@ -683,8 +684,23 @@ export function buildPlanningExportDocument(input: {
     phases: { ...capped(revision?.phases ?? planning?.ledger?.phases ?? []), items: capped(revision?.phases ?? planning?.ledger?.phases ?? []).items.map((entry) => ({ id: safeExportText(entry.id) })) },
     tasks: { ...capped(Object.values(projection.tasks)), items: capped(Object.values(projection.tasks)).items.map((entry) => ({ id: safeExportText(entry.id), status: safeExportText(entry.status) })) },
   };
-  if (Buffer.byteLength(JSON.stringify(result), "utf8") > PLANNING_EXPORT_MAX_BYTES) throw new Error("Planning export exceeds the bounded document limit.");
-  return result;
+  if (projection.projectDocsPolicyVersion === 2) {
+    // Reserve room for mandatory reference cards while retaining exact C1 bytes.
+    // Trim only bounded display metadata; all removed entries remain counted.
+    const collections = [result.sourceManifests, result.requirements, result.phases, result.tasks,
+      result.readiness.sourceSectionIds, result.readiness.unreadSectionIds, result.readiness.blockers];
+    while (Buffer.byteLength(JSON.stringify(result), "utf8") > PLANNING_EXPORT_MAX_BYTES - 12 * 1024) {
+      const largest = collections.filter((entry) => entry.items.length > 0)
+        .sort((a, b) => JSON.stringify(b.items).length - JSON.stringify(a.items).length)[0];
+      if (!largest) throw new Error("Planning export exceeds the bounded document limit.");
+      largest.items = largest.items.slice(0, -1) as typeof largest.items;
+      largest.omittedCount++;
+    }
+  }
+  const exported: PlanningExportDocument = { ...result, ...(projection.projectDocsPolicyVersion === 2 ? { references: buildPlanningReferenceExport(projection,
+    PLANNING_EXPORT_MAX_BYTES - Buffer.byteLength(JSON.stringify(result), "utf8") - Buffer.byteLength(',"references":', "utf8")) } : {}) };
+  if (Buffer.byteLength(JSON.stringify(exported), "utf8") > PLANNING_EXPORT_MAX_BYTES) throw new Error("Planning export exceeds the bounded document limit.");
+  return exported;
 }
 
 export type { ApprovedSourceInputV1 };
