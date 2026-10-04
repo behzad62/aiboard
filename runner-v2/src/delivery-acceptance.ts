@@ -204,6 +204,7 @@ export interface DeliveryReviewRecord {
   satisfied?: boolean;
   completedSequence?: number;
   testConsolidation?: TestConsolidationDisposition;
+  runnerScope?: import("./submission-scope-contracts.js").SubmissionScopeRecord;
 }
 
 export interface DeliveryBoundaryCheck {
@@ -483,7 +484,9 @@ export function validateDeliveryObligations(value: unknown, recordedAt: string):
 
 export function openBlockingFindings(review: DeliveryReviewRecord | undefined): PlanningFinding[] {
   return (review?.findings ?? []).filter(
-    (finding) => finding.severity === "blocking" && finding.disposition === undefined,
+    (finding) => finding.severity === "blocking" && (review?.runnerScope?.findings.some((fact) => fact.id === finding.id)
+      ? finding.disposition?.resolution !== "plan_reconciled" || !finding.disposition.resolvedInRevisionDigest
+      : finding.disposition === undefined),
   );
 }
 

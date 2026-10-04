@@ -6,6 +6,7 @@ import type {
   FinalVerificationCategory,
   FinalVerificationPlan,
 } from "./final-verification-contracts.js";
+import type { SubmissionScopeRecord } from "./submission-scope-contracts.js";
 
 export type TaskStatus =
   | "planned"
@@ -88,6 +89,7 @@ export interface TaskContractRef {
 }
 
 export interface BuildTask {
+  submissionScope?: SubmissionScopeRecord;
   id: string;
   /** Legacy implementation tasks omit this field; final verification is explicit. */
   kind?: BuildTaskKind;

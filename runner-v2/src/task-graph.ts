@@ -303,6 +303,7 @@ export function applyTaskTransition(
           assignedWorkerId: undefined,
           changeSetId: undefined,
           criterionEvidenceLinks: undefined,
+          ...(task.submissionScope ? { submissionScope: undefined } : {}),
           failureReason: undefined,
         }
       : {}),

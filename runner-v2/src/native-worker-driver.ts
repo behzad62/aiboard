@@ -392,6 +392,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         this.recordSuccess(assignment.runId, candidate.providerId);
         return {
           type: "submitted",
+          ...(result.changeSet?.submissionScope ? { submissionScope: structuredClone(result.changeSet.submissionScope) } : {}),
           changeSetId: result.loop.changeSetId,
           ...(result.changeSet?.criterionEvidenceLinks
             ? {

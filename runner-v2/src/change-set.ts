@@ -11,6 +11,8 @@ import type { EvidenceRecord } from "./evidence-store.js";
 import { requireGitRunner } from "./git-command.js";
 import type { GitRunner } from "./git-repository.js";
 import type { TaskCommit } from "./workspace-manager.js";
+import { inspectSubmissionTree } from "./submission-guard-git.js";
+import { bindSubmissionScope, type SubmissionScopeIdentity, type SubmissionScopeRecord } from "./submission-scope-contracts.js";
 
 export interface ExternalEffectReference {
   kind: string;
@@ -19,6 +21,7 @@ export interface ExternalEffectReference {
 }
 
 export interface ChangeSet {
+  submissionScope?: SubmissionScopeRecord;
   id: string;
   runId: string;
   taskId: string;
@@ -39,6 +42,7 @@ export interface ChangeSet {
 }
 
 export interface CreateChangeSetOptions {
+  submissionScopeIdentity?: SubmissionScopeIdentity;
   execute?: GitRunner;
   workspacePath: string;
   taskCommit: TaskCommit;
@@ -107,18 +111,28 @@ export async function createChangeSet(
     if (effect.artifactHash) assertArtifactHash(effect.artifactHash);
   }
 
+  let submissionFileInventory: Array<{ path: string; added: boolean }> = [];
+  const submissionScope = options.submissionScopeIdentity
+    ? bindSubmissionScope(options.submissionScopeIdentity,
+      `changeset_${createHash("sha256").update(`${commit.runId}\0${commit.taskId}\0${commit.revision}`).digest("hex")}`,
+      commit.revision, await inspectSubmissionTree({ git: requireGitRunner(options.execute), workspacePath: options.workspacePath,
+        baselineRevision: commit.baselineRevision, candidateRevision: commit.revision, claim: options.submissionScopeIdentity.claim,
+        captureInventory: (files) => { submissionFileInventory = files; } }), submissionFileInventory)
+    : undefined;
   const diff = await requireGitRunner(options.execute)({
     cwd: options.workspacePath,
     args: [
       "diff",
       "--binary",
       "--full-index",
+      ...(submissionScope ? ["--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"] : []),
       commit.baselineRevision,
       commit.revision,
       "--",
     ],
     maxOutputBytes: 64 * 1024 * 1024,
   });
+  if (submissionScope && diff.exitCode !== 0) throw new Error("Submission diff capture failed.");
   const artifact = await options.artifacts.put(
     Buffer.from(diff.stdout),
     "text/x-diff",
@@ -128,6 +142,7 @@ export async function createChangeSet(
     .update(`${commit.runId}\0${commit.taskId}\0${commit.revision}`)
     .digest("hex")}`;
   return {
+    ...(submissionScope ? { submissionScope } : {}),
     id,
     runId: commit.runId,
     taskId: commit.taskId,

@@ -517,6 +517,7 @@ function appendRunInitialized(
     idempotencyKey: RUN_INITIALIZED_KEY,
     payload: {
       testIntegrityPolicyVersion: 1,
+      submissionScopePolicyVersion: 1,
       ...(spec.objective !== undefined ? { objective: spec.objective } : {}),
     },
   });
@@ -572,7 +573,10 @@ function assertProvisioningInitEvent(
     fail("Planning provisioning refuses a non-matching scheduler prefix.");
   }
   const payload = event.payload as Record<string, unknown>;
-  const keys = Object.keys(payload).filter((key) => key !== "testIntegrityPolicyVersion");
+  const keys = Object.keys(payload).filter((key) => key !== "testIntegrityPolicyVersion" && key !== "submissionScopePolicyVersion");
+  if (payload.submissionScopePolicyVersion !== undefined && payload.submissionScopePolicyVersion !== 1) {
+    fail("Planning provisioning refuses an unsupported submission-scope policy version.");
+  }
   if (payload.testIntegrityPolicyVersion !== undefined && payload.testIntegrityPolicyVersion !== 1) {
     fail("Planning provisioning refuses an unsupported test-integrity policy version.");
   }

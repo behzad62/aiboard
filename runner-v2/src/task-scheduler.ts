@@ -51,6 +51,7 @@ export interface WorkerAssignment {
 export type WorkerOutcome =
   | {
       type: "submitted";
+      submissionScope?: import("./submission-scope-contracts.js").SubmissionScopeRecord;
       changeSetId: string;
       criterionEvidenceLinks?: CriterionEvidenceLink[];
     }
@@ -522,6 +523,7 @@ export class TaskScheduler {
       // T4: the worker is done writing — release the packet claim so later
       // tasks can reuse its files/resources (best-effort, idempotent).
       this.transition(taskId, "submitted", attempt, {
+        ...(outcome.submissionScope ? { submissionScope: structuredClone(outcome.submissionScope) } : {}),
         changeSetId: outcome.changeSetId,
         ...(outcome.criterionEvidenceLinks
           ? {
@@ -536,11 +538,31 @@ export class TaskScheduler {
       return;
     }
     if (outcome.type === "guidance") {
+      // Native lifecycle tools already persist guidance. Settle that exact
+      // receipt instead of recreating its payload with a different key order.
+      const projection = this.projection();
+      const prior = projection.submissionScopePolicyVersion === 1 ? projection.guidance[outcome.requestId] : undefined;
+      if (prior) {
+        const events = this.store.readRun(this.runId);
+        const receiptIndex = events.findIndex((event) => event.type === "guidance.requested" && event.payload.requestId === outcome.requestId);
+        const receipt = events[receiptIndex];
+        const receiptTask = receipt ? rebuildSchedulerProjection(events.slice(0, receiptIndex)).tasks[taskId] : undefined;
+        const task = projection.tasks[taskId];
+        if (!receipt || receipt.actor.role !== "worker" || receipt.actor.id !== workerId ||
+          receiptTask?.status !== "running" || receiptTask.attempt !== attempt || receiptTask.assignedWorkerId !== workerId ||
+          receipt.payload.question !== outcome.question || receipt.payload.blocking !== outcome.blocking || receipt.payload.evidenceSequence !== outcome.evidenceSequence ||
+          receipt.payload.taskId !== taskId || task?.attempt !== attempt || task.assignedWorkerId !== workerId ||
+          prior.taskId !== taskId || prior.blocking !== outcome.blocking || prior.question !== outcome.question ||
+          prior.evidenceSequence !== outcome.evidenceSequence || prior.status !== "open") {
+          throw new Error("Guidance outcome differs from the exact durable worker receipt.");
+        }
+      }
       this.releasePacketClaim(
         taskId,
         "stopped_fenced",
         "driver returned: guidance",
       );
+      if (prior) return;
       this.store.append({
         runId: this.runId,
         type: "guidance.requested",

@@ -170,14 +170,15 @@ export class WorkspaceManager {
 
   async commitWorkspace(
     workspace: TaskWorkspace,
-    summary: string
+    summary: string,
+    inspectCandidate?: (revision: string) => Promise<void>,
   ): Promise<TaskCommit> {
     return await this.serialized(async () => {
       if (workspace.runId !== this.runId) {
         throw new Error(`Task workspace ${workspace.workspaceId} belongs to another run.`);
       }
       await this.assertOwnedWorkspace(workspace);
-      return await this.commitWorkspaceUnlocked(workspace, summary);
+      return await this.commitWorkspaceUnlocked(workspace, summary, inspectCandidate);
     });
   }
 
@@ -328,8 +329,15 @@ export class WorkspaceManager {
 
   private async commitWorkspaceUnlocked(
     workspace: TaskWorkspace,
-    summary: string
+    summary: string,
+    inspectCandidate?: (revision: string) => Promise<void>,
   ): Promise<TaskCommit> {
+      if (inspectCandidate) {
+        for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
+          const metadata = (await this.git(workspace.path, ["rev-parse", "--git-path", name])).stdout.trim();
+          if (await pathExists(resolve(workspace.path, metadata))) throw new Error("Guarded submission requires a settled Git operation.");
+        }
+      }
       const status = await this.git(workspace.path, [
         "status",
         "--porcelain=v1",
@@ -338,6 +346,8 @@ export class WorkspaceManager {
       ]);
       if (status.stdout.length === 0) {
         const head = await this.head(workspace.path);
+        await inspectCandidate?.(head);
+        if (inspectCandidate) await this.assertGuardedParent(workspace, head);
         if (head === workspace.baselineRevision) {
           throw new NoTaskChangesError(workspace.taskId);
         }
@@ -353,6 +363,8 @@ export class WorkspaceManager {
       );
       if (staged.exitCode === 0) {
         const head = await this.head(workspace.path);
+        await inspectCandidate?.(head);
+        if (inspectCandidate) await this.assertGuardedParent(workspace, head);
         if (head === workspace.baselineRevision) {
           throw new NoTaskChangesError(workspace.taskId);
         }
@@ -360,6 +372,21 @@ export class WorkspaceManager {
       }
       if (staged.exitCode !== 1) {
         throw new Error(`Could not inspect staged task changes: ${staged.stderr}`);
+      }
+      if (inspectCandidate) {
+        // The guard and commit consume the same immutable tree, even if the
+        // index changes while the asynchronous inspection is in progress.
+        const previousHead = await this.head(workspace.path);
+        const tree = (await this.git(workspace.path, ["write-tree"])).stdout.trim();
+        if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(previousHead) || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(tree)) throw new Error("Guarded task tree identity is invalid.");
+        await inspectCandidate(tree);
+        await this.assertGuardedParent(workspace, previousHead);
+        const committed = await this.execute({ cwd: workspace.path,
+          args: ["commit-tree", tree, "-p", previousHead, "-m", subject, "-m", `AIBoard-Run: ${this.runId}\nAIBoard-Task: ${workspace.taskId}`], env: RUNNER_IDENTITY });
+        if (committed.exitCode !== 0 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(committed.stdout.trim())) throw new Error("Guarded task commit could not be created.");
+        const revision = committed.stdout.trim();
+        await this.git(workspace.path, ["update-ref", workspace.branch, revision, previousHead]);
+        return await this.taskCommit(workspace, revision);
       }
       await this.execute({
         cwd: workspace.path,
@@ -373,6 +400,13 @@ export class WorkspaceManager {
         env: RUNNER_IDENTITY,
       });
       return await this.taskCommit(workspace, await this.head(workspace.path));
+  }
+
+  private async assertGuardedParent(workspace: TaskWorkspace, previousHead: string): Promise<void> {
+    if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(previousHead)) throw new Error("Guarded task parent identity is invalid.");
+    await this.assertOwnedWorkspace(workspace);
+    if ((await this.head(workspace.path)) !== previousHead) throw new Error("Guarded task parent changed during inspection.");
+    await this.git(workspace.path, ["merge-base", "--is-ancestor", workspace.baselineRevision, previousHead]);
   }
 
   private async ensureWorkspace(taskId: string): Promise<TaskWorkspace> {

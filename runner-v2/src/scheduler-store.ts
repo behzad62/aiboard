@@ -54,6 +54,7 @@ import {
   type ReplanRequest,
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
+import { validateSubmissionScopeRecord } from "./submission-scope-capture.js";
 import type { ExecutionPlanRevision, ExecutionTaskContract } from "./planning-contracts.js";
 import {
   planFinalVerification,
@@ -940,6 +941,8 @@ export interface SchedulerProjection {
   };
   planRevision: number;
   tasks: Record<string, BuildTask>;
+  /** E2 activation is stamped only on fresh runs; old logs retain absent shape. */
+  submissionScopePolicyVersion?: 1;
   guidance: Record<string, GuidanceProjection>;
   userGuidance: Record<string, UserGuidanceItem>;
   userGuidanceVersion: number;
@@ -3291,7 +3294,8 @@ export function reduceSchedulerEvent(
         throw new Error("Only the runner or user may initialize a scheduler run.");
       }
       if (event.payload.testIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1)) throw new Error("Invalid test-integrity initialization authority or version.");
-      return { ...emptySchedulerProjection(event), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
+      if (event.payload.submissionScopePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.submissionScopePolicyVersion !== 1)) throw new Error("Invalid submission-scope initialization authority or version.");
+      return { ...emptySchedulerProjection(event), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
     }
     if (event.type === "run.policy_configured") {
       if (event.actor.role !== "runner") {
@@ -3587,6 +3591,10 @@ export function reduceSchedulerEvent(
         current.runPolicy === undefined
       ) {
         const initialObjective = event.payload.objective;
+        if (event.payload.submissionScopePolicyVersion !== undefined) {
+          if (event.actor.role !== "runner" || event.payload.submissionScopePolicyVersion !== 1) throw new Error("Invalid submission-scope initialization authority or version.");
+          next.submissionScopePolicyVersion = 1;
+        }
         if (event.payload.testIntegrityPolicyVersion !== undefined) {
           if (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1) throw new Error("Invalid test-integrity initialization authority or version.");
           next.testIntegrity = { version: 1, exceptions: {} };
@@ -4825,7 +4833,12 @@ export function reduceSchedulerEvent(
         );
       }
       const transitionPatch =
-        (event.payload.patch as Partial<BuildTask> | undefined) ?? {};
+        { ...((event.payload.patch as Partial<BuildTask> | undefined) ?? {}) };
+      if (transitionPatch.submissionScope !== undefined && (status !== "submitted" || current.submissionScopePolicyVersion !== 1)) throw new Error("Submission scope records apply only to activated submissions.");
+      if (status === "submitted" && current.submissionScopePolicyVersion === 1) {
+        if (event.actor.role !== "runner" || event.actor.id !== "scheduler") throw new Error("Activated submission requires the trusted scheduler actor.");
+        transitionPatch.submissionScope = validateSubmissionScopeRecord(current, taskId, requiredString(transitionPatch as Record<string, unknown>, "changeSetId"), transitionPatch.submissionScope);
+      }
       if (status === "assigned" && task.acceptanceCriteria) {
         requiredAssignedWorkerId(transitionPatch.assignedWorkerId, "Task assignment");
       }
@@ -6958,6 +6971,7 @@ function deliveryReviewStarted(
   if (!task || task.kind === "final_verification" || task.status !== "submitted" || !task.changeSetId) {
     throw new Error(`Deliverable review requires submitted task ${taskId}.`);
   }
+  if (current.submissionScopePolicyVersion === 1 && (!task.submissionScope || task.submissionScope.changeSetId !== task.changeSetId || task.submissionScope.attempt !== task.attempt)) throw new Error("Deliverable review requires the exact guarded submission scope record.");
   const attempt = requiredPositiveInteger(event.payload, "attempt");
   const changeSetId = requiredString(event.payload, "changeSetId");
   if (attempt !== task.attempt || changeSetId !== task.changeSetId) {
@@ -7029,6 +7043,7 @@ function deliveryReviewStarted(
     authorModelIdentity,
     architectRuntimeId,
     architectModelIdentity,
+    ...(current.submissionScopePolicyVersion === 1 ? { runnerScope: structuredClone(task.submissionScope!) } : {}),
     stage: "started",
     startedSequence: event.sequence,
     sessionIds: [],
@@ -7159,6 +7174,8 @@ function deliveryFindingsRecorded(state: DeliveryState, event: SchedulerEvent): 
   requireDeliveryReviewer(event, review);
   const sessionId = requireFreshDeliverySession(state, event);
   const findings = validateDeliveryFindings(event.payload.findings);
+  if (review.runnerScope && findings.some((finding) => finding.id.startsWith("submission-scope:"))) throw new Error("Reviewer findings cannot use reserved runner scope identities.");
+  for (const fact of review.runnerScope?.findings ?? []) findings.push({ id: fact.id, category: "scope_creep", severity: "blocking", location: fact.path, claim: fact.message, evidenceRefs: [review.runnerScope!.changeSetId] });
   const depth = parseDeliveryDepth(event.payload.depth);
   const required = deliveryReviewDepthForTier(review.risk!.tier);
   if (required.repositoryInspection && depth.inspectionToolCalls < 1) {
@@ -7409,6 +7426,12 @@ function applyDeliveryDispositions(
         throw new Error("Deliverable finding disposition resolution is invalid.");
       }
       const rationale = requiredString(raw, "rationale");
+      let scopeResolutionDigest: string | undefined;
+      if (review.runnerScope?.findings.some((fact) => fact.id === findingId)) {
+        const ready = readyPlanIdentity(next);
+        if (resolution !== "plan_reconciled" || !ready || raw.planRevisionId !== ready.revisionId || raw.planDigest !== ready.digest) throw new Error("Submission scope findings require an explicit current-plan reconciliation.");
+        scopeResolutionDigest = ready.digest;
+      }
       review.findings = (review.findings ?? []).map((finding) => finding.id === findingId
         ? {
             ...finding,
@@ -7417,6 +7440,7 @@ function applyDeliveryDispositions(
               rationale,
               resolvedAt: event.occurredAt,
               resolvedByReviewId: review.reviewId,
+              ...(scopeResolutionDigest ? { resolvedInRevisionDigest: scopeResolutionDigest } : {}),
             },
           }
         : finding);
@@ -10896,6 +10920,7 @@ function cloneCriterionReviewVerdicts(
 function cloneBuildTask(task: BuildTask): BuildTask {
   return {
     ...task,
+    ...(task.submissionScope ? { submissionScope: structuredClone(task.submissionScope) } : {}),
     dependencies: [...task.dependencies],
     requiredCapabilities: [...task.requiredCapabilities],
     ...(task.acceptanceCriteria

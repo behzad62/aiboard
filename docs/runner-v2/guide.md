@@ -40,3 +40,11 @@ An unexplained command/configuration change stops boundary execution. A smaller 
 An initial project with no configured suite uses an immutable Git inventory proof with no invented denominator or report. Its first suite may be introduced, but acceptance still requires a fresh positive machine-readable test report. Detected tests or runner configuration without a usable command remain blocked. A successful task acceptance atomically promotes the trusted baseline; a passed boundary or failed attempt alone cannot.
 
 Historical runs retain their recorded policy and are not automatically upgraded on recovery. These runtime project checks are separate from repository development validation: packet tests run during implementation, and the wider development suite remains scheduled for the final P6.6 gate.
+
+## Submission scope and secret checks
+
+New opt-in planning runs inspect the exact Git tree before creating the task commit and submitted diff. Paths outside the active packet claim, forbidden surfaces, unclaimed instruction/control files, and newly added progress/evidence/review/test-output records produce durable blocking scope findings. Submission continues so the Architect can resolve those findings explicitly, with a rationale bound to the exact current ready plan. Reviewer omission or ordinary approval prose cannot clear them.
+
+Added secret patterns and newly added environment/key files refuse submission with a generic redacted reason. The refused candidate does not become a task commit or submitted change set. These checks target the submission boundary; private tool audit output is not claimed to be free of secret bytes. The stored submitted diff disables external converters, text conversion and forced color so it retains the inspected Git representation.
+
+Runner captures the exact task attempt, worker session, assignment claim and plan before releasing the claim. Only the trusted scheduler may publish the guarded submission record. Historical activation-free runs retain their recorded behavior.

@@ -544,6 +544,12 @@ export class NativeDeliverableReviewRuntime {
       ));
     }
     if (pass === "obligations") return sections;
+    if (durable?.runnerScope) {
+      sections.push(section("submission-scope-findings", "contract",
+        "Runner submission scope findings (blocking; only the Architect can resolve them against the current plan):\n" +
+        JSON.stringify(durable.runnerScope, null, 2) +
+        "\nThese facts remain blocking even when you return no findings. Do not copy or reuse their reserved submission-scope IDs. Your verdict must be unsatisfied while any runner scope finding remains unresolved."));
+    }
     if (inputs.testIntegrityReference) {
       sections.push(section("test-integrity-reference", "contract",
         "Runner test-integrity baseline and candidate fingerprints (observational; no automatic exception):\n" + JSON.stringify(inputs.testIntegrityReference, null, 2) +
@@ -750,6 +756,7 @@ function nextGeneration(projection: SchedulerProjection, taskId: string): number
 }
 
 function assertInputs(inputs: DeliverableReviewInputs, task: BuildTask): void {
+  if (task.submissionScope && (inputs.taskRevision !== task.submissionScope.taskRevision || inputs.baselineRevision !== task.submissionScope.baselineRevision)) throw new DeliverableReviewInputsUnavailableError("Review revision differs from the exact guarded submission.");
   if (inputs.taskId !== task.id || inputs.attempt !== task.attempt || inputs.changeSetId !== task.changeSetId) {
     throw new DeliverableReviewInputsUnavailableError("Deliverable review inputs do not describe the current submission.");
   }

@@ -69,6 +69,9 @@ import type {
   WorkspaceManager,
 } from "./workspace-manager.js";
 import { NoTaskChangesError } from "./workspace-manager.js";
+import { captureSubmissionScopeIdentity } from "./submission-scope-capture.js";
+import { inspectSubmissionTree } from "./submission-guard-git.js";
+import { requireGitRunner } from "./git-command.js";
 import {
   createSubmitTaskTool,
   createWorkerLifecycleTools,
@@ -341,11 +344,20 @@ export async function runWorkerTask(
         "Task submission requires durable evidence; record command or browser facts first."
       );
     }
+    const currentSubmissionProjection = schedulerState(options);
+    const scopeIdentity = currentSubmissionProjection ? captureSubmissionScopeIdentity(currentSubmissionProjection, {
+      runId: options.runId, taskId: options.taskId, attempt: attempt ?? 0, workerId: options.actorId, sessionId: options.sessionId,
+      workspacePath: options.workspace.path, baselineRevision: options.workspace.baselineRevision,
+    }) : undefined;
     let commit: TaskCommit;
     try {
       commit = await options.workspaceManager.commitWorkspace(
         options.workspace,
-        summary
+        summary,
+        scopeIdentity ? async (candidateRevision) => {
+          await inspectSubmissionTree({ git: requireGitRunner(options.git?.lifecycle("inspection").run), workspacePath: options.workspace.path,
+            baselineRevision: options.workspace.baselineRevision, candidateRevision, claim: scopeIdentity.claim });
+        } : undefined,
       );
     } catch (error) {
       if (!(error instanceof NoTaskChangesError)) throw error;
@@ -359,6 +371,7 @@ export async function runWorkerTask(
       };
     }
     producedChangeSet = await createChangeSet({
+      ...(scopeIdentity ? { submissionScopeIdentity: scopeIdentity } : {}),
       execute: options.git?.lifecycle("inspection").run,
       workspacePath: options.workspace.path,
       taskCommit: commit,

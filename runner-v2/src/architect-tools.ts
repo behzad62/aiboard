@@ -191,7 +191,7 @@ interface ReviewTaskInput {
   evidenceArtifactHashes: string[];
   criterionVerdicts?: CriterionReviewVerdict[];
   planReconciliation?: PlanReconciliation;
-  findingDispositions?: Array<{ findingId: string; resolution: "plan_reconciled" | "rejected" | "deferred"; rationale: string }>;
+  findingDispositions?: Array<{ findingId: string; resolution: "plan_reconciled" | "rejected" | "deferred"; rationale: string; planRevisionId?: string; planDigest?: string }>;
   claimDispositions?: Array<{ claimId: string; status: "verified"; rationale: string }>;
 }
 
@@ -285,6 +285,8 @@ export function resolvePlanCritiqueTool(
           findingId: { type: "string", minLength: 1 },
           resolution: { enum: ["plan_reconciled", "rejected"] },
           rationale: { type: "string", minLength: 1 },
+          planRevisionId: { type: "string", minLength: 1 },
+          planDigest: { type: "string", minLength: 1 },
         }, ["findingId", "resolution", "rationale"]),
       },
       planReconciliation: planReconciliationSchema(),
@@ -2765,7 +2767,7 @@ function validateReview(input: unknown): ValidationResult<ReviewTaskInput> {
       : parsePlanReconciliation(value.planReconciliation);
     if (value.planReconciliation !== undefined && !planReconciliation) return null;
     const rawFindingDispositions: unknown = value.findingDispositions;
-    const findingDispositions = rawFindingDispositions === undefined ? undefined : Array.isArray(rawFindingDispositions) ? rawFindingDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.findingId) && (candidate.resolution === "plan_reconciled" || candidate.resolution === "rejected" || candidate.resolution === "deferred") && nonEmpty(candidate.rationale) ? { findingId: candidate.findingId, resolution: candidate.resolution as "plan_reconciled" | "rejected" | "deferred", rationale: candidate.rationale } : null) : null;
+    const findingDispositions = rawFindingDispositions === undefined ? undefined : Array.isArray(rawFindingDispositions) ? rawFindingDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.findingId) && (candidate.resolution === "plan_reconciled" || candidate.resolution === "rejected" || candidate.resolution === "deferred") && nonEmpty(candidate.rationale) ? { findingId: candidate.findingId, resolution: candidate.resolution as "plan_reconciled" | "rejected" | "deferred", rationale: candidate.rationale, ...(nonEmpty(candidate.planRevisionId) ? { planRevisionId: candidate.planRevisionId } : {}), ...(nonEmpty(candidate.planDigest) ? { planDigest: candidate.planDigest } : {}) } : null) : null;
     if (findingDispositions === null || findingDispositions?.some((candidate) => candidate === null)) return null;
     const claimDispositions = value.claimDispositions === undefined ? undefined : Array.isArray(value.claimDispositions) ? value.claimDispositions.map((candidate: unknown) => isRecord(candidate) && nonEmpty(candidate.claimId) && candidate.status === "verified" && nonEmpty(candidate.rationale) ? { claimId: candidate.claimId, status: "verified" as const, rationale: candidate.rationale } : null) : null;
     if (claimDispositions === null || claimDispositions?.some((candidate) => candidate === null)) return null;
