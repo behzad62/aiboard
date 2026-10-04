@@ -1,4 +1,17 @@
-import type { BuildRunPolicy } from "@/lib/db/schema";
+import type { ApprovedSourceInputV1 } from "../../runner-v2/src/planning-control-contracts.js";
+import type { ExplicitStartRequestV1, PlanningReadinessSnapshot, PlanningExportDocument, SourceAmendmentImpactV1 } from "../../runner-v2/src/planning-control-contracts.js";
+export type { ApprovedSourceInputV1, ExplicitStartRequestV1, PlanningReadinessSnapshot, PlanningExportDocument };
+
+export interface NativeSourceAmendmentInput extends ApprovedSourceInputV1 {
+  predecessorManifestId: string;
+  predecessorArtifactDigest: string;
+  amendmentId: string;
+  rationale: string;
+  impact: SourceAmendmentImpactV1;
+  idempotencyKey: string;
+}
+
+import type { BuildRunPolicy } from "../db/schema.js";
 
 export const DEFAULT_RUNNER_V2_URL = "http://127.0.0.1:8787";
 
@@ -60,6 +73,8 @@ export interface CreateNativeBuildInput {
   permissionProfile: "guarded" | "project" | "full";
   idempotencyKey: string;
   build: {
+    planningPolicy?: { version: 1 };
+    approvedSource?: ApprovedSourceInputV1;
     projectId: string;
     objective: string;
     architectRuntimeId: string;
@@ -479,6 +494,7 @@ export interface NativeIndependentVerifierObservability {
     history: NativeBuildRiskObservation[];
   };
   selection?: {
+    requiredSequence?: number;
     status: "required" | "selected";
     reason: string;
     requiredCapabilities: string[];
@@ -640,6 +656,7 @@ export interface NativeBuildProjection {
     architect: {
       runtimeId?: string;
       handoff?: {
+        requiredSequence?: number;
         reason: string;
         requiredCapabilities: string[];
         candidateRuntimeIds: string[];
@@ -1708,14 +1725,16 @@ export async function selectNativeArchitectHandoff(
   runtimeId: string,
   idempotencyKey: string,
   fetchImpl: typeof fetch = fetch,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  requiredSequence?: number
 ): Promise<NativeBuildProjection> {
+  if (!Number.isSafeInteger(requiredSequence) || requiredSequence! < 1) throw new Error("Selection must name the requirement displayed to the owner.");
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/architect-handoff`,
     {
       method: "POST",
-      body: JSON.stringify({ runtimeId, idempotencyKey }),
+      body: JSON.stringify({ runtimeId, idempotencyKey, requiredSequence }),
       signal,
     },
     fetchImpl
@@ -1729,13 +1748,15 @@ export async function selectNativeVerifierRuntime(
   idempotencyKey: string,
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
+  requiredSequence?: number,
 ): Promise<NativeBuildProjection> {
+  if (!Number.isSafeInteger(requiredSequence) || requiredSequence! < 1) throw new Error("Selection must name the requirement displayed to the owner.");
   return await request(
     connection,
     `/v2/runs/${encodeURIComponent(runId)}/build/verifier-handoff`,
     {
       method: "POST",
-      body: JSON.stringify({ runtimeId, idempotencyKey }),
+      body: JSON.stringify({ runtimeId, idempotencyKey, requiredSequence }),
       signal,
     },
     fetchImpl,
@@ -1842,4 +1863,20 @@ async function request<T>(
     );
   }
   return data;
+}
+
+export async function registerNativePlanningSource(connection: NativeRunnerConnection, runId: string, input: { approvedSource: ApprovedSourceInputV1; idempotencyKey: string }, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<NativeBuildProjection> {
+  return request(connection, `/v2/runs/${encodeURIComponent(runId)}/build/source`, { method: "POST", body: JSON.stringify(input), signal }, fetchImpl);
+}
+export async function amendNativePlanningSource(connection: NativeRunnerConnection, runId: string, input: NativeSourceAmendmentInput, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<NativeBuildProjection> {
+  return request(connection, `/v2/runs/${encodeURIComponent(runId)}/build/source-amendments`, { method: "POST", body: JSON.stringify(input), signal }, fetchImpl);
+}
+export async function getNativePlanningReadiness(connection: NativeRunnerConnection, runId: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<PlanningReadinessSnapshot> {
+  return request(connection, `/v2/runs/${encodeURIComponent(runId)}/build/planning-readiness`, { method: "GET", signal }, fetchImpl);
+}
+export async function startNativeReadyPlan(connection: NativeRunnerConnection, runId: string, input: ExplicitStartRequestV1, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<NativeBuildProjection> {
+  return request(connection, `/v2/runs/${encodeURIComponent(runId)}/build/plan-start`, { method: "POST", body: JSON.stringify(input), signal }, fetchImpl);
+}
+export async function exportNativePlanning(connection: NativeRunnerConnection, runId: string, fetchImpl: typeof fetch = fetch, signal?: AbortSignal): Promise<PlanningExportDocument> {
+  return request(connection, `/v2/runs/${encodeURIComponent(runId)}/build/planning-export`, { method: "GET", signal }, fetchImpl);
 }

@@ -43,6 +43,8 @@ import {
 } from "./discussion-live-state";
 import {
   effectiveNativeBuildPolicy,
+  explicitNativePlanningOptions,
+  type NativePlanningProvisioningOptions,
   NATIVE_RUNNER_NODE_POLICY_DESCRIPTION,
   nativeProviderBillingBasis,
   supportsNativeRunnerNodeVersion,
@@ -55,12 +57,14 @@ export type NativeBuildPauseGate =
   | { kind: "project_handoff" }
   | {
       kind: "verifier_selection";
+      requiredSequence?: number;
       reason: string;
       requiredCapabilities: string[];
       candidateRuntimeIds: string[];
     }
   | {
       kind: "architect_handoff";
+      requiredSequence?: number;
       reason: string;
       candidateRuntimeIds: string[];
     };
@@ -74,6 +78,7 @@ export function nativeBuildPauseGate(
   if (projection.verifierSelection?.status === "required") {
     return {
       kind: "verifier_selection",
+      requiredSequence: projection.verifierSelection.requiredSequence,
       reason: projection.verifierSelection.reason,
       requiredCapabilities: [
         ...projection.verifierSelection.requiredCapabilities,
@@ -87,6 +92,7 @@ export function nativeBuildPauseGate(
   if (handoff) {
     return {
       kind: "architect_handoff",
+      requiredSequence: handoff.requiredSequence,
       reason: handoff.reason,
       candidateRuntimeIds: [...handoff.candidateRuntimeIds],
     };
@@ -124,7 +130,8 @@ export async function loadNativeBuildAuthoritativeSnapshot<TRun, TBuild>(options
 export async function runNativeBuildDiscussion(
   discussion: Discussion,
   emit: Emit,
-  signal: AbortSignal
+  signal: AbortSignal,
+  planningOptions?: NativePlanningProvisioningOptions
 ): Promise<void> {
   if (!discussion.runnerUrl || !discussion.runnerToken) {
     throw new Error("Build mode requires a connected Runner V2 instance.");
@@ -214,6 +221,7 @@ export async function runNativeBuildDiscussion(
         verifierRuntimeIds,
         maxConcurrency: Math.max(1, Math.min(4, workerRuntimeIds.length)),
         ...nativePolicy,
+        ...explicitNativePlanningOptions(planningOptions),
       },
     });
     updateDiscussion(
@@ -393,6 +401,7 @@ function emitArchitectHandoffPause(
 ): void {
   emit({
     type: "architect_handoff_required",
+    requiredSequence: handoff.requiredSequence,
     reason: handoff.reason,
     candidateRuntimeIds: [...handoff.candidateRuntimeIds],
   });
@@ -437,6 +446,7 @@ function emitVerifierSelectionPause(
 ): void {
   emit({
     type: "verifier_selection_required",
+    requiredSequence: selection.requiredSequence,
     reason: selection.reason,
     requiredCapabilities: [...selection.requiredCapabilities],
     candidateRuntimeIds: [...selection.candidateRuntimeIds],

@@ -409,8 +409,11 @@ export class NativeBuildManager implements BuildControlPlane {
     );
   }
 
+  private readonly activatedRuns = new Set<string>();
+
   activate(runId: string): void {
     this.assertOpen();
+    this.activatedRuns.add(runId);
     const handle = this.requireMutable(runId);
     if (this.pumps.has(runId)) return;
     const projection = handle.runtime.projection();
@@ -571,7 +574,8 @@ export class NativeBuildManager implements BuildControlPlane {
     const projection = await this.withRuntimeActivity(async () =>
       handle.runtime.registerPlanningSource(input)
     );
-    this.wake(runId);
+    // Semantic planning controls do not start a never-activated supervisor pump.
+    if (this.activatedRuns.has(runId)) this.wake(runId);
     return projection;
   }
 
@@ -588,7 +592,8 @@ export class NativeBuildManager implements BuildControlPlane {
     const projection = await this.withRuntimeActivity(async () =>
       handle.runtime.amendPlanningSource(request)
     );
-    this.wake(runId);
+    // Semantic planning controls do not start a never-activated supervisor pump.
+    if (this.activatedRuns.has(runId)) this.wake(runId);
     return projection;
   }
 
@@ -605,7 +610,8 @@ export class NativeBuildManager implements BuildControlPlane {
     const projection = await this.withRuntimeActivity(async () =>
       handle.runtime.authorizeExplicitPlanStart(request)
     );
-    this.wake(runId);
+    // Semantic planning controls do not start a never-activated supervisor pump.
+    if (this.activatedRuns.has(runId)) this.wake(runId);
     return projection;
   }
 

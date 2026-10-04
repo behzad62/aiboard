@@ -395,7 +395,8 @@ export interface PlanningExecutionAuthorization {
   readonly sourceArtifactDigest: string;
   readonly planningPolicyVersion: 1;
   readonly projectDocsPolicyVersion: number;
-  readonly ownerChoice: string;
+  readonly ownerChoice: "execute";
+  readonly authorizedBy: "user:local-user";
   readonly authorizedAt: string;
 }
 
@@ -2265,7 +2266,7 @@ export function reducePlanningProjection(
       }
       next = {
         ...next,
-        executionAuthorization: { ...authorization, authorizedAt: event.occurredAt },
+        executionAuthorization: { ...authorization, authorizedBy: "user:local-user", authorizedAt: event.occurredAt },
       };
       break;
     }

@@ -53,26 +53,8 @@ export const T7A_MAX_APPROVED_SOURCE_BYTES = 512 * 1024;
  * digest/identity, and persists the kernel-generated manifest on the saved
  * spec. Never persisted as-is.
  */
-export interface ApprovedSourceInputV1 {
-  readonly version: 1;
-  /** Explicit owner intent: these exact bytes are the approved specification. */
-  readonly approval: "approved_spec";
-  /** Canonical base64 of the original bytes (strict round-trip). */
-  readonly bytesBase64: string;
-  readonly mediaType: T7aSupportedSourceMediaType;
-  readonly encoding: typeof T7A_SUPPORTED_SOURCE_ENCODING;
-  /**
-   * Ordered section layout over byte offsets. Omitted only when the approved
-   * document carries no inventory: the whole document is then one complete
-   * section (honest, no invented classification).
-   */
-  readonly sections?: readonly {
-    readonly id: string;
-    readonly title?: string;
-    readonly startByte: number;
-    readonly endByte: number;
-  }[];
-}
+export type { ApprovedSourceInputV1 } from "./planning-control-contracts.js";
+import type { ApprovedSourceInputV1 } from "./planning-control-contracts.js";
 
 export interface ValidatedApprovedSource {
   readonly bytes: Uint8Array;

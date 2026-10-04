@@ -223,11 +223,13 @@ export type OrchestratorEvent =
     }
   | {
       type: "architect_handoff_required";
+      requiredSequence?: number;
       reason: string;
       candidateRuntimeIds: string[];
     }
   | {
       type: "verifier_selection_required";
+      requiredSequence?: number;
       reason: string;
       requiredCapabilities: string[];
       candidateRuntimeIds: string[];

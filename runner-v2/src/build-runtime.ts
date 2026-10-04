@@ -14,7 +14,6 @@ import { ensurePlanningProvisioningPrefix } from "./native-planning-provisioner.
 import {
   assertSupportedInitialSourceBytes,
   buildApprovedSourceManifest,
-  registerApprovedSource,
   validateApprovedSourceInput,
   type ApprovedSourceInputV1,
 } from "./native-planning-provisioner.js";
@@ -25,6 +24,8 @@ import {
 } from "./source-manifest.js";
 import {
   buildAmendmentManifest,
+  planningControlRequestDigest,
+  validateExplicitStartRequest,
   buildPlanningExportDocument,
   projectPlanningReadiness,
   resolveSelectionAnswerSequence,
@@ -80,6 +81,7 @@ import {
   STOP_NOTES_FAILED_REASON_MAX_LENGTH,
   EXCEPTIONAL_RECOVERY_PAUSE_REASON,
   rebuildSchedulerProjection,
+  reduceSchedulerEvent,
   effectiveRepairPlanLimit,
   repairCyclesExhausted,
   type StopSnapshotStopKind,
@@ -1056,14 +1058,17 @@ export class BuildRuntime {
       clock: this.clock,
       lifecycleSignal: () => this.activeLifecycleSignal(),
       providerRetryDeadlineMs: this.providerRetryDeadlineMs,
+      assertPlanningArtifact: (projection) => this.verifyCurrentPlanningArtifact(projection),
     });
   }
 
   projection(): SchedulerProjection {
     const events = this.store.readRun(this.runId);
-    return events.length === 0
-      ? emptyProjection(this.runId)
-      : rebuildSchedulerProjection(events);
+    const projection = events.length === 0 ? emptyProjection(this.runId) : rebuildSchedulerProjection(events);
+    // Live API seam only; historical reducers and persisted projections stay unchanged.
+    if (projection.runtime.architect.handoff) projection.runtime.architect.handoff.requiredSequence = events.findLast((event) => event.type === "architect.handoff_required")?.sequence;
+    if (projection.verifierSelection?.status === "required") projection.verifierSelection.requiredSequence = events.findLast((event) => event.type === "verifier.selection_required")?.sequence;
+    return projection;
   }
 
   events(afterSequence = 0) {
@@ -1190,110 +1195,31 @@ export class BuildRuntime {
     return this.projection();
   }
 
-  selectArchitectHandoff(
-    runtimeId: string,
-    idempotencyKey: string,
-    requiredSequence?: number
-  ): SchedulerProjection {
-    // FX-2 repair 1 (M2): scope the stored key to the requirement this
-    // answer belongs to. The client reuses one key per runtime
-    // (`architect-handoff:<run>:<runtime>`), so without scoping an answer to
-    // a second handoff offer dedupes into the first selection and the run
-    // stays paused. The first requirement keeps the bare caller key so
-    // pre-fix logs and in-flight runs behave as before; a replay of the same
-    // answer sees the same requirement count and still dedupes. Selections
-    // never record requirements, so the count is stable across the answer
-    // itself. The reducer never inspects the key.
-    const handoffRequirements = this.recordedArchitectHandoffRequirements();
-    const storedArchitectKey = handoffRequirements <= 1
-      ? idempotencyKey
-      : `${idempotencyKey}:req-${handoffRequirements}`;
-    // T7b (FX-2 review r2 F1): the answer names the exact pending handoff
-    // requirement. A stale named sequence is refused before any append; an
-    // omitted sequence binds the current requirement for pre-T7b drivers.
-    const pendingHandoff = this.projection().runtime.architect.handoff;
-    const boundHandoffSequence = pendingHandoff === undefined
-      ? requiredSequence
-      : resolveSelectionAnswerSequence({
-        provided: requiredSequence,
-        current: pendingHandoff.requiredSequence,
-        label: "Architect handoff selection",
-      });
-    this.store.append({
-      runId: this.runId,
-      type: "architect.handoff_selected",
-      occurredAt: this.clock(),
-      actor: { role: "user", id: "local-user" },
-      idempotencyKey: storedArchitectKey,
-      payload: {
-        runtimeId,
-        ...(boundHandoffSequence !== undefined ? { requiredSequence: boundHandoffSequence } : {}),
-      },
-    });
+  selectArchitectHandoff(runtimeId: string, idempotencyKey: string, requiredSequence?: number): SchedulerProjection {
+    return this.selectRuntimeOffer("architect.handoff_selected", runtimeId, idempotencyKey, requiredSequence);
+  }
+
+  selectVerifierRuntime(runtimeId: string, idempotencyKey: string, requiredSequence?: number): SchedulerProjection {
+    return this.selectRuntimeOffer("verifier.selection_selected", runtimeId, idempotencyKey, requiredSequence);
+  }
+
+  private selectRuntimeOffer(type: "architect.handoff_selected" | "verifier.selection_selected", runtimeId: string, key: string, named?: number): SchedulerProjection {
+    if (!Number.isSafeInteger(named) || named! < 1) throw new Error("Selection answer requiredSequence must name the displayed offer.");
+    const storedKey = `${key}:offer-${named}`;
+    const payload = { runtimeId, requiredSequence: named! };
+    const events = this.store.readRun(this.runId);
+    const prior = events.find((event) => event.idempotencyKey === storedKey);
+    if (prior) {
+      if (prior.type !== type || prior.actor.role !== "user" || prior.actor.id !== "local-user" || JSON.stringify(prior.payload) !== JSON.stringify(payload)) throw new Error(`Scheduler idempotency conflict for ${storedKey}.`);
+      // Exact answer replay cannot answer any later offer, so it appends nothing.
+      return this.projection();
+    }
+    const projection = this.projection();
+    const current = type === "architect.handoff_selected" ? projection.runtime.architect.handoff?.requiredSequence
+      : projection.verifierSelection?.status === "required" ? projection.verifierSelection.requiredSequence : undefined;
+    resolveSelectionAnswerSequence({ provided: named, current, label: type === "architect.handoff_selected" ? "Architect handoff selection" : "Verifier selection" });
+    this.store.append({ runId: this.runId, type, occurredAt: this.clock(), actor: { role: "user", id: "local-user" }, idempotencyKey: storedKey, payload });
     return this.projection();
-  }
-
-  selectVerifierRuntime(
-    runtimeId: string,
-    idempotencyKey: string,
-    requiredSequence?: number,
-  ): SchedulerProjection {
-    // FX-2 repair 1 (B1): scope the stored key to the requirement this
-    // answer belongs to. The client reuses one key per runtime
-    // (`verifier-handoff:<run>:<runtime>`), so without scoping an answer to
-    // a re-required selection dedupes into the first selection: the API
-    // reports success with the projection unchanged, the selection stays
-    // `required`, and a run with one verifier candidate stays stuck. The
-    // first requirement keeps the bare caller key so pre-fix logs and
-    // in-flight runs behave as before; a replay of the same answer sees the
-    // same requirement count and still dedupes. Selections never record
-    // requirements, so the count is stable across the answer itself. The
-    // reducer never inspects the key.
-    const verifierRequirements = this.recordedVerifierRequirements();
-    const storedVerifierKey = verifierRequirements <= 1
-      ? idempotencyKey
-      : `${idempotencyKey}:req-${verifierRequirements}`;
-    // T7b (FX-2 review r2 F1): the answer names the exact pending selection
-    // requirement. A stale named sequence is refused before any append; an
-    // omitted sequence binds the current requirement for pre-T7b drivers.
-    const pendingSelection = this.projection().verifierSelection;
-    const boundSelectionSequence = pendingSelection?.status !== "required"
-      ? requiredSequence
-      : resolveSelectionAnswerSequence({
-        provided: requiredSequence,
-        current: pendingSelection.requiredSequence,
-        label: "Verifier selection",
-      });
-    this.store.append({
-      runId: this.runId,
-      type: "verifier.selection_selected",
-      occurredAt: this.clock(),
-      actor: { role: "user", id: "local-user" },
-      idempotencyKey: storedVerifierKey,
-      payload: {
-        runtimeId,
-        ...(boundSelectionSequence !== undefined ? { requiredSequence: boundSelectionSequence } : {}),
-      },
-    });
-    return this.projection();
-  }
-
-  /**
-   * FX-2 repair 1 (B1/M2): the occurrence an owner answer belongs to -- the
-   * number of recorded requirements. Durable log state, so a replay of the
-   * same answer computes the same count and still dedupes, a new requirement
-   * increments it, and a restart records nothing new.
-   */
-  private recordedVerifierRequirements(): number {
-    return this.store.readRun(this.runId).filter(
-      (event) => event.type === "verifier.selection_required",
-    ).length;
-  }
-
-  private recordedArchitectHandoffRequirements(): number {
-    return this.store.readRun(this.runId).filter(
-      (event) => event.type === "architect.handoff_required",
-    ).length;
   }
 
   extendRepairCycles(additionalRepairPlans: number, idempotencyKey: string): SchedulerProjection {
@@ -1397,201 +1323,127 @@ export class BuildRuntime {
    * saved spec is never rewritten here. Exact repeats reuse the recorded
    * registration; any conflicting reuse fails closed before effects.
    */
-  async registerPlanningSource(input: {
-    approvedSource: ApprovedSourceInputV1;
-    idempotencyKey: string;
-  }): Promise<SchedulerProjection> {
-    const projection = this.projection();
-    try {
-      if (projection.planningPolicyVersion !== 1) {
-        throw new Error("an explicit planningPolicy version 1 opt-in is required");
-      }
-      if (
-        projection.planningTriageDecision !== undefined &&
-        projection.planningTriageDecision !== "build"
-      ) {
-        throw new Error(
-          `a triage decision of build is required; the current triage decision is ${projection.planningTriageDecision}`,
-        );
-      }
-      if (this.specCreatedAt === undefined) {
-        throw new Error("the saved spec creation clock is unavailable");
-      }
-      if (!this.artifacts) {
-        throw new Error("an artifact store is unavailable");
-      }
+  async registerPlanningSource(input: { approvedSource: ApprovedSourceInputV1; idempotencyKey: string }): Promise<SchedulerProjection> {
+    return this.withPlanningControl(async () => {
+      const projection = this.projection();
+      if (projection.planningPolicyVersion !== 1) throw new Error("Planning source refused: an explicit planningPolicy version 1 opt-in is required.");
       const validated = validateApprovedSourceInput(input.approvedSource);
-      const manifest = buildApprovedSourceManifest({
-        runId: this.runId,
-        validated,
-        artifactDigest: computeArtifactDigest(validated.bytes),
-        approvedBy: "local-user",
-        createdAt: this.specCreatedAt,
-      });
-      assertSupportedInitialSourceBytes(validated.bytes, manifest);
-      await this.artifacts.put(validated.bytes, validated.mediaType, `approved-source:${this.runId}`);
-      registerApprovedSource(this.store, this.runId, manifest, "local-user");
-    } catch (error) {
-      throw new Error(
-        `Planning source refused: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    return this.projection();
-  }
-
-  /**
-   * T7b: bounded owner amendment of the approved source. The bytes proposal
-   * reuses the initial-source validation; the predecessor must be the exact
-   * current manifest (identity and digest), and the impact chain, approval,
-   * and authority are kernel-checked before the content-addressed bytes and
-   * the authoritative user event land. Amendments never rewrite the saved
-   * initial source. An exact idempotent repeat is harmless; any differing
-   * reuse of the key conflicts before effects.
-   */
-  async amendPlanningSource(
-    request: ValidatedSourceAmendmentRequest,
-  ): Promise<SchedulerProjection> {
-    const projection = this.projection();
-    try {
-      if (projection.planningPolicyVersion !== 1) {
-        throw new Error("an explicit planningPolicy version 1 opt-in is required");
-      }
-      const currentManifestId = projection.planning?.source.currentManifestId;
-      if (currentManifestId === undefined) {
-        throw new Error("no approved source is registered to amend");
-      }
-      const prior = projection.planning!.source.manifestsById[currentManifestId]!;
-      if (
-        request.predecessorManifestId !== prior.manifestId ||
-        request.predecessorArtifactDigest !== prior.artifactDigest
-      ) {
-        throw new Error(
-          `the amendment names predecessor ${request.predecessorManifestId}, ` +
-          `but the current source manifest is ${prior.manifestId} (stale or drifted predecessors are refused, never rebound)`,
-        );
-      }
-      const recorded = this.store.readRun(this.runId).find(
-        (event) =>
-          event.type === "planning.source_amended" &&
-          event.idempotencyKey === request.idempotencyKey,
-      );
-      if (recorded) {
-        const recordedManifest = (recorded.payload as { manifest?: unknown }).manifest as
-          | ApprovedSourceManifest
-          | undefined;
-        const same =
-          recorded.actor.role === "user" &&
-          recorded.actor.id === "local-user" &&
-          recordedManifest?.amendment?.id === request.amendmentId &&
-          recordedManifest?.amendment?.priorManifestId === request.predecessorManifestId &&
-          recordedManifest?.amendment?.priorArtifactDigest === request.predecessorArtifactDigest &&
-          recordedManifest?.artifactDigest === computeArtifactDigest(request.validated.bytes) &&
-          recordedManifest?.authority === "user:local-user" &&
-          JSON.stringify(recordedManifest?.amendment?.recordedImpact) ===
-            JSON.stringify(request.impact);
-        if (!same) {
-          throw new Error(
-            `idempotency key ${request.idempotencyKey} already records a different amendment`,
-          );
-        }
+      const requestDigest = planningControlRequestDigest(input.approvedSource);
+      const events = this.store.readRun(this.runId);
+      const existing = events.find((event) => event.idempotencyKey === input.idempotencyKey);
+      if (existing) {
+        if (existing.type !== "planning.source_registered" || existing.actor.role !== "user" || existing.actor.id !== "local-user" || existing.payload.controlRequestDigest !== requestDigest) throw new Error(`Scheduler idempotency conflict for ${input.idempotencyKey}.`);
+        this.resumePlanningControlPause("planning_source_missing", input.idempotencyKey);
         return this.projection();
       }
-      if (!this.artifacts) {
-        throw new Error("an artifact store is unavailable");
-      }
-      const manifest = buildAmendmentManifest({
-        runId: this.runId,
-        validated: request.validated,
-        prior,
-        amendmentId: request.amendmentId,
-        approvedBy: "local-user",
-        rationale: request.rationale,
-        impact: request.impact,
-        createdAt: this.clock(),
-      });
-      verifyAmendmentReferencesPredecessor(manifest, prior);
-      await this.artifacts.put(
-        request.validated.bytes,
-        request.validated.mediaType,
-        `approved-source:${this.runId}`,
-      );
-      this.store.append({
-        runId: this.runId,
-        type: "planning.source_amended",
-        occurredAt: this.clock(),
-        actor: { role: "user", id: "local-user" },
-        idempotencyKey: request.idempotencyKey,
-        payload: { manifest: JSON.parse(JSON.stringify(manifest)) as Record<string, unknown> },
-      });
-    } catch (error) {
-      throw new Error(
-        `Source amendment refused: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    return this.projection();
+      if (projection.planning) throw new Error("Planning source refused: an initial source is already registered; use an amendment.");
+      if (projection.planningTriageDecision !== undefined && projection.planningTriageDecision !== "build") throw new Error("Planning source refused: this triage path does not require a specification.");
+      if (!this.specCreatedAt || !this.artifacts) throw new Error("Planning source refused: saved creation authority or artifacts unavailable.");
+      const manifest = buildApprovedSourceManifest({ runId: this.runId, validated, artifactDigest: computeArtifactDigest(validated.bytes), approvedBy: "local-user", createdAt: this.specCreatedAt });
+      assertSupportedInitialSourceBytes(validated.bytes, manifest);
+      const proposal = { runId: this.runId, type: "planning.source_registered" as const, occurredAt: this.specCreatedAt,
+        actor: { role: "user" as const, id: "local-user" }, idempotencyKey: input.idempotencyKey,
+        payload: { manifest: JSON.parse(JSON.stringify(manifest)) as Record<string, unknown>, controlRequestDigest: requestDigest } };
+      this.preflightPlanningControl(proposal);
+      await this.artifacts.put(validated.bytes, validated.mediaType, `approved-source:${this.runId}`);
+      this.preflightPlanningControl(proposal);
+      this.store.append(proposal);
+      this.resumePlanningControlPause("planning_source_missing", input.idempotencyKey);
+      return this.projection();
+    });
   }
 
-  /**
-   * T7b: semantic current-plan execution authorization, separate from the
-   * supervisor process start and pump activation. The named identities must
-   * equal the CURRENT ready identity exactly; reconnects, duplicates, stale
-   * readiness, and post-amendment starts are refused unchanged before any
-   * worker or runtime effect. Only the owner (user role, control token)
-   * authorizes; worker and model roles are refused by the kernel.
-   */
-  authorizeExplicitPlanStart(request: ExplicitStartRequestV1): SchedulerProjection {
-    const projection = this.projection();
-    try {
-      if (projection.planningPolicyVersion !== 1) {
-        throw new Error("an explicit planningPolicy version 1 opt-in is required");
+  async amendPlanningSource(request: ValidatedSourceAmendmentRequest): Promise<SchedulerProjection> {
+    return this.withPlanningControl(async () => {
+      const projection = this.projection();
+      if (projection.planningPolicyVersion !== 1 || !projection.planning) throw new Error("Source amendment refused: an opted-in registered source is required.");
+      const planning = projection.planning;
+      const prior = planning.source.manifestsById[request.predecessorManifestId];
+      if (!prior || request.predecessorArtifactDigest !== prior.artifactDigest) throw new Error("Source amendment refused: unknown or drifted predecessor.");
+      const makeManifest = (createdAt: string) => buildAmendmentManifest({ runId: this.runId, validated: request.validated, prior, amendmentId: request.amendmentId,
+        approvedBy: "local-user", rationale: request.rationale, impact: request.impact, createdAt });
+      const existing = this.store.readRun(this.runId).find((event) => event.idempotencyKey === request.idempotencyKey);
+      if (existing) {
+        const recorded = existing.payload.manifest as ApprovedSourceManifest | undefined;
+        if (existing.type !== "planning.source_amended" || existing.actor.role !== "user" || existing.actor.id !== "local-user" || !recorded ||
+            JSON.stringify(recorded) !== JSON.stringify(makeManifest(recorded.createdAt))) throw new Error(`Scheduler idempotency conflict for ${request.idempotencyKey}.`);
+        return projection;
       }
-      if (projection.planningTriageDecision !== "build") {
-        throw new Error(
-          `a durable triage decision of build is required; the current triage decision is ${projection.planningTriageDecision ?? "none"}`,
-        );
-      }
-      if (projection.runPolicy === "plan_only") {
-        throw new Error("plan-only runs never execute workers and need no start authorization");
-      }
-      if (isAnsweredRun(projection)) {
-        throw new Error("answered runs admit no workers and need no start authorization");
-      }
+      if (planning.source.currentManifestId !== prior.manifestId) throw new Error("Source amendment refused: predecessor is stale; it will not be rebound.");
+      if (Object.values(planning.source.manifestsById).some((manifest) => manifest.amendment?.id === request.amendmentId)) throw new Error("Source amendment refused: amendmentId already belongs to the durable chain.");
+      const priorSections = new Set(prior.sections.map((section) => section.id));
+      const nextSections = new Set(request.validated.sections.map((section) => section.id));
+      const revision = planning.plan?.revisionsById[planning.plan.currentRevisionId];
+      const requirements = new Set((revision?.requirements ?? planning.ledger?.requirements ?? []).map((item) => item.id));
+      for (const id of request.impact.addsSectionIds) if (priorSections.has(id) || !nextSections.has(id) || request.impact.retiresSectionIds.includes(id)) throw new Error("Source amendment refused: section addition impact is inconsistent.");
+      for (const id of request.impact.retiresSectionIds) if (!priorSections.has(id) || nextSections.has(id)) throw new Error("Source amendment refused: section retirement impact is inconsistent.");
+      for (const id of request.impact.addsRequirementIds) if (requirements.has(id) || request.impact.retiresRequirementIds.includes(id)) throw new Error("Source amendment refused: requirement addition impact is inconsistent.");
+      for (const id of request.impact.retiresRequirementIds) if (!requirements.has(id)) throw new Error("Source amendment refused: requirement retirement is unknown.");
+      if (!this.artifacts) throw new Error("Source amendment refused: artifact store unavailable.");
+      // Preflight with a stable clock before any new clock or artifact effect.
+      const candidate = makeManifest(prior.createdAt);
+      verifyAmendmentReferencesPredecessor(candidate, prior);
+      const proposal = { runId: this.runId, type: "planning.source_amended" as const, occurredAt: prior.createdAt,
+        actor: { role: "user" as const, id: "local-user" }, idempotencyKey: request.idempotencyKey,
+        payload: { manifest: JSON.parse(JSON.stringify(candidate)) as Record<string, unknown> } };
+      this.preflightPlanningControl(proposal);
+      const createdAt = this.clock();
+      proposal.occurredAt = createdAt;
+      proposal.payload.manifest = JSON.parse(JSON.stringify(makeManifest(createdAt))) as Record<string, unknown>;
+      await this.artifacts.put(request.validated.bytes, request.validated.mediaType, `approved-source:${this.runId}`);
+      this.preflightPlanningControl(proposal);
+      this.store.append(proposal);
+      return this.projection();
+    });
+  }
+
+  async authorizeExplicitPlanStart(input: ExplicitStartRequestV1): Promise<SchedulerProjection> {
+    return this.withPlanningControl(async () => {
+      const request = validateExplicitStartRequest(input);
+      const projection = this.projection();
+      if (projection.planningPolicyVersion !== 1 || projection.planningTriageDecision !== "build" || projection.runPolicy === "plan_only" || isAnsweredRun(projection)) throw new Error("Plan start refused: an executable opted-in build is required.");
       const identity = currentExplicitStartIdentity(projection);
-      if (!identity) {
-        throw new Error("no ready current plan is recorded");
+      if (!identity || !explicitStartAuthorizationCovers(identity, request)) throw new Error("Plan start refused: stale or drifted current plan, source, or policy identity.");
+      this.verifyCurrentPlanningArtifact(projection);
+      const { idempotencyKey, ...authorization } = request;
+      const proposal = { runId: this.runId, type: "planning.execution_authorized" as const, occurredAt: "", actor: { role: "user" as const, id: "local-user" }, idempotencyKey,
+        payload: { authorization: { ...authorization } } };
+      const existing = this.store.readRun(this.runId).find((event) => event.idempotencyKey === idempotencyKey);
+      if (existing) {
+        if (existing.type !== proposal.type || JSON.stringify(existing.actor) !== JSON.stringify(proposal.actor) || JSON.stringify(existing.payload) !== JSON.stringify(proposal.payload)) throw new Error(`Scheduler idempotency conflict for ${idempotencyKey}.`);
+        this.resumePlanningControlPause("plan_start_required", idempotencyKey);
+        return this.projection();
       }
-      if (!explicitStartAuthorizationCovers(identity, request)) {
-        throw new Error(
-          `the request binds plan revision ${request.planRevisionId} and source manifest ${request.sourceManifestId}, ` +
-          `but the current ready plan is revision ${identity.planRevisionId} with source manifest ` +
-          `${identity.sourceManifestId} (stale or drifted identities are refused, never rebound)`,
-        );
-      }
-      this.store.append({
-        runId: this.runId,
-        type: "planning.execution_authorized",
-        occurredAt: this.clock(),
-        actor: { role: "user", id: "local-user" },
-        idempotencyKey: request.idempotencyKey,
-        payload: {
-          authorization: {
-            version: 1,
-            planRevisionId: request.planRevisionId,
-            planDigest: request.planDigest,
-            sourceManifestId: request.sourceManifestId,
-            sourceArtifactDigest: request.sourceArtifactDigest,
-            planningPolicyVersion: 1,
-            projectDocsPolicyVersion: request.projectDocsPolicyVersion,
-            ownerChoice: request.ownerChoice,
-          },
-        },
-      });
-    } catch (error) {
-      throw new Error(
-        `Plan start refused: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    return this.projection();
+      this.preflightPlanningControl(proposal);
+      proposal.occurredAt = this.clock();
+      this.store.append(proposal);
+      this.resumePlanningControlPause("plan_start_required", idempotencyKey);
+      return this.projection();
+    });
+  }
+
+  private preflightPlanningControl(proposal: import("./scheduler-store.js").NewSchedulerEvent): void {
+    reduceSchedulerEvent(this.projection(), { ...proposal, eventId: "planning-control-preflight", sequence: this.projection().lastSequence + 1 });
+  }
+
+  private resumePlanningControlPause(reason: string, key: string): void {
+    if (this.projection().status === "paused" && this.projection().pauseReason?.reason === reason) this.resume(`${key}:planning-control-resume`);
+  }
+
+  private verifyCurrentPlanningArtifact(projection: SchedulerProjection): void {
+    if (projection.planningPolicyVersion !== 1 || !projection.planning) return;
+    if (!this.artifacts) throw new Error("Plan start refused: current source artifact authority unavailable.");
+    const manifest = projection.planning.source.manifestsById[projection.planning.source.currentManifestId];
+    const record = this.artifacts.verifySync(manifest.artifactDigest);
+    if (record.byteLength !== manifest.byteLength) throw new Error("Plan start refused: source byte length drift.");
+  }
+
+  private async withPlanningControl<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.stepQueue;
+    let release!: () => void;
+    this.stepQueue = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return await operation(); } finally { release(); }
   }
 
   /**
@@ -1635,7 +1487,7 @@ export class BuildRuntime {
     return (
       identity !== undefined &&
       authorization !== undefined &&
-      explicitStartAuthorizationCovers(identity, authorization)
+      explicitStartAuthorizationCovers(identity, authorization) && authorization.ownerChoice === "execute" && authorization.authorizedBy === "user:local-user"
     );
   }
 

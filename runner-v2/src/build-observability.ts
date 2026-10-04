@@ -1,3 +1,4 @@
+import { explicitStartBlocked } from "./scheduler-store.js";
 import { readFile, realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 
@@ -346,17 +347,8 @@ export function projectPlanningObservability(
   if (projection.planningPolicyVersion !== 1) return undefined;
   const planning = projection.planning;
   const ready = planning?.readiness === "ready" && planning.plan !== undefined;
-  const authorization = planning?.executionAuthorization;
-  const executable =
-    projection.runPolicy !== "plan_only" &&
-    projection.planningTriageDecision !== "answer";
-  const startAuthorized = ready &&
-    executable &&
-    authorization !== undefined &&
-    authorization.planRevisionId === planning.plan!.currentRevisionId &&
-    authorization.planDigest === planning.plan!.currentDigest &&
-    authorization.sourceManifestId === planning.source.currentManifestId &&
-    authorization.sourceArtifactDigest === planning.source.artifactDigest;
+  const executable = projection.runPolicy !== "plan_only" && projection.planningTriageDecision === "build";
+  const startAuthorized = ready && executable && explicitStartBlocked(projection) === undefined;
   return {
     optedIn: true,
     readiness: ready ? "ready" : "not_ready",

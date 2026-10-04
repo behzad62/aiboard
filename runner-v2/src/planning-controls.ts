@@ -1,3 +1,5 @@
+import type { ExplicitStartIdentityV1, ExplicitStartAuthorizationV1, ExplicitStartRequestV1, SourceAmendmentImpactV1, PlanningReadinessSnapshot, PlanningExportDocument } from "./planning-control-contracts.js";
+export type { ExplicitStartIdentityV1, ExplicitStartAuthorizationV1, ExplicitStartRequestV1, SourceAmendmentImpactV1, PlanningReadinessSnapshot, PlanningExportDocument, PlanningReadinessStatus } from "./planning-control-contracts.js";
 import { createHash } from "node:crypto";
 
 import {
@@ -15,7 +17,9 @@ import {
   handoffSnapshotInputFromProjection,
   renderHandoffSnapshot,
   verifyHandoffSnapshotDigest,
+  neutralizeSnapshotText,
 } from "./handoff-snapshot.js";
+import { redactSensitiveText } from "./sensitive-redaction.js";
 import type { SchedulerProjection } from "./scheduler-store.js";
 
 /**
@@ -30,6 +34,13 @@ import type { SchedulerProjection } from "./scheduler-store.js";
  * request bodies carry no timestamps, so an exact retry reproduces the
  * identical payload and dedupes harmlessly.
  */
+
+/** Stable request identity preserves optional-field presence but ignores JSON key order. */
+export function planningControlRequestDigest(input: unknown): string {
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) : isRecord(value)
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonical(value[key])])) : value;
+  return createHash("sha256").update(JSON.stringify(canonical(input)), "utf8").digest("hex");
+}
 
 export const T7B_EXPLICIT_START_AUTHORIZATION_VERSION = 1;
 export const T7B_PLANNING_CONTROLS_VERSION = 1;
@@ -56,6 +67,11 @@ function boundedString(
   return value;
 }
 
+function executionConsent(value: unknown): "execute" {
+  if (value !== "execute") fail("Plan start refused: ownerChoice must be the explicit execute choice.");
+  return "execute";
+}
+
 function digestString(value: unknown, label: string): string {
   if (typeof value !== "string" || !DIGEST_PATTERN.test(value)) {
     fail(`${label} must be a 64-character lowercase hex digest.`);
@@ -75,25 +91,12 @@ function sequenceNumber(value: unknown, label: string): number {
 // ---------------------------------------------------------------------------
 
 /** Canonical current-plan authorization identity (T7b explicit start). */
-export interface ExplicitStartIdentityV1 {
-  readonly planRevisionId: string;
-  readonly planDigest: string;
-  readonly sourceManifestId: string;
-  readonly sourceArtifactDigest: string;
-  readonly planningPolicyVersion: 1;
-  readonly projectDocsPolicyVersion: number;
-}
+
 
 /** Durable owner authorization record bound to one exact identity. */
-export interface ExplicitStartAuthorizationV1 extends ExplicitStartIdentityV1 {
-  readonly version: typeof T7B_EXPLICIT_START_AUTHORIZATION_VERSION;
-  /** The owner's explicit choice (wording owned by T7c; bound exactly). */
-  readonly ownerChoice: string;
-}
 
-export interface ExplicitStartRequestV1 extends ExplicitStartAuthorizationV1 {
-  readonly idempotencyKey: string;
-}
+
+
 
 const EXPLICIT_START_BODY_KEYS = [
   "version",
@@ -135,7 +138,7 @@ export function validateExplicitStartRequest(
     sourceArtifactDigest: digestString(input.sourceArtifactDigest, "sourceArtifactDigest"),
     planningPolicyVersion: 1,
     projectDocsPolicyVersion: projectDocsPolicyVersion as number,
-    ownerChoice: boundedString(input.ownerChoice, "ownerChoice", 200).trim(),
+    ownerChoice: executionConsent(input.ownerChoice),
     idempotencyKey: boundedString(input.idempotencyKey, "idempotencyKey", 200),
   };
 }
@@ -179,7 +182,7 @@ export function assertExecutionAuthorizationPayload(
     sourceArtifactDigest: digestString(authorization.sourceArtifactDigest, "sourceArtifactDigest"),
     planningPolicyVersion: 1,
     projectDocsPolicyVersion: projectDocsPolicyVersion as number,
-    ownerChoice: boundedString(authorization.ownerChoice, "ownerChoice", 200).trim(),
+    ownerChoice: executionConsent(authorization.ownerChoice),
   };
 }
 
@@ -229,45 +232,23 @@ export function validateSelectionAnswer(input: unknown): SelectionAnswerV1 {
   };
 }
 
-/**
- * Binds an answer to the exact pending requirement. A named sequence that is
- * not the current requirement is refused (stale answers never rebind to a
- * newer offer). An omitted sequence binds to the current requirement for
- * pre-T7b direct drivers only; the versioned API always requires the field.
- */
+/** Newly invoked controls always name the offer the owner actually saw. */
 export function resolveSelectionAnswerSequence(input: {
   readonly provided: number | undefined;
   readonly current: number | undefined;
   readonly label: string;
 }): number {
-  if (input.provided !== undefined) {
-    if (!Number.isSafeInteger(input.provided) || input.provided < 1) {
-      fail(`${input.label} requiredSequence must be a positive integer event sequence.`);
-    }
-    if (input.current !== undefined && input.provided !== input.current) {
-      fail(
-        `${input.label} answer refused: requiredSequence ${input.provided} is stale; ` +
-        `the current requirement is sequence ${input.current}.`,
-      );
-    }
-    return input.provided;
-  }
-  if (input.current === undefined) {
-    fail(`${input.label} answer refused: no pending requirement is recorded.`);
-  }
-  return input.current;
+  const named = sequenceNumber(input.provided, `${input.label} requiredSequence`);
+  if (input.current === undefined) fail(`${input.label} answer refused: no pending requirement is recorded.`);
+  if (named !== input.current) fail(`${input.label} answer refused: requiredSequence ${named} is stale; the current requirement is sequence ${input.current}.`);
+  return named;
 }
 
 // ---------------------------------------------------------------------------
 // Source amendments.
 // ---------------------------------------------------------------------------
 
-export interface SourceAmendmentImpactV1 {
-  readonly addsSectionIds: readonly string[];
-  readonly retiresSectionIds: readonly string[];
-  readonly addsRequirementIds: readonly string[];
-  readonly retiresRequirementIds: readonly string[];
-}
+
 
 export interface ValidatedSourceAmendmentRequest {
   readonly validated: ValidatedApprovedSource;
@@ -483,34 +464,9 @@ export function sameAmendmentCore(
 // Plan readiness (read-only projection; omissions visible, never hidden).
 // ---------------------------------------------------------------------------
 
-export type PlanningReadinessStatus =
-  | "not_opted_in"
-  | "source_missing"
-  | "not_ready"
-  | "ready_start_required"
-  | "ready_authorized"
-  | "ready";
 
-export interface PlanningReadinessSnapshot {
-  readonly version: typeof T7B_PLANNING_CONTROLS_VERSION;
-  readonly runId: string;
-  readonly status: PlanningReadinessStatus;
-  readonly planningPolicyVersion?: 1;
-  readonly projectDocsPolicyVersion?: number;
-  readonly triageDecision?: string;
-  readonly runPolicy?: string;
-  readonly planRevisionId?: string;
-  readonly planDigest?: string;
-  readonly sourceManifestId?: string;
-  readonly sourceArtifactDigest?: string;
-  readonly sourceSectionIds?: readonly string[];
-  /** Sections at the current manifest no durable read covers. */
-  readonly unreadSectionIds?: readonly string[];
-  readonly explicitStartRequired: boolean;
-  readonly explicitStartAuthorized: boolean;
-  /** Owner-actionable blockers; source omissions appear here, never hidden. */
-  readonly blockers: readonly string[];
-}
+
+
 
 interface ReadinessProjectionInput {
   readonly planningPolicyVersion?: 1;
@@ -571,6 +527,16 @@ export function projectPlanningReadiness(input: {
       : {}),
     ...(projection.runPolicy !== undefined ? { runPolicy: projection.runPolicy } : {}),
   };
+  if (projection.planningTriageDecision !== "build") {
+    const decision = projection.planningTriageDecision;
+    return {
+      ...base,
+      status: decision === "answer" ? "planning_not_applicable" : decision === "clarify" ? "clarification_required" : "triage_pending",
+      explicitStartRequired: false,
+      explicitStartAuthorized: false,
+      blockers: decision === "answer" ? [] : [decision === "clarify" ? "Answer the Architect's current clarification question." : "The Architect has not recorded request triage yet."],
+    };
+  }
   const planning = projection.planning;
   if (planning?.source.currentManifestId === undefined) {
     return {
@@ -601,7 +567,7 @@ export function projectPlanningReadiness(input: {
   for (const sectionId of unreadSectionIds) {
     blockers.push(`Source section ${sectionId} has no durable read at the current manifest revision.`);
   }
-  const executable = projection.runPolicy !== "plan_only" && projection.planningTriageDecision !== "answer";
+  const executable = projection.runPolicy !== "plan_only";
   // An explicit start gates worker dispatch only; readiness itself is the
   // blocker until the plan is ready, and non-executable policies
   // (plan-only, answered) never take a start.
@@ -660,97 +626,65 @@ export function projectPlanningReadiness(input: {
 // On-demand planning export (read-only; C1-bounded, redacted).
 // ---------------------------------------------------------------------------
 
-const EXPORT_LIST_CAP = 200;
+export const PLANNING_EXPORT_MAX_BYTES = 128 * 1024;
+const EXPORT_LIST_CAP = 30;
+const EXPORT_TEXT_CAP = 180;
 
-function capped<T>(items: readonly T[]): { items: readonly T[]; omittedCount: number } {
-  if (items.length <= EXPORT_LIST_CAP) return { items, omittedCount: 0 };
-  return { items: items.slice(0, EXPORT_LIST_CAP), omittedCount: items.length - EXPORT_LIST_CAP };
+function safeExportText(value: string): string {
+  const redacted = redactSensitiveText(value);
+  const rendered = neutralizeSnapshotText(redacted, EXPORT_TEXT_CAP).replace(/\s+/g, " ");
+  return redacted.length > EXPORT_TEXT_CAP ? `${rendered} [truncated]` : rendered;
 }
 
-export interface PlanningExportDocument {
-  readonly version: typeof T7B_PLANNING_CONTROLS_VERSION;
-  readonly runId: string;
-  readonly exportedAt: string;
-  readonly readiness: PlanningReadinessSnapshot;
-  /** C1-rendered bounded snapshot (200 lines / 16 KiB field caps, neutralized text). */
-  readonly snapshot: { readonly text: string; readonly digestValid: boolean; readonly byteLength: number };
-  readonly sourceManifests: ReadonlyArray<{
-    readonly manifestId: string;
-    readonly sourceId: string;
-    readonly artifactDigest: string;
-    readonly byteLength: number;
-    readonly mediaType: string;
-    readonly encoding: string;
-    readonly authority: string;
-    readonly createdAt: string;
-    readonly amendmentId?: string;
-    readonly sections: ReadonlyArray<{ readonly id: string; readonly startByte: number; readonly endByte: number; readonly digest: string }>;
-  }>;
-  readonly requirements: { readonly items: ReadonlyArray<{ readonly id: string; readonly purpose: string }>; readonly omittedCount: number };
-  readonly phases: { readonly items: ReadonlyArray<{ readonly id: string; readonly purpose: string }>; readonly omittedCount: number };
-  readonly tasks: { readonly items: ReadonlyArray<{ readonly id: string; readonly status: string }>; readonly omittedCount: number };
+function capped<T>(items: readonly T[], limit = EXPORT_LIST_CAP): { items: readonly T[]; omittedCount: number } {
+  return { items: items.slice(0, limit), omittedCount: Math.max(0, items.length - limit) };
 }
 
-/**
- * On-demand planning export through the existing C1 renderer. References
- * evidence by identity only: no transcripts, credentials, or environment
- * travel in this document, and no project file is written.
- */
+
+
+/** Read-only C1 export: bounded display metadata, never raw model/source sidecars. */
 export function buildPlanningExportDocument(input: {
   readonly runId: string;
   readonly projection: SchedulerProjection;
   readonly readiness: PlanningReadinessSnapshot;
   readonly exportedAt: string;
 }): PlanningExportDocument {
-  const projection = input.projection;
+  const { projection, readiness } = input;
   const planning = projection.planning;
-  const snapshotText = renderHandoffSnapshot(handoffSnapshotInputFromProjection(projection));
-  const manifests = planning === undefined
-    ? []
-    : planning.source.manifestHistoryIds.map((manifestId) => planning.source.manifestsById[manifestId]!);
-  const requirements = capped(
-    (planning?.ledger?.requirements ?? []).map((requirement) => ({
-      id: requirement.id,
-      purpose: requirement.purpose,
-    })),
-  );
-  const phases = capped(
-    (planning?.ledger?.phases ?? []).map((phase) => ({ id: phase.id, purpose: phase.purpose })),
-  );
-  const tasks = capped(
-    Object.entries(projection.tasks).map(([id, task]) => ({ id, status: task.status })),
-  );
-  return {
-    version: T7B_PLANNING_CONTROLS_VERSION,
-    runId: input.runId,
-    exportedAt: input.exportedAt,
-    readiness: input.readiness,
-    snapshot: {
-      text: snapshotText,
-      digestValid: verifyHandoffSnapshotDigest(snapshotText),
-      byteLength: Buffer.byteLength(snapshotText, "utf8"),
-    },
-    sourceManifests: manifests.map((manifest) => ({
-      manifestId: manifest.manifestId,
-      sourceId: manifest.sourceId,
-      artifactDigest: manifest.artifactDigest,
-      byteLength: manifest.byteLength,
-      mediaType: manifest.mediaType,
-      encoding: manifest.encoding,
-      authority: manifest.authority,
-      createdAt: manifest.createdAt,
-      ...(manifest.amendment !== undefined ? { amendmentId: manifest.amendment.id } : {}),
-      sections: manifest.sections.map((section) => ({
-        id: section.id,
-        startByte: section.startByte,
-        endByte: section.endByte,
-        digest: section.digest,
-      })),
-    })),
-    requirements,
-    phases,
-    tasks,
+  const canonical = handoffSnapshotInputFromProjection(projection);
+  // Redact textual leaf values before C1 renders and stamps its digest.
+  const redactLeaves = (value: unknown): unknown => {
+    if (typeof value === "string") return redactSensitiveText(value);
+    if (Array.isArray(value)) return value.map(redactLeaves);
+    if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, leaf]) => [key, redactLeaves(leaf)]));
+    return value;
   };
+  const snapshotText = renderHandoffSnapshot(redactLeaves(canonical) as typeof canonical);
+  const revision = planning?.plan?.revisionsById[planning.plan.currentRevisionId];
+  const sourceHistory = planning?.source.manifestHistoryIds ?? [];
+  // Current first so a long amendment chain never hides the current source.
+  const ordered = [...sourceHistory].reverse();
+  const manifests = capped(ordered).items.map((id) => {
+    const manifest = planning!.source.manifestsById[id]!;
+    const sections = capped(manifest.sections);
+    return { manifestId: safeExportText(id), artifactDigest: manifest.artifactDigest, current: id === planning!.source.currentManifestId,
+      sections: { items: sections.items.map((section) => ({ id: safeExportText(section.id), digest: section.digest })), omittedCount: sections.omittedCount } };
+  });
+  const { sourceSectionIds, unreadSectionIds, blockers, ...identity } = readiness;
+  const displayIdentity = Object.fromEntries(Object.entries(identity).map(([key, value]) => [key, typeof value === "string" ? safeExportText(value) : value])) as typeof identity;
+  const result: PlanningExportDocument = {
+    version: T7B_PLANNING_CONTROLS_VERSION,
+    runId: safeExportText(input.runId), exportedAt: safeExportText(input.exportedAt),
+    readiness: { ...displayIdentity, sourceSectionIds: capped((sourceSectionIds ?? []).map(safeExportText)), unreadSectionIds: capped((unreadSectionIds ?? []).map(safeExportText)),
+      blockers: capped(blockers.map(safeExportText)), blocked: blockers.length > 0 },
+    snapshot: { text: snapshotText, digestValid: verifyHandoffSnapshotDigest(snapshotText), byteLength: Buffer.byteLength(snapshotText, "utf8") },
+    sourceManifests: { items: manifests, omittedCount: Math.max(0, ordered.length - manifests.length) },
+    requirements: { ...capped(canonical.requirements ?? []), items: capped(canonical.requirements ?? []).items.map((entry) => ({ id: safeExportText(entry.id), status: entry.status })) },
+    phases: { ...capped(revision?.phases ?? planning?.ledger?.phases ?? []), items: capped(revision?.phases ?? planning?.ledger?.phases ?? []).items.map((entry) => ({ id: safeExportText(entry.id) })) },
+    tasks: { ...capped(Object.values(projection.tasks)), items: capped(Object.values(projection.tasks)).items.map((entry) => ({ id: safeExportText(entry.id), status: safeExportText(entry.status) })) },
+  };
+  if (Buffer.byteLength(JSON.stringify(result), "utf8") > PLANNING_EXPORT_MAX_BYTES) throw new Error("Planning export exceeds the bounded document limit.");
+  return result;
 }
 
 export type { ApprovedSourceInputV1 };

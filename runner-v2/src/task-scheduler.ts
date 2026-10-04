@@ -5,6 +5,7 @@ import type {
 } from "./scheduler-store.js";
 import {
   newPolicyTaskAdmissionBlocked,
+  explicitStartBlocked,
   planCritiquePending,
   readyPlanIdentity,
   rebuildSchedulerProjection,
@@ -68,6 +69,7 @@ export interface WorkerRuntimeDriver {
 
 export interface TaskSchedulerOptions {
   runId: string;
+  assertPlanningArtifact?: (projection: SchedulerProjection) => void;
   store: SchedulerStore;
   driver: WorkerRuntimeDriver;
   maxConcurrency: number;
@@ -96,6 +98,7 @@ export interface WorkspaceAllocation {
 }
 
 export class TaskScheduler {
+  private readonly assertPlanningArtifact?: TaskSchedulerOptions["assertPlanningArtifact"];
   private readonly runId: string;
   private readonly store: SchedulerStore;
   private readonly driver: WorkerRuntimeDriver;
@@ -109,10 +112,17 @@ export class TaskScheduler {
   private readonly active = new Map<string, Promise<void>>();
   private tickQueue = Promise.resolve();
 
+  private assertCurrentPlanningArtifact(projection: SchedulerProjection): void {
+    if (projection.planningPolicyVersion !== 1) return;
+    if (!this.assertPlanningArtifact) throw new Error("Current planning source artifact authority unavailable before worker allocation.");
+    this.assertPlanningArtifact(projection);
+  }
+
   constructor(options: TaskSchedulerOptions) {
     if (!Number.isSafeInteger(options.maxConcurrency) || options.maxConcurrency < 1) {
       throw new Error("maxConcurrency must be a positive integer.");
     }
+    this.assertPlanningArtifact = options.assertPlanningArtifact;
     this.runId = options.runId;
     this.store = options.store;
     this.driver = options.driver;
@@ -179,7 +189,8 @@ export class TaskScheduler {
         ) {
           // T3a repair (B1c): only tasks bound to the current ready plan may
           // be dispatched; anything else is skipped without spending work.
-          if (newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
+          if (explicitStartBlocked(projection) || newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
+          this.assertCurrentPlanningArtifact(projection);
           // T4: restart reconciliation with authenticated ownership. A
           // live claim owned by another writer, or an unknown running
           // writer with no durable claim, blocks reassignment — competing
@@ -208,7 +219,8 @@ export class TaskScheduler {
           // global loss stops the tick; a per-task loss skips just this
           // task. Either way the task is skipped cleanly, never thrown.
           if (newPolicyAdmissionClosed(projection)) return;
-          if (newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
+          if (explicitStartBlocked(projection) || newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
+          this.assertCurrentPlanningArtifact(projection);
           if (
             this.restartOwnership(projection, projection.tasks[task.id] ?? task) !==
             undefined
@@ -247,7 +259,8 @@ export class TaskScheduler {
           // covers the no-await workspacePath path). The check and the
           // transition/dispatch below are synchronous, so no change can land
           // between them and tick() never throws an admission error.
-          if (newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
+          if (explicitStartBlocked(projection) || newPolicyTaskAdmissionBlocked(projection, task.id)) continue;
+          this.assertCurrentPlanningArtifact(projection);
           // T4: the restart path reuses the durable packet claim — it never
           // appends a competing reservation for the same packet.
           this.dispatch(projection.tasks[task.id], workspacePath);
@@ -275,7 +288,8 @@ export class TaskScheduler {
         }
         // T3a repair (B1c): skip tasks not bound to the current ready plan
         // before spending a workspace allocation on them.
-        if (newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
+        if (explicitStartBlocked(projection) || newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
+        this.assertCurrentPlanningArtifact(projection);
         const dependencyBlock = this.currentDependencyBlock(
           projection,
           projection.tasks[taskId],
@@ -299,7 +313,8 @@ export class TaskScheduler {
         if (hasPendingUserGuidance(projection)) return;
         // T3a repair (N3): re-check after the async gap; skip cleanly.
         if (newPolicyAdmissionClosed(projection)) return;
-        if (newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
+        if (explicitStartBlocked(projection) || newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
+        this.assertCurrentPlanningArtifact(projection);
         const current = projection.tasks[taskId];
         // T4: dependency/resource admission — overlapping writes, aliased
         // paths, shared DB/port/schema/config resources, a shared
@@ -323,7 +338,8 @@ export class TaskScheduler {
         const workspacePath = allocation.path;
         // T3a repair (N3): final check before the transitions and dispatch;
         // synchronous with them, so tick() never throws an admission error.
-        if (newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
+        if (explicitStartBlocked(projection) || newPolicyTaskAdmissionBlocked(projection, taskId)) continue;
+        this.assertCurrentPlanningArtifact(projection);
         this.transition(taskId, "assigned", attempt, {
           attempt,
           assignedWorkerId: workerId,

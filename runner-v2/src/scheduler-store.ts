@@ -1456,7 +1456,7 @@ export function explicitStartBlocked(
     return "Worker admission requires an explicit owner start authorization: the current ready plan has no complete start identity.";
   }
   const authorization = projection.planning?.executionAuthorization;
-  if (!authorization) {
+  if (!authorization || authorization.ownerChoice !== "execute" || authorization.authorizedBy !== "user:local-user") {
     return `Worker admission requires an explicit owner start authorization for the current ready plan revision ${ready.revisionId}.`;
   }
   if (!explicitStartAuthorizationCovers(identity, authorization)) {
@@ -1493,11 +1493,6 @@ export function newPolicyTaskAdmissionBlocked(
   if (!ready) {
     return "Worker admission requires a ready plan revision.";
   }
-  // T7b: readiness alone never authorizes execution. A current owner start
-  // authorization for this exact identity is required before any worker
-  // dispatch; drift while ready refuses here as well as at the step gate.
-  const startBlocked = explicitStartBlocked(projection);
-  if (startBlocked) return startBlocked;
   const binding = projection.readyPlanTaskBindings?.[taskId];
   if (
     !binding ||
@@ -3464,6 +3459,13 @@ export function reduceSchedulerEvent(
       const foldedBlocker = foldedGuidancePlanReadyBlocked(current);
       if (foldedBlocker) throw new Error(foldedBlocker);
     }
+    if (event.type === "planning.execution_authorized") {
+      const authorization = event.payload.authorization as Record<string, unknown> | undefined;
+      if (event.actor.role !== "user" || event.actor.id !== "local-user" || current.runPolicy === "plan_only" ||
+          authorization?.planningPolicyVersion !== current.planningPolicyVersion || authorization?.projectDocsPolicyVersion !== current.projectDocsPolicyVersion) {
+        throw new Error("Plan start refused: owner and current execution policies must match exactly.");
+      }
+    }
     next.planning = reducePlanningProjection(current.planning, {
       runId: event.runId,
       type: event.type,
@@ -4220,7 +4222,6 @@ export function reduceSchedulerEvent(
       }
       next.verifierSelection = {
         status: "required",
-        requiredSequence: event.sequence,
         reason: requiredString(event.payload, "reason"),
         requiredCapabilities,
         candidateRuntimeIds: [...candidateRuntimeIds],
@@ -5597,8 +5598,7 @@ export function reduceSchedulerEvent(
       next.runtime.architect = {
         ...next.runtime.architect,
         handoff: {
-          requiredSequence: event.sequence,
-          reason: requiredString(event.payload, "reason"),
+            reason: requiredString(event.payload, "reason"),
           requiredCapabilities: stringArray(event.payload, "requiredCapabilities"),
           candidateRuntimeIds,
         },

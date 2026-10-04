@@ -716,7 +716,7 @@ export class NativeBuildFactory {
     // approval or amendment). Verify those bytes exist and match before any
     // consumer reads them; no mutable current-source state is duplicated
     // into the spec store. Missing or drifted bytes fail closed here.
-    if (spec.approvedSource === undefined && spec.planningPolicy?.version === 1) {
+    if (spec.planningPolicy?.version === 1) {
       const currentManifest = currentEventRegisteredSourceManifest(schedulerEvents);
       if (currentManifest !== undefined) {
         let storedBytes: Uint8Array;

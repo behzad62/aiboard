@@ -14,6 +14,7 @@ import type {
 import {
   finalVerificationEventArtifactHashes,
   reduceSchedulerEvent,
+  explicitStartBlocked,
   validateSchedulerEvidenceEvent,
 } from "./scheduler-store.js";
 import type { EvidenceStore } from "./evidence-store.js";
@@ -126,6 +127,22 @@ export class SqliteSchedulerStore implements SchedulerStore {
         }
         this.database.exec("COMMIT");
         return event;
+      }
+      if (input.type === "architect.handoff_selected" || input.type === "verifier.selection_selected") {
+        const pending = input.type === "architect.handoff_selected" ? priorProjection?.runtime.architect.handoff !== undefined : priorProjection?.verifierSelection?.status === "required";
+        const type = input.type === "architect.handoff_selected" ? "architect.handoff_required" : "verifier.selection_required";
+        const sequence = priorEvents.findLast((event) => event.type === type)?.sequence;
+        if (!pending || input.payload.requiredSequence !== sequence || !Number.isSafeInteger(sequence)) throw new Error("Selection answer refused: exact current pending requirement sequence is required.");
+      }
+      // Live admission only: old assignment events still replay byte-for-byte.
+      if (priorProjection?.planningPolicyVersion === 1 && input.type === "task.transitioned" &&
+          (input.payload.status === "assigned" || input.payload.status === "running")) {
+        const blocked = explicitStartBlocked(priorProjection);
+        if (blocked) throw new Error(blocked);
+        const manifest = priorProjection.planning!.source.manifestsById[priorProjection.planning!.source.currentManifestId];
+        if (!this.artifacts) throw new Error("Current planning source artifact authority unavailable.");
+        const record = this.artifacts.verifySync(manifest.artifactDigest);
+        if (record.byteLength !== manifest.byteLength) throw new Error("Current planning source artifact byte length drift.");
       }
       if (
         input.type === "user.guidance_submitted" &&

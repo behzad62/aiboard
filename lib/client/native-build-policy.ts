@@ -74,3 +74,18 @@ export function effectiveNativeBuildPolicy(
       settings.alwaysRequireIndependentVerifier,
   };
 }
+
+export interface NativePlanningProvisioningOptions {
+  planningPolicy?: { version: 1 };
+  approvedSource?: import("./runner-v2").ApprovedSourceInputV1;
+}
+
+/** Fresh run choice only. Attachment/reconnect never infers a policy or approval. */
+export function explicitNativePlanningOptions(input: NativePlanningProvisioningOptions = {}): NativePlanningProvisioningOptions {
+  if (input.planningPolicy === undefined) {
+    if (input.approvedSource !== undefined) throw new Error("Approving a source requires an explicit evidence-gated planning opt-in.");
+    return {};
+  }
+  if (input.planningPolicy.version !== 1) throw new Error("Unsupported planning policy.");
+  return { planningPolicy: { version: 1 }, ...(input.approvedSource !== undefined ? { approvedSource: input.approvedSource } : {}) };
+}
