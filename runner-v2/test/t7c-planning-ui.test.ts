@@ -794,7 +794,7 @@ test("T7c browser configuration: fresh options persist while attached saved poli
     await page.goto("http://127.0.0.1:9876/fixture"); await page.addScriptTag({ content: bundle.outputFiles![0]!.text });
     await page.waitForFunction("window.configResult !== undefined || window.configError !== undefined");
     assert.equal(await page.evaluate("window.configError"), undefined);
-    const result = await page.evaluate("window.configResult") as { defaults: import("../../lib/db/schema").Discussion; before: import("../../lib/db/schema").Discussion; saved: import("../../lib/db/schema").Discussion; selected: unknown; refused: boolean; legacy: unknown };
+    const result = await page.evaluate("window.configResult") as { defaults: import("../../lib/db/schema.js").Discussion; before: import("../../lib/db/schema.js").Discussion; saved: import("../../lib/db/schema.js").Discussion; selected: unknown; refused: boolean; legacy: unknown };
     assert.equal(result.defaults.buildEvidenceGatedPlanning, false); assert.equal(result.defaults.buildSpecCopy, true); assert.equal(result.defaults.buildHandoffFiles, "commit"); assert.equal(result.defaults.buildAnswerReview, false);
     for (const field of ["buildEvidenceGatedPlanning", "buildSpecCopy", "buildHandoffFiles", "buildAnswerReview"] as const) assert.equal(result.saved[field], result.before[field]);
     assert.deepEqual(result.selected, { planningPolicy: { version: 1 }, answerReview: true, specCopy: false, handoffFiles: "export_only" });
