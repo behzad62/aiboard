@@ -6,18 +6,30 @@ import { neutralizeSnapshotText } from "./handoff-snapshot.js";
 const LIST_LIMIT = 20;
 const TEXT_LIMIT = 3500;
 const REFERENCE_BYTES = 80 * 1024;
+// Validators deliberately retain extension fields. Export has a narrower privacy boundary.
+const SIDECAR_KEYS = /^(?:env(?:ironment)?(?:variables|snapshot|values|map)?|ambientenvironment|childenvironment|(?:raw|approved)?source(?:bytes|text|body|content|snapshot)|rawsource|bytes(?:base64)?|raw(?:bytes|body|text|content)|(?:model|chat|conversation)?(?:transcripts?|messages?|requests?|responses?)|stdout(?:bytes|text|tail)?|stderr(?:bytes|text|tail)?|console(?:events|messages|logs)?|pageerrors?|diagnostics|body|content|output|input)$/;
 /** Sanitize every rendered leaf, including dictionary keys, before copying. */
-function safe(value: unknown): unknown {
+function safe(value: unknown, omissions?: { count: number }): unknown {
   if (typeof value === "string") return neutralizeSnapshotText(redactSensitiveText(value), Number.MAX_SAFE_INTEGER).replace(/\s+/g, " ");
-  if (Array.isArray(value)) return value.map(safe);
-  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, leaf]) => [String(safe(key)), isSensitiveKey(key) ? "[REDACTED]" : safe(leaf)]));
+  if (Array.isArray(value)) return value.map((leaf) => safe(leaf, omissions));
+  if (value && typeof value === "object") {
+    const fields = Object.entries(value).filter(([key]) => {
+      if (!SIDECAR_KEYS.test(key.replace(/[\s_-]/g, "").toLowerCase())) return true;
+      if (omissions) omissions.count++;
+      return false;
+    });
+    const isReference = fields.some(([key, leaf]) => key === "method" && leaf === "GET") && fields.some(([key]) => key === "selector");
+    return Object.fromEntries(fields.map(([key, leaf]) => [String(safe(key)), isSensitiveKey(key) ? "[REDACTED]" :
+      isReference && (key === "path" || key === "selector") && typeof leaf === "string" ? redactSensitiveText(leaf) : safe(leaf, omissions)]));
+  }
   return value;
 }
 function display(value: string): string { const text = String(safe(value)); return text.length > 180 ? `${text.slice(0, 180)} [truncated display reference; inspect the canonical run]` : text; }
 function record(id: string, value: unknown, reference: PlanningReferenceExport["cards"][number]["reference"]) {
-  const text = JSON.stringify(safe(value), null, 2);
+  const omissions = { count: 0 };
+  const text = JSON.stringify(safe(value, omissions), null, 2);
   const truncated = text.length > TEXT_LIMIT;
-  return { id: display(id), reference, text: truncated ? `${text.slice(0, TEXT_LIMIT)}\n[truncated — inspect the authenticated GET reference and JSON Pointer]` : text, truncated };
+  return { id: display(id), reference, omittedSidecarCount: omissions.count, text: truncated ? `${text.slice(0, TEXT_LIMIT)}\n[truncated — inspect the authenticated GET reference and JSON Pointer]` : text, truncated };
 }
 
 /** Whitelist mechanical identities/results; profiles, facts and diagnostics stay in runner state. */

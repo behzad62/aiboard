@@ -8,7 +8,7 @@ export interface PlanningExportReference {
 }
 export interface PlanningReferenceExport {
   version: 1;
-  categories: { id: string; title: string; reference: PlanningExportReference; recordCount: number; omittedCount: number; items: { id: string; reference: PlanningExportReference; text: string; truncated: boolean }[] }[];
+  categories: { id: string; title: string; reference: PlanningExportReference; recordCount: number; omittedCount: number; items: { id: string; reference: PlanningExportReference; omittedSidecarCount: number; text: string; truncated: boolean }[] }[];
   cards: { id: string; kind: "worker" | "controller" | "resume_planning"; reference: PlanningExportReference; text: string }[];
   omittedCardCount: number;
   nativeLaunch: { status: "not_applicable"; rationale: string };

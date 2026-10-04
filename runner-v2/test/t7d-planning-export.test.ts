@@ -15,7 +15,7 @@ import { createExecutionHost } from "../src/execution-host.js";
 import { snapshotNativeBuildAmbientEnvironment } from "../src/native-build-factory.js";
 import { NativeBuildManager } from "../src/native-build-manager.js";
 import type { RunnerProviderConfig } from "../src/provider-config-store.js";
-import { buildExecutionPlanRevision, type ExecutionPlanPhase, type ExecutionTaskContract, type SourceRequirement, type CoverageReview } from "../src/planning-contracts.js";
+import { buildExecutionPlanRevision, validateExecutionTaskContract, type ExecutionPlanPhase, type ExecutionTaskContract, type SourceRequirement, type CoverageReview } from "../src/planning-contracts.js";
 import { NativeBuildFactory as FixtureNativeBuildFactory, captureGitBaseline, runGit } from "./support/git-fixture.js";
 import { buildApprovedSourceManifest, validateApprovedSourceInput, type ApprovedSourceInputV1 } from "../src/native-planning-provisioner.js";
 import { currentExplicitStartIdentity, type SchedulerProjection } from "../src/scheduler-store.js";
@@ -640,6 +640,27 @@ test("T7d repaired cards: phase and execution lane stay distinct and released cl
   } finally { f.cleanup(); }
 });
 
+test("T7d repaired privacy boundary: validator-retained sidecars stay out of every exported record", async () => {
+  const f = controlFixture("retained-sidecars");
+  try {
+    await f.seedReady(); const projection = structuredClone(f.runtime.projection());
+    const plan = projection.planning!.plan!; const original = plan.revisionsById[plan.currentRevisionId]!;
+    const sidecars = { environment: { CUSTOM_CONFIG: "t7d-unknown-env-private-sentinel" }, messages: [{ role: "user", content: "t7d-unknown-transcript-private-sentinel" }],
+      sourceBytes: "t7d-private-source-bytes", nestedExtension: { stdout: "t7d-private-stdout", consoleEvents: ["t7d-private-console"], body: "t7d-private-body" } };
+    const task = { ...original.tasks[0]!, ...sidecars };
+    assert.equal(validateExecutionTaskContract(task).valid, true, "accepted extension fields are a real export boundary");
+    const manifests = Object.fromEntries(Object.entries(projection.planning!.source.manifestsById).map(([key, value]) => [key, { ...value, ...sidecars }]));
+    projection.planning = { ...projection.planning!, source: { ...projection.planning!.source, manifestsById: manifests },
+      coverageReview: { ...projection.planning!.coverageReview!, ...sidecars },
+      plan: { ...plan, revisionsById: { ...plan.revisionsById, [original.revisionId]: { ...original, tasks: [task], requirements: original.requirements.map((value) => ({ ...value, ...sidecars })), phases: original.phases.map((value) => ({ ...value, ...sidecars })) } } } };
+    projection.verifierPolicy = { mode: "risk_based", candidateRuntimeIds: ["reviewer-1"], alwaysRequireIndependentVerifier: true, twoPass: true, ...sidecars };
+    const exported = buildPlanningExportDocument({ runId: projection.runId, projection, readiness: f.runtime.planningReadiness(), exportedAt: T7D_CLOCK });
+    assert.doesNotMatch(JSON.stringify(exported), /t7d-unknown-env-private-sentinel|t7d-unknown-transcript-private-sentinel|t7d-private-source-bytes|t7d-private-stdout|t7d-private-console|t7d-private-body/);
+    assert.ok(exported.references!.categories.find((entry) => entry.id === "contracts")!.items[0]!.text.includes(task.steps[0]!));
+    assert.equal(exported.references!.categories.find((entry) => entry.id === "contracts")!.items[0]!.omittedSidecarCount, 6);
+  } finally { f.cleanup(); }
+});
+
 test("T7d repaired limits: joint document budget preserves C1, current source and mandatory resume cards", async () => {
   const f = controlFixture("joint-budget");
   try {
@@ -703,6 +724,12 @@ test("T7d repaired pointers: canonical keys retain spaces, slashes, tildes and c
     assert.deepEqual(selected, old.tasks[0]); assert.ok(card.reference.selector.includes("revision  two"));
     const contracts = result.categories.find((entry) => entry.id === "contracts")!;
     assert.equal(contracts.items[0]!.reference.selector, card.reference.selector);
+    const sourceId = "source  two/~<!--";
+    const source = projection.planning!.source;
+    projection.planning = { ...projection.planning!, source: { ...source, currentManifestId: sourceId,
+      manifestsById: { [sourceId]: { ...Object.values(source.manifestsById)[0]!, manifestId: sourceId } } } };
+    const sourceRecord = buildPlanningReferenceExport(projection).categories.find((entry) => entry.id === "source")!.items[0]!;
+    assert.equal((JSON.parse(sourceRecord.text) as { readsReference: { selector: string } }).readsReference.selector, "/planning/sourceReadIndex/source  two~1~0<!--");
     const privateId = "api_key=reference-private-731";
     projection.planning = { ...projection.planning!, plan: { ...plan, currentRevisionId: privateId,
       revisionsById: { [privateId]: { ...old, revisionId: privateId } } } };
