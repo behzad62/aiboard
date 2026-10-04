@@ -381,7 +381,7 @@ PX-2c `cd475d57`, `54f15b17`, `31bf1957` (accepted `16648709`; opt-in only).
   unauthorized user or worker cannot mutate acceptance; on-demand export API through C1; verifier and
   Architect selection answers name the requirement they answer and a stale answer is refused. Depends:
   T7a. P: yes (authentication). G: no.
-- [ ] **T7c** code — PREPARED 2026-10-04 after T7b acceptance; no production edits/dispatched writer. Concrete run-options proposal opened at controller temp `p6-6/codex-t7c-owner-proposal.md`; D-6 owner choice pending (scope findings blocking/secret refusal, specification copy on and project handoff default with per-run opt-outs/export_only). Earlier owner opt-in/default-off is settled and does not answer D-6. Read-only actual entry tracing added to prepared codex-t7c-brief.txt: DashboardPage/DiscussionSessionSettings->live api/schema->engine->native Build provisioning needs narrow per-run option plumbing, not an unwired switch; saved-run authority remains canonical. SOURCE: SRC-A "T7c", SRC-P T7, CD-2, CD-5. DoD per SRC-A T7c (planning-ready vs
+- [ ] **T7c** code — IN_PROGRESS 2026-10-04 after T7b acceptance; D-6 owner confirmed all recommended choices, recorded below. Isolated `.worktrees/p66-t7c`, branch `codex/p66-t7c`, base accepted T7b `0506aa8a` plus owner-decision record. Muse remains separately quota-limited until2026-10-05T00:00:00Z; controller implementation proceeds with independent GPT-6.1 Sol high review, dedicated packet tests and static checks only. Actual live browser provisioning and canonical planning/readiness/start/source views, per-run approved options, answered-run/model-pass/review/legacy notices are in scope. Full/broad gates deferredT8; protected merge/release pending. SOURCE: SRC-A "T7c", SRC-P T7, CD-2, CD-5. DoD per SRC-A T7c (planning-ready vs
   delivery-complete; requirements and blockers; answered-run view; per-pass purpose and token cost;
   review independence and ladder rungs; docs-v2 run options and defaults shown to the owner; the
   hand-edited-snapshot notice; old builds stay readable). Depends: T7b. P: no. G: no.
@@ -558,6 +558,7 @@ PX-2c stays opt-in (a default-on change is beyond SOURCE; see F-4).
 6. **D-6 CD-2 and CD-5 defaults.** Scope findings blocking (not refusals) and secret refusal (CD-2); spec
    copy on by default with a per-run `export_only` (CD-5) — controller decisions you have not confirmed.
    Options: confirm now, or at T7c where the UI shows them (SOURCE's plan). Recommendation: at T7c.
+   **DECIDED 2026-10-04:** owner said "confirm all recommended" after the concrete four-choice explanation: approved specification copy on with per-run opt-out; handoff files saved to project by default with per-run export_only (no handoff files/spec copy); scope violations block acceptance for Architect resolution rather than hard refusal; secret/key files refused with redacted reasons. Evidence-gated planning remains opt-in/default-off. No merge/deployment authorization is implied.
 7. **D-7 C2d exception to CD-15.** A repository that tracks two spellings of `docs/project/STATE.md`
    (only possible in a case-colliding repo) pauses the run on every attempt, fail-closed. Options: accept
    it as a recorded exception to CD-15, or add a fix item. Recommendation: accept.
