@@ -453,7 +453,7 @@ and their tests. Every R item is P: yes (scheduler log or process paths) and G: 
   (additive) and shown to the reviewer and the Architect; the deliverable reviewer judges the scope and
   the task's `validation.targetedRationale`/`affectedScopeRationale` against the diff and raises a
   finding when impacted areas were not run or the reason is thin. Depends: W3. Touch: SRC-A IV-1 list.
-- [ ] **IV-2** code — SOURCE: SRC-A "IV-2", CD-23, EP16. DoD: with a selection rung other than
+- [ ] **IV-2** code — IN_PROGRESS 2026-10-05, isolated `.worktrees/p66-iv2`, branch `codex/p66-iv2`, accepted IV-1 base `3e3cc82b4700a248f7b4b16d7bccb3d22153fa65`. Muse Spark 1.3 Contributor max owns implementation/repairs; GPT-5.6 Sol owns independent review. Scope frozen to selected execution at per-task boundary + high-tier review, additive `executedScope: "selected"`, safe full-script fallback/widening, and wiring EP16 validation policy into task acceptance. Full scripts remain at milestone/merge-group/final verification; V2 reuse remains valid. No IV-3 budget/tier work. Focused IV-2 tests/static only; broader suites deferred T8. SOURCE: SRC-A "IV-2", CD-23, EP16. DoD: with a selection rung other than
   `full_suite` and no widening trigger, the boundary and the high-tier review run the selected tests
   (additive `executedScope: "selected"`, selection recorded); the whole scripts run at milestone or
   merge-group points and at final verification; `validation-policy.ts` wired into task acceptance; when
