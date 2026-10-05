@@ -23,6 +23,7 @@ export const DURABLE_SUBPROCESS_SCHEMA_VERSION = 2 as const;
 export type DurableSubprocessState =
   | "prepared"
   | "launching"
+  | "reused"
   | "running"
   | "stopping"
   | "exited"
@@ -132,6 +133,7 @@ export type DurableProcessMutationKind =
   | "resume_blocked_exit"
   | "begin_verify"
   | "complete"
+  | "record_reuse"
   | "fail_launch"
   | "fail"
   | "settle_output_cleanup"
@@ -175,6 +177,7 @@ export interface DurableSubprocessRecord {
   readonly environmentAudit: DurableEnvironmentAudit;
   readonly escalation: readonly DurableEscalationEntry[];
   readonly cleanup: ProcessCleanupStatus;
+  readonly reused_from?: string;
   readonly backendBinding?: DurableBackendBinding;
   readonly stopIntent?: DurableStopIntent;
   readonly observation?: DurableChildObservation;
@@ -358,6 +361,7 @@ export type DurableProcessCommand =
       readonly result: DurableSubprocessResult;
       readonly effectId?: string;
     }
+  | { readonly type: "record_reuse"; readonly invocationId: string; readonly expectedRevision: number; readonly at: string; readonly reused_from: string }
   | {
       readonly type: "fail_launch";
       readonly invocationId: string;
@@ -740,6 +744,7 @@ export function openSqliteDurableProcessKernel(
 const STATES = new Set<DurableSubprocessState>([
   "prepared",
   "launching",
+  "reused",
   "running",
   "stopping",
   "exited",
@@ -843,6 +848,8 @@ const LEGAL_HISTORY: Readonly<
 > = {
   prepared: ["prepared", "launching", "launch_not_proven", "cleanup_blocked"],
   launching: [
+    "cleanup_blocked",
+    "reused",
     "launching",
     "running",
     "stopping",
@@ -889,6 +896,7 @@ const LEGAL_HISTORY: Readonly<
     "outcome_unknown",
     "backend_unavailable",
   ],
+  reused: [],
   cleaned: [],
   launch_not_proven: [],
   orphaned: [],
@@ -926,6 +934,7 @@ const BASE_KEYS = [
 const OPTIONAL_BY_STATE: Record<DurableSubprocessState, readonly string[]> = {
   prepared: ["stopIntent", "outputPrepareFailure"],
   launching: ["stopIntent"],
+  reused: ["reused_from"],
   running: ["backendBinding"],
   stopping: ["backendBinding", "stopIntent"],
   exited: ["backendBinding", "stopIntent", "observation"],
@@ -1017,6 +1026,7 @@ function parseRecordShape(
     environmentAudit: parseAudit(object.environmentAudit),
     escalation: parseEscalation(object.escalation),
     cleanup: parseCleanup(object.cleanup),
+    ...optionalText(object, "reused_from"),
     ...(object.backendBinding === undefined
       ? {}
       : { backendBinding: parseBinding(object.backendBinding) }),
@@ -1165,6 +1175,7 @@ function parseMutation(value: unknown): DurableProcessMutation {
       "resume_blocked_exit",
       "begin_verify",
       "complete",
+      "record_reuse",
       "fail_launch",
       "fail",
       "settle_output_cleanup",
@@ -1216,6 +1227,7 @@ function parseMutation(value: unknown): DurableProcessMutation {
     resume_blocked_exit: { required: ["observation"] },
     begin_verify: { required: ["output"], optional: ["effectId"] },
     complete: { required: ["cleanup", "result"], optional: ["effectId"] },
+    record_reuse: { required: ["reused_from"] },
     fail_launch: { required: ["detail"] },
     fail: {
       required: ["state", "detail"],
@@ -1681,6 +1693,10 @@ function reduceMutation(
         "cleaned",
         mutation.at,
       );
+    case "record_reuse":
+      requireState(current, ["launching"]);
+      if (current.backendBinding || current.stopIntent || current.pendingEffects.length) throw new Error("Reuse requires a settled no-launch invocation.");
+      return moveDerived({...base, reused_from: text(data.reused_from, "reused_from"), cleanup: {state: "not_required"}}, "reused", mutation.at, "observed_evidence_reused_no_launch");
     case "fail_launch":
       requireState(current, ["prepared", "launching"]);
       return moveDerived(
@@ -1966,6 +1982,8 @@ function commandData(
       return { leaseExpiresAt: command.leaseExpiresAt };
     case "record_environment":
       return { environmentAudit: command.environmentAudit };
+    case "record_reuse":
+      return {reused_from: command.reused_from};
     case "record_output_prepare_failure":
     case "fail_launch":
     case "orphan_unbound_launch":
@@ -2134,6 +2152,8 @@ function claimRetry(
   return Object.freeze({ record: cloneRecord(existing), won: false });
 }
 function assertStateInvariants(record: DurableSubprocessRecord): void {
+  if (record.state === "reused" && (!record.reused_from || record.backendBinding || record.result || record.output || record.observation || record.cleanup.state !== "not_required")) throw new Error("Reuse must describe no new process execution.");
+  if (record.state !== "reused" && record.reused_from) throw new Error("Reuse provenance requires the no-launch terminal state.");
   if (
     record.history[0]?.state !== "prepared" ||
     record.history.length !== record.revision + 1 ||
@@ -2278,7 +2298,7 @@ function assertStateInvariants(record: DurableSubprocessRecord): void {
       `Durable process record in ${record.state} cannot contain a result.`,
     );
   if (
-    !["cleaned", "cleanup_blocked", "launch_not_proven"].includes(
+    !["reused", "cleaned", "cleanup_blocked", "launch_not_proven"].includes(
       record.state,
     ) &&
     record.cleanup.state !== "pending"

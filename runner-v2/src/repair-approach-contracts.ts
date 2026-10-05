@@ -31,6 +31,8 @@ export interface RepairApproachValidationInput {
    * accepts a fabricated evidence id.
    */
   readonly knownEvidenceIds?: readonly string[];
+  /** Trusted store-derived content authority, absent only for historical policy. */
+  readonly evidenceContentDigests?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -64,20 +66,28 @@ export function validateRepairApproachDecision(input: RepairApproachValidationIn
   }
   const priors = input.priorApproaches.map((entry, index, all) =>
     index === all.length - 1 && !entry.failed ? { ...entry, failed: true } : entry);
-  const diagnosticKnown = new Set(priors.flatMap((entry) => entry.diagnosticSet));
-  const decidedKnown = new Set(priors.flatMap((entry) => entry.evidenceIds));
-  const failureKnown = new Set(priors.flatMap((entry) => entry.failureEvidenceIds));
+  const identity = (id: string): string => {
+    if (!input.evidenceContentDigests) return id;
+    const digest = input.evidenceContentDigests[id];
+    if (!digest) throw new Error(`Unresolved evidence content ${id}.`);
+    return digest;
+  };
+  const contentDecision = { ...input.decision, diagnosticSet: input.decision.diagnosticSet.map(identity), evidenceIds: input.decision.evidenceIds.map(identity) };
+  const contentPriors = priors.map((entry) => ({...entry, diagnosticSet: entry.diagnosticSet.map(identity), evidenceIds: entry.evidenceIds.map(identity), failureEvidenceIds: entry.failureEvidenceIds.map(identity)}));
+  const diagnosticKnown = new Set(contentPriors.flatMap((entry) => entry.diagnosticSet));
+  const decidedKnown = new Set(contentPriors.flatMap((entry) => entry.evidenceIds));
+  const failureKnown = new Set(contentPriors.flatMap((entry) => entry.failureEvidenceIds));
   const excluded = new Set([...diagnosticKnown, ...decidedKnown, ...failureKnown]);
   const prior = priors.find((entry) => entry.approachId === input.decision.approachId);
   if (!input.decision.repeat && prior?.failed) {
     throw new Error("A failed repair approach cannot be relabelled or resubmitted without an explicit repeat and evidence NEW to its diagnostic set.");
   }
   if (input.decision.repeat || prior?.failed) {
-    const citesFailureEvidence = input.decision.evidenceIds.some((id) => failureKnown.has(id));
+    const citesFailureEvidence = contentDecision.evidenceIds.some((id) => failureKnown.has(id));
     if (citesFailureEvidence) {
       throw new Error("A repeated repair approach must not cite the failure's own evidence.");
     }
-    const newEvidence = input.decision.evidenceIds.some((id) => !excluded.has(id));
+    const newEvidence = contentDecision.evidenceIds.some((id) => !excluded.has(id));
     if (!newEvidence) {
       throw new Error("A repeated failed repair approach requires evidence NEW to its diagnostic set.");
     }
@@ -90,13 +100,13 @@ export function validateRepairApproachDecision(input: RepairApproachValidationIn
   // reuses a failed approach's hypothesis and diagnostic set is a
   // relabel, not a new approach.
   if (priors.length > 0) {
-    if (!input.decision.evidenceIds.some((id) => !excluded.has(id))) {
+    if (!contentDecision.evidenceIds.some((id) => !excluded.has(id))) {
       throw new Error("A renamed repair approach with identical evidence cannot pass as a new approach; empty evidence never passes.");
     }
-    const relabel = priors.some((entry) =>
+    const relabel = contentPriors.some((entry) =>
       entry.failed &&
       entry.hypothesis === input.decision.hypothesis &&
-      sameStringSet(entry.diagnosticSet, input.decision.diagnosticSet));
+      sameStringSet(entry.diagnosticSet, contentDecision.diagnosticSet));
     if (relabel) {
       throw new Error("A new repair approach id with a failed approach's hypothesis and diagnostic set is a relabel, not a new approach.");
     }

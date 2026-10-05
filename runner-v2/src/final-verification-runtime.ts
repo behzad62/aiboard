@@ -1,3 +1,4 @@
+import { commandReuseMetadata } from "./command-evidence-reuse.js";
 import { workingTreeForRunner, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import type { AgentActor, ToolExecutionContext } from "./agent-contracts.js";
 import type { TempRecordSink } from "./cleanup-ownership.js";
@@ -754,6 +755,8 @@ export class FinalVerificationRuntime {
         startState,
         endState,
         ...(junitReport ? { report: junitReport } : {}),
+        ...(execution.routed ? commandReuseMetadata(execution.routed) : {}),
+        ...(execution.routed?.reuseSource?.fact.kind === "command" && "report" in execution.routed.reuseSource.fact ? {report: (execution.routed.reuseSource.fact as FinalVerificationCommandFact).report} : {}),
       };
       base.facts.push(fact);
 

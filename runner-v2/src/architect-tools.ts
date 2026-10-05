@@ -63,6 +63,7 @@ import {
 import { createRequestTriageTools } from "./request-triage.js";
 import { boundaryNeedsArchitect, boundaryResolutionGeneration, latestBoundary } from "./delivery-acceptance.js";
 import { deliveryBoundaryRootCause, failingTestIdsByCategory, repairMemberIssues, withFailingIds } from "./repair-budget-contracts.js";
+import { resolveEvidenceContent } from "./evidence-content.js";
 import { validateRepairApproachDecision } from "./repair-approach-contracts.js";
 
 export interface ArchitectToolsOptions {
@@ -631,7 +632,7 @@ export function createArchitectTools(
     ? [...repairPlanning, planVerifierRepairsTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
     : repairPlanning;
   const repairApproach = options.repairApproachAvailable && !answerPath
-    ? [...verifierRepairPlanning, recordRepairApproachDecisionTool(options.store, clock, options.evidenceStore), recordExternalBlockerTool(options.store, clock, options.evidenceStore)]
+    ? [...verifierRepairPlanning, recordRepairApproachDecisionTool(options.store, clock, options.evidenceStore, options.artifacts), recordExternalBlockerTool(options.store, clock, options.evidenceStore)]
     : verifierRepairPlanning;
   const boundaryResolution = options.deliveryBoundaryResolutionAvailable && !answerPath
     ? [...repairApproach, recordTestIntegrityReasonTool(options.store, clock), resolveDeliveryBoundaryFailureTool(options.store, clock, { projectId: options.repairProjectId, evidenceStore: options.evidenceStore })]
@@ -1036,6 +1037,7 @@ function recordRepairApproachDecisionTool(
   store: SchedulerStore,
   clock: () => string,
   evidenceStore?: EvidenceStore,
+  artifacts?: ArtifactStore,
 ): NativeTool<RecordRepairApproachDecisionInput> {
   return lifecycleTool({
     name: "record_repair_approach_decision",
@@ -1066,8 +1068,11 @@ function recordRepairApproachDecisionTool(
       // evidence store is available. Every cited id must exist; repeats
       // need evidence NEW to the failed approach's diagnostic set and
       // must not cite the failure's own evidence.
+      if (projection.evidenceContentPolicyVersion === 1 && (!evidenceStore || !artifacts)) return errorOutput("evidence_content_unavailable", "Current repair policy requires authoritative evidence and artifact stores.");
+      let evidenceContentDigests: Record<string, string> | undefined;
       try {
-        const cited = [...new Set([...input.diagnosticSet, ...input.evidenceIds])];
+        const cited = [...new Set([...input.diagnosticSet, ...input.evidenceIds, ...issue.approaches.flatMap((entry) => [...entry.diagnosticSet, ...entry.evidenceIds, ...entry.failureEvidenceIds])])];
+        if (evidenceStore && artifacts) evidenceContentDigests = resolveEvidenceContent(evidenceStore, artifacts, context.runId, cited);
         const known = evidenceStore
           ? evidenceStore.getByIds({ runId: context.runId, ids: cited }).map((record) => record.id)
           : undefined;
@@ -1098,6 +1103,7 @@ function recordRepairApproachDecisionTool(
             evidenceIds: [...input.evidenceIds],
           },
           ...(known !== undefined ? { knownEvidenceIds: known } : {}),
+          ...(evidenceContentDigests ? { evidenceContentDigests } : {}),
         });
       } catch (error) {
         return errorOutput("invalid_repair_approach_decision", error instanceof Error ? error.message : String(error));
@@ -1118,6 +1124,7 @@ function recordRepairApproachDecisionTool(
           hypothesis: input.hypothesis,
           diagnosticSet: [...input.diagnosticSet],
           evidenceIds: [...input.evidenceIds],
+          ...(evidenceContentDigests ? { contentPolicyVersion: 1, evidenceContentDigests } : {}),
         },
       });
     },

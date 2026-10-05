@@ -1,3 +1,4 @@
+import { workingTreeForRunner } from "./command-evidence-identity.js";
 import { projectPlanningReadiness, buildPlanningExportDocument } from "./planning-controls.js";
 import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
 import { testIntegrityPinDigest, testIntegrityProfileFindings } from "./test-integrity.js";
@@ -252,6 +253,7 @@ import {
 } from "./process-recovery.js";
 import {
   createBoundedProcessOutputFactory,
+  bindCommandEvidenceReuse,
   createRuntimeBackedOneShotCommandExecutor,
   type OneShotCommandExecutor,
 } from "./one-shot-command-executor.js";
@@ -709,6 +711,9 @@ export class NativeBuildFactory {
       });
     }
     ensurePlanningProvisioningPrefix(schedulerStore, spec);
+    if (rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).evidenceContentPolicyVersion !== 1) {
+      schedulerStore.append({runId: spec.runId, type: "run.evidence_policy_activated", actor: {role: "runner", id: "build-runtime"}, occurredAt: new Date().toISOString(), idempotencyKey: "evidence-content-policy:v1", payload: {version: 1}});
+    }
     const integrityInitialization = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)).testIntegrity;
     if (integrityInitialization && integrityInitialization.initialRevision === undefined) {
       schedulerStore.append({ runId: spec.runId, type: "delivery.test_integrity_initialized", occurredAt: spec.createdAt,
@@ -1073,6 +1078,14 @@ export class NativeBuildFactory {
     }, true);
     }
     await this.options.runtimeConstructionHooks?.afterAcquire?.("subprocess_runtime");
+    bindCommandEvidenceReuse(commandExecution, spec.runId, {store: evidenceStore, artifacts: this.artifacts,
+      captureTree: async (cwd, request) => {
+        const captured = await gitContext?.workingTreeForCurrentCall?.(cwd);
+        if (captured) return captured;
+        // Model commands without their original call scope cannot borrow lifecycle authority.
+        if (!request.context.runnerInternal) return {status: "unknown", reason: "capture_unavailable"};
+        return await workingTreeForRunner(requireGitRunner(gitContext).lifecycle("verification").run, cwd);
+      }});
     const initialHealth = providerHealthFromSchedulerEvents(
       schedulerStore.readRun(spec.runId)
     );

@@ -1,3 +1,4 @@
+import { resolveEvidenceContent } from "./evidence-content.js";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -324,6 +325,14 @@ function validateSchedulerEvent(
   if (evidenceStore) {
     validateSchedulerEvidenceEvent(projection, event, evidenceStore);
   }
+  if (event.type === "repair.approach_decided" && event.payload.contentPolicyVersion !== undefined) {
+    if (!evidenceStore || !artifacts || !projection) throw new Error("Repair content policy requires authoritative stores.");
+    const issue = projection.repairIssues?.[String(event.payload.issueId)];
+    const ids = [...(event.payload.diagnosticSet as string[]), ...(event.payload.evidenceIds as string[]), ...(issue?.approaches.flatMap((entry) => [...entry.diagnosticSet, ...entry.evidenceIds, ...entry.failureEvidenceIds]) ?? [])];
+    const actual = resolveEvidenceContent(evidenceStore, artifacts, event.runId, ids);
+    const claimed = event.payload.evidenceContentDigests;
+    if (!claimed || typeof claimed !== "object" || Array.isArray(claimed) || Object.keys(actual).length !== Object.keys(claimed).length || Object.entries(actual).some(([id, digest]) => (claimed as Record<string, unknown>)[id] !== digest)) throw new Error("Forged or unresolved repair content authority.");
+  }
   const artifactHashes = finalVerificationEventArtifactHashes(event);
   if (artifactHashes.length > 0 && !artifacts) {
     throw new Error("An ArtifactStore is required for final-verification evidence artifacts.");
@@ -374,6 +383,7 @@ function requiresAuthoritativeEvidenceStore(
   if (!projection) return false;
   // T6a: command outcomes of deliverable reviews and boundary checks must
   // resolve to durable evidence.
+  if (event.type === "repair.approach_decided" && event.payload.contentPolicyVersion !== undefined) return true;
   if (event.type === "delivery.boundary_checked") return true;
   if (event.type === "delivery.test_integrity_baseline_recorded") return true;
   if (event.type === "delivery.findings_recorded") {

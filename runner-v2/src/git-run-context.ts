@@ -24,6 +24,7 @@ export interface RunGitExecutionContext {
   current(): GitCommandRunner;
   executeForCall(context: ToolExecutionContext, request: Omit<OneShotCommandRequest, "context">): Promise<OneShotCommandResult>;
   forCall(context: ToolExecutionContext): GitCommandRunner;
+  workingTreeForCurrentCall?(cwd: string): Promise<WorkingTreeIdentity | undefined>;
   workingTreeForCall?(context: ToolExecutionContext, cwd: string): Promise<WorkingTreeIdentity>;
   lifecycle(purpose: GitLifecyclePurpose): GitCommandRunner;
 }
@@ -132,20 +133,27 @@ export function createRunGitExecutionContext(input: RunGitExecutionContextOption
       throw error;
     }
   };
+  const captureForCall = async (context: ToolExecutionContext, cwd: string) => {
+    const call = ownedCallFor(context);
+    const execute = runner(async (options) => {
+      const validation = await authorizeCall(call, options.cwd);
+      try {return await authorizeOwnedIdentity(options, validation);}
+      catch(error) {await validation.release();throw error;}
+    });
+    const root = await canonicalDeclaredRoot(roots[roots.length - 1]!);
+    return await captureWorkingTreeIdentity(cwd, root, execute.run);
+  };
   return Object.freeze({
+    async workingTreeForCurrentCall(cwd: string) {
+      const context = activeCall.getStore();
+      return context ? await captureForCall(context, cwd) : undefined;
+    },
     permissionProfile: input.permissionProfile,
     forCall,
     async workingTreeForCall(context: ToolExecutionContext, cwd: string) {
       // Recheck the original call grant for each mechanical command. The private
       // index uses a distinct run-owned grant, never extra model write authority.
-      const call = ownedCallFor(context);
-      const execute = runner(async (options) => {
-        const validation = await authorizeCall(call, options.cwd);
-        try {return await authorizeOwnedIdentity(options, validation);}
-        catch(error) {await validation.release();throw error;}
-      });
-      const root = await canonicalDeclaredRoot(roots[roots.length - 1]!);
-      return await captureWorkingTreeIdentity(cwd, root, execute.run);
+      return await captureForCall(context, cwd);
     },
     withCall<T>(context: ToolExecutionContext, operation: () => Promise<T>): Promise<T> {
       // Run-local async context: concurrent workers cannot overwrite a global

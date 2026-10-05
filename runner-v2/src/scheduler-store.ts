@@ -1,3 +1,4 @@
+import { validateRepairApproachDecision } from "./repair-approach-contracts.js";
 import { validateReadCapture, validateCitations, isMutationSurvivorFindingId } from "./review-evidence.js";
 import {
   DELIVERY_ACCEPTANCE_RUNNER_ID,
@@ -166,6 +167,7 @@ export interface SchedulerActor {
 
 export type SchedulerEventType =
   | "process.recovery_updated"
+  | "run.evidence_policy_activated"
   | "run.initialized"
   | "run.policy_configured"
   | "plan.created"
@@ -910,6 +912,7 @@ export interface AnswerReviewUnavailableRecord {
 }
 
 export interface SchedulerProjection {
+  evidenceContentPolicyVersion?: 1;
   processRecovery?: Record<string, RecoveryAuditRecord>;
   runId: string;
   /** Optional for event-log compatibility with runs created before P3.1. */
@@ -4393,7 +4396,13 @@ export function reduceSchedulerEvent(
       next.repairIssues = issues;
       break;
     }
+    case "run.evidence_policy_activated": {
+      if (event.actor.role !== "runner" || event.payload.version !== 1) throw new Error("Only the runner may activate evidence content policy v1.");
+      next.evidenceContentPolicyVersion = 1;
+      break;
+    }
     case "repair.approach_decided": {
+      if (current.evidenceContentPolicyVersion === 1 && event.payload.contentPolicyVersion !== 1) throw new Error("Current repair decision requires evidence content policy.");
       if (event.actor.role !== "architect") throw new Error("Only the Architect may decide a repair approach.");
       const issueId = requiredString(event.payload, "issueId");
       const issue = next.repairIssues?.[issueId];
@@ -4403,6 +4412,13 @@ export function reduceSchedulerEvent(
       const hypothesis = requiredString(event.payload, "hypothesis");
       const diagnosticSet = stringArray(event.payload, "diagnosticSet");
       const evidenceIds = stringArray(event.payload, "evidenceIds");
+      if (event.payload.contentPolicyVersion !== undefined) {
+        if (event.payload.contentPolicyVersion !== 1) throw new Error("Unsupported repair content policy.");
+        const digests = event.payload.evidenceContentDigests as Record<string, string>;
+        if (!digests || typeof digests !== "object" || Array.isArray(digests)) throw new Error("Repair content authority is required.");
+        validateRepairApproachDecision({actorRole: "architect", actorId: event.actor.id, decisionActorRole: "architect", decisionActorId: event.actor.id,
+          priorApproaches: issue.approaches, decision: {approachId, repeat, hypothesis, diagnosticSet, evidenceIds}, evidenceContentDigests: digests});
+      }
       const prior = issue.approaches.find((entry) => entry.approachId === approachId);
       const known = new Set(issue.approaches.flatMap((entry) => entry.diagnosticSet));
       const decided = new Set(issue.approaches.flatMap((entry) => entry.evidenceIds));

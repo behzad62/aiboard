@@ -1,3 +1,4 @@
+import { commandReuseMetadata } from "./command-evidence-reuse.js";
 import { unknownWorkingTree, unknownChildEnvironment, settleWorkingTreeIdentity } from "./command-evidence-identity.js";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -216,6 +217,7 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
           stdoutArtifactHash: stdout.hash,
           stderrArtifactHash: stderr.hash,
           ...(revision ? { repositoryRevision: revision } : {}),
+          ...commandReuseMetadata(execution),
         };
         const record = options.store.record({
           runId: context.runId,

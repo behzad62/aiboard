@@ -7,6 +7,10 @@ import type {
 
 export interface CommandEvidenceFact {
   kind: "command";
+  /** V2: original native result and exact trusted launch tuple, absent historically. */
+  executionSnapshot?: import("./command-evidence-reuse.js").CommandExecutionSnapshot;
+  /** Original same-run observed evidence; this row represents no new execution. */
+  reused_from?: string;
   workingTreeIdentity?: import("./command-evidence-identity.js").WorkingTreeIdentity;
   childEnvironmentAudit?: import("./child-environment.js").ChildEnvironmentAudit;
   childEnvironmentIdentity?: import("./command-evidence-identity.js").ChildEnvironmentIdentity;
