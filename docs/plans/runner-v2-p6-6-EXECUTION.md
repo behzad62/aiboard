@@ -447,7 +447,7 @@ and their tests. Every R item is P: yes (scheduler log or process paths) and G: 
   Architect's session read; the new-policy "read the submitted diff" instruction removed;
   `decideUnverifiedClaim` wired; runner evidence pre-linked to criteria; final-verification plans
   prefilled for detected categories. Depends: W2.
-- [ ] **IV-1** code — SOURCE: SRC-A "IV-1", CD-23. DoD: the worker prompt and verification skill give
+- [ ] **IV-1** code — IN_PROGRESS 2026-10-05, isolated `.worktrees/p66-iv1`, branch `codex/p66-iv1`, accepted W3 base `d64329e95a888ea5f88839c85d736cb51145c39e`. Muse Spark 1.3 Contributor max owns implementation/repairs; GPT-5.6 Sol owns independent review. Scope is strictly IV-1: worker/verification guidance, required durable `validationScope`, reviewer/Architect context, and reviewer sufficiency finding against diff plus task validation rationales. Do not implement IV-2 selected execution or IV-3 budget ledger/tier mechanics. Focused IV-1 tests/static gates only; broader suites deferred T8. SOURCE: SRC-A "IV-1", CD-23. DoD: the worker prompt and verification skill give
   the widening test order, the budget and the extend/merge/delete-obsolete rule; `submit_task` requires a
   `validationScope` {changed, verified, testsRun [command, counts], notRun [what, why]}, stored
   (additive) and shown to the reviewer and the Architect; the deliverable reviewer judges the scope and
