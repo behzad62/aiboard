@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 
-import type { FinalVerificationDetectedSignal } from "./final-verification-contracts.js";
+import { FINAL_VERIFICATION_CATEGORIES, type FinalVerificationDetectedSignal, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
 import { detectLanguageFamilies, languageReportDescriptors, listLanguageInventoryFiles } from "./language-execution-profile.js";
 import { assertFinalVerificationBrowserPolicy } from "./final-verification-browser-policy.js";
 import type {
@@ -196,6 +196,23 @@ export class FinalVerificationProfileAuthority {
       `${digest}.json`,
     );
   }
+}
+
+/**
+ * W3: build the runner-owned plan prefill from the authoritative execution
+ * profile. Every detected category is already required; non-detected
+ * categories carry no invented rationale or inspection.
+ */
+export function buildFinalVerificationPlanPrefill(runId: string, profile: FinalVerificationExecutionProfile): FinalVerificationPlanPrefill {
+  const digest = finalVerificationProfileDigest(runId, profile);
+  const detected = new Set(profile.detectedSignals.map((signal) => signal.category));
+  return {
+    targetRevision: profile.targetRevision,
+    profileDigest: digest,
+    required: FINAL_VERIFICATION_CATEGORIES.filter((category) => detected.has(category)),
+    undetected: FINAL_VERIFICATION_CATEGORIES.filter((category) => !detected.has(category)),
+    detectedSignals: profile.detectedSignals.map((signal) => ({ ...signal })),
+  };
 }
 
 export function finalVerificationProfileDigest(

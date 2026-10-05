@@ -35,6 +35,8 @@ export interface AcceptedEvidenceFailure {
 }
 
 export interface CriterionReviewVerdict {
+  /** W3 (AR-R29): required exactly when the verdict deviates from the runner prefill. */
+  overrideReason?: string;
   criterionId: string;
   verdict: CriterionReviewVerdictValue;
   rationale: string;

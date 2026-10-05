@@ -26,7 +26,8 @@ import {
   type ExecutionTaskContract,
 } from "./planning-contracts.js";
 import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./planning-projection.js";
-import { evaluatePhaseAcceptance, phaseAcceptanceKey } from "./delivery-acceptance.js";
+import { evaluatePhaseAcceptance, phaseAcceptanceKey, type ReviewTaskPrefill } from "./delivery-acceptance.js";
+import type { FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -355,6 +356,8 @@ export interface BuildArchitectContextInput {
   recentHistory: string[];
   /** Committed docs/project/STATE.md text from the artifact store. Absent when none is committed. */
   projectDocsStateText?: string;
+  /** W3: runner-owned final-verification plan prefill; rendered only when bound to the current revision. */
+  finalVerificationPrefill?: FinalVerificationPlanPrefill;
   /**
    * C4 (AR-R11): docs-v2 base snapshot from the relevant base revision,
    * read through the factory's live revision callback (never the user tree).
@@ -428,6 +431,45 @@ export function renderArchitectBaseSnapshot(snapshot: ArchitectBaseSnapshot): st
   return `${head}\n${body}${marker}`;
 }
 
+/**
+ * W3 (AR-3): confirm/override framing for new-policy review turns. The
+ * independent deliverable review IS the review: the Architect confirms the
+ * runner-owned prefilled disposition or records reasoned overrides. It may
+ * inspect the diff or evidence when an override needs it, but it is never
+ * instructed to redo the reviewer pass. Legacy turns keep legacy lines.
+ */
+export function currentSubmissionIntroLines(submission: ArchitectReviewSubmission): string[] {
+  if (!submission.dispositionPrefill) {
+    return ["Review this immutable submitted attempt, not a prior attempt or the project working tree."];
+  }
+  const prefill = submission.dispositionPrefill;
+  return [
+    `Confirm the independent delivery review ${prefill.reviewId} for this immutable submitted attempt (task ${submission.taskId}, attempt ${submission.attempt}, change set ${submission.changeSetId}); do not redo it as a second reviewer.`,
+    "The independent review IS the review. The runner prefilled each criterion verdict below from the reviewer's claim verdict and runner evidence: confirm each prefilled verdict in review_task, or override it with a non-empty overrideReason.",
+    "Turning a prefilled unsatisfied into satisfied additionally requires that this session read the cited evidence (inspect_evidence or a complete artifact read of the cited evidence). You may open the diff or evidence when an override needs it, but a full re-review is not required.",
+  ];
+}
+
+/** W3 (AR-3): legacy diff instruction, omitted on confirm/override turns. */
+export function currentSubmissionDiffLines(submission: ArchitectReviewSubmission): string[] {
+  if (submission.dispositionPrefill) return [];
+  return ["Use artifact.read with diffArtifactHash for the authoritative submitted diff."];
+}
+
+/**
+ * W3: runner-owned final-verification plan prefill. Every detected category
+ * is already required; the Architect decides each non-detected category
+ * itself (required, or not_applicable with its own rationale and repository
+ * inspection). No inapplicability rationale is prefilled.
+ */
+export function finalVerificationPrefillLines(prefill: FinalVerificationPlanPrefill): string[] {
+  return [
+    `Runner-owned final-verification plan prefill for integration revision ${prefill.targetRevision} (profile ${prefill.profileDigest}). Every detected category is already required: confirm it with plan_final_verification instead of rediscovering applicability.`,
+    "Decide each non-detected category yourself: make it required, or mark it not_applicable with your own rationale and repository inspection. Detected categories cannot be marked not_applicable.",
+    JSON.stringify(prefill, null, 2),
+  ];
+}
+
 export interface ArchitectReviewSubmission {
   taskId: string;
   attempt: number;
@@ -440,6 +482,8 @@ export interface ArchitectReviewSubmission {
   acceptanceCriteria?: AcceptanceCriterion[];
   acceptanceCriteriaVersion?: number;
   criterionEvidenceLinks?: CriterionEvidenceLink[];
+  /** W3 (AR-3): runner-owned prefilled disposition; present exactly for new-policy confirm/override turns. */
+  dispositionPrefill?: ReviewTaskPrefill;
 }
 
 export const VERIFIER_ADVERSARIAL_STANCE = [
@@ -781,14 +825,17 @@ export function architectContextSections(
       ? [required("repair-issues", "repair", renderRepairIssues(input.projection))]
       : []),
   ];
+  if (input.finalVerificationPrefill && input.finalVerificationPrefill.targetRevision === input.projection.integrationRevision) {
+    sections.push(required("final-verification-prefill", "final-verification", finalVerificationPrefillLines(input.finalVerificationPrefill).join("\n")));
+  }
   if (input.reviewSubmission) {
     sections.push(
       required(
         "current-submission",
         "current-submission",
         [
-          "Review this immutable submitted attempt, not a prior attempt or the project working tree.",
-          "Use artifact.read with diffArtifactHash for the authoritative submitted diff.",
+          ...currentSubmissionIntroLines(input.reviewSubmission),
+          ...currentSubmissionDiffLines(input.reviewSubmission),
           JSON.stringify(input.reviewSubmission, null, 2),
         ].join("\n")
       )

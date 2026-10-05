@@ -32,6 +32,8 @@ import {
   type CriterionReviewVerdict,
 } from "./acceptance-contracts.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import { captureArchitectEvidenceReads, architectTurnSessionId, type ArchitectReadProof } from "./review-evidence.js";
+import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import {
   PROJECT_DOC_MAX_BYTES,
@@ -61,7 +63,7 @@ import {
   type PlanningSourceReader,
 } from "./planning-tools.js";
 import { createRequestTriageTools } from "./request-triage.js";
-import { boundaryNeedsArchitect, boundaryResolutionGeneration, latestBoundary } from "./delivery-acceptance.js";
+import { boundaryNeedsArchitect, boundaryResolutionGeneration, latestBoundary, currentSubmissionReview, deriveReviewTaskPrefill, diffReviewTaskVerdicts } from "./delivery-acceptance.js";
 import { deliveryBoundaryRootCause, failingTestIdsByCategory, repairMemberIssues, withFailingIds } from "./repair-budget-contracts.js";
 import { resolveEvidenceContent } from "./evidence-content.js";
 import { validateRepairApproachDecision } from "./repair-approach-contracts.js";
@@ -81,6 +83,8 @@ export interface ArchitectToolsOptions {
   /** T6a: offered on a `delivery_boundary_failed` turn. */
   deliveryBoundaryResolutionAvailable?: boolean;
   evidenceStore?: EvidenceStore;
+  /** W3 (AR-R29): ledger backing same-session read authority for review_task overrides. Absent fails closed. */
+  architectReadLedger?: ToolInvocationLedger;
   architectAction?: {
     reason: ArchitectActionReason;
     sequence: number;
@@ -652,7 +656,7 @@ export function createArchitectTools(
         ...(answerPath
           ? []
           : [
-              reviewTaskTool(options.store, clock, options.evidenceStore),
+              reviewTaskTool(options.architectReadLedger, options.store, clock, options.evidenceStore),
               requestIntegrationTool(options.store, clock),
             ]),
         completeRunTool(options.store, clock, options.runPolicy ?? "finish"),
@@ -2229,6 +2233,8 @@ function answerGuidanceTool(
 }
 
 function reviewTaskTool(
+  // W3 (AR-R29): read-authority ledger for unverified -> verified overrides; undefined fails closed.
+  ledger: ToolInvocationLedger | undefined,
   store: SchedulerStore,
   clock: () => string,
   evidenceStore?: EvidenceStore
@@ -2285,6 +2291,42 @@ function reviewTaskTool(
       if (answered) return answered;
       const task = projection.tasks[input.taskId];
       if (!task) return errorOutput("unknown_task", `Unknown task ${input.taskId}.`);
+      // W3: runner-attested read proofs, populated by the confirm/override block below when criteria exist.
+      const w3CriterionProofs = new Map<string, ArchitectReadProof[]>();
+      const w3ClaimProofs = new Map<string, ArchitectReadProof[]>();
+      // W3: claim dispositions without criteria (criteria tasks use the block
+      // below). Same ledger-derived proofs; unknown claims stay refused by
+      // the kernel, and a missing ledger fails closed.
+      const w3BareReview = !task.acceptanceCriteria && projection.planningPolicyVersion === 1
+        ? currentSubmissionReview(projection.delivery, task)
+        : undefined;
+      if (w3BareReview?.stage === "completed" && (input.claimDispositions?.length ?? 0) > 0) {
+        const w3BareReads = ledger && context.sessionId === architectTurnSessionId(context.runId)
+          ? captureArchitectEvidenceReads(ledger, {
+            runId: context.runId,
+            sessionId: context.sessionId,
+            actorId: context.actor.id,
+            taskId: task.id,
+          }, evidenceStore)
+          : undefined;
+        for (const w3Disposition of input.claimDispositions ?? []) {
+          const w3Claim = w3BareReview.claims?.find((candidate) => candidate.id === w3Disposition.claimId);
+          if (!w3Claim) continue;
+          if (w3Claim.evidenceIds.length === 0) {
+            const w3DiffRead = (w3BareReads ?? []).find((proof) => proof.toolName === "artifact.read" && proof.artifactHash === w3BareReview.diffArtifactHash);
+            if (!w3DiffRead) {
+              return errorOutput("claim_override_read_required", `Worker claim ${w3Disposition.claimId} cites no evidence; verifying it requires this Architect session (${context.sessionId}) to have read the complete submitted diff ${w3BareReview.diffArtifactHash}.`);
+            }
+            w3ClaimProofs.set(w3Disposition.claimId, [w3DiffRead]);
+          } else {
+            const w3Missing = w3Claim.evidenceIds.filter((id) => !(w3BareReads ?? []).some((proof) => proof.evidenceId === id));
+            if (w3Missing.length > 0) {
+              return errorOutput("claim_override_read_required", `Worker claim ${w3Disposition.claimId} is unverified; verifying it requires this Architect session (${context.sessionId}) to have read the cited evidence: ${w3Missing.join(", ")}.`);
+            }
+            w3ClaimProofs.set(w3Disposition.claimId, (w3BareReads ?? []).filter((proof) => proof.evidenceId !== undefined && w3Claim.evidenceIds.includes(proof.evidenceId)));
+          }
+        }
+      }
       if (task.acceptanceCriteria) {
         if (!input.criterionVerdicts) {
           return errorOutput(
@@ -2341,6 +2383,78 @@ function reviewTaskTool(
             error instanceof Error ? error.message : String(error),
           );
         }
+        // W3 (AR-R29/AR-3): confirm-or-override against the runner prefill,
+        // mirroring the kernel so the Architect fails fast with the same
+        // rules. Read proofs are derived from the ledger below, never from
+        // model input (the parser drops proof-shaped fields).
+        const w3Review = projection.planningPolicyVersion === 1 ? currentSubmissionReview(projection.delivery, task) : undefined;
+        const w3Prefill = w3Review?.stage === "completed"
+          ? deriveReviewTaskPrefill({
+              task: {
+                id: task.id,
+                attempt: task.attempt,
+                changeSetId: task.changeSetId,
+                acceptanceCriteria: task.acceptanceCriteria,
+                criterionEvidenceLinks: task.criterionEvidenceLinks,
+              },
+              review: w3Review,
+            })
+          : undefined;
+        const w3Deviations = diffReviewTaskVerdicts(w3Prefill, input.criterionVerdicts ?? []);
+        let w3Reads: ArchitectReadProof[] | undefined;
+        const w3EnsureReads = (): ArchitectReadProof[] | undefined => {
+          if (w3Reads) return w3Reads;
+          if (!ledger) return undefined;
+          if (context.sessionId !== architectTurnSessionId(context.runId)) return undefined;
+          w3Reads = captureArchitectEvidenceReads(ledger, {
+            runId: context.runId,
+            sessionId: context.sessionId,
+            actorId: context.actor.id,
+            taskId: task.id,
+          }, evidenceStore);
+          return w3Reads;
+        };
+        for (const w3Deviation of w3Deviations) {
+          const w3Verdict = (input.criterionVerdicts ?? []).find((candidate) => candidate.criterionId === w3Deviation.criterionId);
+          if (!w3Verdict) continue; // Unreachable: deviations mirror the submitted verdicts.
+          if (!w3Deviation.deviates) {
+            if (w3Verdict.overrideReason !== undefined) {
+              return errorOutput("override_reason_without_deviation", `Task ${input.taskId} criterion ${w3Deviation.criterionId} confirms its prefilled verdict; an override reason without a deviation is refused.`);
+            }
+            continue;
+          }
+          if (typeof w3Verdict.overrideReason !== "string" || !w3Verdict.overrideReason.trim()) {
+            return errorOutput("criterion_override_reason_required", `Task ${input.taskId} criterion ${w3Deviation.criterionId} overrides its prefilled ${w3Deviation.prefilled} verdict; a non-empty override reason is required.`);
+          }
+          if (w3Deviation.upgrades) {
+            const w3Cover = (w3EnsureReads() ?? []).filter((proof) => proof.evidenceId !== undefined && w3Verdict.evidenceIds.includes(proof.evidenceId));
+            const w3Missing = w3Verdict.evidenceIds.filter((id) => !w3Cover.some((proof) => proof.evidenceId === id));
+            if (w3Missing.length > 0) {
+              return errorOutput("criterion_override_read_required", `Task ${input.taskId} criterion ${w3Deviation.criterionId} overrides prefilled unsatisfied with satisfied; this Architect session (${context.sessionId}) has not read the cited evidence: ${w3Missing.join(", ")}.`);
+            }
+            w3CriterionProofs.set(w3Deviation.criterionId, w3Cover);
+          }
+        }
+        if (w3Review?.stage === "completed") {
+          for (const w3Disposition of input.claimDispositions ?? []) {
+            const w3Claim = w3Review.claims?.find((candidate) => candidate.id === w3Disposition.claimId);
+            if (!w3Claim) continue; // Unknown claims stay refused by the kernel below.
+            const w3ReadsForClaim = w3EnsureReads();
+            if (w3Claim.evidenceIds.length === 0) {
+              const w3DiffRead = (w3ReadsForClaim ?? []).find((proof) => proof.toolName === "artifact.read" && proof.artifactHash === w3Review.diffArtifactHash);
+              if (!w3DiffRead) {
+                return errorOutput("claim_override_read_required", `Worker claim ${w3Disposition.claimId} cites no evidence; verifying it requires this Architect session (${context.sessionId}) to have read the complete submitted diff ${w3Review.diffArtifactHash}.`);
+              }
+              w3ClaimProofs.set(w3Disposition.claimId, [w3DiffRead]);
+            } else {
+              const w3Missing = w3Claim.evidenceIds.filter((id) => !(w3ReadsForClaim ?? []).some((proof) => proof.evidenceId === id));
+              if (w3Missing.length > 0) {
+                return errorOutput("claim_override_read_required", `Worker claim ${w3Disposition.claimId} is unverified; verifying it requires this Architect session (${context.sessionId}) to have read the cited evidence: ${w3Missing.join(", ")}.`);
+              }
+              w3ClaimProofs.set(w3Disposition.claimId, (w3ReadsForClaim ?? []).filter((proof) => proof.evidenceId !== undefined && w3Claim.evidenceIds.includes(proof.evidenceId)));
+            }
+          }
+        }
         if (input.decision === "approved" && validation.unsatisfiedCriterionIds.length > 0) {
           return errorOutput(
             "unsatisfied_criterion",
@@ -2371,6 +2485,7 @@ function reviewTaskTool(
             ? {
                 criterionVerdicts: input.criterionVerdicts.map((verdict) => ({
                   ...verdict,
+                  ...(w3CriterionProofs.get(verdict.criterionId) ? { overrideReadProof: w3CriterionProofs.get(verdict.criterionId) } : {}),
                   evidenceIds: [...verdict.evidenceIds],
                   ...(verdict.artifactHashes
                     ? { artifactHashes: [...verdict.artifactHashes] }
@@ -2382,7 +2497,7 @@ function reviewTaskTool(
             ? { planReconciliation: input.planReconciliation }
             : {}),
           ...(input.findingDispositions ? { findingDispositions: input.findingDispositions } : {}),
-          ...(input.claimDispositions ? { claimDispositions: input.claimDispositions } : {}),
+          ...(input.claimDispositions ? { claimDispositions: input.claimDispositions.map((disposition) => ({ ...disposition, ...(w3ClaimProofs.get(disposition.claimId) ? { readProof: w3ClaimProofs.get(disposition.claimId) } : {}) })) } : {}),
         },
       }, {
         type: "architect_action",
@@ -3142,6 +3257,7 @@ function criterionReviewVerdictSchema(): Record<string, unknown> {
         rationale: { type: "string", minLength: 1 },
       }, ["evidenceId", "rationale"]),
     },
+    overrideReason: { type: "string", minLength: 1 },
   }, ["criterionId", "verdict", "rationale", "evidenceIds"]);
 }
 
@@ -3165,12 +3281,14 @@ function parseCriterionReviewVerdicts(value: unknown): CriterionReviewVerdict[] 
       ? undefined
       : parseAcceptedFailures(candidate.acceptedFailures);
     if (candidate.acceptedFailures !== undefined && acceptedFailures === null) return null;
+    if (candidate.overrideReason !== undefined && typeof candidate.overrideReason !== "string") return null;
     verdicts.push({
       criterionId: candidate.criterionId,
       verdict: candidate.verdict,
       rationale: candidate.rationale,
       evidenceIds,
       ...(artifactHashes ? { artifactHashes } : {}),
+      ...(typeof candidate.overrideReason === "string" ? { overrideReason: candidate.overrideReason } : {}),
       ...(acceptedFailures ? { acceptedFailures } : {}),
     });
   }

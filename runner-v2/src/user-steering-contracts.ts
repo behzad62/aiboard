@@ -74,7 +74,7 @@ export type ArchitectActionReason =
     }
   | { type: "integration_approval_required"; taskId: string; changeSetId: string }
   | { type: "completion_decision_required"; runPolicy?: "plan_only" }
-  | { type: "final_verification_plan_required"; integrationRevision: string }
+  | { type: "final_verification_plan_required"; integrationRevision: string; planPrefill?: FinalVerificationPlanPrefill }
   | {
       type: "final_verification_review_required";
       taskId: string;
@@ -353,6 +353,37 @@ function parseCheckpoint(value: unknown): ArchitectActionCheckpoint {
   };
 }
 
+/** W3: strict shape for the runner-owned final-verification plan prefill. */
+function parseFinalVerificationPlanPrefill(value: unknown): FinalVerificationPlanPrefill {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Final-verification plan prefill is invalid.");
+  }
+  const candidate = value as Record<string, unknown>;
+  assertExactKeys(candidate, ["targetRevision", "profileDigest", "required", "undetected", "detectedSignals"]);
+  const categories = (key: string): FinalVerificationPlanPrefill["required"] => {
+    const list = candidate[key];
+    if (!Array.isArray(list) || !list.every((entry): entry is (typeof FINAL_VERIFICATION_CATEGORIES)[number] => typeof entry === "string" && (FINAL_VERIFICATION_CATEGORIES as readonly string[]).includes(entry))) {
+      throw new Error(`Final-verification plan prefill ${key} is invalid.`);
+    }
+    return [...list];
+  };
+  const signals = candidate.detectedSignals;
+  if (!Array.isArray(signals) || !signals.every((entry) => typeof entry === "object" && entry !== null && !Array.isArray(entry) && typeof (entry as Record<string, unknown>).category === "string" && (FINAL_VERIFICATION_CATEGORIES as readonly string[]).includes((entry as Record<string, unknown>).category as string))) {
+    throw new Error("Final-verification plan prefill detectedSignals are invalid.");
+  }
+  const targetRevision = candidate.targetRevision;
+  const profileDigest = candidate.profileDigest;
+  if (typeof targetRevision !== "string" || !targetRevision) throw new Error("Final-verification plan prefill targetRevision is invalid.");
+  if (typeof profileDigest !== "string" || !/^[a-f0-9]{64}$/.test(profileDigest)) throw new Error("Final-verification plan prefill profileDigest is invalid.");
+  return {
+    targetRevision,
+    profileDigest,
+    required: categories("required"),
+    undetected: categories("undetected"),
+    detectedSignals: (signals as { category: (typeof FINAL_VERIFICATION_CATEGORIES)[number]; source?: string; detail?: string }[]).map((entry) => ({ ...entry })),
+  };
+}
+
 export function parseArchitectActionReason(value: unknown): ArchitectActionReason {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Architect action reason is invalid.");
@@ -392,8 +423,12 @@ export function parseArchitectActionReason(value: unknown): ArchitectActionReaso
       return { type, ...(reason.runPolicy === "plan_only" ? { runPolicy: "plan_only" as const } : {}) };
     }
     case "final_verification_plan_required":
-      exact(["integrationRevision"]);
-      return { type, integrationRevision: text("integrationRevision") };
+      exact(["integrationRevision", "planPrefill"]);
+      return {
+        type,
+        integrationRevision: text("integrationRevision"),
+        ...(reason.planPrefill === undefined ? {} : { planPrefill: parseFinalVerificationPlanPrefill(reason.planPrefill) }),
+      };
     case "final_verification_review_required":
       exact(["taskId", "generationId", "submissionId", "targetRevision"]);
       return {
@@ -548,3 +583,4 @@ function parseRepairSource(value: unknown): Extract<
   throw new Error("Architect repair source is invalid.");
 }
 import type { PlanReconciliation } from "./task-contracts.js";
+import { FINAL_VERIFICATION_CATEGORIES, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";

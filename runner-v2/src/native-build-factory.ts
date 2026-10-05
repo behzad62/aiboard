@@ -1542,6 +1542,7 @@ export class NativeBuildFactory {
         artifacts: this.artifacts,
         contract: resolved.contract,
         contractRef: resolved.ref,
+        evidenceStore,
       });
     };
     const deliveryGit = requireGitRunner(gitContext).lifecycle("verification").run;
@@ -2038,6 +2039,7 @@ export class NativeBuildFactory {
       coverageReview: coverageReviewDriver,
       answerReview: answerReviewDriver,
       deliveryReview: deliveryReviewDriver,
+      architectReadLedger: ledger,
       deliveryBoundary: deliveryBoundaryDriver,
       planningHostCapabilities: () => buildCoverageHostCapabilities({
         coverageCandidateRuntimeIds: spec.verifierRuntimeIds,

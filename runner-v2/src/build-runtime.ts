@@ -131,6 +131,7 @@ import {
 } from "./handoff-snapshot.js";
 import type { HandoffSnapshotCommitRequest } from "./integration-manager.js";
 import type { EvidenceStore } from "./evidence-store.js";
+import type { ToolInvocationLedger } from "./tool-ledger.js";
 import type {
   DocumentTipRelation,
   ProjectDocCommitRequest,
@@ -139,6 +140,7 @@ import type {
 import type {
   FinalVerificationCategory,
   FinalVerificationPlan,
+  FinalVerificationPlanPrefill,
 } from "./final-verification-contracts.js";
 import type {
   FinalVerificationCheckResult,
@@ -152,7 +154,7 @@ import {
 } from "./task-scheduler.js";
 import { ToolRegistry } from "./tool-registry.js";
 import { redactSensitiveText } from "./sensitive-redaction.js";
-import type { FinalVerificationExecutionProfile } from "./final-verification-profile.js";
+import { buildFinalVerificationPlanPrefill, type FinalVerificationExecutionProfile } from "./final-verification-profile.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import { ArtifactNotFoundError } from "./artifact-store.js";
 import type { ArchitectActionReason } from "./user-steering-contracts.js";
@@ -429,6 +431,8 @@ export interface BuildRuntimeOptions {
   renewBudgetWindow?: (idempotencyKey: string, occurredAt: string) => void;
   providerRetryDeadlineMs?: () => number | undefined;
   evidenceStore?: EvidenceStore;
+  /** W3 (AR-R29): read-authority ledger for review_task overrides; absent fails closed. */
+  architectReadLedger?: ToolInvocationLedger;
   artifacts?: ArtifactStore;
   /** Commits Architect project documents on the integration branch. */
   projectDocs?: ProjectDocsPort;
@@ -878,6 +882,7 @@ export class BuildRuntime {
   private readonly renewBudgetWindow?: BuildRuntimeOptions["renewBudgetWindow"];
   private readonly providerRetryDeadlineMs?: BuildRuntimeOptions["providerRetryDeadlineMs"];
   private readonly evidenceStore?: EvidenceStore;
+  private readonly architectReadLedger?: ToolInvocationLedger;
   private readonly artifacts?: ArtifactStore;
   private readonly projectDocs?: ProjectDocsPort;
   private readonly finalVerificationDriver?: FinalVerificationCheckDriver;
@@ -945,6 +950,7 @@ export class BuildRuntime {
     this.renewBudgetWindow = options.renewBudgetWindow;
     this.providerRetryDeadlineMs = options.providerRetryDeadlineMs;
     this.evidenceStore = options.evidenceStore;
+    this.architectReadLedger = options.architectReadLedger;
     this.artifacts = options.artifacts;
     this.projectDocs = options.projectDocs;
     this.finalVerificationDriver = options.finalVerificationDriver;
@@ -1989,6 +1995,7 @@ export class BuildRuntime {
     ) {
       await this.runArchitect({
         type: "final_verification_plan_required",
+        ...(await this.finalVerificationPlanPrefill(projection.integrationRevision)),
         integrationRevision: projection.integrationRevision,
       }, projection);
       const planned = this.projection().finalVerification?.current;
@@ -4100,6 +4107,23 @@ export class BuildRuntime {
     });
   }
 
+  /**
+   * W3: runner-owned final-verification plan prefill for the current
+   * integration revision. Guidance only: the plan tool stays authoritative,
+   * and a profile failure omits the prefill instead of breaking the turn.
+   */
+  private async finalVerificationPlanPrefill(
+    integrationRevision: string,
+  ): Promise<{ planPrefill?: FinalVerificationPlanPrefill }> {
+    if (!this.finalVerificationProfileFor) return {};
+    try {
+      const profile = await this.finalVerificationProfileFor(integrationRevision);
+      return { planPrefill: buildFinalVerificationPlanPrefill(this.runId, profile) };
+    } catch {
+      return {};
+    }
+  }
+
   private async runArchitect(
     reason: ArchitectActionReason,
     projection: SchedulerProjection
@@ -4182,6 +4206,7 @@ export class BuildRuntime {
         ? { discardFinalVerificationProfile: this.discardFinalVerificationProfile }
         : {}),
       ...(this.evidenceStore ? { evidenceStore: this.evidenceStore } : {}),
+      ...(this.architectReadLedger ? { architectReadLedger: this.architectReadLedger } : {}),
       ...(this.artifacts ? { artifacts: this.artifacts } : {}),
     }));
     const registered = this.architectLifecycleProbe

@@ -228,6 +228,20 @@ export function planFinalVerification(
 /** The snake-case name used by the Architect lifecycle tool. */
 export const plan_final_verification = planFinalVerification;
 
+/**
+ * W3: runner-owned final-verification plan prefill. Every detected category
+ * is already required; non-detected categories carry no invented rationale
+ * or inspection. Bound to the inspected revision and profile digest so stale
+ * facts cannot be confirmed after revision drift.
+ */
+export interface FinalVerificationPlanPrefill {
+  targetRevision: string;
+  profileDigest: string;
+  required: FinalVerificationCategory[];
+  undetected: FinalVerificationCategory[];
+  detectedSignals: FinalVerificationDetectedSignal[];
+}
+
 /** JSON-schema surface used when exposing the contract as a native tool. */
 export function finalVerificationPlanSchema(): Record<string, unknown> {
   return {

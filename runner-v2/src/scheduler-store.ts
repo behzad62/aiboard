@@ -1,6 +1,6 @@
 import { validateRepairApproachDecision } from "./repair-approach-contracts.js";
 import { findOscillatingRepairAttempt } from "./review-key.js";
-import { validateReadCapture, validateCitations, isMutationSurvivorFindingId } from "./review-evidence.js";
+import { validateReadCapture, validateCitations, isMutationSurvivorFindingId, validateArchitectReadProof, architectTurnSessionId, architectReadProofsCoverEvidence, type ArchitectReadProof } from "./review-evidence.js";
 import {
   DELIVERY_ACCEPTANCE_RUNNER_ID,
   DELIVERY_REVIEW_RUNNER_ID,
@@ -38,6 +38,10 @@ import {
   type DeliveryReviewRecord,
   type DeliveryState,
   type DeliveryTestReport,
+  currentSubmissionReview,
+  deliveryReviewHasMechanicalLabels,
+  deriveReviewTaskPrefill,
+  diffReviewTaskVerdicts,
 } from "./delivery-acceptance.js";
 import { applyLateFindingRule } from "./review-delta.js";
 import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
@@ -3273,6 +3277,9 @@ export function acceptanceContractAuditProjection(
             verdict: verdict.verdict,
             rationale: verdict.rationale,
             evidenceIds: [...verdict.evidenceIds],
+            // W3: an override stays durably recorded and audit-visible; dropping the reason here would
+            // hide why the submitted verdict deviates from the runner prefill.
+            ...(verdict.overrideReason !== undefined ? { overrideReason: verdict.overrideReason } : {}),
             ...(verdict.artifactHashes
               ? { artifactHashes: [...verdict.artifactHashes] }
               : {}),
@@ -5432,6 +5439,52 @@ export function reduceSchedulerEvent(
         if (decision === "rejected" && validation.unsatisfiedCriterionIds.length === 0) {
           throw new Error(`Rejected task ${taskId} must identify an unsatisfied criterion.`);
         }
+        // W3 (AR-R29/AR-3): confirm-or-override against the runner prefill. Only
+        // the verdict word deviates; evidence selection stays governed by the
+        // existing criterion validation above. Legacy runs and criteria without
+        // a reviewer verdict keep legacy judging (an override reason there is
+        // refused as meaningless).
+        const w3Review = next.planningPolicyVersion === 1 ? currentSubmissionReview(next.delivery, task) : undefined;
+        const w3Prefill = w3Review?.stage === "completed"
+          ? deriveReviewTaskPrefill({
+              task: {
+                id: task.id,
+                attempt: task.attempt,
+                changeSetId: task.changeSetId,
+                acceptanceCriteria: task.acceptanceCriteria,
+                criterionEvidenceLinks: links,
+              },
+              review: w3Review,
+            })
+          : undefined;
+        const w3Deviations = diffReviewTaskVerdicts(w3Prefill, submittedVerdicts);
+        const w3SessionId = architectTurnSessionId(event.runId);
+        for (const [w3Index, w3Verdict] of submittedVerdicts.entries()) {
+          const w3Deviation = w3Deviations[w3Index]!;
+          const w3Reason = (w3Verdict as { overrideReason?: unknown }).overrideReason;
+          if (!w3Deviation.deviates) {
+            if (w3Reason !== undefined) {
+              throw new Error(`Task ${taskId} criterion ${w3Deviation.criterionId} confirms its prefilled verdict; an override reason without a deviation is refused.`);
+            }
+            continue;
+          }
+          if (typeof w3Reason !== "string" || !w3Reason.trim()) {
+            throw new Error(`Task ${taskId} criterion ${w3Deviation.criterionId} overrides its prefilled ${w3Deviation.prefilled} verdict; a non-empty override reason is required.`);
+          }
+          if (w3Deviation.upgrades) {
+            // A missing proof packet is missing coverage, not a malformed packet: report it with the
+            // criterion wording (has not read) like a partial packet. Array packets still get structural
+            // validation below, so malformed entries fail closed with their precise reason.
+            const w3RawProof = (w3Verdict as { overrideReadProof?: unknown }).overrideReadProof;
+            const w3Proofs = Array.isArray(w3RawProof)
+              ? validatedW3ReadProofs(w3RawProof, event.runId, w3SessionId, `Task ${taskId} criterion ${w3Deviation.criterionId} override`)
+              : [];
+            const w3Missing = architectReadProofsCoverEvidence(w3Proofs, w3Verdict.evidenceIds);
+            if (w3Missing.length > 0) {
+              throw new Error(`Task ${taskId} criterion ${w3Deviation.criterionId} overrides prefilled unsatisfied with satisfied; this Architect session (${w3SessionId}) has not read the cited evidence: ${w3Missing.join(", ")}.`);
+            }
+          }
+        }
         criterionVerdicts = submittedVerdicts.map((verdict) => ({
           ...verdict,
           evidenceIds: [...verdict.evidenceIds],
@@ -7490,7 +7543,8 @@ function deliveryReportDelivered(state: DeliveryState, event: SchedulerEvent): v
     const id = requiredString(candidate, "id");
     if (seen.has(id)) throw new Error(`Duplicate worker claim ${id}.`);
     seen.add(id);
-    return { id, text: requiredString(candidate, "text"), evidenceIds: stringArray(candidate, "evidenceIds") };
+    const mechanical = candidate.mechanical === undefined ? undefined : parseMechanicalClaimAssessment(candidate.mechanical, id);
+    return { id, text: requiredString(candidate, "text"), evidenceIds: stringArray(candidate, "evidenceIds"), ...(mechanical ? { mechanical } : {}) };
   });
   for (const criterionId of review.criteriaIds) {
     if (!seen.has(`claim:${criterionId}`)) {
@@ -7525,6 +7579,9 @@ function deliveryReviewRecorded(current: SchedulerProjection, state: DeliverySta
     if (review.reviewEvidencePolicyVersion === 1 && candidate.status === "verified") {
       if (review.readCapture?.sessionId !== sessionId) throw new Error("Verified claim citation requires current session read capture.");
       citations = validateCitations(candidate.citations, review.readCapture);
+    }
+    if (claim.mechanical?.label === "unverified_claim" && candidate.status === "verified") {
+      throw new Error(`Worker claim ${claimId} is mechanically labeled unverified_claim; the reviewer cannot record it verified.`);
     }
     return { claimId, claim: claim.text, status: candidate.status, rationale: requiredString(candidate, "rationale"), ...(citations ? { citations } : {}) };
   });
@@ -7649,6 +7706,15 @@ function parseFailingTestIds(value: Record<string, unknown>): { failingTestIds?:
   return { failingTestIds: [...ids as string[]] };
 }
 
+/** W3 (AR-R29): the runner-computed mechanical floor label on a worker claim. */
+function parseMechanicalClaimAssessment(value: unknown, claimId: string): { label: "verified" | "unverified_claim" | "reviewer_judgement"; reason: string } {
+  if (!isRecord(value)) throw new Error(`Worker claim ${claimId} mechanical assessment is invalid.`);
+  if (value.label !== "verified" && value.label !== "unverified_claim" && value.label !== "reviewer_judgement") {
+    throw new Error(`Worker claim ${claimId} mechanical label is invalid.`);
+  }
+  return { label: value.label, reason: requiredString(value, "reason") };
+}
+
 function parseDeliveryTestReport(value: unknown, label: string): DeliveryTestReport {
   if (!isRecord(value) || (value.status !== "passed" && value.status !== "failed" && value.status !== "unknown")) {
     throw new Error(`${label} is invalid.`);
@@ -7738,6 +7804,24 @@ function parseDeliveryDepth(value: unknown): DeliveryDepthRecord {
  * blocking deliverable findings and of unverified worker claims. Each list
  * is applied on its own; an unknown or already-disposed id is refused.
  */
+/**
+ * W3 (AR-R29): validate runner-attested Architect read proofs on an override.
+ * Every entry must be well-formed; callers additionally check coverage of the
+ * cited evidence (or of the submitted diff for evidence-less claims).
+ */
+function validatedW3ReadProofs(value: unknown, runId: string, sessionId: string, label: string): ArchitectReadProof[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${label} requires this Architect session (${sessionId}) to have read the cited evidence.`);
+  }
+  return value.map((entry) => {
+    try {
+      return validateArchitectReadProof(entry, runId, sessionId);
+    } catch (error) {
+      throw new Error(`${label} carries an invalid Architect read proof: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+}
+
 function applyDeliveryDispositions(
   next: SchedulerProjection,
   task: BuildTask,
@@ -7804,6 +7888,31 @@ function applyDeliveryDispositions(
         throw new Error("The Architect disposes of an unverified claim only by verifying it.");
       }
       const rationale = requiredString(raw, "rationale");
+      // W3 (AR-R29): an unverified -> verified claim disposition needs
+      // same-session reads of the claim's cited evidence (or, for an
+      // evidence-less claim, a complete read of the submitted diff). Reviews
+      // without mechanical claim labels keep legacy rationale-only behavior.
+      if (deliveryReviewHasMechanicalLabels(review)) {
+        const w3Claim = review.claims?.find((candidate) => candidate.id === claimId);
+        const w3ClaimEvidenceIds = w3Claim?.evidenceIds ?? [];
+        const w3SessionId = architectTurnSessionId(event.runId);
+        const w3RawProof = (raw as { readProof?: unknown }).readProof;
+        if (w3ClaimEvidenceIds.length === 0 && !Array.isArray(w3RawProof)) {
+          throw new Error(`Worker claim ${claimId} cites no evidence; verifying it requires this Architect session (${w3SessionId}) to have read the complete submitted diff ${review.diffArtifactHash}.`);
+        }
+        const w3ClaimProofs = validatedW3ReadProofs(w3RawProof, event.runId, w3SessionId, `Worker claim ${claimId} disposition`);
+        if (w3ClaimEvidenceIds.length === 0) {
+          const w3DiffRead = w3ClaimProofs.some((proof) => proof.toolName === "artifact.read" && proof.artifactHash === review.diffArtifactHash);
+          if (!w3DiffRead) {
+            throw new Error(`Worker claim ${claimId} cites no evidence; verifying it requires this Architect session (${w3SessionId}) to have read the complete submitted diff ${review.diffArtifactHash}.`);
+          }
+        } else {
+          const w3Missing = architectReadProofsCoverEvidence(w3ClaimProofs, w3ClaimEvidenceIds);
+          if (w3Missing.length > 0) {
+            throw new Error(`Worker claim ${claimId} is unverified; verifying it requires this Architect session (${w3SessionId}) to have read the cited evidence: ${w3Missing.join(", ")}.`);
+          }
+        }
+      }
       review.claimVerdicts = (review.claimVerdicts ?? []).map((verdict) => verdict.claimId === claimId
         ? { ...verdict, disposition: { status: "verified" as const, rationale, resolvedAt: event.occurredAt } }
         : verdict);

@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { decideUnverifiedClaim, type ClaimCitation } from "./evidence-applicability.js";
+import type { EvidenceRecord } from "./evidence-store.js";
+import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
 import { assessChangeRisk, type ChangeRiskInput, type ChangeRiskLevel, type ModelTrackRecordSnapshot } from "./change-risk.js";
 import {
   PLANNING_FINDING_CATEGORIES,
@@ -49,7 +52,16 @@ export type DeliveryReviewStage =
   | "completed"
   | "abandoned";
 
+export type MechanicalClaimLabel = "verified" | "unverified_claim" | "reviewer_judgement";
+
+export interface MechanicalClaimAssessment {
+  label: MechanicalClaimLabel;
+  reason: string;
+}
+
 export interface DeliveryClaim {
+  /** W3 (AR-R29): runner-computed mechanical floor. Absent on legacy claims. */
+  mechanical?: MechanicalClaimAssessment;
   id: string;
   text: string;
   evidenceIds: string[];
@@ -613,10 +625,252 @@ export function diffLineCounts(diffText: string): { linesAdded: number; linesRem
  * acceptance criterion (with the evidence the worker linked to it), plus the
  * worker's own summary.
  */
+/** W3 (AR-R29): the submitted link facts the mechanical labeler reads. */
+export interface MechanicalClaimLink {
+  readonly evidenceId: string;
+  readonly artifactHashes?: readonly string[];
+  readonly freshness?: CriterionEvidenceLink["freshness"];
+}
+
+/**
+ * W3 (AR-R29, S3 L2): mechanically classify one delivery claim against the
+ * actual durable evidence records, reusing decideUnverifiedClaim (never a
+ * weaker reimplementation). Conservative floor: missing/fabricated evidence,
+ * failed command facts, stale or missing revision/artifact binding, and empty
+ * link sets are unverified_claim; only mechanically matching command evidence
+ * is verified; everything mechanics cannot decide (including the freeform
+ * summary) is reviewer_judgement.
+ */
+export function labelDeliveryClaim(input: {
+  claimId: string;
+  links: readonly MechanicalClaimLink[];
+  recordsById: ReadonlyMap<string, EvidenceRecord>;
+  isSummary: boolean;
+}): MechanicalClaimAssessment {
+  if (input.isSummary) {
+    return {
+      label: "reviewer_judgement",
+      reason: "Freeform worker summary; no mechanical command/exit/revision/artifact comparison applies.",
+    };
+  }
+  if (input.links.length === 0) {
+    return {
+      label: "unverified_claim",
+      reason: `Criterion claim ${input.claimId} cites no evidence (an empty link set proves nothing).`,
+    };
+  }
+  let judgement: MechanicalClaimAssessment | undefined;
+  for (const link of input.links) {
+    const perLink = labelDeliveryClaimLink(input.claimId, link, input.recordsById);
+    // A criterion with multiple links is verified only when every required
+    // link is mechanically verified; one unverified link blocks certainty.
+    if (perLink.label === "unverified_claim") return perLink;
+    if (perLink.label === "reviewer_judgement" && !judgement) judgement = perLink;
+  }
+  if (judgement) return judgement;
+  return {
+    label: "verified",
+    reason: `All ${input.links.length} cited evidence record(s) mechanically match for ${input.claimId}.`,
+  };
+}
+
+function labelDeliveryClaimLink(
+  claimId: string,
+  link: MechanicalClaimLink,
+  recordsById: ReadonlyMap<string, EvidenceRecord>,
+): MechanicalClaimAssessment {
+  const record = recordsById.get(link.evidenceId);
+  if (record && record.fact.kind !== "command") {
+    // Non-command facts carry no command/exit/revision/artifacts to compare;
+    // mechanics cannot decide them, so the residue stays reviewer judgement.
+    const assessed = decideUnverifiedClaim({
+      claim: {
+        evidenceId: link.evidenceId,
+        command: "",
+        args: [],
+        exitCode: 0,
+        snapshotRevision: "",
+        artifactHashes: [...(link.artifactHashes ?? [])],
+      },
+      recordsById,
+      hasSemanticResidue: true,
+      semanticNote: `cited evidence ${link.evidenceId} is ${record.fact.kind}, not a command record`,
+    });
+    return { label: assessed.status, reason: assessed.reason };
+  }
+  if (record?.fact.kind === "command" && (record.fact.signal !== null || record.fact.timedOut || record.fact.cancelled)) {
+    return {
+      label: "unverified_claim",
+      reason: `Cited evidence ${record.id} did not complete successfully (signal ${String(record.fact.signal)}, timed out ${String(record.fact.timedOut)}, cancelled ${String(record.fact.cancelled)}).`,
+    };
+  }
+  if (record?.fact.kind === "command" && !link.freshness) {
+    return {
+      label: "unverified_claim",
+      reason: `Cited evidence ${link.evidenceId} for ${claimId} has no revision binding (missing working-tree freshness).`,
+    };
+  }
+  if (record?.fact.kind === "command" && link.freshness && link.freshness.status !== "current") {
+    return {
+      label: "unverified_claim",
+      reason: `Cited evidence ${link.evidenceId} for ${claimId} is ${link.freshness.status}: ${link.freshness.reason ?? "working-tree identity does not match the submitted tree"}.`,
+    };
+  }
+  // The criterion claim asserts green evidence at a bound revision with the
+  // linked artifacts. Command/args come from the durable record itself: the
+  // worker submits no independent command assertion, so exit, revision
+  // presence, and artifact binding are the deciding mechanical dimensions.
+  const citation: ClaimCitation = {
+    evidenceId: link.evidenceId,
+    command: record?.fact.kind === "command" ? record.fact.command : "",
+    args: record?.fact.kind === "command" ? [...record.fact.args] : [],
+    exitCode: 0,
+    snapshotRevision: record?.fact.kind === "command" ? (record.fact.repositoryRevision ?? "") : "",
+    artifactHashes: [...(link.artifactHashes ?? [])],
+  };
+  const assessed = decideUnverifiedClaim({ claim: citation, recordsById, hasSemanticResidue: false });
+  return { label: assessed.status, reason: assessed.reason };
+}
+
+/** W3 (AR-R29/AR-3): one runner-owned prefilled criterion of review_task. */
+export interface ReviewTaskPrefilledCriterion {
+  criterionId: string;
+  /** Deterministic join to the reviewer claim verdict. */
+  claimId: string;
+  prefilledVerdict: "satisfied" | "unsatisfied";
+  /** Submitted criterion evidence links; reviewer citations stay per-claim below, never sprayed. */
+  prefilledEvidenceIds: string[];
+  reviewerStatus: "verified" | "unverified";
+  reviewerRationale: string;
+  reviewerCitations: import("./review-evidence.js").ReviewCitation[];
+  mechanicalLabel?: MechanicalClaimLabel;
+  mechanicalReason?: string;
+}
+
+/** W3 (AR-R29/AR-3): the runner-owned prefilled review_task disposition. */
+export interface ReviewTaskPrefill {
+  taskId: string;
+  reviewId: string;
+  submissionAttempt: number;
+  changeSetId: string;
+  reviewSatisfied: boolean;
+  openBlockingFindingIds: string[];
+  criteria: ReviewTaskPrefilledCriterion[];
+}
+
+/**
+ * W3: a review carries the mechanical floor exactly when every durable claim
+ * carries a runner-computed label. Pre-W3 reviews carry none and keep legacy
+ * judging, so every stored log replays unchanged.
+ */
+export function deliveryReviewHasMechanicalLabels(review: DeliveryReviewRecord): boolean {
+  return (review.claims?.length ?? 0) > 0 && (review.claims ?? []).every((claim) => claim.mechanical !== undefined);
+}
+
+/**
+ * W3 (AR-R29/AR-3): derive the runner-owned review_task prefill from the
+ * completed independent delivery review of the CURRENT submission plus runner
+ * evidence. Undefined when there is no completed current-submission review or
+ * when the review predates mechanical labels (legacy judging applies). A
+ * criterion is prefilled satisfied only when the reviewer verified it AND no
+ * mechanical unverified_claim floor binds it; raw reviewer status is used
+ * (Architect dispositions never rewrite the prefill). Criteria without a
+ * reviewer verdict get no entry and stay legacy-judged.
+ */
+export function deriveReviewTaskPrefill(input: {
+  task: {
+    id: string;
+    attempt: number;
+    changeSetId?: string;
+    /** Optional like BuildTask: absent criteria prefill no entries (legacy judging for the task). */
+    acceptanceCriteria?: readonly { id: string }[];
+    criterionEvidenceLinks?: readonly CriterionEvidenceLink[];
+  };
+  review: DeliveryReviewRecord | undefined;
+}): ReviewTaskPrefill | undefined {
+  const review = input.review;
+  if (!review || review.stage !== "completed") return undefined;
+  if (review.taskId !== input.task.id) return undefined;
+  if (review.submissionAttempt !== input.task.attempt) return undefined;
+  if (!input.task.changeSetId || review.changeSetId !== input.task.changeSetId) return undefined;
+  if (!deliveryReviewHasMechanicalLabels(review)) return undefined;
+  const criteria: ReviewTaskPrefilledCriterion[] = [];
+  for (const criterion of input.task.acceptanceCriteria ?? []) {
+    const claimId = `claim:${criterion.id}`;
+    const verdict = review.claimVerdicts?.find((candidate) => candidate.claimId === claimId);
+    if (!verdict) continue;
+    const claim = review.claims?.find((candidate) => candidate.id === claimId);
+    const mechanical = claim?.mechanical;
+    const prefilledVerdict = mechanical?.label === "unverified_claim" || verdict.status !== "verified"
+      ? "unsatisfied"
+      : "satisfied";
+    criteria.push({
+      criterionId: criterion.id,
+      claimId,
+      prefilledVerdict,
+      prefilledEvidenceIds: [...new Set(
+        (input.task.criterionEvidenceLinks ?? [])
+          .filter((link) => link.criterionId === criterion.id)
+          .map((link) => link.evidenceId),
+      )].sort(),
+      reviewerStatus: verdict.status,
+      reviewerRationale: verdict.rationale,
+      reviewerCitations: [...(verdict.citations ?? [])],
+      ...(mechanical ? { mechanicalLabel: mechanical.label, mechanicalReason: mechanical.reason } : {}),
+    });
+  }
+  return {
+    taskId: input.task.id,
+    reviewId: review.reviewId,
+    submissionAttempt: review.submissionAttempt,
+    changeSetId: review.changeSetId,
+    reviewSatisfied: review.satisfied ?? false,
+    openBlockingFindingIds: openBlockingFindings(review).map((finding) => finding.id),
+    criteria,
+  };
+}
+
+/** W3: one submitted verdict compared against its prefilled verdict. */
+export interface ReviewTaskVerdictDeviation {
+  criterionId: string;
+  /** Undefined when the criterion has no prefill (legacy judging for it). */
+  prefilled: "satisfied" | "unsatisfied" | undefined;
+  submitted: "satisfied" | "unsatisfied";
+  deviates: boolean;
+  upgrades: boolean;
+}
+
+/**
+ * W3: compare submitted criterion verdicts against the prefill, in input
+ * order. Only the verdict word deviates; evidence selection stays governed by
+ * the existing criterion evidence validation.
+ */
+export function diffReviewTaskVerdicts(
+  prefill: ReviewTaskPrefill | undefined,
+  verdicts: readonly { criterionId: string; verdict: "satisfied" | "unsatisfied" }[],
+): ReviewTaskVerdictDeviation[] {
+  const prefilledByCriterion = new Map(
+    (prefill?.criteria ?? []).map((entry) => [entry.criterionId, entry.prefilledVerdict] as const),
+  );
+  return verdicts.map((verdict) => {
+    const prefilled = prefilledByCriterion.get(verdict.criterionId);
+    const deviates = prefilled !== undefined && prefilled !== verdict.verdict;
+    return {
+      criterionId: verdict.criterionId,
+      prefilled,
+      submitted: verdict.verdict,
+      deviates,
+      upgrades: deviates && prefilled === "unsatisfied" && verdict.verdict === "satisfied",
+    };
+  });
+}
+
 export function deliveryClaimsFromSubmission(input: {
   summary: string;
   criteria: readonly { id: string; text: string }[];
-  links: readonly { criterionId: string; evidenceId: string; freshness?: import("./acceptance-contracts.js").CriterionEvidenceLink["freshness"] }[];
+  links: readonly { criterionId: string; evidenceId: string; artifactHashes?: readonly string[]; freshness?: import("./acceptance-contracts.js").CriterionEvidenceLink["freshness"] }[];
+  /** W3: when present, every claim carries its mechanical label; absent keeps legacy unlabeled claims. */
+  evidenceById?: ReadonlyMap<string, EvidenceRecord>;
 }): DeliveryClaim[] {
   const claims: DeliveryClaim[] = input.criteria.map((criterion) => ({
     id: `claim:${criterion.id}`,
@@ -626,6 +880,16 @@ export function deliveryClaimsFromSubmission(input: {
       .map((link) => link.evidenceId))].sort(),
   }));
   claims.push({ id: "claim:summary", text: input.summary, evidenceIds: [] });
+  if (input.evidenceById) {
+    for (const claim of claims) {
+      claim.mechanical = labelDeliveryClaim({
+        claimId: claim.id,
+        links: input.links.filter((link) => `claim:${link.criterionId}` === claim.id),
+        recordsById: input.evidenceById,
+        isSummary: claim.id === "claim:summary",
+      });
+    }
+  }
   return claims;
 }
 

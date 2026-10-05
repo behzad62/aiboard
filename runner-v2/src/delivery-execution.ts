@@ -102,6 +102,8 @@ export async function loadDeliverableReviewInputs(input: {
   contract?: ExecutionTaskContract;
   /** C5: the exact accepted revision/digest/task identity the contract was resolved at. */
   contractRef?: TaskContractRef;
+  /** W3: when present, delivery claims carry mechanical labels; absent keeps legacy unlabeled claims. */
+  evidenceStore?: Pick<EvidenceStore, "getByIds">;
 }): Promise<DeliverableReviewInputs> {
   const { task, submission } = input;
   const changeSet = submission.changeSet;
@@ -124,6 +126,13 @@ export async function loadDeliverableReviewInputs(input: {
   }
   const diffText = diffBytes.toString("utf8");
   const criteria = (task.acceptanceCriteria ?? []).map((criterion) => ({ id: criterion.id, text: criterion.text }));
+  const claimRecordsById = input.evidenceStore
+    ? new Map(input.evidenceStore.getByIds({
+        runId: changeSet.runId,
+        taskId: task.id,
+        ids: [...new Set((changeSet.criterionEvidenceLinks ?? []).map((link) => link.evidenceId))],
+      }).map((record) => [record.id, record] as const))
+    : undefined;
   return {
     taskId: task.id,
     attempt: task.attempt,
@@ -141,6 +150,7 @@ export async function loadDeliverableReviewInputs(input: {
       summary: submission.summary,
       criteria,
       links: changeSet.criterionEvidenceLinks ?? [],
+      ...(claimRecordsById ? { evidenceById: claimRecordsById } : {}),
     }),
     authorRuntimeId: submission.authorRuntimeId,
     ...(input.contract ? { contract: input.contract } : {}),

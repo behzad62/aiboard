@@ -47,6 +47,8 @@ import type {
   StopNotesRequest,
 } from "./build-runtime.js";
 import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
+import { currentSubmissionReview, deriveReviewTaskPrefill, type ReviewTaskPrefill } from "./delivery-acceptance.js";
+import type { BuildTask } from "./task-contracts.js";
 import { HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH } from "./handoff-snapshot.js";
 import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import type { CapabilityRegistry } from "./capability-registry.js";
@@ -166,6 +168,25 @@ export interface ArchitectCommandWorkspaceProvider {
   readonly workspaceKind: "independent-verifier";
   create(targetRevision: string): Promise<{ readonly path: string }>;
   cleanup(): Promise<void>;
+}
+
+/** W3 (AR-3): runner-owned prefilled disposition for new-policy confirm/override turns, else {}. */
+function architectDispositionPrefillSpread(
+  projection: SchedulerProjection,
+  task: BuildTask,
+): { dispositionPrefill?: ReviewTaskPrefill } {
+  if (projection.planningPolicyVersion !== 1) return {};
+  const prefill = deriveReviewTaskPrefill({
+    task: {
+      id: task.id,
+      attempt: task.attempt,
+      changeSetId: task.changeSetId,
+      acceptanceCriteria: task.acceptanceCriteria ?? [],
+      criterionEvidenceLinks: task.criterionEvidenceLinks,
+    },
+    review: currentSubmissionReview(projection.delivery, task),
+  });
+  return prefill ? { dispositionPrefill: prefill } : {};
 }
 
 export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
@@ -792,6 +813,7 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       reason: request.reason,
       projection,
       ...(reviewSubmission ? { reviewSubmission } : {}),
+      ...(request.reason.type === "final_verification_plan_required" && request.reason.planPrefill ? { finalVerificationPrefill: request.reason.planPrefill } : {}),
       instructions,
       skills,
       memories,
@@ -898,6 +920,7 @@ export async function loadArchitectReviewSubmission(
   }
   return {
     taskId: task.id,
+    ...architectDispositionPrefillSpread(projection, task),
     attempt: task.attempt,
     changeSetId: changeSet.id,
     baselineRevision: changeSet.baselineRevision,

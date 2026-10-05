@@ -791,7 +791,7 @@ export class NativeDeliverableReviewRuntime {
     sections.push(section(
       "worker-claims",
       "claims",
-      `Worker claims to judge one by one (verified only when you confirmed it yourself):\n${JSON.stringify(inputs.claims, null, 2)}`,
+      `Worker claims to judge one by one (verified only when you confirmed it yourself):${inputs.claims.some((claim) => claim.mechanical) ? " A claim mechanically labeled unverified_claim cannot be verified; mark it unverified with a rationale. A reviewer_judgement label leaves the verdict to you." : ""}\n${JSON.stringify(inputs.claims, null, 2)}`,
     ));
     // W2 (AR-R28): the late-finding rule rides the fix re-review verdict
     // pass, before the released prior findings.
