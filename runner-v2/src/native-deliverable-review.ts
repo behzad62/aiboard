@@ -1,4 +1,5 @@
 import { captureReviewReads } from "./review-evidence.js";
+import type { ValidationScope } from "./validation-scope.js";
 import { createHash } from "node:crypto";
 import { resolveEvidenceContent } from "./evidence-content.js";
 import {
@@ -136,6 +137,12 @@ export interface DeliverableReviewInputs {
   unresolvedConcerns: string[];
   claims: DeliveryClaim[];
   authorRuntimeId: string;
+  /**
+   * IV-1: the worker's durable validation-scope report (a claim, not
+   * evidence). Shown on the findings and verdict passes, never on the
+   * obligations-before-diff pass.
+   */
+  validationScope?: ValidationScope;
   /**
    * W2 (AR-R28): delta-first re-review input, assembled by the runtime
    * from the prior completed review and the audited Git trees. Absent on
@@ -755,6 +762,16 @@ export class NativeDeliverableReviewRuntime {
     // findings are never included here — the verdict context releases
     // them only after the reviewer records its own findings.
     for (const deltaSection of this.deltaContextSections(context)) sections.push(deltaSection);
+    // IV-1: the worker's scope report rides findings and verdict (this
+    // code is past the obligations early-return). A claim to check against
+    // the diff and the task validation rationales — never evidence.
+    if (inputs.validationScope) {
+      sections.push(section(
+        "validation-scope",
+        "report",
+        `Worker validation-scope report (a claim, not evidence — judge it against the diff, never the reverse):\n${JSON.stringify(inputs.validationScope, null, 2)}\nCompare its changed/verified/testsRun/notRun against the actual diff/changed paths and the task's targeted and affected-scope validation rationales in the contract block.`,
+      ));
+    }
     if (context.depthRecords) {
       sections.push(section(
         "runner-depth",
@@ -1213,6 +1230,7 @@ export class NativeDeliverableReviewRuntime {
           workerSummary: inputs.workerSummary,
           unresolvedConcerns: inputs.unresolvedConcerns,
           ...(task.kind !== undefined && task.kind !== "implementation" ? { repairTaskKind: task.kind } : {}),
+          ...(inputs.validationScope !== undefined ? { validationScope: inputs.validationScope } : {}),
         }),
         // W1 (F6): the candidate side binds the ACTUAL head content
         // tree, never the commit label: an identical resubmission under
@@ -1752,7 +1770,8 @@ export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTie
             : "At this risk tier you must use at least one inspection tool before record_deliverable_findings; the kernel refuses findings without a real inspection.",
           "Severity blocking means a criterion is not met or the change is unsafe; advisory means a gap worth noting. An empty list means the change checks out.",
           ...(isReReview ? ["On this fix re-review, independently inspect and judge the repair delta first, including whether the correction introduces any regression or over-correction. Prior findings are withheld until the later verdict pass; record your own findings without inferring or reconstructing them."] : []),
-          "You have NOT seen the worker's report. Form your own view first.",
+          "The worker's summary and claims remain withheld until the verdict pass; judge the diff first.",
+          "Compare the actual diff/changed paths against the worker validation-scope report (changed/verified/testsRun/notRun) when present and the task's targeted and affected-scope validation rationales: if impacted areas or direct dependents reasonably implied by the diff or contract were not run and notRun lacks a concrete justification, or the rationale is thin or generic, record a normal blocking finding through record_deliverable_findings.",
         ]
       : [
           "Judge each worker claim as verified (you confirmed it yourself) or unverified, with a rationale.",
@@ -1762,6 +1781,7 @@ export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTie
                 "After the first review, a new blocking finding on unchanged already-reviewed code counts only when critical (security, data loss, false acceptance) with an explicit rationale or backed by an actual failing test from this review's runner checks — mark the basis on the finding; other late observations are retained as nonblocking follow-up.",
               ]
             : []),
+          "Weigh the worker validation-scope report (changed/verified/testsRun/notRun) when present as a claim, not evidence, when judging claims; scope gaps already sit in your recorded findings.",
           "Set satisfied true only when no blocking finding and no unverified claim remains. Call submit_deliverable_verdict exactly once.",
         ];
   return `${DELIVERABLE_REVIEWER_INVARIANTS}\n${instructions.join("\n")}`;

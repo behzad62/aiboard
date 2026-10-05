@@ -117,6 +117,12 @@ export function buildWorkerSystemPrompt(criterionIds: readonly string[] = []): s
           `Submit one criterionEvidenceLinks entry for every acceptance criterion (${criterionIds.join(", ")}). Cite the durable evidence ID and only its recorded artifact hashes; the runner binds the mapping to this task attempt.`,
         ]
       : []),
+    "Verify by impact, narrowest first: run the new or changed tests first, then the owning test file or suite, then direct dependents and affected scope. Do not run the whole suite by default.",
+    "Widen beyond affected scope only for a failure, a shared or public contract change, or a reviewer-named risk.",
+    "Stay near the task's validation budget and justify anything broader in your submission.",
+    "Extend or parameterize existing tests before adding new test files where sensible.",
+    "Merging or deleting obsolete tests is allowed only with an explicit `behaviour proven in <test id or file>` statement naming where the behavior is still proven.",
+    "Your submit_task validationScope must truthfully report what changed, what was verified, the tests actually run with counts, and what was not run and why.",
     "Do not submit while your own fresh evidence still shows a known acceptance failure. Continue fixing it; if you are mechanically blocked or the intended resolution is unclear, use ask_architect instead of submitting a known-bad changeset.",
   ].join("\n");
 }
@@ -395,6 +401,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           type: "submitted",
           ...(result.changeSet?.reviewSignals ? { reviewSignals: structuredClone(result.changeSet.reviewSignals) } : {}),
           ...(result.changeSet?.submissionScope ? { submissionScope: structuredClone(result.changeSet.submissionScope) } : {}),
+          ...(result.changeSet?.validationScope ? { validationScope: structuredClone(result.changeSet.validationScope) } : {}),
           ...(result.changeSet?.encodingSubmission ? { encodingSubmission: structuredClone(result.changeSet.encodingSubmission) } : {}),
           changeSetId: result.loop.changeSetId,
           ...(result.changeSet?.criterionEvidenceLinks

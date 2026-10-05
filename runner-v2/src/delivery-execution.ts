@@ -6,6 +6,7 @@ import { basename, join, relative, resolve } from "node:path";
 import { computeAffectedTests, isRunnableTestFile } from "./affected-tests.js";
 import type { ArtifactStore } from "./artifact-store.js";
 import type { ChangeSet } from "./change-set.js";
+import { cloneValidationScope, validationScopesEqual } from "./validation-scope.js";
 import {
   deliveryClaimsFromSubmission,
   testsOutcome,
@@ -113,6 +114,9 @@ export async function loadDeliverableReviewInputs(input: {
   if (task.submissionScope && JSON.stringify(task.submissionScope) !== JSON.stringify(changeSet.submissionScope)) throw new Error("Submitted scope record differs from its durable kernel binding.");
   if (task.reviewSignals && JSON.stringify(task.reviewSignals) !== JSON.stringify(changeSet.reviewSignals)) throw new Error("Submitted review signals differ from their durable kernel binding.");
   if (task.encodingSubmission && JSON.stringify(task.encodingSubmission) !== JSON.stringify(changeSet.encodingSubmission)) throw new Error("Submitted encoding record differs from its durable kernel binding.");
+  if ((task.validationScope === undefined) !== (changeSet.validationScope === undefined)) throw new Error("Submitted validation scope differs from its durable kernel binding.");
+  if (task.validationScope !== undefined && changeSet.validationScope !== undefined && !validationScopesEqual(task.validationScope, changeSet.validationScope)) throw new Error("Submitted validation scope differs from its durable kernel binding.");
+  const validationScope = task.validationScope;
   // W1 (F6): the submitted immutable diff bytes are hash-verified
   // against their addressed artifact BEFORE the text is trusted. A
   // missing artifact or bytes that no longer hash to the submitted
@@ -153,6 +157,7 @@ export async function loadDeliverableReviewInputs(input: {
       ...(claimRecordsById ? { evidenceById: claimRecordsById } : {}),
     }),
     authorRuntimeId: submission.authorRuntimeId,
+    ...(validationScope ? { validationScope: cloneValidationScope(validationScope) } : {}),
     ...(input.contract ? { contract: input.contract } : {}),
     ...(input.contractRef ? { contractRef: input.contractRef } : {}),
   };

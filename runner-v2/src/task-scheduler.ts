@@ -54,6 +54,7 @@ export type WorkerOutcome =
       reviewSignals?: import("./review-integrity.js").ReviewSignalsRecord;
       encodingSubmission?: import("./encoding-safety.js").EncodingSubmissionRecord;
       submissionScope?: import("./submission-scope-contracts.js").SubmissionScopeRecord;
+      validationScope?: import("./validation-scope.js").ValidationScope;
       changeSetId: string;
       criterionEvidenceLinks?: CriterionEvidenceLink[];
     }
@@ -528,6 +529,7 @@ export class TaskScheduler {
         ...(outcome.reviewSignals ? { reviewSignals: structuredClone(outcome.reviewSignals) } : {}),
         ...(outcome.encodingSubmission ? { encodingSubmission: structuredClone(outcome.encodingSubmission) } : {}),
         ...(outcome.submissionScope ? { submissionScope: structuredClone(outcome.submissionScope) } : {}),
+        ...(outcome.validationScope ? { validationScope: structuredClone(outcome.validationScope) } : {}),
         changeSetId: outcome.changeSetId,
         ...(outcome.criterionEvidenceLinks
           ? {

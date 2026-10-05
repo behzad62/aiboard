@@ -10,6 +10,12 @@ import {
 } from "./scheduler-store.js";
 import type { ChangeSet } from "./change-set.js";
 import type { CriterionEvidenceLink } from "./acceptance-contracts.js";
+import {
+  cloneValidationScope,
+  parseValidationScope,
+  validationScopeJsonSchema,
+  type ValidationScope,
+} from "./validation-scope.js";
 import { REPLAN_REASONS, type ReplanReason } from "./task-contracts.js";
 
 export interface WorkerLifecycleToolsOptions {
@@ -53,9 +59,11 @@ export function createWorkerLifecycleTools(
 
 export function createSubmitTaskTool(
   submit: (input: SubmitTaskInput) => Promise<ChangeSet>,
-  options: { requireCriterionEvidenceLinks?: boolean } = {}
+  options: { requireCriterionEvidenceLinks?: boolean; requireValidationScope?: boolean } = {}
 ): NativeTool<SubmitTaskInput> {
   const requireCriterionEvidenceLinks = options.requireCriterionEvidenceLinks === true;
+  // IV-1: set explicitly by worker-runtime from trusted scheduler state, never from model input.
+  const requireValidationScope = options.requireValidationScope === true;
   return {
     definition: {
       name: "submit_task",
@@ -74,6 +82,7 @@ export function createSubmitTaskTool(
             maxItems: 100,
             items: { type: "string", minLength: 1, maxLength: 2_000 },
           },
+          ...(requireValidationScope ? { validationScope: validationScopeJsonSchema() } : {}),
           criterionEvidenceLinks: {
             type: "array",
             minItems: requireCriterionEvidenceLinks ? 1 : 0,
@@ -81,8 +90,8 @@ export function createSubmitTaskTool(
           },
         },
         required: requireCriterionEvidenceLinks
-          ? ["summary", "readiness", "criterionEvidenceLinks"]
-          : ["summary", "readiness"],
+          ? ["summary", "readiness", "criterionEvidenceLinks", ...(requireValidationScope ? ["validationScope"] : [])]
+          : ["summary", "readiness", ...(requireValidationScope ? ["validationScope"] : [])],
         additionalProperties: false,
       },
       readOnly: false,
@@ -90,13 +99,14 @@ export function createSubmitTaskTool(
       lifecycle: true,
     },
     validate: (input) =>
-      validateSubmit(input, requireCriterionEvidenceLinks),
+      validateSubmit(input, requireCriterionEvidenceLinks, requireValidationScope),
     assessAccess: () => ({
       capability: "task.submit",
       paths: [{ path: ".", access: "write" }],
     }),
     execute: async (input) => {
       const changeSet = await submit({
+        ...(input.validationScope ? { validationScope: cloneValidationScope(input.validationScope) } : {}),
         summary: input.summary.trim(),
         readiness: input.readiness,
         unresolvedConcerns: input.unresolvedConcerns.map((item) => item.trim()),
@@ -119,11 +129,14 @@ export interface SubmitTaskInput {
   readiness: "ready_for_architect_review";
   unresolvedConcerns: string[];
   criterionEvidenceLinks: CriterionEvidenceLink[];
+  /** IV-1: present exactly when the run requires it and the input validated. */
+  validationScope?: ValidationScope;
 }
 
 function validateSubmit(
   input: unknown,
-  requireCriterionEvidenceLinks = false
+  requireCriterionEvidenceLinks = false,
+  requireValidationScope = false
 ): ValidationResult<SubmitTaskInput> {
   if (!isRecord(input) || !nonEmpty(input.summary)) {
     return invalid("summary must be a non-empty string");
@@ -141,6 +154,10 @@ function validateSubmit(
       (item) => typeof item !== "string" || !item.trim() || item.length > 2_000
     )
   ) return invalid("unresolvedConcerns must contain at most 100 non-empty strings");
+  const validationScope = parseSubmitValidationScope(input, requireValidationScope);
+  if (!validationScope.ok) {
+    return invalid(validationScope.issue);
+  }
   const criterionEvidenceLinks = parseCriterionEvidenceLinks(
     input.criterionEvidenceLinks,
     requireCriterionEvidenceLinks
@@ -156,9 +173,34 @@ function validateSubmit(
       summary: input.summary,
       readiness: input.readiness,
       unresolvedConcerns: (concerns as string[]).map((item) => item.trim()),
+      ...(validationScope.value !== undefined ? { validationScope: validationScope.value } : {}),
       criterionEvidenceLinks,
     },
   };
+}
+
+function parseSubmitValidationScope(
+  input: Record<string, unknown>,
+  required: boolean
+): { ok: true; value: ValidationScope | undefined } | { ok: false; issue: string } {
+  const present = input.validationScope !== undefined;
+  if (!present) {
+    return required
+      ? {
+          ok: false,
+          issue:
+            "validationScope is required: report changed surfaces, verified behavior, tests run with counts, and what was not run with reasons",
+        }
+      : { ok: true, value: undefined };
+  }
+  if (!required) {
+    return { ok: false, issue: "validationScope is not accepted on this run" };
+  }
+  try {
+    return { ok: true, value: parseValidationScope(input.validationScope) };
+  } catch (error) {
+    return { ok: false, issue: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function criterionEvidenceLinkSchema(): Record<string, unknown> {

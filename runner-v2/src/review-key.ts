@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { ExecutionTaskContract } from "./planning-contracts.js";
+import { canonicalValidationScope, type ValidationScope } from "./validation-scope.js";
 
 /**
  * W1 (AR-R27, S2 section 7.2 items 1-3, S3 L7): review economics.
@@ -127,6 +128,9 @@ export interface ClaimBindingClaim {
  * materially new current claims. Evidence associations are bound by
  * verified content digests (sorted), so swapped links with the same
  * union still invalidate while bookkeeping id renames do not.
+ * IV-1 (F1): the worker validationScope report is reviewer-visible claim
+ * semantics, bound here as an OPTIONAL field. Absent hashes exactly as
+ * before (legacy replay); present binds the structural canonical scope.
  */
 export interface ClaimBindingInputs {
   readonly objective: string;
@@ -135,6 +139,7 @@ export interface ClaimBindingInputs {
   readonly workerSummary: string;
   readonly unresolvedConcerns: readonly string[];
   readonly repairTaskKind?: string;
+  readonly validationScope?: ValidationScope;
 }
 
 export function claimBindingDigest(input: ClaimBindingInputs): string {
@@ -155,6 +160,7 @@ export function claimBindingDigest(input: ClaimBindingInputs): string {
     workerSummary: input.workerSummary,
     unresolvedConcerns: [...input.unresolvedConcerns].sort(),
     ...(input.repairTaskKind !== undefined ? { repairTaskKind: input.repairTaskKind } : {}),
+    ...(input.validationScope !== undefined ? { validationScope: canonicalValidationScope(input.validationScope) } : {}),
   }));
 }
 

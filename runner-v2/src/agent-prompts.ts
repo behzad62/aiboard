@@ -28,6 +28,7 @@ import {
 import { coveragePlanReadinessInput, openBlockingCoverageFindings } from "./planning-projection.js";
 import { evaluatePhaseAcceptance, phaseAcceptanceKey, type ReviewTaskPrefill } from "./delivery-acceptance.js";
 import type { FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
+import type { ValidationScope } from "./validation-scope.js";
 
 export const RUNNER_KERNEL_INVARIANTS = [
   "Use native tools for actions and lifecycle changes.",
@@ -479,6 +480,8 @@ export interface ArchitectReviewSubmission {
   changedPaths: string[];
   diffArtifactHash: string;
   evidenceArtifactHashes: string[];
+  /** IV-1: the worker's durable validation-scope report for this submission (a claim, not evidence). */
+  validationScope?: ValidationScope;
   acceptanceCriteria?: AcceptanceCriterion[];
   acceptanceCriteriaVersion?: number;
   criterionEvidenceLinks?: CriterionEvidenceLink[];

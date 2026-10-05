@@ -16,6 +16,7 @@ import type { GitRunner } from "./git-repository.js";
 import type { TaskCommit } from "./workspace-manager.js";
 import { inspectSubmissionTree } from "./submission-guard-git.js";
 import { bindSubmissionScope, type SubmissionScopeIdentity, type SubmissionScopeRecord } from "./submission-scope-contracts.js";
+import { cloneValidationScope, parseValidationScope, type ValidationScope } from "./validation-scope.js";
 
 export interface ExternalEffectReference {
   kind: string;
@@ -27,6 +28,8 @@ export interface ChangeSet {
   encodingSubmission?: EncodingSubmissionRecord;
   reviewSignals?: ReviewSignalsRecord;
   submissionScope?: SubmissionScopeRecord;
+  /** IV-1: the worker's validation-scope report (a claim, not evidence). Absent on legacy submissions. */
+  validationScope?: ValidationScope;
   id: string;
   runId: string;
   taskId: string;
@@ -51,6 +54,8 @@ export interface CreateChangeSetOptions {
   executeBytes?: GitBinaryRunner;
   reviewIntegrityPolicyVersion?: 1;
   submissionScopeIdentity?: SubmissionScopeIdentity;
+  /** IV-1: validated with the canonical parser when present; absent on legacy submissions. */
+  validationScope?: unknown;
   execute?: GitRunner;
   workspacePath: string;
   taskCommit: TaskCommit;
@@ -76,6 +81,12 @@ export async function createChangeSet(
   options: CreateChangeSetOptions
 ): Promise<ChangeSet> {
   const commit = options.taskCommit;
+  // IV-1: the worker's scope report rides the immutable submission when the
+  // caller supplies one (the new-policy worker path always does). Legacy
+  // callers omit it. Canonical validation here, never duplicated.
+  const validationScope = options.validationScope !== undefined
+    ? parseValidationScope(options.validationScope)
+    : undefined;
   const hasCriteria = options.acceptanceCriteria !== undefined;
   let criterionEvidenceLinks: CriterionEvidenceLink[] | undefined;
   if (hasCriteria) {
@@ -171,6 +182,7 @@ export async function createChangeSet(
     ...(options.encodingSafetyPolicyVersion === 1 ? { encodingSubmission: await captureEncodingSubmission({ git: requireGitRunner(options.execute), gitBytes: requireGitRunner(options.executeBytes), workspacePath: options.workspacePath, runId: commit.runId, taskId: commit.taskId, baselineRevision: commit.baselineRevision, taskRevision: commit.revision }) } : {}),
     ...(options.reviewIntegrityPolicyVersion === 1 ? { reviewSignals: await captureReviewSignals({ git: requireGitRunner(options.execute), workspacePath: options.workspacePath, runId: commit.runId, taskId: commit.taskId, baselineRevision: commit.baselineRevision, taskRevision: commit.revision }) } : {}),
     ...(submissionScope ? { submissionScope } : {}),
+    ...(validationScope ? { validationScope: cloneValidationScope(validationScope) } : {}),
     id,
     runId: commit.runId,
     taskId: commit.taskId,

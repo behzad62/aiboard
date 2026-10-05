@@ -49,6 +49,7 @@ import type {
 import { ContextAssembler, type ContextLimits } from "./context-assembler.js";
 import { currentSubmissionReview, deriveReviewTaskPrefill, type ReviewTaskPrefill } from "./delivery-acceptance.js";
 import type { BuildTask } from "./task-contracts.js";
+import { agreedValidationScope } from "./validation-scope.js";
 import { HANDOFF_SNAPSHOT_NOTES_MAX_LENGTH } from "./handoff-snapshot.js";
 import { recordContextPack, type ContextManifestStore } from "./context-manifest-store.js";
 import type { CapabilityRegistry } from "./capability-registry.js";
@@ -928,6 +929,13 @@ export async function loadArchitectReviewSubmission(
     changedPaths: [...changeSet.changedPaths],
     diffArtifactHash: changeSet.diffArtifactHash,
     evidenceArtifactHashes: [...changeSet.evidenceArtifactHashes],
+    // IV-1 (F3): the durable scope rides the current submission beside
+    // the prefill after bidirectional task/changeSet agreement, so the
+    // Architect sees what was and was not validated. Ordering is not
+    // authority; the scheduler-bound task copy stands after agreement.
+    ...(agreedValidationScope(task.validationScope, changeSet.validationScope)
+      ? { validationScope: agreedValidationScope(task.validationScope, changeSet.validationScope)! }
+      : {}),
     ...(changeSet.acceptanceCriteria
       ? { acceptanceCriteria: changeSet.acceptanceCriteria.map((criterion) => ({ ...criterion })) }
       : {}),

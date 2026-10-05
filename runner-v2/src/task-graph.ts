@@ -306,6 +306,7 @@ export function applyTaskTransition(
           ...(task.submissionScope ? { submissionScope: undefined } : {}),
           ...(task.reviewSignals ? { reviewSignals: undefined } : {}),
           ...(task.encodingSubmission ? { encodingSubmission: undefined } : {}),
+          ...(task.validationScope ? { validationScope: undefined } : {}),
           failureReason: undefined,
         }
       : {}),

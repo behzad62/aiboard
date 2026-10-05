@@ -307,11 +307,16 @@ export async function runWorkerTask(
     language,
   })) registerStaticWorkerTool(broker, tool);
 
+  // IV-1: the trusted scheduler decides whether this run's worker path
+  // requires a validationScope report. Never inferred from model input.
+  const requireValidationScope =
+    schedulerState(options)?.validationScopePolicyVersion === 1;
   let producedChangeSet: ChangeSet | undefined;
   broker.register(createSubmitTaskTool(async ({
     summary,
     unresolvedConcerns,
     criterionEvidenceLinks,
+    validationScope,
   }) => {
     if (
       schedulerState(options)?.acceptanceContractStatus ===
@@ -319,6 +324,11 @@ export async function runWorkerTask(
     ) {
       throw new Error(
         "Task submission is blocked until the Architect upgrades the acceptance contract."
+      );
+    }
+    if (requireValidationScope && validationScope === undefined) {
+      throw new Error(
+        "Task submission requires a validationScope report on this run."
       );
     }
     const evidenceRecords = options.evidenceStore
@@ -371,6 +381,7 @@ export async function runWorkerTask(
       };
     }
     producedChangeSet = await createChangeSet({
+      ...(validationScope ? { validationScope } : {}),
       ...(currentSubmissionProjection?.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1, executeBytes: options.git?.lifecycle("inspection").runBytes } : {}),
       ...(schedulerState(options)?.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
       ...(scopeIdentity ? { submissionScopeIdentity: scopeIdentity } : {}),
@@ -403,7 +414,7 @@ export async function runWorkerTask(
       unresolvedConcerns,
     });
     return producedChangeSet;
-  }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined }));
+  }, { requireCriterionEvidenceLinks: acceptanceCriteria !== undefined, requireValidationScope }));
   for (const tool of options.toolSurfaceProbe ?? []) broker.register(tool);
   assertRoleToolSurface(
     "worker",

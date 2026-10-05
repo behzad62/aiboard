@@ -64,6 +64,7 @@ import {
 } from "./task-contracts.js";
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import { validateSubmissionScopeRecord } from "./submission-scope-capture.js";
+import { cloneValidationScope, parseValidationScope, type ValidationScope } from "./validation-scope.js";
 import { validateReviewSignals } from "./review-integrity.js";
 import { validateEncodingSubmission, encodingFindingFacts } from "./encoding-safety.js";
 import type { ExecutionPlanRevision, ExecutionTaskContract } from "./planning-contracts.js";
@@ -316,6 +317,8 @@ export interface GuidanceProjection {
 }
 
 export interface CriterionSubmissionProjection {
+  /** IV-1: the worker's validation-scope report for this submission attempt (a claim, not evidence). */
+  validationScope?: ValidationScope;
   taskId: string;
   attempt: number;
   acceptanceCriteriaVersion?: number;
@@ -963,6 +966,8 @@ export interface SchedulerProjection {
   reviewIntegrityPolicyVersion?: 1;
   encodingSafetyPolicyVersion?: 1;
   reviewEvidencePolicyVersion?: 1;
+  /** IV-1 activation, stamped only on fresh runs; old logs retain absent shape and replay unchanged. */
+  validationScopePolicyVersion?: 1;
   guidance: Record<string, GuidanceProjection>;
   userGuidance: Record<string, UserGuidanceItem>;
   userGuidanceVersion: number;
@@ -3321,7 +3326,8 @@ export function reduceSchedulerEvent(
       if (event.payload.reviewIntegrityPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.reviewIntegrityPolicyVersion !== 1)) throw new Error("Invalid review-integrity initialization authority or version.");
       if (event.payload.reviewEvidencePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.reviewEvidencePolicyVersion !== 1)) throw new Error("Invalid review-evidence initialization authority or version.");
       if (event.payload.encodingSafetyPolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.encodingSafetyPolicyVersion !== 1)) throw new Error("Invalid encoding-safety initialization authority or version.");
-      return { ...emptySchedulerProjection(event), ...(event.payload.reviewEvidencePolicyVersion === 1 ? { reviewEvidencePolicyVersion: 1 as const } : {}), ...(event.payload.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1 as const } : {}), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}) };
+      if (event.payload.validationScopePolicyVersion !== undefined && (event.actor.role !== "runner" || event.payload.validationScopePolicyVersion !== 1)) throw new Error("Invalid validation-scope initialization authority or version.");
+      return { ...emptySchedulerProjection(event), ...(event.payload.reviewEvidencePolicyVersion === 1 ? { reviewEvidencePolicyVersion: 1 as const } : {}), ...(event.payload.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1 as const } : {}), ...(event.payload.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 as const } : {}), ...(event.payload.submissionScopePolicyVersion === 1 ? { submissionScopePolicyVersion: 1 as const } : {}), ...(event.payload.testIntegrityPolicyVersion === 1 ? { testIntegrity: { version: 1 as const, exceptions: {} } } : {}), ...(event.payload.validationScopePolicyVersion === 1 ? { validationScopePolicyVersion: 1 as const } : {}) };
     }
     if (event.type === "run.policy_configured") {
       if (event.actor.role !== "runner") {
@@ -3633,6 +3639,10 @@ export function reduceSchedulerEvent(
         if (event.payload.submissionScopePolicyVersion !== undefined) {
           if (event.actor.role !== "runner" || event.payload.submissionScopePolicyVersion !== 1) throw new Error("Invalid submission-scope initialization authority or version.");
           next.submissionScopePolicyVersion = 1;
+        }
+        if (event.payload.validationScopePolicyVersion !== undefined) {
+          if (event.actor.role !== "runner" || event.payload.validationScopePolicyVersion !== 1) throw new Error("Invalid validation-scope initialization authority or version.");
+          next.validationScopePolicyVersion = 1;
         }
         if (event.payload.testIntegrityPolicyVersion !== undefined) {
           if (event.actor.role !== "runner" || event.payload.testIntegrityPolicyVersion !== 1) throw new Error("Invalid test-integrity initialization authority or version.");
@@ -4891,6 +4901,11 @@ export function reduceSchedulerEvent(
         if (event.actor.role !== "runner" || event.actor.id !== "scheduler") throw new Error("Activated submission requires the trusted scheduler actor.");
         transitionPatch.submissionScope = validateSubmissionScopeRecord(current, taskId, requiredString(transitionPatch as Record<string, unknown>, "changeSetId"), transitionPatch.submissionScope);
       }
+      if (transitionPatch.validationScope !== undefined && (status !== "submitted" || current.validationScopePolicyVersion !== 1)) throw new Error("Validation scope records apply only to activated submissions.");
+      if (status === "submitted" && current.validationScopePolicyVersion === 1) {
+        if (event.actor.role !== "runner" || event.actor.id !== "scheduler") throw new Error("Activated submission requires the trusted scheduler actor.");
+        transitionPatch.validationScope = parseValidationScope(transitionPatch.validationScope);
+      }
       if (transitionPatch.reviewSignals !== undefined && (status !== "submitted" || current.reviewIntegrityPolicyVersion !== 1)) throw new Error("Review signals apply only to activated submissions.");
       if (transitionPatch.encodingSubmission !== undefined && (status !== "submitted" || current.encodingSafetyPolicyVersion !== 1)) throw new Error("Encoding facts apply only to activated submissions.");
       if (status === "submitted" && current.encodingSafetyPolicyVersion === 1) {
@@ -4937,6 +4952,9 @@ export function reduceSchedulerEvent(
       if (startsRetry) delete next.reviews[taskId];
       if (status === "submitted") {
         appendSubmissionHistory(next, {
+          ...(transitionedTask.validationScope
+            ? { validationScope: cloneValidationScope(transitionedTask.validationScope) }
+            : {}),
           taskId,
           attempt: task.attempt,
           ...(task.acceptanceCriteriaVersion !== undefined
@@ -11325,6 +11343,9 @@ function cloneSubmissionProjection(
 ): CriterionSubmissionProjection {
   return {
     ...submission,
+    ...(submission.validationScope
+      ? { validationScope: cloneValidationScope(submission.validationScope) }
+      : {}),
     ...(submission.criterionEvidenceLinks
       ? { criterionEvidenceLinks: cloneCriterionEvidenceLinks(submission.criterionEvidenceLinks) }
       : {}),
@@ -11378,6 +11399,7 @@ function cloneBuildTask(task: BuildTask): BuildTask {
     ...(task.submissionScope ? { submissionScope: structuredClone(task.submissionScope) } : {}),
     ...(task.reviewSignals ? { reviewSignals: structuredClone(task.reviewSignals) } : {}),
     ...(task.encodingSubmission ? { encodingSubmission: structuredClone(task.encodingSubmission) } : {}),
+    ...(task.validationScope ? { validationScope: cloneValidationScope(task.validationScope) } : {}),
     dependencies: [...task.dependencies],
     requiredCapabilities: [...task.requiredCapabilities],
     ...(task.acceptanceCriteria
