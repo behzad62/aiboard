@@ -97,7 +97,7 @@ export interface DurableSubmission {
 export async function loadDeliverableReviewInputs(input: {
   task: BuildTask;
   submission: DurableSubmission;
-  artifacts: Pick<ArtifactStore, "get">;
+  artifacts: Pick<ArtifactStore, "get" | "verify">;
   /** C5: the authoritative accepted contract resolved from durable state. */
   contract?: ExecutionTaskContract;
   /** C5: the exact accepted revision/digest/task identity the contract was resolved at. */
@@ -111,7 +111,18 @@ export async function loadDeliverableReviewInputs(input: {
   if (task.submissionScope && JSON.stringify(task.submissionScope) !== JSON.stringify(changeSet.submissionScope)) throw new Error("Submitted scope record differs from its durable kernel binding.");
   if (task.reviewSignals && JSON.stringify(task.reviewSignals) !== JSON.stringify(changeSet.reviewSignals)) throw new Error("Submitted review signals differ from their durable kernel binding.");
   if (task.encodingSubmission && JSON.stringify(task.encodingSubmission) !== JSON.stringify(changeSet.encodingSubmission)) throw new Error("Submitted encoding record differs from its durable kernel binding.");
-  const diffText = (await input.artifacts.get(changeSet.diffArtifactHash)).toString("utf8");
+  // W1 (F6): the submitted immutable diff bytes are hash-verified
+  // against their addressed artifact BEFORE the text is trusted. A
+  // missing artifact or bytes that no longer hash to the submitted
+  // address throw (the review then fails closed as unavailable) —
+  // tampered bytes at the same address can never become review inputs.
+  const diffRecord = await input.artifacts.verify(changeSet.diffArtifactHash);
+  const diffBytes = await input.artifacts.get(changeSet.diffArtifactHash);
+  if (createHash("sha256").update(diffBytes).digest("hex") !== changeSet.diffArtifactHash ||
+      diffBytes.byteLength !== diffRecord.byteLength) {
+    throw new Error(`Submitted diff artifact ${changeSet.diffArtifactHash} hash mismatch.`);
+  }
+  const diffText = diffBytes.toString("utf8");
   const criteria = (task.acceptanceCriteria ?? []).map((criterion) => ({ id: criterion.id, text: criterion.text }));
   return {
     taskId: task.id,

@@ -113,6 +113,7 @@ import {
 } from "./delivery-acceptance.js";
 import type { NativeDeliverableReviewResult } from "./native-deliverable-review.js";
 import { DEFAULT_ISSUE_REPAIR_CYCLE_LIMIT, deliveryBoundaryRootCause, failingTestIdsByCategory, repairIssueIdentity, repairMemberIssues, withFailingIds } from "./repair-budget-contracts.js";
+import { isDuplicateReviewReuse } from "./review-key.js";
 import {
   SchedulerAnswerReviewAuthority,
   type AnswerReviewAuthority,
@@ -5323,6 +5324,11 @@ export class BuildRuntime {
       members.set(key, entry);
     }
     const deliveryReview = this.projection().delivery?.reviews[rejected.id];
+    // W1 (AR-R27): a duplicate ReviewKey reuse is not a new verdict.
+    // Generation or resubmission alone never charges, and a reused
+    // failed verdict consumes no further cycle even across attempts
+    // while the exact semantic review identity is unchanged.
+    if (isDuplicateReviewReuse(deliveryReview)) return undefined;
     for (const finding of openBlockingFindings(deliveryReview)) {
       const key = `delivery-review:${rejected.id}:${finding.category}`;
       const entry = members.get(key) ?? { evidenceIds: [], rationale: "" };

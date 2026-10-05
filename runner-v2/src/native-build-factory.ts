@@ -37,7 +37,7 @@ import {
   submitTaskSummary,
   type DurableSubmission,
 } from "./delivery-execution.js";
-import { NativeDeliverableReviewRuntime } from "./native-deliverable-review.js";
+import { NativeDeliverableReviewRuntime, type DeliverableReviewInputs } from "./native-deliverable-review.js";
 import type { ExecutionTaskContract } from "./planning-contracts.js";
 import type { BuildTask, TaskContractRef } from "./task-contracts.js";
 import type { MutationFileSystem } from "./mutation-probe.js";
@@ -1529,6 +1529,21 @@ export class NativeBuildFactory {
       if (!summary) throw new Error(`Task ${taskId} submit_task summary is not in its durable session.`);
       return { changeSet: session.changeSet, summary, authorRuntimeId: author };
     };
+    // W1 (AR-R27): cheap authority subset for the reuse decision — the
+    // baseline guard, the current contract and the durable submission
+    // bytes, but no candidate-pin workspace. The full loader below adds
+    // the test-integrity pin only when a real review actually proceeds.
+    const peekDeliverableReviewInputs = async (input: { task: BuildTask; projection: SchedulerProjection }): Promise<DeliverableReviewInputs> => {
+      await deliveryBoundaryDriver.captureInitialBaseline?.(input.task.id);
+      const resolved = resolveReviewContract(input.projection, input.task);
+      return loadDeliverableReviewInputs({
+        task: input.task,
+        submission: await durableSubmission(input.projection, input.task.id),
+        artifacts: this.artifacts,
+        contract: resolved.contract,
+        contractRef: resolved.ref,
+      });
+    };
     const deliveryGit = requireGitRunner(gitContext).lifecycle("verification").run;
     // The same ambient source the audited executor uses for children, so the
     // project's own NODE_OPTIONS is kept when the reporter flags are added.
@@ -1554,15 +1569,8 @@ export class NativeBuildFactory {
       artifacts: this.artifacts,
       evidenceStore,
       loadInputs: async ({ task, projection }) => {
-        await deliveryBoundaryDriver.captureInitialBaseline?.(task.id);
+        const inputs = await peekDeliverableReviewInputs({ task, projection });
         const resolved = resolveReviewContract(projection, task);
-        const inputs = await loadDeliverableReviewInputs({
-          task,
-          submission: await durableSubmission(projection, task.id),
-          artifacts: this.artifacts,
-          contract: resolved.contract,
-          contractRef: resolved.ref,
-        });
         const fresh = rebuildSchedulerProjection(schedulerStore.readRun(spec.runId));
         if (fresh.testIntegrity?.baseline) {
           const baseline = fresh.testIntegrity.baseline;
@@ -1580,6 +1588,25 @@ export class NativeBuildFactory {
             findings: testIntegrityProfileFindings(baseline.pin, candidatePin) };
         }
         return inputs;
+      },
+      peekInputs: async ({ task, projection }) => peekDeliverableReviewInputs({ task, projection }),
+      // W1 (F6): actual Git trees through the audited verification
+      // runner. Read-only rev-parse in the project checkout; any failure
+      // yields undefined (conservative reuse miss, never a label).
+      resolveTrees: async ({ baselineRevision, taskRevision }) => {
+        const treeOf = async (revision: string): Promise<string | undefined> => {
+          try {
+            const result = await deliveryGit({ cwd: this.options.projectRoot, args: ["rev-parse", `${revision}^{tree}`] });
+            if (result.exitCode !== 0) return undefined;
+            const tree = result.stdout.trim();
+            return /^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(tree) ? tree : undefined;
+          } catch {
+            return undefined;
+          }
+        };
+        const [baseTree, headTree] = await Promise.all([treeOf(baselineRevision), treeOf(taskRevision)]);
+        if (!baseTree || !headTree) return undefined;
+        return { baseTree, headTree };
       },
       workspace: {
         create: async (taskRevision) => ({ path: (await deliveryReviewWorkspace.create(taskRevision)).path }),

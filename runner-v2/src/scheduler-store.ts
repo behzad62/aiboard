@@ -1,4 +1,5 @@
 import { validateRepairApproachDecision } from "./repair-approach-contracts.js";
+import { findOscillatingRepairAttempt } from "./review-key.js";
 import { validateReadCapture, validateCitations, isMutationSurvivorFindingId } from "./review-evidence.js";
 import {
   DELIVERY_ACCEPTANCE_RUNNER_ID,
@@ -258,6 +259,7 @@ export type SchedulerEventType =
   | "delivery.findings_recorded"
   | "delivery.report_delivered"
   | "delivery.review_recorded"
+  | "delivery.review_reused"
   | "delivery.boundary_started"
   | "delivery.boundary_checked"
   | "delivery.boundary_failure_resolved"
@@ -5816,6 +5818,7 @@ export function reduceSchedulerEvent(
     case "delivery.report_delivered":
     case "delivery.reads_captured":
     case "delivery.review_recorded":
+    case "delivery.review_reused":
     case "delivery.boundary_started":
     case "delivery.boundary_checked":
     case "delivery.boundary_failure_resolved":
@@ -6951,6 +6954,9 @@ function reduceDeliveryEvent(
     case "delivery.review_recorded":
       deliveryReviewRecorded(current, state, event);
       return;
+    case "delivery.review_reused":
+      deliveryReviewReused(current, state, event);
+      return;
     case "delivery.boundary_started":
       deliveryBoundaryStarted(current, state, event);
       return;
@@ -7078,13 +7084,13 @@ function deliveryReviewStarted(
   const authorModelIdentity = canonicalIdentity(event.payload, "authorModelIdentity");
   const architectModelIdentity = canonicalIdentity(event.payload, "architectModelIdentity");
   const existing = state.reviews[taskId];
-  if (
-    existing?.stage === "completed" &&
-    existing.submissionAttempt === attempt &&
-    existing.changeSetId === changeSetId
-  ) {
-    throw new Error(`Task ${taskId} submission already has a completed deliverable review.`);
-  }
+  // W1 (F1): no blanket rejection of a completed same-submission
+  // review. An exact-key resubmission never reaches a fresh start
+  // (it reuses through delivery.review_reused); arriving here means
+  // the current key differs or is unknown, so the original completed
+  // record is archived unchanged below and a fresh generation opens.
+  // Missing or tampered evidence therefore can never return the old
+  // verdict — only an exact recomputed key reuses.
   const history = state.reviewHistory[taskId] ?? [];
   const expectedGeneration = Math.max(
     0,
@@ -7144,6 +7150,161 @@ function reviewsOfTask(projection: SchedulerProjection, taskId: string): ReviewP
     ...(projection.reviewHistory?.[taskId] ?? []),
     ...(projection.reviews[taskId] ? [projection.reviews[taskId]!] : []),
   ];
+}
+
+/**
+ * W1 (AR-R27): optional ReviewKey binding recorded when the runner
+ * requests a review. Every field is validated; a malformed binding
+ * fails closed. Legacy events carry none of these fields and replay
+ * byte-identical to before. The key lets a later identical
+ * resubmission return this review's durable verdict without new work.
+ */
+function recordDeliveryReviewKeyInputs(review: DeliveryReviewRecord, payload: Record<string, unknown>): void {
+  const reviewKey = payload.reviewKey;
+  const reviewKeyInputs = payload.reviewKeyInputs;
+  const diffFingerprint = payload.diffFingerprint;
+  const diffReverseFingerprint = payload.diffReverseFingerprint;
+  const failedRepairFingerprints = payload.failedRepairFingerprints;
+  if (
+    reviewKey === undefined && reviewKeyInputs === undefined && diffFingerprint === undefined &&
+    diffReverseFingerprint === undefined && failedRepairFingerprints === undefined
+  ) {
+    return;
+  }
+  // W1 (F2): the real-diff lineage is independent of ReviewKey
+  // eligibility: fingerprints ride every request so a cache-key miss
+  // can never disable oscillation detection. A partial lineage is a
+  // malformed binding and fails closed.
+  if (diffFingerprint !== undefined || diffReverseFingerprint !== undefined || failedRepairFingerprints !== undefined) {
+    if (typeof diffFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(diffFingerprint)) {
+      throw new Error("Deliverable review requires its real diff fingerprint.");
+    }
+    if (typeof diffReverseFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(diffReverseFingerprint)) {
+      throw new Error("Deliverable review requires its reverse diff fingerprint.");
+    }
+    if (!Array.isArray(failedRepairFingerprints)) throw new Error("Deliverable review requires its failed repair lineage.");
+    for (const entry of failedRepairFingerprints) {
+      if (
+        !isRecord(entry) || !Number.isSafeInteger(entry.attempt) || (entry.attempt as number) < 1 ||
+        typeof entry.forward !== "string" || !/^[a-f0-9]{64}$/.test(entry.forward as string) ||
+        typeof entry.reverse !== "string" || !/^[a-f0-9]{64}$/.test(entry.reverse as string)
+      ) {
+        throw new Error("Deliverable review failed repair lineage is invalid.");
+      }
+    }
+    review.diffFingerprint = diffFingerprint;
+    review.diffReverseFingerprint = diffReverseFingerprint;
+    review.failedRepairFingerprints = (failedRepairFingerprints as unknown[]).map((entry) => {
+      const record = entry as Record<string, unknown>;
+      return { attempt: record.attempt as number, forward: record.forward as string, reverse: record.reverse as string };
+    });
+  }
+  if (reviewKey === undefined && reviewKeyInputs === undefined) return;
+  if (typeof reviewKey !== "string" || !/^[a-f0-9]{64}$/.test(reviewKey)) {
+    throw new Error("Deliverable review key must be a 64-hex digest.");
+  }
+  if (!isRecord(reviewKeyInputs)) throw new Error("Deliverable review key requires its audit inputs.");
+  for (const field of ["semanticContractDigest", "baseTree", "headTree", "diffDigest", "diffArtifactHash",
+    "evidenceContentDigest", "claimBindingDigest", "testIntegrityDigest", "tier", "authorModelIdentity", "policyVersions"]) {
+    if (typeof reviewKeyInputs[field] !== "string" || (reviewKeyInputs[field] as string).length === 0) {
+      throw new Error(`Deliverable review key audit is missing ${field}.`);
+    }
+  }
+  if (typeof reviewKeyInputs.reviewerPolicyVersion !== "number") throw new Error("Deliverable review key audit is missing reviewerPolicyVersion.");
+  review.reviewKey = reviewKey;
+  review.reviewKeyInputs = reviewKeyInputs as unknown as DeliveryReviewRecord["reviewKeyInputs"];
+}
+
+/**
+ * W1 (AR-R27): ReviewKey reuse. The runner replays a PRIOR completed
+ * review's durable verdict for a resubmission with the exact same key.
+ * No new review opens, no model or depth work runs, and the original
+ * verdict/finding/read/depth provenance is preserved (reusedFrom
+ * binds the resubmission; nothing is re-minted). The current
+ * submission binding (task, attempt, change set, criteria, recorded
+ * author and Architect) is validated exactly like a fresh start, so
+ * historical authority or fake identities cannot authorize reuse.
+ * Repeating the same reuse event is a no-op once it is current.
+ */
+function deliveryReviewReused(
+  current: SchedulerProjection,
+  state: DeliveryState,
+  event: SchedulerEvent,
+): void {
+  requireDeliveryRunner(event, DELIVERY_REVIEW_RUNNER_ID);
+  const taskId = requiredString(event.payload, "taskId");
+  const task = current.tasks[taskId];
+  if (!task || task.kind === "final_verification" || task.status !== "submitted" || !task.changeSetId) {
+    throw new Error(`Deliverable review reuse requires submitted task ${taskId}.`);
+  }
+  const attempt = requiredPositiveInteger(event.payload, "attempt");
+  const changeSetId = requiredString(event.payload, "changeSetId");
+  if (attempt !== task.attempt || changeSetId !== task.changeSetId) {
+    throw new Error("Deliverable review reuse must bind the current submission.");
+  }
+  const criteriaIds = stringArray(event.payload, "criteriaIds");
+  const expectedCriteria = (task.acceptanceCriteria ?? []).map((criterion) => criterion.id).sort();
+  if (expectedCriteria.length === 0 || !sameValue([...criteriaIds].sort(), expectedCriteria)) {
+    throw new Error("Deliverable review reuse must bind the task's exact acceptance criteria.");
+  }
+  const authorRuntimeId = requiredString(event.payload, "authorRuntimeId");
+  const assignment = current.runtime.workerAssignments[`${taskId}:${attempt}`];
+  if (!assignment || assignment.runtimeId !== authorRuntimeId) {
+    throw new Error("Deliverable review reuse must record the submission's recorded author runtime.");
+  }
+  const architectRuntimeId = requiredString(event.payload, "architectRuntimeId");
+  if (
+    current.runtime.architect.runtimeId !== undefined &&
+    current.runtime.architect.runtimeId !== architectRuntimeId
+  ) {
+    throw new Error("Deliverable review reuse must record the current Architect runtime.");
+  }
+  canonicalIdentity(event.payload, "authorModelIdentity");
+  canonicalIdentity(event.payload, "architectModelIdentity");
+  const priorReviewId = requiredString(event.payload, "priorReviewId");
+  const reviewKey = requiredString(event.payload, "reviewKey");
+  if (!/^[a-f0-9]{64}$/.test(reviewKey)) throw new Error("Deliverable review reuse requires the exact prior ReviewKey.");
+  const candidates = [...(state.reviewHistory[taskId] ?? []), ...(state.reviews[taskId] ? [state.reviews[taskId]!] : [])];
+  const prior = candidates.find((review) => review.reviewId === priorReviewId);
+  if (!prior || prior.stage !== "completed") {
+    throw new Error(`Reuse requires the completed prior review ${priorReviewId}.`);
+  }
+  if (prior.reviewKey !== reviewKey) {
+    throw new Error("Reuse requires the exact prior ReviewKey; stale observations cannot authorize reuse.");
+  }
+  const existing = state.reviews[taskId];
+  if (existing && existing.stage === "completed" && existing.submissionAttempt === attempt && existing.changeSetId === changeSetId) {
+    // W1 (F1/F8): the same submission already has a completed review.
+    // An exact key match is a pure no-op: the record already IS the
+    // original verdict, so no binding is minted. A same-submission
+    // self-reuse must never become a duplicate-cycle exemption — the
+    // repeat itself costs nothing, while the original's first real
+    // Architect rejection still charges its one legitimate cycle.
+    // Anything else is a key drift the runner resolves with a fresh
+    // generation, never here.
+    if (existing.reviewKey === reviewKey) {
+      return;
+    }
+    throw new Error(`Task ${taskId} submission already has a completed deliverable review.`);
+  }
+  if (existing) {
+    // Same rule as a fresh start: a completed prior stays completed in
+    // history (its failed diff remains oscillation lineage); only an
+    // unfinished record is marked abandoned.
+    state.reviewHistory[taskId] = [...(state.reviewHistory[taskId] ?? []),
+      existing.stage === "completed" ? existing : { ...existing, stage: "abandoned" }];
+  }
+  state.authorModelIdentities[authorRuntimeId] = requiredString(event.payload, "authorModelIdentity");
+  // W1 (F8): the current-submission reuse is the prior's immutable
+  // verdict with an additive binding — original completion, session,
+  // read, depth and failed lineage preserved, no rewritten sequence
+  // and no invented fresh citation. Generation alone never charges.
+  state.reviews[taskId] = {
+    ...prior,
+    submissionAttempt: attempt,
+    changeSetId,
+    reusedFrom: priorReviewId,
+  };
 }
 
 function deliveryReviewRequested(current: SchedulerProjection, state: DeliveryState, event: SchedulerEvent): void {
@@ -7232,6 +7393,7 @@ function deliveryReviewRequested(current: SchedulerProjection, state: DeliverySt
   review.independence = independence;
   review.risk = risk;
   if (prior) review.priorReviewId = prior.reviewId;
+  recordDeliveryReviewKeyInputs(review, event.payload);
   review.stage = "requested";
 }
 
@@ -7291,6 +7453,17 @@ function deliveryFindingsRecorded(state: DeliveryState, event: SchedulerEvent): 
       if (!location) throw new Error("Mutation survivor lacks changed-line location.");
       findings.push({ id: `mutation-survivor:${index}`, category: "weakened_obligation", severity: "blocking", location, claim: `Mutation survived: ${survivor}`, evidenceRefs: [...depth.probe!.evidenceIds] });
     }
+  }
+  const oscillation = findOscillatingRepairAttempt(review.diffFingerprint ?? "", review.diffReverseFingerprint ?? "", review.failedRepairFingerprints ?? []);
+  if (oscillation !== undefined && review.diffFingerprint && review.diffReverseFingerprint) {
+    findings.push({
+      id: `repair-oscillation:${oscillation}`,
+      category: "weakened_obligation",
+      severity: "blocking",
+      location: review.changeSetId,
+      claim: `Repair resubmits the real diff of failed attempt ${oscillation} (identical or reversed); the Architect must dispose of this oscillation.`,
+      evidenceRefs: [review.changeSetId],
+    });
   }
   review.findings = findings;
   review.depth = depth;

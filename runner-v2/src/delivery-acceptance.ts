@@ -212,6 +212,17 @@ export interface DeliveryReviewRecord {
   completedSequence?: number;
   testConsolidation?: TestConsolidationDisposition;
   runnerScope?: import("./submission-scope-contracts.js").SubmissionScopeRecord;
+  // W1 (AR-R27): ReviewKey this review was requested under, with audit
+  // inputs. Absent on pre-W1 historical records: they never hit reuse
+  // (conservative miss, never cache invention). reusedFrom binds a reuse
+  // to its prior verdict without minting duplicate provenance. The
+  // fingerprint fields carry S3 L7 real-diff lineage for oscillation.
+  reviewKey?: string;
+  reviewKeyInputs?: import("./review-key.js").ReviewKeyInputs;
+  reusedFrom?: string;
+  diffFingerprint?: string;
+  diffReverseFingerprint?: string;
+  failedRepairFingerprints?: import("./review-key.js").FailedRepairDiff[];
 }
 
 export interface DeliveryBoundaryCheck {

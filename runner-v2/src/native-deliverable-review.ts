@@ -1,5 +1,19 @@
 import { captureReviewReads } from "./review-evidence.js";
 import { createHash } from "node:crypto";
+import { resolveEvidenceContent } from "./evidence-content.js";
+import {
+  REVIEWER_POLICY_VERSION,
+  claimBindingDigest,
+  combineEvidenceContentDigests,
+  computeReviewKey,
+  repairDiffFingerprint,
+  repairDiffReverseFingerprint,
+  semanticContractDigest,
+  testIntegrityDigest,
+  type FailedRepairDiff,
+  type ReviewKeyInputs,
+  type TestIntegrityInputs,
+} from "./review-key.js";
 import { isDeepStrictEqual } from "node:util";
 
 import type {
@@ -44,6 +58,7 @@ import {
   taskAcceptedFailuresUsed,
   type DeliveryAffectedTestsRecord,
   type DeliveryClaim,
+  type DeliveryState,
   type DeliveryProbeRecord,
   type DeliveryReviewRecord,
   type DeliveryReviewTier,
@@ -176,6 +191,20 @@ export interface NativeDeliverableReviewRuntimeOptions {
   artifacts: ArtifactStore;
   evidenceStore: EvidenceStore;
   loadInputs(input: { runId: string; task: BuildTask; projection: SchedulerProjection }): Promise<DeliverableReviewInputs>;
+  /**
+   * W1 (AR-R27): cheap authority subset for the reuse decision — the
+   * same validated submission, contract and diff bytes as loadInputs
+   * but without the test-integrity candidate-pin workspace. Absent
+   * only on historical harnesses, which fall back to loadInputs.
+   */
+  peekInputs?(input: { runId: string; task: BuildTask; projection: SchedulerProjection }): Promise<DeliverableReviewInputs>;
+  /**
+   * W1 (F6): actual Git tree resolution through the audited git
+   * context. Unavailable or unresolvable revisions must yield
+   * undefined (conservative reuse miss, never a substitute label);
+   * the real diff digest always binds content separately.
+   */
+  resolveTrees?(input: { baselineRevision: string; taskRevision: string }): Promise<{ baseTree: string; headTree: string } | undefined>;
   workspace: DeliveryReviewWorkspace;
   depth: DeliveryDepthRunner;
   budgetLedger?: BudgetLedger;
@@ -228,19 +257,28 @@ export type NativeDeliverableReviewResult =
 
 type Pass = "obligations" | "findings" | "verdict";
 
-/** Session identity per (review, pass, runtime, independence); the review id carries the durable generation. */
+/**
+ * Session identity per (review, pass, runtime, independence); the review
+ * id carries the durable generation. Ordinal 0 is the deterministic
+ * first-try session. A missing stage whose session already carries
+ * partial tool calls is retried in a NEW genuinely fresh session with
+ * a higher ordinal — the contaminated session stays immutable and is
+ * never borrowed. Ordinal 0 keeps its exact historical identity.
+ */
 export function deliverySessionId(
   runId: string,
   reviewId: string,
   pass: Pass,
   runtimeId: string,
   independence: ReviewerIndependence,
+  retryOrdinal = 0,
 ): string {
   const digest = createHash("sha256")
     .update(JSON.stringify([runId, reviewId, pass, runtimeId, independence]))
     .digest("hex")
     .slice(0, 24);
-  return `delivery:${runId}:${digest}`;
+  const base = `delivery:${runId}:${digest}`;
+  return retryOrdinal > 0 ? `${base}:retry${retryOrdinal}` : base;
 }
 
 export class NativeDeliverableReviewRuntime {
@@ -258,21 +296,14 @@ export class NativeDeliverableReviewRuntime {
     if (!task || task.status !== "submitted" || !task.changeSetId || projection.planningPolicyVersion !== 1) {
       throw new Error(`Deliverable review requires a submitted new-policy task ${request.taskId}.`);
     }
-    const existing = currentSubmissionReview(projection.delivery, task);
-    if (existing?.stage === "completed") {
-      return {
-        status: "reviewed",
-        reviewId: existing.reviewId,
-        runtimeId: existing.reviewerRuntimeId!,
-        independence: existing.independence!,
-        tier: existing.risk!.tier,
-        replayed: true,
-      };
-    }
     // C5 (AR-R16): the CURRENT accepted contract is the only reviewer
     // authority, resolved here before any loader or provider call. An
     // invalid, stale, dropped or mismatched reference fails closed —
     // never a historical fallback on the live readiness path.
+    // W1 (AR-R27): reuse is decided only AFTER these current authority
+    // checks. A previously completed review never authorizes itself:
+    // historical authority, fake identities, missing immutable artifacts
+    // and stale observations cannot authorize reuse.
     const authority = resolveTaskContractReference(projection, task.id);
     if (authority.status !== "current") {
       return {
@@ -281,11 +312,19 @@ export class NativeDeliverableReviewRuntime {
         detail: `Task ${task.id} has no current accepted contract (resolution: ${authority.status}).`,
       };
     }
+    // W1: cheap peek first — the same validated submission, contract and
+    // diff bytes, but no candidate-pin workspace, no model and no depth.
+    // The full inputs load only when a real review actually proceeds.
     let inputs: DeliverableReviewInputs;
     try {
-      inputs = await this.options.loadInputs({ runId: request.runId, task, projection });
+      inputs = await (this.options.peekInputs ?? this.options.loadInputs)({ runId: request.runId, task, projection });
       assertInputs(inputs, task);
       inputs = bindContractAuthority(inputs, task, authority);
+      // W1 (F6): the exact submitted immutable diff bytes at their
+      // addressed artifact must verify, AND the supplied text must
+      // equal those exact bytes — before model, workspace or cache
+      // authority. Missing/tampered bytes fail closed as unavailable.
+      await this.verifySubmittedDiff(inputs);
     } catch (error) {
       return { status: "unavailable", reason: "delivery_inputs_unavailable", detail: message(error) };
     }
@@ -310,21 +349,16 @@ export class NativeDeliverableReviewRuntime {
       }
       if (!task.reviewSignals || task.reviewSignals.taskRevision !== inputs.taskRevision || task.reviewSignals.baselineRevision !== inputs.baselineRevision) throw new DeliverableReviewInputsUnavailableError("Exact submitted review signals unavailable.");
     }
-    const generation = nextGeneration(projection, task.id);
-    const reviewId = deliveryReviewId(task.id, task.attempt, generation);
-    this.append(request.runId, "delivery.review_started", `${reviewId}:started`, {
-      taskId: task.id,
-      reviewId,
-      generation,
-      attempt: task.attempt,
-      changeSetId: task.changeSetId,
-      diffArtifactHash: inputs.diffArtifactHash,
-      criteriaIds: inputs.criteria.map((criterion) => criterion.id),
-      authorRuntimeId: inputs.authorRuntimeId,
-      authorModelIdentity: authorIdentity,
-      architectRuntimeId,
-      architectModelIdentity: canonicalModelIdentity(architect.modelId),
-    });
+    // W1 (F1): no same-submission shortcut. A completed review for the
+    // current submission never authorizes itself: validity is not equal
+    // semantic contract/key. The current key, evidence integrity, tier
+    // and policy are recomputed below for every hit, and only an exact
+    // key match returns the prior verdict (as an additive reuse
+    // binding). A different or unknown key archives the original
+    // unchanged and opens a fresh generation instead; missing or
+    // tampered evidence can never return the old verdict, and legacy
+    // no-key reviews are a conservative miss.
+    const existing = currentSubmissionReview(projection.delivery, task);
     // T6b repair (EP50): the OA-16 track-record snapshot feeds the T5
     // change-risk author tier; without outcomes the recorded default tier
     // applies exactly as before.
@@ -353,14 +387,101 @@ export class NativeDeliverableReviewRuntime {
       acceptedChangeAuthorRuntimeIds: authors,
     });
     if (selection.status === "unavailable") {
-      return { status: "unavailable", reviewId, reason: "delivery_reviewer_unavailable", detail: selection.reason };
+      return { status: "unavailable", reason: "delivery_reviewer_unavailable", detail: selection.reason };
     }
     const candidate = this.candidateById.get(selection.runtime.runtimeId);
     const model = this.options.models.get(selection.runtime.runtimeId);
     if (!candidate || !model) {
-      return { status: "unavailable", reviewId, reason: "delivery_reviewer_unavailable", runtimeId: selection.runtime.runtimeId };
+      return { status: "unavailable", reason: "delivery_reviewer_unavailable", runtimeId: selection.runtime.runtimeId };
     }
     const independence = selection.independence;
+    // W1 (F1): exact-key reuse. The CURRENT key above already
+    // recomputed every verdict-affecting dimension (contract, actual
+    // trees, real diff bytes, verified evidence content, claim
+    // bindings, test-integrity reference, tier, reviewer policy).
+    // The same exact key returns the PRIOR actual durable verdict: no
+    // new review opens, no model or depth workspace work runs, and no
+    // new repair cycle is charged. Original verdict/finding/read/depth
+    // provenance is preserved; nothing is re-minted and no
+    // current-session citation is invented. A different or unknown key
+    // (including legacy no-key reviews) is a conservative miss.
+    const reuseKey = await this.computeReviewKey(request.runId, task, inputs, authority.contract, authority.ref, risk.tier, authorIdentity);
+    if (reuseKey) {
+      const prior = findCompletedReviewByKey(projection.delivery, task.id, reuseKey.key);
+      if (prior) {
+        this.append(request.runId, "delivery.review_reused", `${task.id}:${task.attempt}:${reuseKey.key.slice(0, 16)}`, {
+          taskId: task.id,
+          attempt: task.attempt,
+          changeSetId: task.changeSetId,
+          criteriaIds: inputs.criteria.map((criterion) => criterion.id),
+          authorRuntimeId: inputs.authorRuntimeId,
+          authorModelIdentity: authorIdentity,
+          architectRuntimeId,
+          architectModelIdentity: canonicalModelIdentity(architect.modelId),
+          priorReviewId: prior.reviewId,
+          reviewKey: reuseKey.key,
+        });
+        return {
+          status: "reviewed",
+          reviewId: prior.reviewId,
+          runtimeId: prior.reviewerRuntimeId!,
+          independence: prior.independence!,
+          tier: prior.risk!.tier,
+          replayed: true,
+        };
+      }
+    }
+    // W1 (F3): an interrupted review resumes at its FIRST MISSING
+    // durable stage when the same exact KNOWN reviewer runtime/model/
+    // key and eligible identity continue. A different reviewer,
+    // runtime, model, independence, identity or key starts a new
+    // generation instead (the unfinished review is abandoned and stays
+    // immutable). An unknown previous key never continues: without a
+    // proven prior identity the review restarts at its first stage in
+    // a new generation once the actual tree is known. Completed stages
+    // keep their original sessions and never veto a resume; a missing
+    // stage whose session already carries partial tool calls is
+    // retried in a NEW genuinely fresh retry session after the partial
+    // work — only durably completed stages are ever reused, partial
+    // reads are never borrowed. A completed current submission without
+    // an exact key match is never resumed here: it is archived
+    // unchanged and a fresh generation opens below.
+    const unfinished = existing && existing.stage !== "completed" ? existing : undefined;
+    const keyContinues = reuseKey !== undefined &&
+      unfinished?.reviewKey !== undefined && unfinished.reviewKey === reuseKey.key;
+    if (
+      unfinished &&
+      keyContinues &&
+      unfinished.reviewerRuntimeId === candidate.runtimeId &&
+      unfinished.reviewerModelIdentity === canonicalModelIdentity(candidate.modelId) &&
+      unfinished.independence === independence &&
+      unfinished.risk?.tier === risk.tier &&
+      !unfinished.reusedFrom &&
+      firstMissingResumePass(unfinished) !== undefined
+    ) {
+      inputs = await this.ensureFullInputs(request.runId, task, projection, inputs, authority);
+      const context: PassContext = { request, reviewId: unfinished.reviewId, inputs, candidate, model, independence, tier: risk.tier, ...(projection.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}), defectClasses: this.resolveDefectClasses(), retryOrdinals: {} };
+      // W1 (F3): durably completed stages whose sessions lack
+      // session.complete (close/reopen between the lifecycle event and
+      // completion) are reconciled WITHOUT re-executing their passes.
+      this.reconcileCompletedStageSessions(unfinished);
+      return await this.runRemainingStages(context, unfinished.reviewId);
+    }
+    const generation = nextGeneration(projection, task.id);
+    const reviewId = deliveryReviewId(task.id, task.attempt, generation);
+    this.append(request.runId, "delivery.review_started", `${reviewId}:started`, {
+      taskId: task.id,
+      reviewId,
+      generation,
+      attempt: task.attempt,
+      changeSetId: task.changeSetId,
+      diffArtifactHash: inputs.diffArtifactHash,
+      criteriaIds: inputs.criteria.map((criterion) => criterion.id),
+      authorRuntimeId: inputs.authorRuntimeId,
+      authorModelIdentity: authorIdentity,
+      architectRuntimeId,
+      architectModelIdentity: canonicalModelIdentity(architect.modelId),
+    });
     const prior = latestCompletedReview(this.projection(request.runId).delivery, task.id);
     this.append(request.runId, "delivery.review_requested", `${reviewId}:requested`, {
       taskId: task.id,
@@ -372,57 +493,13 @@ export class NativeDeliverableReviewRuntime {
       riskDigest: risk.digest,
       riskInput,
       ...(prior ? { priorReviewId: prior.reviewId } : {}),
+      ...(await this.reviewKeyRequestFields(request.runId, task, inputs, reuseKey)),
     });
     const tier = risk.tier;
-    const depth = deliveryReviewDepthForTier(tier, projection.reviewIntegrityPolicyVersion);
+    inputs = await this.ensureFullInputs(request.runId, task, projection, inputs, authority);
     const context: PassContext = { request, reviewId, inputs, candidate, model, independence, tier, ...(projection.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}), defectClasses: this.resolveDefectClasses() };
-    let workspace: { path: string } | undefined;
-    try {
-      if (depth.obligationsFirst) {
-        const obligations = await this.runPass(context, "obligations", undefined);
-        if (obligations) return obligations;
-      }
-      this.append(request.runId, "delivery.criteria_and_diff_delivered", `${reviewId}:diff`, {
-        taskId: task.id,
-        reviewId,
-        diffArtifactHash: inputs.diffArtifactHash,
-      });
-      await this.options.workspace.cleanup();
-      workspace = await this.options.workspace.create(inputs.taskRevision);
-      if (depth.affectedTests) {
-        try {
-          context.depthRecords = await this.options.depth.run({
-            runId: request.runId,
-            taskId: task.id,
-            reviewId,
-            sessionId: deliverySessionId(request.runId, reviewId, "findings", candidate.runtimeId, independence),
-            reviewerRuntimeId: candidate.runtimeId,
-            workspacePath: workspace.path,
-            taskRevision: inputs.taskRevision,
-            baselineRevision: inputs.baselineRevision,
-            changedFiles: inputs.changedPaths,
-            diffText: inputs.diffText,
-            ...(request.signal ? { signal: request.signal } : {}),
-          });
-        } catch (error) {
-          return { status: "unavailable", reviewId, reason: "delivery_depth_unavailable", detail: message(error), runtimeId: candidate.runtimeId };
-        }
-      }
-      const findings = await this.runPass(context, "findings", workspace.path);
-      if (findings) return findings;
-      this.append(request.runId, "delivery.report_delivered", `${reviewId}:report`, {
-        taskId: task.id,
-        reviewId,
-        claims: inputs.claims.map((claim) => ({ ...claim, evidenceIds: [...claim.evidenceIds] })),
-      });
-      const verdict = await this.runPass(context, "verdict", workspace.path);
-      if (verdict) return verdict;
-    } finally {
-      if (workspace) await this.options.workspace.cleanup().catch(() => undefined);
-    }
-    return { status: "reviewed", reviewId, runtimeId: candidate.runtimeId, independence, tier, replayed: false };
+    return await this.runRemainingStages(context, reviewId);
   }
-
   /** Runs one pass; returns a terminal result when the pass did not record its stage. */
   private async runPass(
     context: PassContext,
@@ -430,6 +507,25 @@ export class NativeDeliverableReviewRuntime {
     workspacePath: string | undefined,
   ): Promise<NativeDeliverableReviewResult | undefined> {
     const { request, reviewId, candidate, model, independence } = context;
+    const expectedStage = expectedStageForPass(pass);
+    // W1 (F3): the missing stage runs in its deterministic session
+    // when empty, else in a new genuinely fresh retry session.
+    const sessionId = this.passSessionId(context, pass);
+    const earlyDurable = this.projection(request.runId).delivery?.reviews[context.inputs.taskId];
+    if (earlyDurable?.reviewId === reviewId && earlyDurable.stage === expectedStage) {
+      // W1: the lifecycle event is durable but session.complete may be
+      // missing (for example SQLite close/reopen between them).
+      // Complete the open session conservatively; a completed stage is
+      // never re-executed and no duplicate verdict provenance is minted.
+      if (this.options.sessions.events(sessionId).length > 0) {
+        try {
+          this.options.sessions.complete(sessionId, this.clock());
+        } catch {
+          // Already completed: the durable stage stands either way.
+        }
+      }
+      return undefined;
+    }
     const limits = this.options.contextLimits ?? { ...DELIVERABLE_REVIEW_CONTEXT_LIMITS };
     let pack: ContextPack;
     try {
@@ -440,7 +536,6 @@ export class NativeDeliverableReviewRuntime {
       }
       throw error;
     }
-    const sessionId = deliverySessionId(request.runId, reviewId, pass, candidate.runtimeId, independence);
     await recordContextPack({
       store: this.options.contextManifests,
       artifacts: this.options.artifacts,
@@ -506,11 +601,8 @@ export class NativeDeliverableReviewRuntime {
         await this.options.sessions.checkpoint(sessionId, checkpoint, this.clock());
       },
     });
-    const expectedStage: DeliveryReviewRecord["stage"] = pass === "obligations"
-      ? "obligations_recorded"
-      : pass === "findings" ? "findings_recorded" : "completed";
     const durable = this.projection(request.runId).delivery?.reviews[context.inputs.taskId];
-    if (passEnded(result, pass, reviewId) && durable?.reviewId === reviewId && durable.stage === expectedStage) {
+    if (passEnded(result, pass, reviewId) && durable?.reviewId === reviewId && durable.stage === expectedStageForPass(pass)) {
       this.options.sessions.complete(sessionId, this.clock());
       return undefined;
     }
@@ -648,16 +740,16 @@ export class NativeDeliverableReviewRuntime {
     counter: { calls: number },
   ): AgentToolRuntime {
     const lifecycle: NativeTool<unknown> = pass === "obligations"
-      ? createRecordDeliverableObligationsTool(this.lifecycleOptions(context, sessionId)) as NativeTool<unknown>
+      ? createRecordDeliverableObligationsTool(this.lifecycleOptions(context, pass, sessionId)) as NativeTool<unknown>
       : pass === "findings"
         ? createRecordDeliverableFindingsTool({
-            ...this.lifecycleOptions(context, sessionId),
+            ...this.lifecycleOptions(context, pass, sessionId),
             depth: () => ({
               inspectionToolCalls: counter.calls,
               ...(context.depthRecords ? context.depthRecords : {}),
             }),
           }) as NativeTool<unknown>
-        : createSubmitDeliverableVerdictTool(this.lifecycleOptions(context, sessionId)) as NativeTool<unknown>;
+        : createSubmitDeliverableVerdictTool(this.lifecycleOptions(context, pass, sessionId)) as NativeTool<unknown>;
     let runtime: AgentToolRuntime;
     let broker: RoleCapabilityBroker;
     if (pass === "obligations") {
@@ -705,7 +797,7 @@ export class NativeDeliverableReviewRuntime {
     return new InspectionCountingRuntime(budgeted, counter);
   }
 
-  private lifecycleOptions(context: PassContext, sessionId: string): DeliveryLifecycleToolOptions {
+  private lifecycleOptions(context: PassContext, pass: Pass, sessionId: string): DeliveryLifecycleToolOptions {
     return {
       store: this.options.store,
       runId: context.request.runId,
@@ -713,12 +805,77 @@ export class NativeDeliverableReviewRuntime {
       reviewId: context.reviewId,
       runtimeId: context.candidate.runtimeId,
       sessionId,
+      // W1 (F3): the retry ordinal of the session this pass actually
+      // runs in, so the read-capture authority gate binds the real
+      // retry session instead of only the deterministic first try.
+      retryOrdinal: context.retryOrdinals?.[pass] ?? 0,
       clock: this.clock,
       ...(this.options.ledger ? { ledger: this.options.ledger } : {}),
       evidenceStore: this.options.evidenceStore,
       sessions: this.options.sessions,
       ...(this.options.defectRecorder ? { defects: { ...this.options.defectRecorder } } : {}),
     };
+  }
+
+  /**
+   * W1 (F3): the session a pass runs in — its deterministic session
+   * when still empty, else the first genuinely fresh retry session.
+   * Ordinals resolve once per review call and are memoized on the
+   * context, so depth work, session creation, lifecycle tools and the
+   * read-capture gate all bind the SAME session.
+   */
+  private passSessionId(context: PassContext, pass: Pass): string {
+    const ordinal = context.retryOrdinals?.[pass] ?? this.resolvePassSessionOrdinal(context, pass);
+    return deliverySessionId(
+      context.request.runId,
+      context.reviewId,
+      pass,
+      context.candidate.runtimeId,
+      context.independence,
+      ordinal,
+    );
+  }
+
+  private resolvePassSessionOrdinal(context: PassContext, pass: Pass): number {
+    let ordinal = 0;
+    while (
+      this.options.sessions.events(deliverySessionId(
+        context.request.runId,
+        context.reviewId,
+        pass,
+        context.candidate.runtimeId,
+        context.independence,
+        ordinal,
+      )).length !== 0
+    ) {
+      ordinal += 1;
+    }
+    if (context.retryOrdinals) context.retryOrdinals[pass] = ordinal;
+    else context.retryOrdinals = { [pass]: ordinal };
+    return ordinal;
+  }
+
+  /**
+   * W1 (F3): completes the open sessions of durably recorded stages
+   * when the lifecycle event is durable but session.complete is
+   * absent (for example SQLite close/reopen between them). Only
+   * sessions already bound to durable stages are completed — partial
+   * sessions of missing stages are never touched — and no stage is
+   * ever re-executed to reconcile.
+   */
+  private reconcileCompletedStageSessions(review: DeliveryReviewRecord): void {
+    for (const sessionId of review.sessionIds ?? []) {
+      const events = this.options.sessions.events(sessionId);
+      if (events.length === 0) continue;
+      if (events.some((event) =>
+        event.type === "session.completed" || event.type === "session.submitted" || event.type === "session.suspended",
+      )) continue;
+      try {
+        this.options.sessions.complete(sessionId, this.clock());
+      } catch {
+        // The durable stage stands either way; never re-execute to reconcile.
+      }
+    }
   }
 
   private resolveDefectClasses(): readonly string[] | undefined {
@@ -739,6 +896,273 @@ export class NativeDeliverableReviewRuntime {
 
   private projection(runId: string): SchedulerProjection {
     return rebuildSchedulerProjection(this.options.store.readRun(runId));
+  }
+
+  /**
+   * W1: runs only the stages the durable record is still missing for
+   * this review. Completed stages are never re-executed, and every
+   * runner-emitted stage event is gated on its exact expected
+   * predecessor, so a retried call cannot duplicate durable history.
+   * Depth work runs only while its consuming findings stage is still
+   * missing; an exact repeat performs no workspace, depth or model work.
+   */
+  private async runRemainingStages(context: PassContext, reviewId: string): Promise<NativeDeliverableReviewResult> {
+    const { request, inputs, candidate, independence, tier } = context;
+    const taskId = inputs.taskId;
+    const durable = (): DeliveryReviewRecord | undefined => this.projection(request.runId).delivery?.reviews[taskId];
+    const atStage = (stage: DeliveryReviewRecord["stage"]): boolean => {
+      const record = durable();
+      return record?.reviewId === reviewId && record.stage === stage;
+    };
+    const depth = deliveryReviewDepthForTier(tier, context.reviewIntegrityPolicyVersion);
+    let workspace: { path: string } | undefined;
+    try {
+      if (depth.obligationsFirst && atStage("requested")) {
+        const obligations = await this.runPass(context, "obligations", undefined);
+        if (obligations) return obligations;
+      }
+      if (atStage("requested") || atStage("obligations_recorded")) {
+        this.append(request.runId, "delivery.criteria_and_diff_delivered", `${reviewId}:diff`, {
+          taskId,
+          reviewId,
+          diffArtifactHash: inputs.diffArtifactHash,
+        });
+      }
+      const record = durable();
+      const needsWorkspace = record?.reviewId === reviewId &&
+        (record.stage === "diff_delivered" || record.stage === "findings_recorded" || record.stage === "report_delivered");
+      if (needsWorkspace) {
+        await this.options.workspace.cleanup();
+        workspace = await this.options.workspace.create(inputs.taskRevision);
+        if (depth.affectedTests && atStage("diff_delivered")) {
+          try {
+            context.depthRecords = await this.options.depth.run({
+              runId: request.runId,
+              taskId,
+              reviewId,
+              sessionId: this.passSessionId(context, "findings"),
+              reviewerRuntimeId: candidate.runtimeId,
+              workspacePath: workspace.path,
+              taskRevision: inputs.taskRevision,
+              baselineRevision: inputs.baselineRevision,
+              changedFiles: inputs.changedPaths,
+              diffText: inputs.diffText,
+              ...(request.signal ? { signal: request.signal } : {}),
+            });
+          } catch (error) {
+            return { status: "unavailable", reviewId, reason: "delivery_depth_unavailable", detail: message(error), runtimeId: candidate.runtimeId };
+          }
+        }
+      }
+      if (atStage("diff_delivered")) {
+        if (!workspace) throw new Error("Findings pass requires its review workspace.");
+        const findings = await this.runPass(context, "findings", workspace.path);
+        if (findings) return findings;
+      }
+      if (atStage("findings_recorded")) {
+        this.append(request.runId, "delivery.report_delivered", `${reviewId}:report`, {
+          taskId,
+          reviewId,
+          claims: inputs.claims.map((claim) => ({ ...claim, evidenceIds: [...claim.evidenceIds] })),
+        });
+      }
+      if (atStage("report_delivered")) {
+        if (!workspace) throw new Error("Verdict pass requires its review workspace.");
+        const verdict = await this.runPass(context, "verdict", workspace.path);
+        if (verdict) return verdict;
+      }
+    } finally {
+      if (workspace) await this.options.workspace.cleanup().catch(() => undefined);
+    }
+    const finished = durable();
+    if (finished?.reviewId === reviewId && finished.stage === "completed") {
+      return { status: "reviewed", reviewId, runtimeId: candidate.runtimeId, independence, tier, replayed: false };
+    }
+    return { status: "unavailable", reviewId, reason: "delivery_review_incomplete", detail: `Review ${reviewId} ended at stage ${finished?.stage ?? "unknown"}.`, runtimeId: candidate.runtimeId };
+  }
+
+  /**
+   * W1: upgrades peek inputs to the full loader (test-integrity pin
+   * workspace included) once a real review — fresh or resumed — is
+   * certain. The peek already carried the validated submission,
+   * contract and diff bytes, so this only adds the pin workspace the
+   * reuse decision must not buy. Harnesses without a peek loader are
+   * already full and pass through untouched.
+   */
+  private async ensureFullInputs(
+    runId: string,
+    task: BuildTask,
+    projection: SchedulerProjection,
+    inputs: DeliverableReviewInputs,
+    authority: { readonly ref: TaskContractRef; readonly contract: ExecutionTaskContract },
+  ): Promise<DeliverableReviewInputs> {
+    if (!this.options.peekInputs) return inputs;
+    const full = await this.options.loadInputs({ runId, task, projection });
+    assertInputs(full, task);
+    return bindContractAuthority(full, task, authority);
+  }
+
+  /**
+   * W1 (F1/F5/F6/F7): computes the ReviewKey for the CURRENT
+   * submission. Every dimension is verified: the current accepted
+   * contract, the ACTUAL base and head Git trees through the audited
+   * resolver (never a manufactured label), the real diff bytes from
+   * the immutable artifact, the observed current-run evidence with
+   * immutable artifact verification, the content-bound claim
+   * semantics and evidence associations, the durable
+   * baseline/candidate test-integrity identity, tier and reviewer
+   * policy. Any failure is a conservative miss (undefined): unknown
+   * inputs never hit.
+   */
+  private async computeReviewKey(
+    runId: string,
+    task: BuildTask,
+    inputs: DeliverableReviewInputs,
+    contract: ExecutionTaskContract,
+    contractRef: TaskContractRef,
+    tier: string,
+    authorIdentity: string,
+  ): Promise<{ key: string; inputs: ReviewKeyInputs } | undefined> {
+    try {
+      const projection = this.projection(runId);
+      const trees = await this.resolveReviewTrees(inputs);
+      const diffDigest = createHash("sha256").update(inputs.diffText, "utf8").digest("hex");
+      const evidenceIds = [...new Set(inputs.claims.flatMap((claim) => claim.evidenceIds))];
+      const digests = resolveEvidenceContent(this.options.evidenceStore, this.options.artifacts, runId, evidenceIds);
+      const keyInputs: ReviewKeyInputs = {
+        semanticContractDigest: semanticContractDigest(contract),
+        baseTree: trees.baseTree,
+        headTree: trees.headTree,
+        diffDigest,
+        diffArtifactHash: inputs.diffArtifactHash,
+        evidenceContentDigest: combineEvidenceContentDigests(digests),
+        claimBindingDigest: claimBindingDigest({
+          objective: inputs.objective,
+          criteria: inputs.criteria,
+          claims: inputs.claims.map((claim) => ({
+            id: claim.id,
+            text: claim.text,
+            evidenceContent: claim.evidenceIds.map((id) => {
+              const digest = digests[id];
+              if (!digest) throw new Error(`Unresolved current-run evidence ${id}.`);
+              return digest;
+            }),
+          })),
+          workerSummary: inputs.workerSummary,
+          unresolvedConcerns: inputs.unresolvedConcerns,
+          ...(task.kind !== undefined && task.kind !== "implementation" ? { repairTaskKind: task.kind } : {}),
+        }),
+        // W1 (F6): the candidate side binds the ACTUAL head content
+        // tree, never the commit label: an identical resubmission under
+        // a new commit keeps its identity instead of over-keying.
+        testIntegrityDigest: testIntegrityDigest(currentTestIntegrityInputs(projection, contractRef, trees.headTree)),
+        tier,
+        reviewerPolicyVersion: REVIEWER_POLICY_VERSION,
+        authorModelIdentity: authorIdentity,
+        policyVersions: activeReviewPolicyVersions(projection),
+      };
+      return { key: computeReviewKey(keyInputs), inputs: keyInputs };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * W1 (F6): ACTUAL base and head Git trees through the audited
+   * resolver only. An unknown or unresolved actual base tree is a
+   * conservative reuse miss (throw): a substitute `commit:` label is
+   * never manufactured. Digest syntax is validated and the submitted
+   * diff bytes (bound separately via the diff digest) stay verified
+   * from the immutable artifact.
+   */
+  private async resolveReviewTrees(inputs: DeliverableReviewInputs): Promise<{ baseTree: string; headTree: string }> {
+    if (!inputs.baselineRevision || !inputs.taskRevision) throw new Error("ReviewKey requires submitted revisions.");
+    if (!this.options.resolveTrees) throw new Error("ReviewKey requires the audited actual Git tree resolver; unknown trees never hit.");
+    const resolved = await this.options.resolveTrees({ baselineRevision: inputs.baselineRevision, taskRevision: inputs.taskRevision });
+    if (!resolved) throw new Error("ReviewKey requires resolved actual Git trees; unknown trees never hit.");
+    const tree = (value: unknown, side: string): string => {
+      if (typeof value === "string" && /^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(value)) return value;
+      throw new Error(`ReviewKey requires a valid actual ${side} Git tree; unknown trees never hit.`);
+    };
+    return { baseTree: tree(resolved.baseTree, "base"), headTree: tree(resolved.headTree, "head") };
+  }
+
+  /**
+   * W1 (F6): verifies the exact submitted immutable diff bytes at
+   * their addressed artifact, and that the supplied text equals those
+   * exact bytes. A custom loader could supply text that never came
+   * from the addressed bytes, so both checks run here at the review
+   * boundary (the product loader already verifies on read). Missing
+   * or tampered bytes throw and the review fails closed as
+   * unavailable — never a freshly reviewed or cached authority.
+   */
+  private async verifySubmittedDiff(inputs: DeliverableReviewInputs): Promise<void> {
+    let bytes: Buffer;
+    try {
+      const record = await this.options.artifacts.verify(inputs.diffArtifactHash);
+      bytes = await this.options.artifacts.get(inputs.diffArtifactHash);
+      if (createHash("sha256").update(bytes).digest("hex") !== inputs.diffArtifactHash ||
+          bytes.byteLength !== record.byteLength) {
+        throw new Error("Captured submitted diff artifact hash mismatch.");
+      }
+    } catch {
+      throw new DeliverableReviewInputsUnavailableError(
+        `Submitted diff artifact ${inputs.diffArtifactHash} is missing or its bytes no longer hash to that address.`,
+      );
+    }
+    if (bytes.toString("utf8") !== inputs.diffText) {
+      throw new DeliverableReviewInputsUnavailableError(
+        "Supplied diff text differs from the verified immutable diff artifact bytes.",
+      );
+    }
+  }
+
+  /**
+   * W1 (F2): key/audit/fingerprint fields stored at request time for
+   * future reuse and oscillation checks. The current diff
+   * fingerprints and the FAILED lineage are ALWAYS derived —
+   * independently of ReviewKey eligibility — so a cache-key miss can
+   * never disable the mandatory blocking oscillation detection.
+   */
+  private async reviewKeyRequestFields(
+    runId: string,
+    task: BuildTask,
+    inputs: DeliverableReviewInputs,
+    reuseKey: { key: string; inputs: ReviewKeyInputs } | undefined,
+  ): Promise<Record<string, unknown>> {
+    return {
+      ...(reuseKey ? { reviewKey: reuseKey.key, reviewKeyInputs: reuseKey.inputs } : {}),
+      diffFingerprint: repairDiffFingerprint(inputs.diffText),
+      diffReverseFingerprint: repairDiffReverseFingerprint(inputs.diffText),
+      failedRepairFingerprints: await this.failedRepairFingerprints(runId, task.id),
+    };
+  }
+
+  /**
+   * W1 (S3 L7, F6): fingerprints of every FAILED completed review's
+   * real diff, with durable attempt lineage. The lineage is ALWAYS
+   * re-derived from the VERIFIED immutable artifact bytes — stored
+   * fingerprints are worker labels, never content proof. A missing
+   * or tampered failed artifact contributes nothing: an oscillation
+   * that cannot be proven from verified bytes is a miss, never a guess.
+   */
+  private async failedRepairFingerprints(runId: string, taskId: string): Promise<FailedRepairDiff[]> {
+    const history = this.projection(runId).delivery?.reviewHistory[taskId] ?? [];
+    const entries: FailedRepairDiff[] = [];
+    for (const review of history) {
+      if (review.stage !== "completed" || review.satisfied !== false) continue;
+      try {
+        const record = await this.options.artifacts.verify(review.diffArtifactHash);
+        const bytes = await this.options.artifacts.get(review.diffArtifactHash);
+        if (createHash("sha256").update(bytes).digest("hex") !== review.diffArtifactHash ||
+            bytes.byteLength !== record.byteLength) continue;
+        const text = bytes.toString("utf8");
+        entries.push({ attempt: review.submissionAttempt, forward: repairDiffFingerprint(text), reverse: repairDiffReverseFingerprint(text) });
+      } catch {
+        // Missing/tampered immutable artifact: this lineage cannot be proven.
+      }
+    }
+    return entries;
   }
 
   private budgetedModel(model: AgentModel, candidate: AgentRuntimeCandidate, runId: string, sessionId: string): AgentModel {
@@ -767,11 +1191,90 @@ interface PassContext {
   tier: DeliveryReviewTier;
   defectClasses?: readonly string[];
   depthRecords?: { affectedTests: DeliveryAffectedTestsRecord; probe: DeliveryProbeRecord };
+  /**
+   * W1 (F3): resolved retry-session ordinals per pass. The missing
+   * stage runs in its deterministic session when empty, else in a new
+   * genuinely fresh retry session; completed stages always reuse 0
+   * (their original sessions, never re-executed).
+   */
+  retryOrdinals?: Partial<Record<Pass, number>>;
 }
 
 function passEnded(result: AgentLoopResult, pass: Pass, reviewId: string): boolean {
   if (pass === "verdict") return result.status === "verifier_verdict_submitted" && result.reviewId === reviewId;
   return result.status === "verifier_expectations_recorded" && result.reviewId === reviewId;
+}
+
+function expectedStageForPass(pass: Pass): DeliveryReviewRecord["stage"] {
+  return pass === "obligations" ? "obligations_recorded" : pass === "findings" ? "findings_recorded" : "completed";
+}
+
+/**
+ * W1 (F3): the first missing durable stage of an unfinished review —
+ * the only stage a same-runtime resume may still run. Completed
+ * stages are never re-executed. `started` (requested event missing)
+ * has no resumable stage: the run must open a new generation.
+ */
+export function firstMissingResumePass(review: DeliveryReviewRecord): Pass | undefined {
+  switch (review.stage) {
+    case "requested":
+      return deliveryReviewDepthForTier(review.risk?.tier ?? "low").obligationsFirst ? "obligations" : "findings";
+    case "obligations_recorded":
+    case "diff_delivered":
+      return "findings";
+    case "findings_recorded":
+    case "report_delivered":
+      return "verdict";
+    default:
+      return undefined;
+  }
+}
+
+/** W1: the latest completed review whose stored ReviewKey exactly matches. Pre-W1 records carry no key. */
+function findCompletedReviewByKey(state: DeliveryState | undefined, taskId: string, key: string): DeliveryReviewRecord | undefined {
+  const current = state?.reviews[taskId];
+  if (current?.stage === "completed" && current.reviewKey === key) return current;
+  return [...(state?.reviewHistory[taskId] ?? [])].reverse().find((review) => review.stage === "completed" && review.reviewKey === key);
+}
+
+/**
+ * W1 (F5/F7): durable baseline/candidate identity for the ReviewKey,
+ * derived from durable state without any workspace. The accepted plan
+ * pin, the durable baseline pin (or a stable absent sentinel) and
+ * the candidate content tree bind the test-integrity reference: relevant
+ * baseline/candidate drift invalidates reuse even on the cheap path,
+ * while the full validated reference still rides the real review's
+ * inputs for reviewer authority.
+ */
+function currentTestIntegrityInputs(
+  projection: SchedulerProjection,
+  contractRef: TaskContractRef,
+  candidateRevision: string,
+): TestIntegrityInputs {
+  const baseline = projection.testIntegrity?.baseline;
+  return {
+    planRevisionId: contractRef.revisionId,
+    planDigest: contractRef.digest,
+    ...(baseline
+      ? {
+          baselinePinDigest: baseline.pinDigest,
+          baselineKind: baseline.kind,
+          baselineRevision: baseline.pin.revision,
+          ...(baseline.kind === "executed_report" ? { baselineExecuted: baseline.executed } : {}),
+        }
+      : {}),
+    candidateRevision,
+  };
+}
+
+/** W1: active reviewer-affecting policy flags bound into every ReviewKey. */
+function activeReviewPolicyVersions(projection: SchedulerProjection): string {
+  return [
+    `evidence:${projection.reviewEvidencePolicyVersion ?? 0}`,
+    `integrity:${projection.reviewIntegrityPolicyVersion ?? 0}`,
+    `scope:${projection.submissionScopePolicyVersion ?? 0}`,
+    `encoding:${projection.encodingSafetyPolicyVersion ?? 0}`,
+  ].join("|");
 }
 
 function nextGeneration(projection: SchedulerProjection, taskId: string): number {
@@ -907,6 +1410,12 @@ export interface DeliveryLifecycleToolOptions {
   reviewId: string;
   runtimeId: string;
   sessionId: string;
+  /**
+   * W1 (F3): retry ordinal of the bound session (0 for the
+   * deterministic first try). The read-capture authority gate binds
+   * this exact session, never an assumed base id.
+   */
+  retryOrdinal?: number;
   clock: () => string;
   defects?: ReviewDefectRecorder;
   ledger?: ToolInvocationLedger;
@@ -937,7 +1446,7 @@ function appendAsReviewer(
       const review = rebuildSchedulerProjection(options.store.readRun(options.runId)).delivery?.reviews[options.taskId];
       if (review?.reviewEvidencePolicyVersion === 1) {
         if (!options.ledger) throw new Error("Verified claim read capture requires the native tool ledger.");
-        if (review.reviewId !== options.reviewId || review.reviewerRuntimeId !== options.runtimeId || review.stage !== "report_delivered" || options.sessionId !== deliverySessionId(options.runId, options.reviewId, "verdict", options.runtimeId, review.independence!)) throw new Error("Read capture requires the current bound review.");
+        if (review.reviewId !== options.reviewId || review.reviewerRuntimeId !== options.runtimeId || review.stage !== "report_delivered" || options.sessionId !== deliverySessionId(options.runId, options.reviewId, "verdict", options.runtimeId, review.independence!, options.retryOrdinal ?? 0)) throw new Error("Read capture requires the current bound review.");
         const sessionEvents = options.sessions?.events(options.sessionId) ?? [];
         const created = sessionEvents[0];
         const actor = created?.payload.actor as { role?: string; id?: string } | undefined;

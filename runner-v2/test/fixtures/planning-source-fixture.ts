@@ -60,6 +60,9 @@ export function buildBaseManifest(): ApprovedSourceManifest {
 
 const AMENDED_TEXT = BASE_TEXT + "\nSECTION 8: AMENDMENT. Section 7 is retired by this amendment.";
 
+/** Exact bytes of the amended source manifest, for artifact authority in pump harnesses. */
+export const FIXTURE_AMENDED_TEXT = AMENDED_TEXT;
+
 export function buildAmendedManifest(prior: ApprovedSourceManifest): ApprovedSourceManifest {
   const bytes = Buffer.from(AMENDED_TEXT, "utf-8");
   return buildSourceManifest(bytes, sectionSpans(AMENDED_TEXT), {
