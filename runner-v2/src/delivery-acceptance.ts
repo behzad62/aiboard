@@ -9,6 +9,7 @@ import {
 } from "./planning-contracts.js";
 import type { ReviewerIndependence } from "./verifier-contracts.js";
 import type { TestIntegrityBoundary, TestConsolidationDisposition } from "./test-integrity-contracts.js";
+import { validateLateFindingBasis, type DeltaHunk, type PriorReadRange } from "./review-delta.js";
 
 /**
  * T6a (P6.6, OA-3/OA-4/OA-10/OA-11/OA-13): mandatory deliverable review and
@@ -223,6 +224,177 @@ export interface DeliveryReviewRecord {
   diffFingerprint?: string;
   diffReverseFingerprint?: string;
   failedRepairFingerprints?: import("./review-key.js").FailedRepairDiff[];
+  // W2 (AR-R28): delta-first re-review input. Absent on pre-W2 records
+  // and initial reviews: the conservative floor is the full cumulative
+  // diff with every finding staying blocking. followUpFindings retains
+  // late observations the kernel demoted to nonblocking; they never
+  // gate acceptance.
+  delta?: DeliveryReviewDelta;
+  followUpFindings?: PlanningFinding[];
+}
+
+/**
+ * W2 (AR-R28, S2 section 7.2 item 5): runner-computed fix re-review
+ * input. The fix delta runs prior reviewed head -> current head; the
+ * unnamed files list carries PATHS ONLY (never prior finding names or
+ * claims); invalidated evidence derives from changed tree identity.
+ * `fallback` marks the explicit conservative floor: prior trees,
+ * artifacts or evidence were unavailable, so the available full
+ * cumulative input stands in and unknown surfaces stay blocking.
+ */
+export interface DeliveryReviewDelta {
+  readonly priorReviewId: string;
+  readonly priorHeadTree?: string;
+  /** Absent only on the explicit conservative fallback (trees unavailable). */
+  readonly headTree?: string;
+  readonly deltaFiles: readonly string[];
+  /**
+   * Verified prior reviewed surface: prior cumulative changed files
+   * from actual Git trees, byte-exact. Read paths NEVER join: a ranged
+   * read authorizes only its range (see priorReadRanges). Empty means
+   * nothing proven reviewed: every late candidate stays blocking.
+   */
+  readonly priorReviewedFiles: readonly string[];
+  /**
+   * Verified prior line coverage: new-side lines SHOWN in the prior
+   * cumulative diff hunks, per file. A filename inventory never confers
+   * line coverage. Absent (fallback, oversize, unparsed) restricts line
+   * authority to read ranges.
+   */
+  readonly priorShownLines?: Readonly<Record<string, readonly number[]>>;
+  /**
+   * Authentic prior read ranges: actual returned start/end lines per
+   * path from the kernel-captured tool ledger. A range authorizes
+   * exactly its lines — never its whole file. Empty means no read
+   * authority.
+   */
+  readonly priorReadRanges: readonly PriorReadRange[];
+  /**
+   * Verified fix-delta hunks per file, from verified diff bytes.
+   * Absent (or a missing file entry) stays blocking; only omitted on
+   * oversized deltas that skip hunk mapping.
+   */
+  readonly deltaHunks?: Readonly<Record<string, readonly DeltaHunk[]>>;
+  readonly filesWithoutPriorFindings: readonly string[];
+  readonly invalidatedEvidenceIds: readonly string[];
+  readonly cumulativeIncludedUpFront: boolean;
+  readonly overCorrection: boolean;
+  readonly fallback?: "full_cumulative";
+  readonly deltaArtifactHash?: string;
+}
+
+function stringList(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || !entry.trim())) {
+    throw new Error(`${label} must be an array of paths.`);
+  }
+  return [...value as string[]];
+}
+
+/** Validates a runner-supplied re-review delta binding; absent stays absent. */
+export function validateReviewDelta(value: unknown, priorReviewId: string | undefined): DeliveryReviewDelta | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("Deliverable review delta is invalid.");
+  const priorId = text(value.priorReviewId, "Deliverable review delta prior review");
+  if (priorReviewId === undefined || priorId !== priorReviewId) {
+    throw new Error("Deliverable review delta must bind the current review's prior review.");
+  }
+  // W2: the head tree is absent only on the explicit conservative
+  // fallback (actual trees unavailable); the fallback flag is then
+  // required and the available full cumulative input stands in.
+  let headTree: string | undefined;
+  if (value.headTree !== undefined) {
+    headTree = text(value.headTree, "Deliverable review delta head tree");
+    if (!/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(headTree)) {
+      throw new Error("Deliverable review delta head tree is not an actual Git tree.");
+    }
+  }
+  if (value.priorHeadTree !== undefined) {
+    const priorTree = text(value.priorHeadTree, "Deliverable review delta prior tree");
+    if (!/^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(priorTree)) {
+      throw new Error("Deliverable review delta prior tree is not an actual Git tree.");
+    }
+  }
+  const deltaFiles = stringList(value.deltaFiles, "Deliverable review delta files");
+  const unnamed = stringList(value.filesWithoutPriorFindings, "Deliverable review delta unnamed files");
+  const deltaSet = new Set(deltaFiles);
+  for (const file of unnamed) {
+    if (!deltaSet.has(file)) throw new Error("Deliverable review delta unnamed files must be delta files.");
+  }
+  const invalidated = stringList(value.invalidatedEvidenceIds, "Deliverable review delta invalidated evidence");
+  const priorReviewedFiles = stringList(value.priorReviewedFiles, "Deliverable review delta prior reviewed files");
+  let priorShownLines: Record<string, number[]> | undefined;
+  if (value.priorShownLines !== undefined) {
+    if (!isRecord(value.priorShownLines)) throw new Error("Deliverable review delta shown lines are invalid.");
+    priorShownLines = {};
+    for (const [path, lines] of Object.entries(value.priorShownLines)) {
+      if (!path.length) throw new Error("Deliverable review delta shown lines carry an empty path.");
+      if (!Array.isArray(lines) || lines.some((line) => !Number.isSafeInteger(line) || (line as number) < 1)) {
+        throw new Error(`Deliverable review delta shown lines for ${path} are invalid.`);
+      }
+      priorShownLines[path] = [...lines as number[]];
+    }
+  }
+  if (!Array.isArray(value.priorReadRanges)) throw new Error("Deliverable review delta prior read ranges are invalid.");
+  const priorReadRanges: PriorReadRange[] = (value.priorReadRanges as unknown[]).map((range) => {
+    if (!isRecord(range) || typeof range.path !== "string" || !range.path.length) {
+      throw new Error("Deliverable review delta prior read ranges carry an empty path.");
+    }
+    if (!Number.isSafeInteger(range.startLine) || !Number.isSafeInteger(range.endLine) ||
+      (range.startLine as number) < 1 || (range.endLine as number) < (range.startLine as number)) {
+      throw new Error(`Deliverable review delta read range for ${range.path as string} is invalid.`);
+    }
+    return { path: range.path, startLine: range.startLine as number, endLine: range.endLine as number };
+  });
+  let deltaHunks: Record<string, DeltaHunk[]> | undefined;
+  if (value.deltaHunks !== undefined) {
+    if (!isRecord(value.deltaHunks)) throw new Error("Deliverable review delta hunks are invalid.");
+    deltaHunks = {};
+    for (const [path, hunks] of Object.entries(value.deltaHunks)) {
+      if (!path.length) throw new Error("Deliverable review delta hunks carry an empty path.");
+      if (!Array.isArray(hunks)) throw new Error(`Deliverable review delta hunks for ${path} are invalid.`);
+      deltaHunks[path] = (hunks as unknown[]).map((hunk) => {
+        if (!isRecord(hunk) || !["oldStart", "oldCount", "newStart", "newCount"].every((key) =>
+          Number.isSafeInteger(hunk[key]) && (hunk[key] as number) >= 0)) {
+          throw new Error(`Deliverable review delta hunk for ${path} is invalid.`);
+        }
+        return {
+          oldStart: hunk.oldStart as number,
+          oldCount: hunk.oldCount as number,
+          newStart: hunk.newStart as number,
+          newCount: hunk.newCount as number,
+        };
+      });
+    }
+  }
+  if (typeof value.cumulativeIncludedUpFront !== "boolean" || typeof value.overCorrection !== "boolean") {
+    throw new Error("Deliverable review delta must state its cumulative and over-correction flags.");
+  }
+  if (value.fallback !== undefined && value.fallback !== "full_cumulative") {
+    throw new Error("Deliverable review delta fallback is invalid.");
+  }
+  if (headTree === undefined && value.fallback !== "full_cumulative") {
+    throw new Error("Deliverable review delta without an actual head tree must mark the explicit full-cumulative fallback.");
+  }
+  if (value.deltaArtifactHash !== undefined) {
+    const hash = text(value.deltaArtifactHash, "Deliverable review delta artifact");
+    if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("Deliverable review delta artifact hash is invalid.");
+  }
+  return {
+    priorReviewId: priorId,
+    ...(value.priorHeadTree !== undefined ? { priorHeadTree: value.priorHeadTree as string } : {}),
+    ...(headTree !== undefined ? { headTree } : {}),
+    deltaFiles,
+    priorReviewedFiles,
+    ...(priorShownLines !== undefined ? { priorShownLines } : {}),
+    priorReadRanges,
+    ...(deltaHunks !== undefined ? { deltaHunks } : {}),
+    filesWithoutPriorFindings: unnamed,
+    invalidatedEvidenceIds: invalidated,
+    cumulativeIncludedUpFront: value.cumulativeIncludedUpFront as boolean,
+    overCorrection: value.overCorrection as boolean,
+    ...(value.fallback !== undefined ? { fallback: value.fallback as "full_cumulative" } : {}),
+    ...(value.deltaArtifactHash !== undefined ? { deltaArtifactHash: value.deltaArtifactHash as string } : {}),
+  };
 }
 
 export interface DeliveryBoundaryCheck {
@@ -476,6 +648,10 @@ export function validateDeliveryFindings(value: unknown): PlanningFinding[] {
     const evidenceRefs = Array.isArray(candidate.evidenceRefs)
       ? candidate.evidenceRefs.map((ref) => text(ref, "Deliverable finding evidence ref"))
       : [];
+    // W2 (AR-R28): optional reviewer-asserted late-finding exception
+    // basis. Structurally validated here; the kernel honors it only on
+    // unchanged already-reviewed code with a valid basis.
+    const lateFinding = validateLateFindingBasis(candidate.lateFinding, id);
     return {
       id,
       category,
@@ -488,6 +664,7 @@ export function validateDeliveryFindings(value: unknown): PlanningFinding[] {
         : {}),
       claim: text(candidate.claim, "Deliverable finding claim"),
       evidenceRefs,
+      ...(lateFinding !== undefined ? { lateFinding } : {}),
     };
   });
 }

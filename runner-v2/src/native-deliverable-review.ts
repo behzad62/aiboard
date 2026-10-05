@@ -25,6 +25,7 @@ import type {
   ToolExecutionOutput,
   ToolResult,
 } from "./agent-contracts.js";
+import { deltaFilesWithoutPriorFindings, invalidatedEvidenceIds, parseDiffHunks, parseShownLines } from "./review-delta.js";
 import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
 import {
   RUNNER_KERNEL_INVARIANTS,
@@ -136,6 +137,13 @@ export interface DeliverableReviewInputs {
   claims: DeliveryClaim[];
   authorRuntimeId: string;
   /**
+   * W2 (AR-R28): delta-first re-review input, assembled by the runtime
+   * from the prior completed review and the audited Git trees. Absent on
+   * initial reviews and when no prior actual tree is available (the
+   * findings pass then keeps the full cumulative diff).
+   */
+  fixDelta?: FixDeltaInputs;
+  /**
    * C5 (AR-R16): the authoritative accepted contract from durable state,
    * rendered as the required compact contract block on the findings and
    * verdict passes. Optional loader copies are checked against the current
@@ -149,6 +157,43 @@ export interface DeliverableReviewInputs {
     baselineKind: "executed_report" | "no_configured_test_suite"; baselineExecuted?: number; baselineRevision: string;
     findings: readonly import("./test-integrity.js").TestIntegrityFinding[];
   };
+}
+
+/** W2 (AR-R28): ordered delta-first input for one fix re-review. */
+export interface FixDeltaInputs {
+  readonly priorReviewId: string;
+  readonly priorHeadTree?: string;
+  readonly headTree?: string;
+  /** Changed files, prior reviewed head -> current head (full cumulative on fallback). */
+  readonly deltaFiles: string[];
+  /** Verified prior reviewed surface: prior cumulative files from actual Git trees ONLY. */
+  readonly priorReviewedFiles: string[];
+  /** Verified prior line coverage: new-side lines SHOWN in the prior cumulative diff. */
+  readonly priorShownLines?: Record<string, number[]>;
+  /** Authentic prior read ranges: actual returned lines, never widened. */
+  readonly priorReadRanges: Array<{ path: string; startLine: number; endLine: number }>;
+  /** Verified fix-delta hunks per file; absent when hunk mapping is skipped. */
+  readonly deltaHunks?: Record<string, import("./review-delta.js").DeltaHunk[]>;
+  /** Delta files no prior finding location names — PATHS ONLY, never finding names or claims. */
+  readonly filesWithoutPriorFindings: string[];
+  readonly invalidatedEvidenceIds: string[];
+  /** Fix-delta unified diff text; empty on explicit fallback. */
+  readonly deltaText: string;
+  readonly deltaArtifactHash?: string;
+  /** Submitted cumulative diff artifact (baseline -> current): the tool reference. */
+  readonly cumulativeArtifactHash: string;
+  readonly cumulativeIncludedUpFront: boolean;
+  readonly overCorrection: boolean;
+  readonly fallback?: "full_cumulative";
+}
+
+/** W2 (AR-R28): audited fix-delta diff primitive. Real Git trees only; undefined is an explicit miss. */
+export interface FixDeltaResolver {
+  (input: { priorBaseTree?: string; priorHeadTree: string; headTree: string }): Promise<{
+    deltaFiles: string[];
+    deltaText: string;
+    priorReviewed: string[];
+  } | undefined>;
 }
 
 export class DeliverableReviewInputsUnavailableError extends Error {}
@@ -205,6 +250,14 @@ export interface NativeDeliverableReviewRuntimeOptions {
    * the real diff digest always binds content separately.
    */
   resolveTrees?(input: { baselineRevision: string; taskRevision: string }): Promise<{ baseTree: string; headTree: string } | undefined>;
+  /**
+   * W2 (AR-R28): audited fix-delta diff between two ACTUAL Git trees,
+   * wired by the factory through the audited verification runner (no new
+   * product child_process). Unavailable or unresolvable trees must yield
+   * undefined: the runtime then records the explicit conservative
+   * fallback with the available full cumulative input.
+   */
+  resolveFixDelta?: FixDeltaResolver;
   workspace: DeliveryReviewWorkspace;
   depth: DeliveryDepthRunner;
   budgetLedger?: BudgetLedger;
@@ -460,6 +513,10 @@ export class NativeDeliverableReviewRuntime {
       firstMissingResumePass(unfinished) !== undefined
     ) {
       inputs = await this.ensureFullInputs(request.runId, task, projection, inputs, authority);
+      // W2: a resumed re-review rebuilds the same deterministic delta-first
+      // input (same prior, same actual trees) before its remaining stages.
+      const resumeFixDelta = await this.assembleFixDelta(task, inputs, latestCompletedReview(this.projection(request.runId).delivery, task.id), reuseKey?.inputs.headTree, risk.tier);
+      if (resumeFixDelta) inputs = { ...inputs, fixDelta: resumeFixDelta };
       const context: PassContext = { request, reviewId: unfinished.reviewId, inputs, candidate, model, independence, tier: risk.tier, ...(projection.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}), defectClasses: this.resolveDefectClasses(), retryOrdinals: {} };
       // W1 (F3): durably completed stages whose sessions lack
       // session.complete (close/reopen between the lifecycle event and
@@ -483,6 +540,11 @@ export class NativeDeliverableReviewRuntime {
       architectModelIdentity: canonicalModelIdentity(architect.modelId),
     });
     const prior = latestCompletedReview(this.projection(request.runId).delivery, task.id);
+    // W2 (AR-R28): delta-first input for a fix re-review, assembled from
+    // the prior completed review and the audited actual trees before any
+    // new reviewer session opens. Initial reviews carry no delta.
+    const fixDelta = await this.assembleFixDelta(task, inputs, prior, reuseKey?.inputs.headTree, risk.tier);
+    if (fixDelta) inputs = { ...inputs, fixDelta };
     this.append(request.runId, "delivery.review_requested", `${reviewId}:requested`, {
       taskId: task.id,
       reviewId,
@@ -494,6 +556,7 @@ export class NativeDeliverableReviewRuntime {
       riskInput,
       ...(prior ? { priorReviewId: prior.reviewId } : {}),
       ...(await this.reviewKeyRequestFields(request.runId, task, inputs, reuseKey)),
+      ...(fixDelta ? { delta: toDurableReviewDelta(fixDelta) } : {}),
     });
     const tier = risk.tier;
     inputs = await this.ensureFullInputs(request.runId, task, projection, inputs, authority);
@@ -550,7 +613,7 @@ export class NativeDeliverableReviewRuntime {
       recordedAt: this.clock(),
     });
     const messages: AgentMessage[] = [
-      { id: `delivery-${pass}-system`, role: "system", content: deliveryReviewerSystemPrompt(pass, context.tier, context.reviewIntegrityPolicyVersion) },
+      { id: `delivery-${pass}-system`, role: "system", content: deliveryReviewerSystemPrompt(pass, context.tier, context.reviewIntegrityPolicyVersion, context.inputs.fixDelta !== undefined) },
       { id: `context:${pack.digest}`, role: "user", content: pack.text },
     ];
     // Fresh-context device: every pass opens a new session whose event list
@@ -674,12 +737,24 @@ export class NativeDeliverableReviewRuntime {
         `Obligations you recorded before seeing the diff:\n${JSON.stringify(durable.obligations, null, 2)}`,
       ));
     }
-    sections.push(section(
-      "submitted-diff",
-      "diff",
-      `Submitted change ${inputs.changeSetId} (baseline ${inputs.baselineRevision} -> task revision ${inputs.taskRevision}).\n` +
-        `Changed files:\n${inputs.changedPaths.map((path) => `- ${path}`).join("\n")}\n\nUnified diff:\n${inputs.diffText}`,
-    ));
+    // F4: initial reviews keep the full cumulative diff here. Fix
+    // re-reviews render it inside deltaContextSections AFTER the correction
+    // input (criteria -> fix delta -> unnamed files -> invalidated evidence
+    // -> allowed cumulative). Prior findings stay withheld until durable
+    // own findings exist.
+    if (!inputs.fixDelta) {
+      sections.push(section(
+        "submitted-diff",
+        "diff",
+        `Submitted change ${inputs.changeSetId} (baseline ${inputs.baselineRevision} -> task revision ${inputs.taskRevision}).\n` +
+          `Changed files:\n${inputs.changedPaths.map((path) => `- ${path}`).join("\n")}\n\n${this.cumulativeDiffTail(context)}`,
+      ));
+    }
+    // W2 (AR-R28): delta-first re-review input rides both the findings
+    // and the verdict pass (each pass runs in a fresh session). Prior
+    // findings are never included here — the verdict context releases
+    // them only after the reviewer records its own findings.
+    for (const deltaSection of this.deltaContextSections(context)) sections.push(deltaSection);
     if (context.depthRecords) {
       sections.push(section(
         "runner-depth",
@@ -718,6 +793,9 @@ export class NativeDeliverableReviewRuntime {
       "claims",
       `Worker claims to judge one by one (verified only when you confirmed it yourself):\n${JSON.stringify(inputs.claims, null, 2)}`,
     ));
+    // W2 (AR-R28): the late-finding rule rides the fix re-review verdict
+    // pass, before the released prior findings.
+    if (durable?.priorReviewId !== undefined) sections.push(this.lateFindingRuleSection());
     const prior = durable?.priorReviewId
       ? (this.projection(context.request.runId).delivery?.reviewHistory[inputs.taskId] ?? [])
           .find((review) => review.reviewId === durable.priorReviewId)
@@ -730,6 +808,87 @@ export class NativeDeliverableReviewRuntime {
       ));
     }
     return sections;
+  }
+
+  /**
+   * W2 (AR-R28): cumulative-diff gating for fix re-reviews. The full
+   * cumulative baseline->current text rides up front only at high tier
+   * or when the actual fix delta touches files outside prior finding
+   * locations (over-correction signal), or on the explicit fallback.
+   * Otherwise the reviewer gets a real tool/artifact reference and the
+   * fix delta as the primary surface. Initial reviews always include
+   * the full diff.
+   */
+  private cumulativeDiffTail(context: PassContext): string {
+    const { inputs } = context;
+    const delta = inputs.fixDelta;
+    if (!delta || delta.cumulativeIncludedUpFront) return `Unified diff:\n${inputs.diffText}`;
+    return `Unified diff: withheld up front on this fix re-review (ordinary ${context.tier}-tier repair with no over-correction signal). ` +
+      `The complete cumulative diff (baseline ${inputs.baselineRevision} -> task revision ${inputs.taskRevision}) remains available: ` +
+      `open it with the artifact read tool at hash ${inputs.diffArtifactHash}, or inspect the task-revision checkout with your git tools. ` +
+      `Judge the fix delta below first.`;
+  }
+
+  /**
+   * F4: correction-first sections for a fix re-review, in required order:
+   * criteria (already first), the actual fix delta (prior reviewed head
+   * -> current head), the delta files no prior finding location names
+   * (paths only — never finding names or claims), the invalidated evidence
+   * facts, and only then the allowed cumulative context (full text at high
+   * tier or on the over-correction signal, else a real tool reference).
+   * Prior findings are NEVER included here: the verdict context releases
+   * them only after the reviewer records its own findings.
+   */
+  private deltaContextSections(context: PassContext): ContextSection[] {
+    const { inputs } = context;
+    const delta = inputs.fixDelta;
+    if (!delta) return [];
+    const fixBody = delta.fallback
+      ? `Explicit conservative fallback (${delta.fallback}): prior trees, artifacts or evidence were unavailable, so the available full cumulative input stands in. ` +
+        `Treat every unknown surface as unreviewed; do not assume the repair is small.`
+      : `Fix delta (prior reviewed head ${delta.priorHeadTree ?? "unknown"} -> current head ${delta.headTree ?? "unknown"}).\n` +
+        `Changed files:\n${delta.deltaFiles.map((path) => `- ${path}`).join("\n")}\n\nUnified fix diff:\n${delta.deltaText}` +
+        (delta.deltaArtifactHash ? `\nFix-delta bytes are also stored at artifact hash ${delta.deltaArtifactHash}.` : "");
+    return [
+      section("fix-delta", "diff", fixBody),
+      section(
+        "delta-files-without-findings",
+        "diff",
+        `Runner-computed fix-delta files that no prior finding location names (over-correction signal; PATHS ONLY — no finding names or claims):\n` +
+          (delta.filesWithoutPriorFindings.length > 0
+            ? delta.filesWithoutPriorFindings.map((path) => `- ${path}`).join("\n")
+            : "- none") +
+          (delta.overCorrection ? "\nThe delta touches files outside prior finding locations: the full cumulative diff is included up front." : ""),
+      ),
+      section(
+        "invalidated-evidence",
+        "evidence",
+        `Evidence facts invalidated by changed tree/content identity (re-verify them; prior reads grant no authority):\n` +
+          (delta.invalidatedEvidenceIds.length > 0 ? delta.invalidatedEvidenceIds.map((id) => `- ${id}`).join("\n") : "- none"),
+      ),
+      section(
+        "submitted-diff",
+        "diff",
+        `Submitted change ${inputs.changeSetId} (baseline ${inputs.baselineRevision} -> task revision ${inputs.taskRevision}).\n` +
+          `Changed files:\n${inputs.changedPaths.map((path) => `- ${path}`).join("\n")}\n\n${this.cumulativeDiffTail(context)}`,
+      ),
+    ];
+  }
+
+  /**
+   * W2 (AR-R28, CD-4): late-finding rule reminder for a fix re-review
+   * verdict pass. The kernel enforces the mechanical side; this states
+   * the reviewer's obligations, including the both-directions check.
+   */
+  private lateFindingRuleSection(): ContextSection {
+    return section(
+      "late-finding-rule",
+      "contract",
+      `Fix re-review, both directions: check EVERY prior finding as resolved or outstanding with a rationale (exactly once each), AND check that no change goes beyond what the findings require and no previously satisfied criterion regressed. ` +
+        `After the first review, a NEW blocking finding on unchanged already-reviewed code counts only when it is critical (security, data loss, false acceptance) with an explicit rationale, or backed by an actual failing test from this review's runner checks — mark the basis on the finding. ` +
+        `Other late observations are retained as nonblocking follow-up. Findings on changed, unreviewed or unknown surfaces stay blocking. ` +
+        `Runner scope, encoding, mutation-survivor and oscillation facts keep their reserved blocking force regardless of this rule.`,
+    );
   }
 
   private passTools(
@@ -999,7 +1158,10 @@ export class NativeDeliverableReviewRuntime {
     if (!this.options.peekInputs) return inputs;
     const full = await this.options.loadInputs({ runId, task, projection });
     assertInputs(full, task);
-    return bindContractAuthority(full, task, authority);
+    const bound = bindContractAuthority(full, task, authority);
+    // W2: the peek already assembled the delta-first input from the same
+    // validated submission; the full loader only adds the pin workspace.
+    return inputs.fixDelta ? { ...bound, fixDelta: inputs.fixDelta } : bound;
   }
 
   /**
@@ -1075,6 +1237,167 @@ export class NativeDeliverableReviewRuntime {
    * diff bytes (bound separately via the diff digest) stay verified
    * from the immutable artifact.
    */
+  /**
+   * W2 (AR-R28): assembles the ordered delta-first input for a fix
+   * re-review — criteria stay first in context; then the actual fix
+   * delta (prior reviewed head -> current head from ACTUAL Git trees
+   * through the audited resolver, never a diff filename guess or a
+   * manufactured label); then the runner-computed delta files no prior
+   * finding location names (paths only); then the invalidated evidence
+   * facts from changed tree identity. Missing or unavailable prior
+   * trees, artifacts or evidence yield the EXPLICIT conservative
+   * fallback with the available full cumulative input — never a silent
+   * empty correction. Initial reviews get no delta and keep their
+   * normal full-diff behavior.
+   */
+  private async assembleFixDelta(
+    task: BuildTask,
+    inputs: DeliverableReviewInputs,
+    prior: DeliveryReviewRecord | undefined,
+    headTree: string | undefined,
+    tier: DeliveryReviewTier,
+  ): Promise<FixDeltaInputs | undefined> {
+    if (!prior) return undefined;
+    // F6: invalidation from every authentic prior tree-bound evidence
+    // source — worker claims, verdict citations, runner depth/probe
+    // evidence, finding evidence refs, and read-capture evidence refs.
+    // Ids only: never finding text or claims (no leak into the blind
+    // pass). Tree/content identity decides; model prose never revalidates.
+    const priorEvidenceIds = [
+      ...(prior.claims ?? []).flatMap((claim) => claim.evidenceIds),
+      ...(prior.claimVerdicts ?? []).flatMap((verdict) =>
+        (verdict.citations ?? []).flatMap((citation) =>
+          "evidenceId" in citation && typeof citation.evidenceId === "string" ? [citation.evidenceId] : [],
+        ),
+      ),
+      ...(prior.depth?.affectedTests?.evidenceIds ?? []),
+      ...(prior.depth?.probe?.evidenceIds ?? []),
+      ...(prior.findings ?? []).flatMap((finding) => finding.evidenceRefs),
+      ...(prior.readCapture?.reads ?? []).flatMap((read) =>
+        typeof read.evidenceId === "string" && read.evidenceId.length > 0 ? [read.evidenceId] : [],
+      ),
+    ];
+    const priorHeadTree = prior.reviewKeyInputs?.headTree;
+    const priorBaseTree = prior.reviewKeyInputs?.baseTree;
+    // F5: authentic prior read RANGES from the kernel-captured tool
+    // ledger. Only successful fs.read facts with actual returned ranges;
+    // a range authorizes exactly its lines, never its whole file. Paths
+    // ride raw: captured strings keep byte-exact identity (no trim).
+    const priorReadRanges = (prior.readCapture?.reads ?? [])
+      .filter((read) => read.toolName === "fs.read" && typeof read.path === "string" && read.path.length > 0 &&
+        Number.isSafeInteger(read.startLine) && Number.isSafeInteger(read.endLine) &&
+        (read.startLine as number) >= 1 && (read.endLine as number) >= (read.startLine as number))
+      .map((read) => ({
+        path: read.path as string,
+        startLine: read.startLine as number,
+        endLine: read.endLine as number,
+      }));
+    // F5: verified prior line coverage = new-side lines SHOWN in the
+    // prior cumulative diff's verified bytes. Unavailable, unparsed or
+    // oversized bytes mean absent: line authority then rests on read
+    // ranges only.
+    const priorShownLines = await this.readPriorShownLines(prior);
+    const resolved = await this.resolveFixDeltaDiff(priorBaseTree, priorHeadTree, headTree);
+    if (!resolved) {
+      return {
+        priorReviewId: prior.reviewId,
+        ...(isHexTree(priorHeadTree) ? { priorHeadTree: priorHeadTree as string } : {}),
+        ...(isHexTree(headTree) ? { headTree: headTree as string } : {}),
+        deltaFiles: [...inputs.changedPaths],
+        priorReviewedFiles: [],
+        ...(priorShownLines ? { priorShownLines } : {}),
+        priorReadRanges,
+        filesWithoutPriorFindings: [...inputs.changedPaths],
+        invalidatedEvidenceIds: invalidatedEvidenceIds(priorEvidenceIds, priorHeadTree, headTree),
+        deltaText: "",
+        cumulativeArtifactHash: inputs.diffArtifactHash,
+        cumulativeIncludedUpFront: true,
+        overCorrection: false,
+        fallback: "full_cumulative" as const,
+      };
+    }
+    const split = deltaFilesWithoutPriorFindings(resolved.deltaFiles, prior.findings ?? []);
+    let deltaArtifactHash: string | undefined;
+    try {
+      const record = await this.options.artifacts.put(
+        Buffer.from(resolved.deltaText, "utf8"),
+        "text/x-diff",
+        `fix-delta ${prior.reviewId} -> current`,
+      );
+      deltaArtifactHash = record.hash;
+    } catch {
+      deltaArtifactHash = undefined;
+    }
+    const overCorrection = split.unnamed.length > 0;
+    // Hunk mapping is skipped on oversized deltas: the file stays
+    // blocking instead of guessing line facts.
+    const hunkMap = diffHunkMap(resolved.deltaText);
+    return {
+      priorReviewId: prior.reviewId,
+      priorHeadTree: resolved.priorHeadTree,
+      headTree: resolved.headTree,
+      deltaFiles: resolved.deltaFiles,
+      priorReviewedFiles: [...resolved.priorReviewed],
+      ...(priorShownLines ? { priorShownLines } : {}),
+      priorReadRanges,
+      ...(hunkMap ? { deltaHunks: hunkMap } : {}),
+      filesWithoutPriorFindings: split.unnamed,
+      invalidatedEvidenceIds: invalidatedEvidenceIds(priorEvidenceIds, priorHeadTree, headTree),
+      deltaText: resolved.deltaText,
+      ...(deltaArtifactHash ? { deltaArtifactHash } : {}),
+      cumulativeArtifactHash: inputs.diffArtifactHash,
+      cumulativeIncludedUpFront: tier === "high" || overCorrection,
+      overCorrection,
+    };
+  }
+
+  /**
+   * W2: the audited fix-delta diff between two actual Git trees. Only
+   * hex-validated trees reach the factory primitive; anything else is
+   * an explicit miss (fallback), never a manufactured label.
+   */
+  /**
+   * F5: new-side lines SHOWN in the prior cumulative diff's verified
+   * bytes (context plus added hunks): the prior review's actual line
+   * coverage. Bytes are hash-verified like the submitted diff; missing,
+   * tampered, unparsed or oversized bytes mean absent (line authority
+   * then rests on read ranges only), never an empty fabrication.
+   */
+  private async readPriorShownLines(prior: DeliveryReviewRecord): Promise<Record<string, number[]> | undefined> {
+    try {
+      const hash = prior.diffArtifactHash;
+      if (!/^[a-f0-9]{64}$/.test(hash)) return undefined;
+      const bytes = await this.options.artifacts.get(hash);
+      if (createHash("sha256").update(bytes).digest("hex") !== hash) return undefined;
+      if (bytes.byteLength > 512 * 1024) return undefined;
+      const shown = parseShownLines(bytes.toString("utf8"));
+      return Object.fromEntries([...shown.entries()].map(([path, numbers]) => [path, [...numbers]]));
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async resolveFixDeltaDiff(
+    priorBaseTree: string | undefined,
+    priorHeadTree: string | undefined,
+    headTree: string | undefined,
+  ): Promise<{ priorHeadTree: string; headTree: string; deltaFiles: string[]; deltaText: string; priorReviewed: string[] } | undefined> {
+    if (!isHexTree(priorHeadTree) || !isHexTree(headTree) || !this.options.resolveFixDelta) return undefined;
+    try {
+      const resolved = await this.options.resolveFixDelta({
+        ...(isHexTree(priorBaseTree) ? { priorBaseTree: priorBaseTree as string } : {}),
+        priorHeadTree: priorHeadTree as string,
+        headTree: headTree as string,
+      });
+      if (!resolved || !Array.isArray(resolved.deltaFiles) || typeof resolved.deltaText !== "string") return undefined;
+      if (resolved.deltaFiles.some((file) => typeof file !== "string" || !file.length)) return undefined;
+      if (!Array.isArray(resolved.priorReviewed) || resolved.priorReviewed.some((file) => typeof file !== "string" || !file.length)) return undefined;
+      return { priorHeadTree: priorHeadTree as string, headTree: headTree as string, deltaFiles: [...resolved.deltaFiles], deltaText: resolved.deltaText, priorReviewed: [...resolved.priorReviewed] };
+    } catch {
+      return undefined;
+    }
+  }
+
   private async resolveReviewTrees(inputs: DeliverableReviewInputs): Promise<{ baseTree: string; headTree: string }> {
     if (!inputs.baselineRevision || !inputs.taskRevision) throw new Error("ReviewKey requires submitted revisions.");
     if (!this.options.resolveTrees) throw new Error("ReviewKey requires the audited actual Git tree resolver; unknown trees never hit.");
@@ -1349,6 +1672,46 @@ function bindContractAuthority(
   return { ...inputs, contract: authority.contract, contractRef: authority.ref };
 }
 
+/**
+ * W2: durable delta binding for the review_requested event. Context-only
+ * bytes (the delta text, the cumulative reference) are excluded: hashes
+ * bind bytes, and the cumulative hash already rides the review record.
+ */
+function toDurableReviewDelta(delta: FixDeltaInputs): Record<string, unknown> {
+  return {
+    priorReviewId: delta.priorReviewId,
+    ...(delta.priorHeadTree ? { priorHeadTree: delta.priorHeadTree } : {}),
+    ...(delta.headTree ? { headTree: delta.headTree } : {}),
+    deltaFiles: [...delta.deltaFiles],
+    priorReviewedFiles: [...delta.priorReviewedFiles],
+    ...(delta.priorShownLines ? { priorShownLines: delta.priorShownLines } : {}),
+    priorReadRanges: delta.priorReadRanges.map((range) => ({ ...range })),
+    ...(delta.deltaHunks ? { deltaHunks: delta.deltaHunks } : {}),
+    filesWithoutPriorFindings: [...delta.filesWithoutPriorFindings],
+    invalidatedEvidenceIds: [...delta.invalidatedEvidenceIds],
+    cumulativeIncludedUpFront: delta.cumulativeIncludedUpFront,
+    overCorrection: delta.overCorrection,
+    ...(delta.fallback ? { fallback: delta.fallback } : {}),
+    ...(delta.deltaArtifactHash ? { deltaArtifactHash: delta.deltaArtifactHash } : {}),
+  };
+}
+
+/**
+ * W2: verified fix-delta hunks per file as a durable record, or
+ * undefined when the delta is oversized (512 KiB, the review context
+ * cap): unknown hunk facts stay blocking instead of guessed.
+ */
+function diffHunkMap(deltaText: string): Record<string, import("./review-delta.js").DeltaHunk[]> | undefined {
+  if (Buffer.byteLength(deltaText, "utf8") > 512 * 1024) return undefined;
+  const hunks = parseDiffHunks(deltaText);
+  return Object.fromEntries([...hunks.entries()].map(([path, list]) => [path, [...list]]));
+}
+
+/** W2: an actual Git tree id (40-hex SHA-1 or 64-hex SHA-256), never a label. */
+function isHexTree(value: unknown): value is string {
+  return typeof value === "string" && (/^[a-f0-9]{40}$/.test(value) || /^[a-f0-9]{64}$/.test(value));
+}
+
 function section(id: string, kind: string, content: string): ContextSection {
   return { id, kind, required: true, priority: 1000, content };
 }
@@ -1375,7 +1738,7 @@ export const DELIVERABLE_REVIEWER_INVARIANTS = [
   "Your records are durable evidence; another reviewer may audit them without seeing your session.",
 ].join("\n");
 
-export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTier, reviewIntegrityPolicyVersion?: 1): string {
+export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTier, reviewIntegrityPolicyVersion?: 1, isReReview?: boolean): string {
   const instructions = pass === "obligations"
     ? [
         "You see the acceptance criteria only. You have NOT seen the diff yet.",
@@ -1388,11 +1751,17 @@ export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTie
             ? "Record your findings with record_deliverable_findings exactly once."
             : "At this risk tier you must use at least one inspection tool before record_deliverable_findings; the kernel refuses findings without a real inspection.",
           "Severity blocking means a criterion is not met or the change is unsafe; advisory means a gap worth noting. An empty list means the change checks out.",
+          ...(isReReview ? ["On this fix re-review, independently inspect and judge the repair delta first, including whether the correction introduces any regression or over-correction. Prior findings are withheld until the later verdict pass; record your own findings without inferring or reconstructing them."] : []),
           "You have NOT seen the worker's report. Form your own view first.",
         ]
       : [
           "Judge each worker claim as verified (you confirmed it yourself) or unverified, with a rationale.",
-          "On a fix re-review, check each prior finding as resolved or outstanding.",
+          ...(isReReview
+            ? [
+                "On this fix re-review, your own findings are now durable and the prior findings are released — check BOTH directions: each prior finding resolved or outstanding with a rationale, AND no change beyond what the findings require and no previously satisfied criterion regressed.",
+                "After the first review, a new blocking finding on unchanged already-reviewed code counts only when critical (security, data loss, false acceptance) with an explicit rationale or backed by an actual failing test from this review's runner checks — mark the basis on the finding; other late observations are retained as nonblocking follow-up.",
+              ]
+            : []),
           "Set satisfied true only when no blocking finding and no unverified claim remains. Call submit_deliverable_verdict exactly once.",
         ];
   return `${DELIVERABLE_REVIEWER_INVARIANTS}\n${instructions.join("\n")}`;
@@ -1534,6 +1903,7 @@ export function createRecordDeliverableFindingsTool(
       name: "record_deliverable_findings",
       description:
         "Record your own findings on the submitted change exactly once, before the worker's report is shown. " +
+        "On a fix re-review, a finding on unchanged already-reviewed code stays blocking only with a lateFinding basis (critical with an explicit rationale, or failing_test naming this review's actual failing test ids); other late observations are retained as nonblocking follow-up. " +
         "Each finding carries a short defect class (for example \"guard never exercised\"); the runner remembers the project's top classes. " +
         "The runner attaches your inspection count and any runner-executed checks.",
       inputSchema: {
@@ -1552,6 +1922,17 @@ export function createRecordDeliverableFindingsTool(
                 requirementId: { type: "string", minLength: 1 },
                 evidenceRefs: { type: "array", items: { type: "string", minLength: 1 } },
                 defectClass: { type: "string", minLength: 1 },
+                lateFinding: {
+                  type: "object",
+                  properties: {
+                    basis: { type: "string", enum: ["critical", "failing_test"] },
+                    criticalKind: { type: "string", enum: ["security", "data_loss", "false_acceptance"] },
+                    testIds: { type: "array", items: { type: "string", minLength: 1 } },
+                    rationale: { type: "string", minLength: 1 },
+                  },
+                  required: ["basis", "rationale"],
+                  additionalProperties: false,
+                },
               },
               required: ["id", "category", "severity", "claim", "evidenceRefs", "defectClass"],
               additionalProperties: false,

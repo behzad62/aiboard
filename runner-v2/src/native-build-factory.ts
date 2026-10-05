@@ -1608,6 +1608,49 @@ export class NativeBuildFactory {
         if (!baseTree || !headTree) return undefined;
         return { baseTree, headTree };
       },
+      // W2 (AR-R28): actual fix-delta diff between two Git trees through
+      // the audited verification runner. Read-only diff in the project
+      // checkout; file lists arrive NUL-delimited with exact path
+      // identity (no quoting, no source prefixes). Any failure yields
+      // undefined: the review runtime then records the explicit
+      // conservative fallback, never a manufactured label.
+      resolveFixDelta: async ({ priorBaseTree, priorHeadTree, headTree }) => {
+        const namesOf = async (from: string, to: string): Promise<string[] | undefined> => {
+          try {
+            const result = await deliveryGit({ cwd: this.options.projectRoot, args: ["diff", "-z", "--name-only", from, to, "--"] });
+            if (result.exitCode !== 0) return undefined;
+            // No trimming: NUL-delimited entries carry exact identity,
+            // including leading or trailing spaces.
+            return result.stdout.split("\0").filter((entry) => entry.length > 0);
+          } catch {
+            return undefined;
+          }
+        };
+        const textOf = async (from: string, to: string): Promise<string | undefined> => {
+          try {
+            const result = await deliveryGit({ cwd: this.options.projectRoot, args: ["diff", from, to, "--"] });
+            if (result.exitCode !== 0) return undefined;
+            return result.stdout;
+          } catch {
+            return undefined;
+          }
+        };
+        const [deltaFiles, deltaText] = await Promise.all([
+          namesOf(priorHeadTree, headTree),
+          textOf(priorHeadTree, headTree),
+        ]);
+        if (!deltaFiles || deltaText === undefined || !deltaText.trim()) {
+          // An empty fix diff carries no correction hunks: without byte
+          // proof of a change there is no delta to review.
+          if (deltaFiles && deltaFiles.length === 0 && deltaText !== undefined) {
+            const priorReviewed = priorBaseTree ? await namesOf(priorBaseTree, priorHeadTree) : undefined;
+            return { deltaFiles: [], deltaText: "", priorReviewed: priorReviewed ?? [] };
+          }
+          return undefined;
+        }
+        const priorReviewed = priorBaseTree ? await namesOf(priorBaseTree, priorHeadTree) : undefined;
+        return { deltaFiles, deltaText, priorReviewed: priorReviewed ?? [] };
+      },
       workspace: {
         create: async (taskRevision) => ({ path: (await deliveryReviewWorkspace.create(taskRevision)).path }),
         cleanup: () => deliveryReviewWorkspace.cleanup(),

@@ -1483,6 +1483,17 @@ export interface PlanningFindingDisposition {
   readonly resolvedInRevisionDigest?: string;
 }
 
+/**
+ * W2 (AR-R28): late-finding exception basis a deliverable reviewer may
+ * assert on one own finding. The kernel honors it only on unchanged
+ * already-reviewed code of a fix re-review, and only when the basis is
+ * valid (explicit rationale; failing-test ids from this review's own
+ * failed runner report). Additive: historical findings carry none.
+ */
+export type LateFindingBasis =
+  | { readonly basis: "critical"; readonly criticalKind: "security" | "data_loss" | "false_acceptance"; readonly rationale: string }
+  | { readonly basis: "failing_test"; readonly testIds: readonly string[]; readonly rationale: string };
+
 export interface PlanningFinding {
   readonly id: string;
   readonly category: string;
@@ -1493,6 +1504,8 @@ export interface PlanningFinding {
   readonly evidenceRefs: readonly string[];
   /** Present once the finding has been resolved by a later review/revision. */
   readonly disposition?: PlanningFindingDisposition;
+  /** W2 (AR-R28): reviewer-asserted late-finding exception basis, if any. */
+  readonly lateFinding?: LateFindingBasis;
 }
 
 function validateDerivedObligations(obligations: readonly DerivedObligation[]): PlanningIssue[] {

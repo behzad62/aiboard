@@ -26,6 +26,7 @@ import {
   unverifiedClaims,
   validateDeliveryFindings,
   validateDeliveryObligations,
+  validateReviewDelta,
   type DeliveryAffectedTestsRecord,
   type DeliveryBoundaryCheck,
   type DeliveryBoundaryRecord,
@@ -38,6 +39,7 @@ import {
   type DeliveryState,
   type DeliveryTestReport,
 } from "./delivery-acceptance.js";
+import { applyLateFindingRule } from "./review-delta.js";
 import { parseRecoveryAuditRecord, recoveryBlocksRun, validateRecoveryTransition, type RecoveryAuditRecord } from "./process-recovery-contracts.js";
 import { createHash } from "node:crypto";
 import { PROJECT_DOC_MAX_BYTES, validateProjectDocPath } from "./project-docs.js";
@@ -7394,6 +7396,11 @@ function deliveryReviewRequested(current: SchedulerProjection, state: DeliverySt
   review.risk = risk;
   if (prior) review.priorReviewId = prior.reviewId;
   recordDeliveryReviewKeyInputs(review, event.payload);
+  // W2 (AR-R28): runner-computed delta-first input for a fix re-review.
+  // Additive and optional: pre-W2 replays carry no delta and keep the
+  // conservative floor (full cumulative diff, every finding blocking).
+  const delta = validateReviewDelta(event.payload.delta, review.priorReviewId);
+  if (delta !== undefined) review.delta = delta;
   review.stage = "requested";
 }
 
@@ -7565,26 +7572,54 @@ function deliveryReviewRecorded(current: SchedulerProjection, state: DeliverySta
   } else if (event.payload.priorFindingChecks !== undefined) {
     throw new Error("Only a fix re-review checks prior findings.");
   }
+  // W2 (AR-R28, CD-4): bounded late findings. After the first review, a
+  // new blocking finding on unchanged already-reviewed code stays
+  // blocking only when critical (with an explicit rationale) or backed
+  // by an actual failing test from this review's runner checks; other
+  // late observations are retained as nonblocking follow-up. Changed,
+  // unreviewed and unknown surfaces stay blocking, and reserved runner
+  // facts (scope, encoding, survivor, oscillation, carried) are never
+  // filtered. Without a recorded delta the floor is fail-closed: every
+  // finding stays blocking. Outstanding prior findings already carried
+  // above keep their blocking force through the reserved carry prefix.
+  let effectiveFindings = findings;
+  if (review.priorReviewId !== undefined) {
+    const depthReport = review.depth?.affectedTests?.report;
+    const depthFailed = depthReport?.status === "failed";
+    const { retained, followUp } = applyLateFindingRule(findings, {
+      isReReview: true,
+      deltaFiles: review.delta && !review.delta.fallback ? [...review.delta.deltaFiles] : undefined,
+      priorReviewedFiles: review.delta && !review.delta.fallback ? [...review.delta.priorReviewedFiles] : undefined,
+      deltaHunks: review.delta && !review.delta.fallback ? review.delta.deltaHunks : undefined,
+      priorShownLines: review.delta && !review.delta.fallback ? review.delta.priorShownLines : undefined,
+      priorReadRanges: review.delta && !review.delta.fallback ? [...review.delta.priorReadRanges] : undefined,
+      failingTestIds: depthFailed ? [...(depthReport?.failingTestIds ?? [])] : undefined,
+      depthFailed,
+      depthReportArtifactHash: depthFailed ? depthReport?.artifactHash : undefined,
+    });
+    effectiveFindings = retained;
+    if (followUp.length > 0) review.followUpFindings = followUp;
+  }
   if (review.reviewEvidencePolicyVersion === 1 && event.payload.survivorDispositions !== undefined) {
     if (!Array.isArray(event.payload.survivorDispositions)) throw new Error("Survivor dispositions must be an array.");
     const seen = new Set<string>();
     review.survivorDispositions = event.payload.survivorDispositions.map((value) => {
       if (!isRecord(value)) throw new Error("Invalid survivor disposition.");
       const findingId = requiredString(value, "findingId");
-      const finding = findings.find((item) => item.id === findingId);
+      const finding = effectiveFindings.find((item) => item.id === findingId);
       if (!finding || !isMutationSurvivorFindingId(findingId) || seen.has(findingId) || value.disposition !== "not_a_real_gap") throw new Error("Invalid or duplicate survivor disposition.");
       seen.add(findingId);
       return { findingId, disposition: "not_a_real_gap" as const, rationale: requiredString(value, "rationale") };
     });
   }
-  const blocked = findings.some((finding) => finding.severity === "blocking" && !review.survivorDispositions?.some((item) => item.findingId === finding.id)) ||
+  const blocked = effectiveFindings.some((finding) => finding.severity === "blocking" && !review.survivorDispositions?.some((item) => item.findingId === finding.id)) ||
     verdicts.some((verdict) => verdict.status === "unverified");
   if (event.payload.satisfied === blocked) {
     throw new Error(
       "Deliverable review verdict must be unsatisfied exactly when a blocking finding or unverified claim exists.",
     );
   }
-  review.findings = findings;
+  review.findings = effectiveFindings;
   review.claimVerdicts = verdicts;
   review.summary = summary;
   review.satisfied = event.payload.satisfied;
@@ -7598,6 +7633,20 @@ function deliveryReviewRecorded(current: SchedulerProjection, state: DeliverySta
     if (!ready || disposition.planRevisionId !== ready.revisionId || disposition.planDigest !== ready.digest) throw new Error("Test consolidation must bind the exact current ready plan.");
     review.testConsolidation = disposition;
   }
+}
+
+/**
+ * W2 (AR-R28 F3): failing test identities are authentic exception facts.
+ * They ride the durable report only as a validated string list; absent
+ * or malformed ids mean the failing-test exception is unavailable
+ * (conservative unknown), never fabricated.
+ */
+function parseFailingTestIds(value: Record<string, unknown>): { failingTestIds?: string[] } {
+  if (!Array.isArray(value.failingTestIds)) return {};
+  const ids = value.failingTestIds as unknown[];
+  if (!ids.every((id) => typeof id === "string" && (id as string).length > 0)) return {};
+  if (ids.length === 0) return {};
+  return { failingTestIds: [...ids as string[]] };
 }
 
 function parseDeliveryTestReport(value: unknown, label: string): DeliveryTestReport {
@@ -7614,6 +7663,7 @@ function parseDeliveryTestReport(value: unknown, label: string): DeliveryTestRep
     ...(value.format === "junit" || value.format === "trx" ? { format: value.format } : {}),
     ...(typeof value.path === "string" ? { path: value.path } : {}),
     ...(typeof value.artifactHash === "string" ? { artifactHash: value.artifactHash } : {}),
+    ...parseFailingTestIds(value),
     ...(isRecord(counts) ? { counts: { selected: counts.selected as number, passed: counts.passed as number, failed: counts.failed as number, skipped: counts.skipped as number } } : {}),
     ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
     ...(value.reporterUnsupported === true ? { reporterUnsupported: true } : {}),

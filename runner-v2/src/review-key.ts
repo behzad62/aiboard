@@ -25,8 +25,13 @@ import type { ExecutionTaskContract } from "./planning-contracts.js";
  * fingerprint and is never flagged.
  */
 
-/** Reviewer policy version bound into every ReviewKey. Bump only when reviewer semantics change. */
-export const REVIEWER_POLICY_VERSION = 1;
+/**
+ * Reviewer policy version bound into every ReviewKey. Bump only when
+ * reviewer semantics change. W2 (AR-R28) bumps 1 -> 2: delta-first
+ * re-review input and the late-finding intake change reviewer
+ * input/decision semantics, so W1-policy verdicts never reuse.
+ */
+export const REVIEWER_POLICY_VERSION = 2;
 
 /** Durable lineage for one failed attempt's real repair diff. */
 export interface FailedRepairDiff {
