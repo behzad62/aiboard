@@ -107,6 +107,10 @@ export function knownTestSuitePath(path: string): boolean {
   return /(?:^|\/)(?:test|tests|__tests__)(?:\/|$)/i.test(path) ||
     /(?:^|[._-])(?:test|spec)(?:[._-]|$)/.test(name) ||
     /^(?:vitest|jest|playwright|cypress|mocha|pytest|tox|conftest|setup|pyproject|ava|karma|tap|nyc|coverage)(?:[._-]|$)/.test(name) ||
+    name === "pom.xml" || name === "build.gradle" || name === "build.gradle.kts" ||
+    name === "settings.gradle" || name === "settings.gradle.kts" || name === "gradle.properties" ||
+    name === "cmakelists.txt" || name === "cargo.toml" || name === "go.mod" ||
+    /\.cmake$/.test(name) || /\.(?:cs|fs|vb)proj$/.test(name) || /\.(?:sln|slnx)$/.test(name) ||
     /^\.(?:mocha|nyc|tap|ava|c8|test).*rc/.test(name);
 }
 

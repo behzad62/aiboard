@@ -49,7 +49,24 @@ export type ReportReading =
   | { readonly status: "ok"; readonly counts: ReportCounts }
   | { readonly status: "unknown"; readonly reason: string };
 
+import { closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+import { isTrustedRunnerHostAliasResolution } from "./runner-capabilities-config.js";
 export const MAX_REPORT_BYTES = 10 * 1024 * 1024;
+
+/** Workspace-relative posix path of `absolute` under `checkout`, or undefined on escape. */
+function confinedRelative(checkout: string, absolute: string): string | undefined {
+  const back = relative(checkout, absolute);
+  if (!back || back === ".." || back.startsWith(`..${sep}`) || isAbsolute(back)) return undefined;
+  return back.replaceAll("\\", "/");
+}
+
+/** True when `candidate` is the canonical checkout itself or beneath it. */
+function isInsideCheckout(checkoutCanonical: string, candidate: string): boolean {
+  const back = relative(checkoutCanonical, candidate);
+  return back === "" || (back !== ".." && !back.startsWith(`..${sep}`) && !isAbsolute(back));
+}
 
 /** Upper bound on a single tag's length; longer opens mean truncation. */
 const MAX_TAG_BYTES = 8192;
@@ -517,4 +534,146 @@ export function outcomeFromReportReading(reading: ReportReading): {
     return { outcome: "unknown", counts };
   }
   return { outcome: counts.failed > 0 ? "failed" : "passed", counts };
+}
+
+/**
+ * Bounded, canonical-confinement report read shared by every newly wired
+ * family report path (delivery and final verification, single files and
+ * report-set members). The path must be workspace-relative and resolve
+ * inside the checkout; symlinked parents, symlinked leaves, directories,
+ * missing files, and over-bound reads throw, so stale/preexisting/outside/
+ * symlink/oversized reports fail closed instead of minting counts.
+ * Invocation freshness (this run wrote it) is the caller's snapshot
+ * comparison, not this reader. The file is read through the checked
+ * descriptor in bounded chunks under a hard allocation cap: no whole-file
+ * allocation happens before the final bound is validated, and dev/ino,
+ * size, and mtime continuity across the read refuses replacement or
+ * growth. Throws with a stable message; never returns partial bytes.
+ */
+export function readBoundedReportBytes(input: {
+  checkoutPath: string;
+  reportPath: string;
+  maxBytes?: number;
+}): Buffer {
+  const max = input.maxBytes ?? MAX_REPORT_BYTES;
+  if (!Number.isSafeInteger(max) || max < 1 || max > MAX_REPORT_BYTES) throw new Error("Report size bound is invalid.");
+  const requested = input.reportPath.replaceAll("\\", "/");
+  if (
+    !requested || requested.includes("\0") || requested.startsWith("/") ||
+    /^[A-Za-z][A-Za-z0-9+.-]*:/.test(requested) || requested.split("/").includes("..")
+  ) {
+    throw new Error(`Refusing to read a report outside the verification workspace: ${input.reportPath}.`);
+  }
+  const checkoutRequested = resolve(input.checkoutPath);
+  let checkoutCanonical: string;
+  try {
+    checkoutCanonical = realpathSync(checkoutRequested);
+  } catch {
+    throw new Error(`Refusing to read a report outside the verification workspace: ${input.reportPath}.`);
+  }
+  const absolute = resolve(checkoutRequested, requested);
+  const confined = confinedRelative(checkoutRequested, absolute);
+  if (confined === undefined) {
+    throw new Error(`Refusing to read a report outside the verification workspace: ${input.reportPath}.`);
+  }
+  // Parent indirection (a workspace-relative symlink or junction pointing
+  // outside) is resolved canonically: every parent must canonicalize inside
+  // the checkout. realpath resolves symlinks and Windows junctions alike,
+  // where lstat alone reports junctions inconsistently.
+  const parentRequested = dirname(absolute);
+  let parentCanonical: string;
+  try {
+    parentCanonical = realpathSync(parentRequested);
+  } catch {
+    throw new Error(`Test report is missing at the runner-owned path: ${confined}.`);
+  }
+  const canonicalFile = join(parentCanonical, basename(absolute));
+  if (!isInsideCheckout(checkoutCanonical, parentCanonical) || !isInsideCheckout(checkoutCanonical, canonicalFile)) {
+    if (!isTrustedRunnerHostAliasResolution(absolute, canonicalFile)) {
+      throw new Error(`Refusing to read a report outside the verification workspace: ${input.reportPath}.`);
+    }
+  }
+  // Capture every canonical directory from the checkout to the leaf's
+  // parent. Recheck that namespace before opening, before reading, and
+  // after reading. A newly substituted parent must never supply the leaf
+  // identity used to authorize foreign bytes.
+  const directories: Array<{ path: string; dev: number; ino: number }> = [];
+  let directory = checkoutCanonical;
+  const parts = relative(checkoutCanonical, parentCanonical).split(sep).filter(Boolean);
+  for (const part of ["", ...parts]) {
+    if (part) directory = join(directory, part);
+    const state = lstatSync(directory);
+    if (state.isSymbolicLink() || !state.isDirectory() || realpathSync(directory) !== directory) {
+      throw new Error(`Test report parent changed or is indirect at: ${confined}.`);
+    }
+    directories.push({ path: directory, dev: state.dev, ino: state.ino });
+  }
+  const verifyParents = (): void => {
+    if (realpathSync(checkoutRequested) !== checkoutCanonical || realpathSync(parentRequested) !== parentCanonical) {
+      throw new Error(`Test report parent changed at: ${confined}.`);
+    }
+    for (const expected of directories) {
+      const state = lstatSync(expected.path);
+      if (state.isSymbolicLink() || !state.isDirectory() || state.dev !== expected.dev || state.ino !== expected.ino || realpathSync(expected.path) !== expected.path) {
+        throw new Error(`Test report parent changed or is indirect at: ${confined}.`);
+      }
+    }
+  };
+  const leaf = lstatSync(canonicalFile);
+  if (leaf.isSymbolicLink()) throw new Error(`Refusing to read a symlinked report: ${confined}.`);
+  if (!leaf.isFile()) throw new Error(`Test report is not a regular file: ${confined}.`);
+  if (leaf.size > max) throw new Error(`Test report exceeds the size bound at: ${confined}.`);
+  verifyParents();
+  const fd = openSync(canonicalFile, "r");
+  try {
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.dev !== leaf.dev || opened.ino !== leaf.ino || opened.size !== leaf.size || opened.mtimeMs !== leaf.mtimeMs || opened.ctimeMs !== leaf.ctimeMs) {
+      throw new Error(`Test report changed while being read at: ${confined}.`);
+    }
+    verifyParents();
+    // One fixed allocation, at most max + 1 bytes. The extra byte detects
+    // growth, and reads use only this already checked descriptor.
+    const bytes = Buffer.alloc(opened.size + 1);
+    let total = 0;
+    for (;;) {
+      const read = readSync(fd, bytes, total, bytes.length - total, total);
+      if (read === 0) break;
+      total += read;
+      if (total > opened.size) throw new Error(`Test report changed or exceeds the size bound at: ${confined}.`);
+    }
+    const settled = fstatSync(fd);
+    verifyParents();
+    const current = lstatSync(canonicalFile);
+    if (settled.size !== total || settled.mtimeMs !== opened.mtimeMs || settled.ctimeMs !== opened.ctimeMs || current.isSymbolicLink() || !current.isFile() || current.dev !== opened.dev || current.ino !== opened.ino || current.size !== total || current.mtimeMs !== opened.mtimeMs || current.ctimeMs !== opened.ctimeMs) {
+      throw new Error(`Test report changed while being read at: ${confined}.`);
+    }
+    return bytes.subarray(0, total);
+  } finally { closeSync(fd); }
+
+}
+
+/**
+ * Aggregates one invocation's JUnit report-set readings (for example the
+ * Maven Surefire fresh set) into a single reading. Any unreadable member
+ * or an empty set yields `unknown`: a partial set must never mint
+ * counts. Sums of individually `ok` readings stay consistent by
+ * construction.
+ */
+export function aggregateJUnitReportSet(readings: readonly ReportReading[]): ReportReading {
+  if (readings.length === 0) return unknown("JUnit report set: no fresh report files were collected for this run.");
+  for (const reading of readings) {
+    if (reading.status === "unknown") return unknown(`JUnit report set: ${reading.reason}`);
+  }
+  let selected = 0;
+  let passed = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const reading of readings) {
+    if (reading.status !== "ok") continue;
+    selected += reading.counts.selected;
+    passed += reading.counts.passed;
+    failed += reading.counts.failed;
+    skipped += reading.counts.skipped;
+  }
+  return { status: "ok", counts: { selected, passed, failed, skipped } };
 }

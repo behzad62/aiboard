@@ -29,6 +29,7 @@ import {
 } from "./mutation-probe.js";
 import type { DeliverableReviewInputs, DeliveryDepthRunner } from "./native-deliverable-review.js";
 import { outputFor, type OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import { planLanguageTestReport } from "./language-execution-profile.js";
 import { effectiveTestIntegrityException, readyPlanIdentity, type SchedulerProjection } from "./scheduler-store.js";
 import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
 import { testIntegrityBaselineFindings, assertNoConfiguredTestSuite, executedTestCount, testIntegrityPinDigest, testIntegrityExceptionMatches, unresolvedTestIntegrityFindings } from "./test-integrity.js";
@@ -36,7 +37,9 @@ import type { TestIntegrityBaselineInput, TestIntegrityBoundary } from "./test-i
 import type { BuildTask, TaskContractRef } from "./task-contracts.js";
 import type { ExecutionTaskContract } from "./planning-contracts.js";
 import {
+  aggregateJUnitReportSet,
   outcomeFromReportReading,
+  readBoundedReportBytes,
   readJUnitReport,
   readTrxReport,
 } from "./test-report-readers.js";
@@ -231,6 +234,8 @@ export interface TestReportPlan {
   /** Relative to the checkout root; unique per run, never a committed file. */
   reportPath?: string;
   format?: "junit" | "trx";
+  /** Maven Surefire fresh report-set collection (no flag to append). */
+  reportSet?: { kind: "maven-surefire-reports" };
   unsupported?: string;
   /**
    * R6-B1: the run filters tests by name or `.only`; at least one real
@@ -248,6 +253,31 @@ export function planTestReport(input: {
   /** Script-shell rules differ (cmd.exe does not treat `'` as a quote). */
   platform?: NodeJS.Platform;
 }): TestReportPlan {
+  // V3 (AR-R26): detected non-package.json family commands plan their
+  // own wired report flags without a package.json. Shape-matched only;
+  // package script flows below are unchanged.
+  const language = planLanguageTestReport({
+    checkoutPath: input.checkoutPath,
+    command: { label: input.command.label, executable: input.command.executable, args: [...input.command.args] },
+    reportName: input.reportName,
+  });
+  if (language) {
+    if (!language.command) {
+      if (language.format && language.reportPath) {
+        return { runner: language.runner, format: language.format, reportPath: language.reportPath };
+      }
+      if (language.format && language.reportSet) {
+        return { runner: language.runner, format: language.format, reportSet: { kind: language.reportSet.kind } };
+      }
+      return { runner: language.runner, unsupported: language.unsupported ?? "the language test runner has no wired machine-readable report." };
+    }
+    return {
+      runner: language.runner,
+      format: language.format,
+      reportPath: language.reportPath,
+      command: { ...input.command, executable: language.command.executable, args: [...language.command.args] },
+    };
+  }
   let manifest: { scripts?: Record<string, unknown>; dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> } = {};
   try {
     manifest = JSON.parse(readFileSync(join(input.checkoutPath, "package.json"), "utf8"));
@@ -514,13 +544,90 @@ export function reporterUnsupportedIn(stderr: string): boolean {
   return /ERR_INVALID_ARG_VALUE[\s\S]*reporter|Unknown test reporter|reporter[^\n]*junit[^\n]*(not found|unknown|invalid)|Cannot find (module|package) ['"]?junit/i.test(stderr);
 }
 
+/** Collects one invocation-owned Maven Surefire fresh report set (F1, AR-R26). */
+async function readRunReportSet(input: {
+  plan: TestReportPlan;
+  checkoutPath: string;
+  artifacts: ArtifactStore;
+  before: ReadonlyMap<string, { size: number; mtimeMs: number }> | undefined;
+}): Promise<DeliveryTestReport> {
+  const runner = input.plan.runner;
+  if (!input.before) {
+    return { status: "unknown", runner, format: "junit", reason: `${runner} report set has no pre-run snapshot; refusing to attribute reports to this run.` };
+  }
+  const { scanMavenSurefireReportFiles } = await import("./language-execution-profile.js");
+  let scan: Awaited<ReturnType<typeof scanMavenSurefireReportFiles>>;
+  try {
+    scan = await scanMavenSurefireReportFiles({ checkoutPath: input.checkoutPath, before: input.before });
+  } catch {
+    return { status: "unknown", runner, format: "junit", reason: `${runner} report-set inventory is unavailable after this run.` };
+  }
+  if (scan.incomplete) {
+    return { status: "unknown", runner, format: "junit", reason: `${runner} report-set collection hit its bounds; refusing a partial set.` };
+  }
+  if (scan.fresh.length === 0) {
+    return { status: "unknown", runner, format: "junit", reason: `${runner} wrote no fresh junit reports: the runner collects the invocation-owned target/surefire-reports set, so this run must execute the Surefire tests.` };
+  }
+  const parts: Buffer[] = [];
+  const readings = [];
+  for (const reportPath of scan.fresh) {
+    let bytes: Buffer;
+    try {
+      bytes = readBoundedReportBytes({ checkoutPath: input.checkoutPath, reportPath });
+    } catch (error) {
+      // An unusable member refuses ALL counts, but the bounded bytes
+      // already collected stay archived as safe diagnostics.
+      let diagnosticHash: string | undefined;
+      try {
+        if (parts.length > 0) {
+          diagnosticHash = (await input.artifacts.put(Buffer.concat(parts), "application/xml", "delivery maven surefire report set")).hash;
+        }
+      } catch {
+        // Diagnostic preservation never masks the refusal.
+      }
+      return {
+        status: "unknown", runner, format: "junit",
+        ...(diagnosticHash !== undefined ? { artifactHash: diagnosticHash } : {}),
+        reason: `${runner} report ${reportPath} is unusable: ${(error as Error).message}`,
+      };
+    }
+    parts.push(bytes);
+    readings.push(readJUnitReport(bytes.toString("utf8")));
+  }
+  const aggregate = aggregateJUnitReportSet(readings);
+  const outcome = outcomeFromReportReading(aggregate);
+  const joined: Buffer[] = [];
+  for (const part of parts) {
+    if (joined.length > 0) joined.push(Buffer.from("\n", "utf8"));
+    joined.push(part);
+  }
+  const artifact = await input.artifacts.put(Buffer.concat(joined), "application/xml", "delivery maven surefire report set");
+  return {
+    status: outcome.outcome,
+    runner,
+    format: "junit",
+    path: "target/surefire-reports",
+    artifactHash: artifact.hash,
+    counts: { ...outcome.counts },
+    ...(aggregate.status === "unknown"
+      ? { reason: aggregate.reason }
+      : outcome.outcome === "unknown"
+        ? { reason: `The junit report set shows ${outcome.counts.selected} selected and ${outcome.counts.passed} passed tests; at least one executed test is required.` }
+        : {}),
+  };
+}
+
 /** Reads the report this run wrote; anything missing or unreadable is `unknown`. */
 async function readRunReport(
   plan: TestReportPlan,
   checkoutPath: string,
   artifacts: ArtifactStore,
   stderr: string,
+  reportSetBefore?: ReadonlyMap<string, { size: number; mtimeMs: number }>,
 ): Promise<DeliveryTestReport> {
+  if (plan.reportSet) {
+    return await readRunReportSet({ plan, checkoutPath, artifacts, before: reportSetBefore });
+  }
   if (!plan.reportPath || !plan.format) {
     return { status: "unknown", runner: plan.runner, reason: `No machine-readable test report: ${plan.unsupported ?? "not supported"}` };
   }
@@ -534,21 +641,26 @@ async function readRunReport(
       reason: `${plan.runner} rejected the ${plan.format} report flags (for example a Node version without the JUnit reporter); upgrade the runner or change the test script.`,
     };
   }
-  const absolute = join(checkoutPath, plan.reportPath);
-  if (!existsSync(absolute)) {
+  let bytes: Buffer;
+  try {
+    bytes = readBoundedReportBytes({ checkoutPath, reportPath: plan.reportPath });
+  } catch (error) {
+    const detail = (error as Error).message;
+    const missing = detail.startsWith("Test report is missing");
     return {
       status: "unknown",
       runner: plan.runner,
       format: plan.format,
       path: plan.reportPath,
-      reason: plan.runner === "node --test"
+      reason: plan.runner === "node --test" && missing
         ? `node --test wrote no junit report at ${plan.reportPath}: ${npmrcSetsNodeOptions(checkoutPath)
           ? "the project's .npmrc sets node-options, which replaces the NODE_OPTIONS that carries the runner's reporter; remove node-options from .npmrc or move it into the environment."
           : "the NODE_OPTIONS that carries the runner's reporter did not reach the node --test process (a wrapper tool or script replaced it), or node exited before reporting."}`
-        : `${plan.runner} wrote no ${plan.format} report at ${plan.reportPath}: the runner appends the report flags to the test script, so the script must end with the ${plan.runner} command.`,
+        : missing
+          ? `${plan.runner} wrote no ${plan.format} report at ${plan.reportPath}: the runner appends the report flags to the test script, so the script must end with the ${plan.runner} command.`
+          : `${plan.runner} report at ${plan.reportPath} is unusable: ${detail}`,
     };
   }
-  const bytes = readFileSync(absolute);
   const artifact = await artifacts.put(bytes, "application/xml", `delivery test report ${plan.reportPath}`);
   const text = bytes.toString("utf8");
   if (plan.runner === "node --test") {
@@ -629,6 +741,7 @@ export async function runDeliveryCategory(input: {
   // run owns. The same command goes into the profile copy, so the runtime's
   // profile comparison still holds.
   let reportPlan: TestReportPlan | undefined;
+  let reportSetBefore: Map<string, { size: number; mtimeMs: number }> | undefined;
   if (input.category === "tests") {
     const reportName = createHash("sha256").update(`${input.generationId}:${randomUUID()}`).digest("hex").slice(0, 24);
     reportPlan = planTestReport({
@@ -641,6 +754,35 @@ export async function runDeliveryCategory(input: {
       throw new Error(`Test report path ${reportPlan.reportPath} already exists; refusing to read a report this run did not write.`);
     }
     if (reportPlan.command) profile.commands.tests = [...commands.slice(0, -1), reportPlan.command];
+    // V3 (AR-R26): a family-shaped wired plan without a matching trusted
+    // descriptor (ambiguous multi-project/target runs share one report
+    // file) must not mint single-result counts. The declared command
+    // still runs for evidence; its report stays unknown.
+    if (reportPlan.format && (reportPlan.reportPath || reportPlan.reportSet)) {
+      const shape = planLanguageTestReport({
+        checkoutPath: input.manager.path,
+        command: first,
+        reportName: "probe",
+      });
+      if (shape && shape.format && (shape.reportPath || shape.reportSet)) {
+        const descriptor = profile.reports?.find((entry) => entry.commandLabel === first.label);
+        if (!descriptor || descriptor.runner !== shape.runner || descriptor.format !== shape.format) {
+          profile.commands.tests = [...commands];
+          reportPlan = { runner: shape.runner, unsupported: `tests command ${first.label} has no trusted report descriptor; refusing single-result counts.` };
+        }
+      }
+    }
+    // reportSetBefore is declared at function scope above.
+    if (reportPlan.reportSet) {
+      const { scanMavenSurefireReportFiles } = await import("./language-execution-profile.js");
+      const snapshot = await scanMavenSurefireReportFiles({ checkoutPath: input.manager.path });
+      if (snapshot.incomplete) {
+        profile.commands.tests = [...commands];
+        reportPlan = { runner: reportPlan.runner, unsupported: `tests command ${first.label} report-set inventory is incomplete before this run; refusing to collect reports.` };
+      } else {
+        reportSetBefore = snapshot.snapshot;
+      }
+    }
   }
   // R4-B1: FinalVerificationRuntime compares every category's commands with
   // the profile, so the full command map is passed; the plan and the
@@ -665,7 +807,9 @@ export async function runDeliveryCategory(input: {
   const stderr = lastFact?.stderrArtifactHash
     ? (await input.artifacts.get(lastFact.stderrArtifactHash)).toString("utf8")
     : "";
-  const report = reportPlan ? await readRunReport(reportPlan, input.manager.path, input.artifacts, stderr) : undefined;
+  const report = profile.inventoryIncomplete === true && input.category === "tests"
+    ? { status: "unknown" as const, runner: reportPlan?.runner ?? "none", reason: "Repository file inventory was incomplete; marker absence proves nothing." }
+    : reportPlan ? await readRunReport(reportPlan, input.manager.path, input.artifacts, stderr, reportSetBefore) : undefined;
   return {
     command: ranCommand.executable,
     args: [...ranCommand.args],
@@ -911,6 +1055,7 @@ export function createDeliveryBoundaryDriver(options: {
         const initial = await options.testIntegrity!.baselineWorkspace.create(revision);
         try {
           const profile = await inspectFinalVerificationExecutionProfile({ repositoryRoot: initial.path, targetRevision: revision, execute: options.git });
+          if (profile.inventoryIncomplete) throw new Error("Trusted initial test inventory is incomplete; refusing an unconfigured-suite claim.");
           const pin = await inspectTestIntegrityPin({ git: options.git, repositoryRoot: initial.path, revision, commands: profile.commands.tests ?? [] });
           if (!pin.commands.length && pin.script === undefined && pin.hasTestSignals === false) {
             const workingTreeIdentity = await workingTreeForRunner(options.git, initial.path);

@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { FinalVerificationDetectedSignal } from "./final-verification-contracts.js";
+import { detectLanguageFamilies, languageReportDescriptors, listLanguageInventoryFiles } from "./language-execution-profile.js";
 import { assertFinalVerificationBrowserPolicy } from "./final-verification-browser-policy.js";
 import type {
   FinalVerificationBrowserInput,
@@ -26,6 +27,14 @@ export interface FinalVerificationDependencyProvisioning {
   command: FinalVerificationCommand;
 }
 
+export interface FinalVerificationReportDescriptor {
+  /** Exact label of the `commands.tests` entry this report belongs to. */
+  commandLabel: string;
+  /** Wired test runner identity; must match the report plan at runtime. */
+  runner: "pytest" | "dotnet test" | "ctest" | "maven test";
+  format: "junit" | "trx";
+}
+
 export interface FinalVerificationExecutionProfile {
   version: 1;
   targetRevision: string;
@@ -35,6 +44,14 @@ export interface FinalVerificationExecutionProfile {
     build?: FinalVerificationCommand[];
     tests?: FinalVerificationCommand[];
   };
+  /**
+   * V3 (AR-R26): trusted report descriptors for detected non-package.json
+   * tests commands. Additive: absent on older profiles, preserved by
+   * clone/validator/digest/archive, consumed by the runtime.
+   */
+  reports?: FinalVerificationReportDescriptor[];
+  /** V3: true when the bounded file walk hit a cap or error, so marker absence proves nothing. Consumers fail closed. */
+  inventoryIncomplete?: boolean;
   provisioning?: FinalVerificationDependencyProvisioning;
   portLease?: FinalVerificationPortLease;
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
@@ -243,6 +260,67 @@ export async function inspectFinalVerificationExecutionProfile(options: {
     commands.tests = [{ label: "package tests", executable: packageManager.executable, args: [...packageManager.args, "run", "test"] }];
   }
 
+  const profileInspectedPaths: string[] = manifest
+    ? ["package.json", ...(packageExecution.lockfile ? [packageExecution.lockfile] : [])]
+    : [];
+  const profileReports: FinalVerificationReportDescriptor[] = [];
+  let languageInventoryIncomplete = false;
+  // V3 (AR-R26): non-package.json families fill only categories the
+  // package manifest did not already claim. Each family signal agrees
+  // with its exact commands; nothing detected stays a clean inventory.
+  if (!commands.build || !commands.tests) {
+    const languageInventory = await listLanguageInventoryFiles({
+      repositoryRoot,
+      readdir: async (path) => (await readdir(path, { withFileTypes: true }))
+        .map((entry) => ({ name: entry.name, isDirectory: entry.isDirectory(), isSymbolicLink: entry.isSymbolicLink() })),
+    });
+    const contents = new Map<string, string>();
+    const unavailableContents: string[] = [];
+    for (const file of languageInventory.files) {
+      const base = file.slice(file.lastIndexOf("/") + 1).toLowerCase();
+      // V3 F5: the .NET single-result qualification reads the relevant
+      // property closure (the test project, automatically imported
+      // Directory.Build files, and transitively imported property files),
+      // so those contents participate in the same bounded/unreadable rules.
+      if (!/\.(?:cs|fs|vb)proj$/.test(base) && base !== "cmakelists.txt" && base !== "pyproject.toml" &&
+        base !== "directory.build.props" && base !== "directory.build.targets" && !/\.(?:props|targets)$/.test(base)) continue;
+      if (contents.size >= 40) {
+        unavailableContents.push(file);
+        continue;
+      }
+      try {
+        const text = await readFile(join(repositoryRoot, ...file.split("/")), "utf8");
+        if (text.length <= 131072) {
+          contents.set(file, text);
+        } else {
+          unavailableContents.push(file);
+        }
+      } catch {
+        unavailableContents.push(file);
+      }
+    }
+    const detections = detectLanguageFamilies({ files: languageInventory.files, readFile: (path) => contents.get(path), unreadable: unavailableContents });
+    languageInventoryIncomplete = languageInventory.incomplete;
+    const inspected = new Set<string>();
+    for (const detection of detections) {
+      if (!commands.build && detection.build) {
+        detectedSignals.push({ category: "build", source: detection.source, detail: detection.detail });
+        commands.build = detection.build.map((command) => ({ label: command.label, executable: command.executable, args: [...command.args] }));
+        inspected.add(detection.source);
+      }
+      if (!commands.tests && detection.tests) {
+        detectedSignals.push({ category: "tests", source: detection.source, detail: detection.detail });
+        commands.tests = [{ label: detection.tests.label, executable: detection.tests.executable, args: [...detection.tests.args] }];
+        inspected.add(detection.source);
+        const projectArg = detection.tests.args[1];
+        if (typeof projectArg === "string" && !projectArg.startsWith("-")) inspected.add(projectArg);
+        profileReports.push(...languageReportDescriptors([detection]));
+      }
+    }
+    for (const path of [...inspected].sort()) {
+      if (!profileInspectedPaths.includes(path)) profileInspectedPaths.push(path);
+    }
+  }
   const serverPortLease = serverSignal(scripts, dependencies)
     ? await (options.reservePort?.() ?? reserveUnownedPort(options.targetRevision))
     : undefined;
@@ -256,11 +334,11 @@ export async function inspectFinalVerificationExecutionProfile(options: {
   const profile: FinalVerificationExecutionProfile = {
     version: 1,
     targetRevision: options.targetRevision,
-    inspectedPaths: manifest
-      ? ["package.json", ...(packageExecution.lockfile ? [packageExecution.lockfile] : [])]
-      : [],
+    inspectedPaths: profileInspectedPaths,
     detectedSignals,
     commands,
+    ...(profileReports.length > 0 ? { reports: profileReports } : {}),
+    ...(languageInventoryIncomplete ? { inventoryIncomplete: true as const } : {}),
     ...(packageExecution.provisioning ? { provisioning: packageExecution.provisioning } : {}),
     ...(serverPortLease ? { portLease: serverPortLease } : {}),
     ...(server ? {
@@ -300,6 +378,8 @@ export function cloneFinalVerificationExecutionProfile(
         command: cloneCommand(profile.provisioning.command),
       },
     } : {}),
+    ...(profile.reports ? { reports: profile.reports.map((report) => ({ ...report })) } : {}),
+    ...(profile.inventoryIncomplete !== undefined ? { inventoryIncomplete: profile.inventoryIncomplete } : {}),
     ...(profile.portLease ? { portLease: { ...profile.portLease } } : {}),
     ...(profile.runtimeSmoke ? { runtimeSmoke: cloneSmoke(profile.runtimeSmoke) } : {}),
     ...(profile.browser ? { browser: cloneBrowser(profile.browser) } : {}),
@@ -322,6 +402,20 @@ export function assertFinalVerificationExecutionProfile(
   }
   if (profile.provisioning !== undefined && !validProvisioning(profile.provisioning)) {
     throw new Error("Final verification dependency provisioning profile is invalid.");
+  }
+  if (profile.reports !== undefined) {
+    if (!Array.isArray(profile.reports) || profile.reports.some((report) => !validReportDescriptor(report))) {
+      throw new Error("Final verification execution report descriptors are invalid.");
+    }
+    const labels = new Set((profile.commands.tests ?? []).map((command) => command.label));
+    for (const report of profile.reports) {
+      if (!labels.has(report.commandLabel)) {
+        throw new Error("Final verification execution report descriptor names an unknown tests command.");
+      }
+    }
+  }
+  if (profile.inventoryIncomplete !== undefined && profile.inventoryIncomplete !== true) {
+    throw new Error("Final verification execution inventory completeness flag is invalid.");
   }
   if (profile.portLease !== undefined && !validPortLease(profile.portLease, targetRevision)) {
     throw new Error("Final verification port lease profile is invalid.");
@@ -574,6 +668,15 @@ function validBrowser(value: unknown): value is FinalVerificationBrowserInput {
   catch { return false; }
   return browser.policy !== undefined &&
     (browser.server === undefined || validSmoke(browser.server));
+}
+function validReportDescriptor(value: unknown): value is FinalVerificationReportDescriptor {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Record<string, unknown>;
+  return typeof report.commandLabel === "string" && report.commandLabel.trim().length > 0 &&
+    ((report.runner === "pytest" && report.format === "junit") ||
+      (report.runner === "dotnet test" && report.format === "trx") ||
+      (report.runner === "ctest" && report.format === "junit") ||
+      (report.runner === "maven test" && report.format === "junit"));
 }
 function validProvisioning(value: unknown): value is FinalVerificationDependencyProvisioning {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
