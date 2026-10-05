@@ -431,7 +431,7 @@ and their tests. Every R item is P: yes (scheduler log or process paths) and G: 
   (tree id, exact command, environment fingerprint) within one run, recorded as `reused_from`;
   content-based evidence digests used by the approach-decision "new evidence" rule; tests both ways;
   never reuse across runs; run when any fingerprint part is missing. Depends: V1.
-- [ ] **V3** code — SOURCE: SRC-A R2 V3, AR-R26. DoD: non-`package.json` detection and report readers,
+- [ ] **V3** code — IN_PROGRESS 2026-10-05 in `.worktrees/p66-v3`, branch `codex/p66-v3`, clean accepted V2 base `18695f9f1d1d151eb53d1e8b3b776a64b75764ef`; Muse medium implementation under owner standing preference, fresh GPT-6.1 Sol high independent review required. Original language/profile/report contract and existing conservative readers inspected; only V3-own fixtures/gates and fast static checks authorized, native unseeded factory journey required; full SDK/platform/integration qualification deferred T8. SOURCE: SRC-A R2 V3, AR-R26. DoD: non-`package.json` detection and report readers,
   `unknown` only when nothing applies; fixtures: C# TRX, CMake `ctest` JUnit, Python `pytest
   --junitxml`, one Maven or Gradle JUnit XML, an unknown-language floor. Depends: V2.
 - [ ] **PHASE-R2-EXIT** verify — SOURCE: SRC-A section 5 row R2. DoD: reuse and non-JS fixtures green;
