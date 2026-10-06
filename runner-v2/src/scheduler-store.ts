@@ -5,7 +5,7 @@ import {
   DELIVERY_ACCEPTANCE_RUNNER_ID,
   DELIVERY_REVIEW_RUNNER_ID,
   assertContractTaskRevisionAllowed,
-  assertSelectedExecutionCoherence, validateSelectedCommandEvidenceBinding,
+  assertSelectedExecutionCoherence, assertValidationTierCoherence, validateSelectedCommandEvidenceBinding,
   assertTestsOutcome,
   assessDeliveryRisk,
   taskAcceptedFailuresUsed,
@@ -68,6 +68,7 @@ import {
 import { applyTaskTransition, validateTaskGraph } from "./task-graph.js";
 import { validateSubmissionScopeRecord } from "./submission-scope-capture.js";
 import { cloneValidationScope, parseValidationScope, type ValidationScope } from "./validation-scope.js";
+import { cloneValidationBudgetSubmission, parseValidationBudgetSubmission, type ValidationBudgetSubmission } from "./validation-budget.js";
 import { validateReviewSignals } from "./review-integrity.js";
 import { validateEncodingSubmission, encodingFindingFacts } from "./encoding-safety.js";
 import type { ExecutionPlanRevision, ExecutionTaskContract } from "./planning-contracts.js";
@@ -322,6 +323,7 @@ export interface GuidanceProjection {
 export interface CriterionSubmissionProjection {
   /** IV-1: the worker's validation-scope report for this submission attempt (a claim, not evidence). */
   validationScope?: ValidationScope;
+  validationBudget?: ValidationBudgetSubmission;
   taskId: string;
   attempt: number;
   acceptanceCriteriaVersion?: number;
@@ -4905,6 +4907,11 @@ export function reduceSchedulerEvent(
         transitionPatch.submissionScope = validateSubmissionScopeRecord(current, taskId, requiredString(transitionPatch as Record<string, unknown>, "changeSetId"), transitionPatch.submissionScope);
       }
       if (transitionPatch.validationScope !== undefined && (status !== "submitted" || current.validationScopePolicyVersion !== 1)) throw new Error("Validation scope records apply only to activated submissions.");
+      if (transitionPatch.validationBudget !== undefined && status !== "submitted") throw new Error("Validation budget records apply only to submissions.");
+      if (status === "submitted" && transitionPatch.validationBudget !== undefined) {
+        if (event.actor.role !== "runner" || event.actor.id !== "scheduler") throw new Error("Validation budget submission requires the trusted scheduler actor.");
+        transitionPatch.validationBudget = parseValidationBudgetSubmission(transitionPatch.validationBudget);
+      }
       if (status === "submitted" && current.validationScopePolicyVersion === 1) {
         if (event.actor.role !== "runner" || event.actor.id !== "scheduler") throw new Error("Activated submission requires the trusted scheduler actor.");
         transitionPatch.validationScope = parseValidationScope(transitionPatch.validationScope);
@@ -4955,6 +4962,9 @@ export function reduceSchedulerEvent(
       if (startsRetry) delete next.reviews[taskId];
       if (status === "submitted") {
         appendSubmissionHistory(next, {
+          ...(transitionedTask.validationBudget
+            ? { validationBudget: cloneValidationBudgetSubmission(transitionedTask.validationBudget) }
+            : {}),
           ...(transitionedTask.validationScope
             ? { validationScope: cloneValidationScope(transitionedTask.validationScope) }
             : {}),
@@ -7049,9 +7059,9 @@ function reduceDeliveryEvent(
         const integrity = boundary.testIntegrity;
         const tests = boundary.checks.find((check) => check.checkId === "tests");
         if (!integrity || !tests?.report || integrity.candidateExecuted === undefined) throw new Error("Accepted task must carry complete test-integrity evidence.");
-        next.testIntegrity.baseline = boundary.executedScope === "selected" ? next.testIntegrity.baseline : { kind: "executed_report", pin: integrity.candidatePin, pinDigest: integrity.candidatePinDigest, // F3: a selected acceptance preserves the trusted full-suite baseline.
+        next.testIntegrity.baseline = boundary.executedScope === "full_test_script" ? { kind: "executed_report", pin: integrity.candidatePin, pinDigest: integrity.candidatePinDigest,
           executed: integrity.candidateExecuted, report: tests.report, evidenceIds: tests.evidenceIds,
-          sequence: event.sequence, acceptedTaskId: boundary.taskId };
+          sequence: event.sequence, acceptedTaskId: boundary.taskId } : next.testIntegrity.baseline;
       }
       return;
     case "phase.acceptance_recorded":
@@ -7790,8 +7800,16 @@ function parseDeliveryDepth(value: unknown): DeliveryDepthRecord {
         args: affectedArgs,
       });
     }
+    assertValidationTierCoherence("Affected-test", {
+      executedScope: record.executedScope,
+      validationTier: (record as Record<string, unknown>).validationTier,
+      command: (record as Record<string, unknown>).command,
+      args: affectedArgs,
+      evidenceIds,
+    });
     const affectedTests: DeliveryAffectedTestsScope = {
       executedScope: record.executedScope as DeliveryExecutedScope,
+      ...((record as Record<string, unknown>).validationTier !== undefined ? { validationTier: (record as Record<string, unknown>).validationTier as import("./delivery-acceptance.js").DeliveryAffectedTestsScope["validationTier"] } : {}),
       selectionRung: requiredString(record, "selectionRung"),
       changedFiles: stringArray(record, "changedFiles"),
       selectedTests: affectedSelectedTests,
@@ -8016,7 +8034,7 @@ function deliveryBoundaryChecked(
     throw new Error("Boundary checks must record the latest durably started attempt.");
   }
   { // IV-2: the recorded scope must be a known value; full coherence follows the selection parse below.
-    if (event.payload.executedScope !== "full_test_script" && event.payload.executedScope !== "selected") throw new Error("Boundary executedScope is invalid.");
+    if (event.payload.executedScope !== "full_test_script" && event.payload.executedScope !== "selected" && event.payload.executedScope !== "validation_tier") throw new Error("Boundary executedScope is invalid.");
   }
   if (generation !== previous.length + 1) {
     throw new Error(`Boundary generation must be ${previous.length + 1}.`);
@@ -8073,6 +8091,13 @@ function deliveryBoundaryChecked(
   // IV-2: `selected` requires a narrow rung, an explicitly unwidened
   // selection, named tests, and executed tests-check argv naming each one.
   const boundaryScope = event.payload.executedScope as DeliveryExecutedScope;
+  assertValidationTierCoherence("Boundary", {
+    executedScope: boundaryScope,
+    validationTier: (event.payload as Record<string, unknown>).validationTier,
+    command: checks.find((check) => check.checkId === "tests")?.command,
+    args: checks.find((check) => check.checkId === "tests")?.args ?? [],
+    evidenceIds: checks.find((check) => check.checkId === "tests")?.evidenceIds ?? [],
+  });
   assertSelectedExecutionCoherence("Boundary", {
     executedScope: boundaryScope,
     rung: selection.rung,
@@ -8118,6 +8143,7 @@ function deliveryBoundaryChecked(
     integrationRevision,
     changedFiles: stringArray(event.payload, "changedFiles"),
     executedScope: boundaryScope,
+    ...(typeof (event.payload as Record<string, unknown>).validationTier === "string" ? { validationTier: (event.payload as Record<string, unknown>).validationTier as import("./delivery-acceptance.js").DeliveryBoundaryScope["validationTier"] } : {}),
     selection: { rung: requiredString(selection, "rung"), selectedTests: stringArray(selection, "selectedTests"), ...(typeof selection.widened === "boolean" ? { widened: selection.widened } : {}), ...(Array.isArray(selection.wideningReasons) ? { wideningReasons: stringArray(selection, "wideningReasons") } : {}) },
     checks,
     passed,
@@ -11368,6 +11394,9 @@ function cloneSubmissionProjection(
 ): CriterionSubmissionProjection {
   return {
     ...submission,
+    ...(submission.validationBudget
+      ? { validationBudget: cloneValidationBudgetSubmission(submission.validationBudget) }
+      : {}),
     ...(submission.validationScope
       ? { validationScope: cloneValidationScope(submission.validationScope) }
       : {}),
@@ -11425,6 +11454,7 @@ function cloneBuildTask(task: BuildTask): BuildTask {
     ...(task.reviewSignals ? { reviewSignals: structuredClone(task.reviewSignals) } : {}),
     ...(task.encodingSubmission ? { encodingSubmission: structuredClone(task.encodingSubmission) } : {}),
     ...(task.validationScope ? { validationScope: cloneValidationScope(task.validationScope) } : {}),
+    ...(task.validationBudget ? { validationBudget: cloneValidationBudgetSubmission(task.validationBudget) } : {}),
     dependencies: [...task.dependencies],
     requiredCapabilities: [...task.requiredCapabilities],
     ...(task.acceptanceCriteria

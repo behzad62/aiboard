@@ -21,9 +21,11 @@ import type { FinalVerificationCategory, FinalVerificationPlan } from "./final-v
 import {
   deriveSelectedTestsCommand,
   inspectFinalVerificationExecutionProfile,
+  projectTierCommandsToRuntimeCommands,
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
 import { FinalVerificationRuntime, type FinalVerificationCommand } from "./final-verification-runtime.js";
+import { VALIDATION_TIERS, type ValidationTier } from "./final-verification-contracts.js";
 import type { GitRunner } from "./git-repository.js";
 import {
   runBreakItProbe,
@@ -33,7 +35,11 @@ import {
 import type { DeliverableReviewInputs, DeliveryDepthRunner } from "./native-deliverable-review.js";
 import { outputFor, type OneShotCommandExecutor } from "./one-shot-command-executor.js";
 import { decideTestExecutionScope, resolveExecutionMandates, type TaskValidationMandates } from "./task-validation-policy.js";
+import { selectValidationTier, tierCommandsForTier, type ProjectValidationTierCommand } from "./project-validation-config.js";
+import type { BudgetLedger } from "./budget-ledger.js";
+import { recordValidationBoundarySegment } from "./validation-budget.js";
 import { planLanguageTestReport } from "./language-execution-profile.js";
+import { isDirectNodeTestCommand } from "./flaky-rerun.js";
 import { effectiveTestIntegrityException, readyPlanIdentity, type SchedulerProjection } from "./scheduler-store.js";
 import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
 import { testIntegrityBaselineFindings, assertNoConfiguredTestSuite, executedTestCount, testIntegrityPinDigest, testIntegrityExceptionMatches, unresolvedTestIntegrityFindings } from "./test-integrity.js";
@@ -120,6 +126,9 @@ export async function loadDeliverableReviewInputs(input: {
   if ((task.validationScope === undefined) !== (changeSet.validationScope === undefined)) throw new Error("Submitted validation scope differs from its durable kernel binding.");
   if (task.validationScope !== undefined && changeSet.validationScope !== undefined && !validationScopesEqual(task.validationScope, changeSet.validationScope)) throw new Error("Submitted validation scope differs from its durable kernel binding.");
   const validationScope = task.validationScope;
+  if ((task.validationBudget === undefined) !== (changeSet.validationBudget === undefined)) throw new Error("Submitted validation budget differs from its durable kernel binding.");
+  if (task.validationBudget !== undefined && changeSet.validationBudget !== undefined && JSON.stringify(task.validationBudget) !== JSON.stringify(changeSet.validationBudget)) throw new Error("Submitted validation budget differs from its durable kernel binding.");
+  const validationBudget = task.validationBudget;
   // W1 (F6): the submitted immutable diff bytes are hash-verified
   // against their addressed artifact BEFORE the text is trusted. A
   // missing artifact or bytes that no longer hash to the submitted
@@ -161,6 +170,7 @@ export async function loadDeliverableReviewInputs(input: {
     }),
     authorRuntimeId: submission.authorRuntimeId,
     ...(validationScope ? { validationScope: cloneValidationScope(validationScope) } : {}),
+    ...(validationBudget ? { validationBudget: structuredClone(validationBudget) } : {}),
     ...(input.contract ? { contract: input.contract } : {}),
     ...(input.contractRef ? { contractRef: input.contractRef } : {}),
   };
@@ -249,6 +259,7 @@ export interface DeliveryCommandRun {
   ran: boolean;
   /** IV-2: what actually ran — the whole script, or exactly the selection. */
   executedScope: DeliveryExecutedScope;
+  validationTier?: ValidationTier;
   reason?: string;
   /** `tests` only: this run's own machine-readable report reading. */
   report?: DeliveryTestReport;
@@ -307,6 +318,36 @@ export function planTestReport(input: {
       format: language.format,
       reportPath: language.reportPath,
       command: { ...input.command, executable: language.command.executable, args: [...language.command.args] },
+    };
+  }
+  // IV-3: configured tiers may name an exact absolute node executable. Use
+  // the same canonical direct-node recognition as FinalVerificationRuntime.
+  if (isDirectNodeTestCommand(input.command)) {
+    const junit = ".aiboard-report-" + input.reportName + ".xml";
+    if (input.command.args.some((token) => token.startsWith("--test-reporter"))) {
+      return { runner: "node --test", unsupported: "the test command sets its own --test-reporter, which would replace the runner JUnit reporter." };
+    }
+    const explicitNodeOptions = input.command.environment?.NODE_OPTIONS;
+    const ambient = (explicitNodeOptions ?? input.ambientNodeOptions ?? "").trim();
+    if (/(^|\s)--test-reporter/.test(ambient)) {
+      return { runner: "node --test", unsupported: "the command environment NODE_OPTIONS sets its own --test-reporter, which would replace the runner JUnit reporter." };
+    }
+    const destination = resolve(input.checkoutPath, junit).replaceAll("\\", "/");
+    const reporterFlags = "--test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=\"" + destination + "\"";
+    const filterPattern = /(^|\s)--test-(name-pattern|skip-pattern|only)\b/;
+    return {
+      runner: "node --test",
+      format: "junit",
+      reportPath: junit,
+      filtered: input.command.args.some((token) => filterPattern.test(token)) || filterPattern.test(ambient),
+      command: {
+        ...input.command,
+        environment: {
+          ...(input.command.environment ?? {}),
+          NODE_OPTIONS: ambient ? ambient + " " + reporterFlags : reporterFlags,
+          NODE_TEST_CONTEXT: undefined,
+        },
+      },
     };
   }
   let manifest: { scripts?: Record<string, unknown>; dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> } = {};
@@ -753,8 +794,14 @@ export async function runDeliveryCategory(input: {
   selection?: { rung: string; widened: boolean; tests: readonly string[] };
   /** IV-2: an explicit validation mandate requires the full suite now. */
   forceFullSuite?: boolean;
+  tierCommands?: ProjectValidationTierCommand[];
+  validationTier?: ValidationTier;
 }): Promise<DeliveryCommandRun> {
-  const commands = input.profile.commands[input.category];
+  // R2-F1: explicit structured forceFullSuite ALWAYS runs the detected full_test_script.
+  // No tier override and no selected narrowing.
+  const explicitFull = input.category === "tests" && input.forceFullSuite === true;
+  const tierOverride = !explicitFull && input.category === "tests" && input.tierCommands?.length ? projectTierCommandsToRuntimeCommands(input.tierCommands) : undefined;
+  const commands = tierOverride ?? input.profile.commands[input.category];
   const first = commands?.at(-1);
   if (!commands || !first) {
     return { command: "", args: [], evidenceIds: [], exitCode: null, ran: false, executedScope: "full_test_script", reason: `No project ${input.category} command was detected.` };
@@ -775,6 +822,10 @@ export async function runDeliveryCategory(input: {
   delete profile.runtimeSmoke;
   delete profile.browser;
   delete profile.portLease;
+  if (tierOverride) {
+    profile.commands.tests = [...tierOverride];
+    delete profile.reports;
+  }
   // Real counts: make the tests command write a report to a fresh path this
   // run owns. The same command goes into the profile copy, so the runtime's
   // profile comparison still holds.
@@ -827,8 +878,12 @@ export async function runDeliveryCategory(input: {
   // in the profile copy, so the runtime comparison still holds and the
   // evidence/argv identity is the selected command. A downgraded report
   // plan (unsupported) or an undecidable shape stays full (fail safe).
-  let executedScope: DeliveryExecutedScope = "full_test_script";
-  if (input.category === "tests" && input.selection && !reportPlan?.unsupported) {
+  if (tierOverride && (input.validationTier === undefined || !(VALIDATION_TIERS as readonly string[]).includes(input.validationTier))) {
+    throw new Error("Tier execution requires its validation tier.");
+  }
+  let executedScope: DeliveryExecutedScope = tierOverride && input.validationTier ? "validation_tier" : "full_test_script";
+  const executedTier = tierOverride ? input.validationTier : undefined;
+  if (input.category === "tests" && input.selection && !reportPlan?.unsupported && !tierOverride) {
     const selective = deriveSelectedTestsCommand({
       checkoutPath: input.manager.path,
       command: reportPlan?.command ?? first,
@@ -877,6 +932,7 @@ export async function runDeliveryCategory(input: {
     exitCode,
     ran: evidenceIds.length > 0,
     executedScope,
+    ...(executedTier ? { validationTier: executedTier } : {}),
     ...(run.check.issues.length > 0 ? { reason: run.check.issues.join(" ") } : {}),
     ...(report ? { report } : {}),
   };
@@ -941,7 +997,11 @@ export function createDeliveryDepthRunner(options: DeliveryExecutionOptions): De
         ...(options.validationMandates ? { mandates: options.validationMandates } : {}),
         isFinalCandidate: false,
       });
+      const depthTier = input.changeRisk && profile.tiers && !mandates.forceFullSuite
+        ? tierCommandsForTier(profile.tiers, selectValidationTier({ changeRisk: input.changeRisk, isMilestoneGate: false, isFinalCandidate: false }))
+        : undefined;
       const tests = await runDeliveryCategory({
+        ...(depthTier && input.changeRisk ? { tierCommands: depthTier, validationTier: selectValidationTier({ changeRisk: input.changeRisk, isMilestoneGate: false, isFinalCandidate: false }) } : {}),
         ...(ambientNodeOptions !== undefined ? { ambientNodeOptions } : {}),
         category: "tests",
         profile,
@@ -959,6 +1019,7 @@ export function createDeliveryDepthRunner(options: DeliveryExecutionOptions): De
       });
       const affectedTests: DeliveryAffectedTestsScope = {
         executedScope: tests.executedScope,
+        ...(tests.validationTier ? { validationTier: tests.validationTier } : {}),
         selectionRung: selection.rung,
         changedFiles: [...input.changedFiles],
         selectedTests: [...selection.tests],
@@ -1114,6 +1175,7 @@ export function createDeliveryBoundaryDriver(options: {
   execution: OneShotCommandExecutor;
   boundaryWorkspace: DeliveryWorkspaceSlot;
   changedFilesFor(taskId: string): Promise<string[]>;
+  validationAccounting?: { ledger: BudgetLedger; clock?: () => string };
   ambientNodeOptions?: () => string | undefined;
   testIntegrity?: {
     projection(): SchedulerProjection;
@@ -1161,12 +1223,17 @@ export function createDeliveryBoundaryDriver(options: {
   };
   return {
     captureInitialBaseline,
-    check: async (input: { runId: string; taskId: string; boundaryId: string; attempt: number; integrationRevision: string; signal?: AbortSignal; forceFullSuite?: boolean }) => {
-      await captureInitialBaseline(input.taskId, input.signal);
+    check: async (input: { runId: string; taskId: string; boundaryId: string; attempt: number; integrationRevision: string; signal?: AbortSignal; forceFullSuite?: boolean; validationTierInput?: { changeRisk: "low" | "medium" | "high"; isMilestoneGate: boolean } }) => {
+      const validationStart = (options.validationAccounting?.clock ?? (() => new Date().toISOString()))();
+      // R2-F2: the finally below covers the whole driver attempt after validationStart.
+      let workspace: Awaited<ReturnType<typeof options.boundaryWorkspace.create>> | undefined;
       const trustedProjection = options.testIntegrity?.projection();
-      const changedFiles = await options.changedFilesFor(input.taskId);
-      const workspace = await options.boundaryWorkspace.create(input.integrationRevision);
+      // (changed-files inventory runs inside the try below)
+      // (workspace creation runs inside the try below; cleanup is conditional)
       try {
+        await captureInitialBaseline(input.taskId, input.signal);
+        const changedFiles = await options.changedFilesFor(input.taskId);
+        workspace = await options.boundaryWorkspace.create(input.integrationRevision);
         const inventory = await projectInventory(options.git, workspace.path);
         const selection = computeAffectedTests({
           changedFiles,
@@ -1178,6 +1245,14 @@ export function createDeliveryBoundaryDriver(options: {
           targetRevision: input.integrationRevision,
           execute: options.git,
         });
+        // R2-F1: explicit structured forceFullSuite ALWAYS suppresses tiers.
+        const explicitFull = input.forceFullSuite === true;
+        const milestoneGate = input.validationTierInput?.isMilestoneGate === true;
+        const boundaryTier = input.validationTierInput && profile.tiers && !explicitFull
+          ? tierCommandsForTier(profile.tiers, selectValidationTier({ changeRisk: input.validationTierInput.changeRisk, isMilestoneGate: input.validationTierInput.isMilestoneGate, isFinalCandidate: false }))
+          : undefined;
+        // R2-F1: milestone without a configured slow tier falls back to full (IV-2).
+        const testsForceFull = explicitFull || (milestoneGate && !boundaryTier);
         const checks: DeliveryBoundaryCheck[] = [];
         let testIntegrity: TestIntegrityBoundary | undefined;
         if (trustedProjection?.testIntegrity) {
@@ -1205,6 +1280,7 @@ export function createDeliveryBoundaryDriver(options: {
         const categories: Array<"build" | "tests"> = profile.commands.build ? ["build", "tests"] : ["tests"];
         // IV-2: the actual scope of the tests run (builds always run whole).
         let testsScope: DeliveryExecutedScope = "full_test_script";
+        let testsTier: ValidationTier | undefined;
         for (const category of categories) {
           const ambientNodeOptions = options.ambientNodeOptions?.();
           const run = await runDeliveryCategory({
@@ -1216,14 +1292,18 @@ export function createDeliveryBoundaryDriver(options: {
             evidenceTaskId: `delivery:${input.taskId}`,
             // N-R4-3: attempt-scoped so a retried run never reuses keys.
             generationId: `${input.boundaryId}:${input.attempt}:${category}`,
-            ...(category === "tests" ? { selection: { rung: selection.rung, widened: selection.widened, tests: selection.tests }, forceFullSuite: input.forceFullSuite === true } : {}),
+            ...(category === "tests" ? { selection: { rung: selection.rung, widened: selection.widened, tests: selection.tests }, forceFullSuite: testsForceFull } : {}),
+            ...(category === "tests" && boundaryTier && input.validationTierInput ? { tierCommands: boundaryTier, validationTier: selectValidationTier({ changeRisk: input.validationTierInput.changeRisk, isMilestoneGate: input.validationTierInput.isMilestoneGate, isFinalCandidate: false }) } : {}),
             git: options.git,
             artifacts: options.artifacts,
             evidenceStore: options.evidenceStore,
             execution: options.execution,
             ...(input.signal ? { signal: input.signal } : {}),
           });
-          if (category === "tests") testsScope = run.executedScope;
+          if (category === "tests") {
+            testsScope = run.executedScope;
+            testsTier = run.validationTier;
+          }
           const report = category === "tests"
             ? run.report ?? { status: "unknown" as const, runner: "none", reason: run.reason ?? "No project test command was detected." }
             : undefined;
@@ -1259,12 +1339,27 @@ export function createDeliveryBoundaryDriver(options: {
         return {
           changedFiles,
           executedScope: testsScope,
+          ...(testsTier ? { validationTier: testsTier } : {}),
           selection: { rung: selection.rung, selectedTests: [...selection.tests], widened: selection.widened, wideningReasons: [...selection.wideningReasons] },
           checks,
           ...(testIntegrity ? { testIntegrity } : {}),
         };
       } finally {
-        await options.boundaryWorkspace.cleanup().catch(() => undefined);
+        const validationFinish = (options.validationAccounting?.clock ?? (() => new Date().toISOString()))();
+        // R2-F2: cleanup only if workspace creation succeeded.
+        if (workspace) {
+          await options.boundaryWorkspace.cleanup().catch(() => undefined);
+        }
+        if (options.validationAccounting) {
+          recordValidationBoundarySegment(options.validationAccounting.ledger, {
+            runId: input.runId,
+            taskId: input.taskId,
+            boundaryId: input.boundaryId,
+            attempt: input.attempt,
+            startedAt: validationStart,
+            finishedAt: validationFinish,
+          });
+        }
       }
     },
   };

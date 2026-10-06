@@ -233,6 +233,8 @@ function spawnSubagentTool(
       }
       if (!readOnly && options.evidenceStore) {
         for (const tool of createEvidenceTools({
+          ...(options.execution ? { execution: options.execution } : {}),
+          ...(options.budgetLedger ? { validationAccounting: { ledger: options.budgetLedger, runId: options.runId } } : {}),
       git: options.git,
           store: options.evidenceStore,
           artifacts: options.artifacts,

@@ -19,7 +19,7 @@ function configurationPath(path: string): boolean {
     /\.props$/.test(name) || /\.targets$/.test(name) ||
     /^(?:jest|vitest|playwright|cypress|ava|karma|tap|nyc|coverage|mocha|test)[._-].*config/.test(name) ||
     /^(?:jest|vitest|playwright|cypress|ava|karma|tap|nyc|coverage|mocha|test)\.config(?:\.|$)/.test(name) ||
-    /^\.(?:mocha|nyc|tap|ava|c8|test).*rc/.test(name);
+    /^\.(?:mocha|nyc|tap|ava|c8|test).*rc/.test(name) || name === "aiboard-validation.json";
 }
 
 /** Inspect immutable Git blobs; the candidate working directory cannot supply its baseline pin. */

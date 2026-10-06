@@ -1,5 +1,6 @@
 import { captureReviewReads } from "./review-evidence.js";
 import type { ValidationScope } from "./validation-scope.js";
+import type { ValidationBudgetSubmission } from "./validation-budget.js";
 import { createHash } from "node:crypto";
 import { resolveEvidenceContent } from "./evidence-content.js";
 import {
@@ -143,6 +144,7 @@ export interface DeliverableReviewInputs {
    * obligations-before-diff pass.
    */
   validationScope?: ValidationScope;
+  validationBudget?: ValidationBudgetSubmission;
   /**
    * W2 (AR-R28): delta-first re-review input, assembled by the runtime
    * from the prior completed review and the audited Git trees. Absent on
@@ -223,6 +225,7 @@ export interface DeliveryDepthRunner {
     baselineRevision: string;
     changedFiles: readonly string[];
     diffText: string;
+    changeRisk?: "low" | "medium" | "high";
     signal?: AbortSignal;
   }): Promise<{ affectedTests: DeliveryAffectedTestsScope; probe: DeliveryProbeRecord }>;
 }
@@ -765,6 +768,13 @@ export class NativeDeliverableReviewRuntime {
     // IV-1: the worker's scope report rides findings and verdict (this
     // code is past the obligations early-return). A claim to check against
     // the diff and the task validation rationales — never evidence.
+    if (inputs.validationBudget) {
+      sections.push(section(
+        "validation-budget",
+        "report",
+        `Worker validation-budget advisory (measured by the runner, never model-supplied — overage alone is NOT a correctness failure):\n${JSON.stringify(inputs.validationBudget, null, 2)}\nJudge whether the justification is concrete and credible for the measured overage; a missing justification on an over-budget submission is a mechanical refusal, never a silent pass. This advisory never substitutes for criterion evidence or the validationScope report.`,
+      ));
+    }
     if (inputs.validationScope) {
       sections.push(section(
         "validation-scope",
@@ -1123,6 +1133,7 @@ export class NativeDeliverableReviewRuntime {
               baselineRevision: inputs.baselineRevision,
               changedFiles: inputs.changedPaths,
               diffText: inputs.diffText,
+              changeRisk: tier,
               ...(request.signal ? { signal: request.signal } : {}),
             });
           } catch (error) {
@@ -1231,6 +1242,7 @@ export class NativeDeliverableReviewRuntime {
           unresolvedConcerns: inputs.unresolvedConcerns,
           ...(task.kind !== undefined && task.kind !== "implementation" ? { repairTaskKind: task.kind } : {}),
           ...(inputs.validationScope !== undefined ? { validationScope: inputs.validationScope } : {}),
+          ...(inputs.validationBudget !== undefined ? { validationBudget: inputs.validationBudget } : {}),
         }),
         // W1 (F6): the candidate side binds the ACTUAL head content
         // tree, never the commit label: an identical resubmission under

@@ -390,6 +390,8 @@ export interface DeliveryBoundaryDriver {
     runId: string;
     taskId: string;
     boundaryId: string;
+    /** IV-3: trusted tier selection inputs; absent fails safe to detected commands. */
+    validationTierInput?: { changeRisk: "low" | "medium" | "high"; isMilestoneGate: boolean };
     /** IV-2: an explicit validation mandate requires the full suite now. */
     forceFullSuite?: boolean;
     /** N-R4-3: the durably started attempt; scopes process and evidence keys. */
@@ -400,6 +402,7 @@ export interface DeliveryBoundaryDriver {
     changedFiles: string[];
     /** IV-2: the actual scope of the tests run. */
     executedScope: DeliveryExecutedScope;
+    validationTier?: import("./final-verification-contracts.js").ValidationTier;
     selection: { rung: string; selectedTests: string[]; widened?: boolean; wideningReasons?: string[] };
     checks: DeliveryBoundaryCheck[];
     testIntegrity?: import("./test-integrity-contracts.js").TestIntegrityBoundary;
@@ -4497,6 +4500,8 @@ export class BuildRuntime {
         ...(this.validationMandates ? { mandates: this.validationMandates } : {}),
         isFinalCandidate: task.kind === "final_verification",
       });
+      const boundaryRiskTier = projection.delivery?.reviews[task.id]?.risk?.tier;
+      const boundaryMilestoneGate = boundaryWouldClosePhaseWithTestsGate({ projection, taskId: task.id });
       let outcome: Awaited<ReturnType<DeliveryBoundaryDriver["check"]>>;
       try {
         outcome = await this.deliveryBoundary.check({
@@ -4506,7 +4511,10 @@ export class BuildRuntime {
           attempt,
           integrationRevision,
           signal: this.activeLifecycleSignal(),
-          forceFullSuite: executionPolicy.forceFullSuite || boundaryWouldClosePhaseWithTestsGate({ projection, taskId: task.id }), // F4: a boundary closing a phase with a tests gate runs the whole suite.
+          // R2-F1: explicit structured full stays separate from the milestone gate.
+          // The boundary driver runs slow-tier for milestones (full when slow is absent).
+          forceFullSuite: executionPolicy.forceFullSuite,
+          ...(boundaryRiskTier || boundaryMilestoneGate ? { validationTierInput: { changeRisk: boundaryRiskTier ?? "high", isMilestoneGate: boundaryMilestoneGate } } : {}),
         });
       } catch (error) {
         await this.recordCleanupSearch("verification");
@@ -4525,6 +4533,7 @@ export class BuildRuntime {
           attempt,
           integrationRevision,
           executedScope: outcome.executedScope,
+          ...(outcome.validationTier ? { validationTier: outcome.validationTier } : {}),
           changedFiles: [...outcome.changedFiles],
           selection: { rung: outcome.selection.rung, selectedTests: [...outcome.selection.selectedTests], ...(outcome.selection.widened !== undefined ? { widened: outcome.selection.widened } : {}), ...(outcome.selection.wideningReasons !== undefined ? { wideningReasons: [...outcome.selection.wideningReasons] } : {}) },
           checks: outcome.checks.map((check) => ({ ...check, evidenceIds: [...check.evidenceIds] })),

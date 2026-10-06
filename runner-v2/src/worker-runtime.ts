@@ -26,6 +26,15 @@ import {
 } from "./change-set.js";
 import type { PermissionProfile } from "./contracts.js";
 import { createEvidenceTools } from "./evidence-tools.js";
+import {
+  DEFAULT_VALIDATION_BUDGET_MS,
+  parseValidationBudgetMs,
+} from "./project-validation-config.js";
+import {
+  cloneValidationBudgetSummary,
+  parseValidationBudgetJustification,
+  summarizeValidationBudget,
+} from "./validation-budget.js";
 import { evidenceFactArtifactHashes, type EvidenceStore } from "./evidence-store.js";
 import { createFilesystemTools } from "./filesystem-tools.js";
 import { createOpenRouterApplyPatchTool } from "./openrouter-apply-patch-tool.js";
@@ -107,6 +116,7 @@ export interface RunWorkerTaskOptions {
   permissions?: SqlitePermissionStore;
   managedProcesses?: ManagedProcessService;
   budgetLedger?: BudgetLedger;
+  validationBudgetMs?: number;
   capabilityRegistry?: CapabilityRegistry;
   language?: LanguageIntelligenceProvider;
   allowedCommands?: readonly string[];
@@ -242,6 +252,7 @@ export async function runWorkerTask(
     for (const tool of createEvidenceTools({
       git: options.git,
       store: options.evidenceStore,
+      ...(options.budgetLedger ? { validationAccounting: { ledger: options.budgetLedger, runId: options.runId } } : {}),
       artifacts: options.artifacts,
       taskId: options.taskId,
       ...(options.execution ? { execution: options.execution } : {}),
@@ -312,11 +323,15 @@ export async function runWorkerTask(
   const requireValidationScope =
     schedulerState(options)?.validationScopePolicyVersion === 1;
   let producedChangeSet: ChangeSet | undefined;
+  const validationBudgetMs = options.validationBudgetMs === undefined
+    ? DEFAULT_VALIDATION_BUDGET_MS
+    : parseValidationBudgetMs(options.validationBudgetMs);
   broker.register(createSubmitTaskTool(async ({
     summary,
     unresolvedConcerns,
     criterionEvidenceLinks,
     validationScope,
+    validationBudgetJustification,
   }) => {
     if (
       schedulerState(options)?.acceptanceContractStatus ===
@@ -330,6 +345,21 @@ export async function runWorkerTask(
       throw new Error(
         "Task submission requires a validationScope report on this run."
       );
+    }
+    const validationBudget = options.budgetLedger
+      ? summarizeValidationBudget(options.budgetLedger, {
+          runId: options.runId,
+          taskId: options.taskId,
+          budgetMs: validationBudgetMs,
+        })
+      : undefined;
+    if (validationBudget?.overBudget) {
+      if (validationBudgetJustification === undefined) {
+        throw new Error(
+          "Task submission requires a validation-budget justification: measured validation time exceeds the advisory budget."
+        );
+      }
+      parseValidationBudgetJustification(validationBudgetJustification);
     }
     const evidenceRecords = options.evidenceStore
       ? acceptanceCriteria
@@ -382,6 +412,14 @@ export async function runWorkerTask(
     }
     producedChangeSet = await createChangeSet({
       ...(validationScope ? { validationScope } : {}),
+      ...(validationBudget?.overBudget && validationBudgetJustification !== undefined
+        ? {
+            validationBudget: {
+              summary: cloneValidationBudgetSummary(validationBudget),
+              justification: parseValidationBudgetJustification(validationBudgetJustification),
+            },
+          }
+        : {}),
       ...(currentSubmissionProjection?.encodingSafetyPolicyVersion === 1 ? { encodingSafetyPolicyVersion: 1, executeBytes: options.git?.lifecycle("inspection").runBytes } : {}),
       ...(schedulerState(options)?.reviewIntegrityPolicyVersion === 1 ? { reviewIntegrityPolicyVersion: 1 } : {}),
       ...(scopeIdentity ? { submissionScopeIdentity: scopeIdentity } : {}),

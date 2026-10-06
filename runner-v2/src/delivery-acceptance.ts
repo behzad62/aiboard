@@ -13,6 +13,7 @@ import {
 import type { ReviewerIndependence } from "./verifier-contracts.js";
 import type { TestIntegrityBoundary, TestConsolidationDisposition } from "./test-integrity-contracts.js";
 import { validateLateFindingBasis, type DeltaHunk, type PriorReadRange } from "./review-delta.js";
+import { VALIDATION_TIERS, type ValidationTier } from "./final-verification-contracts.js";
 
 /**
  * T6a (P6.6, OA-3/OA-4/OA-10/OA-11/OA-13): mandatory deliverable review and
@@ -465,15 +466,17 @@ export interface DeliveryBoundaryRecord {
  * events rebuild byte-for-semantics; the `Scope` aliases below widen the
  * scope field additively while every other field keeps its frozen shape.
  */
-export type DeliveryExecutedScope = "full_test_script" | "selected";
+export type DeliveryExecutedScope = "full_test_script" | "selected" | "validation_tier";
 
 /** IV-2: either scope of high-tier affected-test record (the pre-IV-2 interface is frozen; scope widens additively). */
 export type DeliveryAffectedTestsScope = Omit<DeliveryAffectedTestsRecord, "executedScope"> & {
+  validationTier?: ValidationTier;
   executedScope: DeliveryExecutedScope;
 };
 
 /** IV-2: either scope of boundary record (the pre-IV-2 interface is frozen; scope widens additively). */
 export type DeliveryBoundaryScope = Omit<DeliveryBoundaryRecord, "executedScope"> & {
+  validationTier?: ValidationTier;
   executedScope: DeliveryExecutedScope;
 };
 
@@ -505,6 +508,7 @@ export function assertSelectedExecutionCoherence(
   },
 ): void {
   if (input.executedScope === "full_test_script") return;
+  if (input.executedScope === "validation_tier") return;
   if (input.executedScope !== "selected") {
     throw new Error(`${label} executedScope is invalid.`);
   }
@@ -535,6 +539,42 @@ export function assertSelectedExecutionCoherence(
  * Legacy full_test_script records keep their historical replay behavior: no
  * new requirement applies to them.
  */
+export function assertValidationTierCoherence(
+  label: string,
+  input: {
+    executedScope: unknown;
+    validationTier: unknown;
+    command: unknown;
+    args: unknown;
+    evidenceIds: unknown;
+  },
+): void {
+  if (input.executedScope === "validation_tier") {
+    if (typeof input.validationTier !== "string" || !(VALIDATION_TIERS as readonly string[]).includes(input.validationTier)) {
+      throw new Error(`${label} records validation_tier execution with invalid tier ${JSON.stringify(input.validationTier)}.`);
+    }
+    if (input.validationTier === "release") {
+      throw new Error(`${label} records validation_tier execution with release tier; boundary/depth tiers never use release.`);
+    }
+    if (typeof input.command !== "string" || !input.command.trim() || input.command === "none") {
+      throw new Error(`${label} records validation_tier execution without its actual tests command.`);
+    }
+    if (!Array.isArray(input.args) || input.args.some((entry) => typeof entry !== "string")) {
+      throw new Error(`${label} records validation_tier execution without its executed argv.`);
+    }
+    if (!Array.isArray(input.evidenceIds) || input.evidenceIds.length === 0) {
+      throw new Error(`${label} records validation_tier execution without its command evidence.`);
+    }
+    return;
+  }
+  if (input.executedScope === "full_test_script" || input.executedScope === "selected") {
+    if (input.validationTier !== undefined) {
+      throw new Error(`${label} records ${String(input.executedScope)} execution with a validation tier; only validation_tier scope carries a tier.`);
+    }
+    return;
+  }
+}
+
 export function validateSelectedCommandEvidenceBinding(
   event: { readonly runId: string; readonly type: string; readonly payload: Record<string, unknown> },
   evidenceStore: { getByIds(input: { runId: string; ids: readonly string[] }): readonly unknown[] },
@@ -567,12 +607,12 @@ export function validateSelectedCommandEvidenceBinding(
   }
   const taskId = event.payload.taskId;
   for (const candidate of candidates) {
-    if (candidate.executedScope !== "selected") continue;
+    if (candidate.executedScope !== "selected" && candidate.executedScope !== "validation_tier") continue;
     if (typeof taskId !== "string" || taskId.length === 0) {
-      throw new Error(`The ${candidate.label} records selected execution without its task binding.`);
+      throw new Error(`The ${candidate.label} records ${String(candidate.executedScope)} execution without its task binding.`);
     }
     if (candidate.evidenceIds.length === 0) {
-      throw new Error(`The ${candidate.label} records selected execution without citing its command evidence.`);
+      throw new Error(`The ${candidate.label} records ${String(candidate.executedScope)} execution without citing its command evidence.`);
     }
     const lastId = candidate.evidenceIds.at(-1)!;
     const last = evidenceStore.getByIds({ runId: event.runId, ids: [...new Set(candidate.evidenceIds)] })
@@ -581,12 +621,12 @@ export function validateSelectedCommandEvidenceBinding(
       throw new Error(`The ${candidate.label} cites missing or foreign evidence.`);
     }
     if (last.taskId !== `delivery:${taskId}`) {
-      throw new Error(`The ${candidate.label} records selected execution but its command evidence belongs to task ${String(last.taskId)}.`);
+      throw new Error(`The ${candidate.label} records ${String(candidate.executedScope)} execution but its command evidence belongs to task ${String(last.taskId)}.`);
     }
     if (!isRecord(last.fact) || last.fact.kind !== "command" ||
       last.fact.command !== candidate.command ||
       !selectedBindingSameArgs(last.fact.args, candidate.args)) {
-      throw new Error(`The ${candidate.label} records selected execution but its command evidence ran a different command.`);
+      throw new Error(`The ${candidate.label} records ${String(candidate.executedScope)} execution but its command evidence ran a different command.`);
     }
   }
 }
@@ -1380,7 +1420,7 @@ export function evaluatePhaseAcceptance(input: PhaseAcceptanceInputs): {
       continue;
     }
     const boundary = currentBoundaries.find((candidate) =>
-      candidate.checks.some((check) => check.checkId === checkId && check.outcome === "passed") && (checkId !== "tests" || candidate.executedScope === "full_test_script"));
+      candidate.checks.some((check) => check.checkId === checkId && check.outcome === "passed") && (checkId !== "tests" || candidate.executedScope === "full_test_script" || (candidate.executedScope === "validation_tier" && candidate.validationTier === "slow")));
     if (!boundary) {
       issues.push(`Phase ${input.phase.id} exit check "${validation}" has no passed ${checkId} run at the current integration revision.`);
       continue;

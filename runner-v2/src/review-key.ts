@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { ExecutionTaskContract } from "./planning-contracts.js";
 import { canonicalValidationScope, type ValidationScope } from "./validation-scope.js";
+import { cloneValidationBudgetSubmission, type ValidationBudgetSubmission } from "./validation-budget.js";
 
 /**
  * W1 (AR-R27, S2 section 7.2 items 1-3, S3 L7): review economics.
@@ -131,6 +132,9 @@ export interface ClaimBindingClaim {
  * IV-1 (F1): the worker validationScope report is reviewer-visible claim
  * semantics, bound here as an OPTIONAL field. Absent hashes exactly as
  * before (legacy replay); present binds the structural canonical scope.
+ * IV-3 (F4): the worker validationBudget submission is likewise OPTIONAL.
+ * Absent hashes exactly as before; present binds the canonical summary
+ * plus justification deterministically.
  */
 export interface ClaimBindingInputs {
   readonly objective: string;
@@ -140,6 +144,7 @@ export interface ClaimBindingInputs {
   readonly unresolvedConcerns: readonly string[];
   readonly repairTaskKind?: string;
   readonly validationScope?: ValidationScope;
+  readonly validationBudget?: ValidationBudgetSubmission;
 }
 
 export function claimBindingDigest(input: ClaimBindingInputs): string {
@@ -161,6 +166,7 @@ export function claimBindingDigest(input: ClaimBindingInputs): string {
     unresolvedConcerns: [...input.unresolvedConcerns].sort(),
     ...(input.repairTaskKind !== undefined ? { repairTaskKind: input.repairTaskKind } : {}),
     ...(input.validationScope !== undefined ? { validationScope: canonicalValidationScope(input.validationScope) } : {}),
+    ...(input.validationBudget !== undefined ? { validationBudget: cloneValidationBudgetSubmission(input.validationBudget) } : {}),
   }));
 }
 

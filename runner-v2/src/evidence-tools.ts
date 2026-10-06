@@ -17,6 +17,8 @@ import {
   outputFor,
   type OneShotCommandExecutor,
 } from "./one-shot-command-executor.js";
+import type { BudgetLedger } from "./budget-ledger.js";
+import { recordValidationEvidenceSegment } from "./validation-budget.js";
 
 interface RunEvidenceInput {
   label: string;
@@ -26,6 +28,10 @@ interface RunEvidenceInput {
   timeoutMs: number;
 }
 
+export interface EvidenceValidationAccounting {
+  ledger: BudgetLedger;
+  runId: string;
+}
 export interface EvidenceToolsOptions {
   git?: RunGitExecutionContext;
   store: EvidenceStore;
@@ -38,6 +44,7 @@ export interface EvidenceToolsOptions {
   allowedCommands?: readonly string[];
   attempt?: number;
   execution?: OneShotCommandExecutor;
+  validationAccounting?: EvidenceValidationAccounting;
 }
 
 export function createEvidenceTools(options: EvidenceToolsOptions): NativeTool<unknown>[] {
@@ -180,9 +187,21 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
             ...(context.signal ? { signal: context.signal } : {}),
           },
         };
+        const validationStart = clock();
         const execution = options.git
           ? await options.git.executeForCall(context, commandRequest)
           : await options.execution.execute(commandRequest);
+        const validationFinish = clock();
+        if (options.validationAccounting && !execution.reuseSource && context.callId) {
+          recordValidationEvidenceSegment(options.validationAccounting.ledger, {
+            runId: options.validationAccounting.runId,
+            taskId: options.taskId,
+            sessionId: context.sessionId,
+            callId: context.callId,
+            startedAt: validationStart,
+            finishedAt: validationFinish,
+          });
+        }
         const postTree = await options.git?.workingTreeForCall?.(context, cwd) ?? unknownWorkingTree();
         const workingTreeIdentity = settleWorkingTreeIdentity(commandTree, postTree);
         const finishedAt = clock();

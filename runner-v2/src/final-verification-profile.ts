@@ -4,7 +4,8 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import { createServer } from "node:net";
 import { basename, dirname, join, resolve } from "node:path";
 
-import { FINAL_VERIFICATION_CATEGORIES, type FinalVerificationDetectedSignal, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
+import { FINAL_VERIFICATION_CATEGORIES, VALIDATION_TIERS, type FinalVerificationDetectedSignal, type FinalVerificationPlanPrefill } from "./final-verification-contracts.js";
+import { PROJECT_VALIDATION_CONFIG_PATH, parseProjectValidationConfig, parseValidationBudgetMs, type ProjectValidationTierCommand, type ProjectValidationTiers } from "./project-validation-config.js";
 import { detectLanguageFamilies, languageReportDescriptors, listLanguageInventoryFiles } from "./language-execution-profile.js";
 import { assertFinalVerificationBrowserPolicy } from "./final-verification-browser-policy.js";
 import type {
@@ -56,6 +57,8 @@ export interface FinalVerificationExecutionProfile {
   portLease?: FinalVerificationPortLease;
   runtimeSmoke?: FinalVerificationRuntimeSmokeInput;
   browser?: FinalVerificationBrowserInput;
+  tiers?: ProjectValidationTiers;
+  validationBudgetMs?: number;
 }
 
 interface FinalVerificationProfileArchive {
@@ -348,6 +351,10 @@ export async function inspectFinalVerificationExecutionProfile(options: {
     detectedSignals.push({ category: "runtime_smoke", source: `package.json#scripts.${server.script}`, detail: scripts[server.script]! });
     detectedSignals.push({ category: "browser", source: "package.json and browser application signals", detail: `Serve the integrated UI with ${server.script}.` });
   }
+  const projectConfig = await readProjectValidationConfig(repositoryRoot);
+  if (projectConfig && !profileInspectedPaths.includes(PROJECT_VALIDATION_CONFIG_PATH)) {
+    profileInspectedPaths.push(PROJECT_VALIDATION_CONFIG_PATH);
+  }
   const profile: FinalVerificationExecutionProfile = {
     version: 1,
     targetRevision: options.targetRevision,
@@ -358,6 +365,8 @@ export async function inspectFinalVerificationExecutionProfile(options: {
     ...(languageInventoryIncomplete ? { inventoryIncomplete: true as const } : {}),
     ...(packageExecution.provisioning ? { provisioning: packageExecution.provisioning } : {}),
     ...(serverPortLease ? { portLease: serverPortLease } : {}),
+    ...(projectConfig?.tiers ? { tiers: cloneProjectTiers(projectConfig.tiers) } : {}),
+    ...(projectConfig?.validationBudgetMs !== undefined ? { validationBudgetMs: projectConfig.validationBudgetMs } : {}),
     ...(server ? {
       runtimeSmoke: server.smoke,
       browser: {
@@ -400,6 +409,8 @@ export function cloneFinalVerificationExecutionProfile(
     ...(profile.portLease ? { portLease: { ...profile.portLease } } : {}),
     ...(profile.runtimeSmoke ? { runtimeSmoke: cloneSmoke(profile.runtimeSmoke) } : {}),
     ...(profile.browser ? { browser: cloneBrowser(profile.browser) } : {}),
+    ...(profile.tiers ? { tiers: cloneTiers(profile.tiers) } : {}),
+    ...(profile.validationBudgetMs !== undefined ? { validationBudgetMs: profile.validationBudgetMs } : {}),
   };
 }
 
@@ -443,6 +454,16 @@ export function assertFinalVerificationExecutionProfile(
     assertFinalVerificationBrowserPolicy(profile.browser.policy);
   }
   const detected = new Set(profile.detectedSignals.map((signal) => signal.category));
+  if (profile.tiers !== undefined && !validTiers(profile.tiers)) {
+    throw new Error("Final verification execution tier map is invalid.");
+  }
+  if (profile.validationBudgetMs !== undefined) {
+    try {
+      parseValidationBudgetMs(profile.validationBudgetMs);
+    } catch {
+      throw new Error("Final verification execution validation budget is invalid.");
+    }
+  }
   if (detected.has("build") !== Boolean(profile.commands.build?.length)) throw new Error("Build signal and exact commands disagree.");
   if (detected.has("tests") !== Boolean(profile.commands.tests?.length)) throw new Error("Test signal and exact commands disagree.");
   if (detected.has("runtime_smoke") !== Boolean(profile.runtimeSmoke)) throw new Error("Runtime signal and exact smoke spec disagree.");
@@ -639,6 +660,40 @@ function serverSignal(scripts: Record<string, string>, dependencies: Record<stri
   return Boolean((scripts.preview && dependencies.vite) || (scripts.start && dependencies.next));
 }
 
+async function readProjectValidationConfig(repositoryRoot: string): Promise<import("./project-validation-config.js").ProjectValidationConfig | undefined> {
+  let text: string;
+  try {
+    text = await readFile(join(repositoryRoot, PROJECT_VALIDATION_CONFIG_PATH), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is not valid JSON.`, { cause: error });
+  }
+  try {
+    return parseProjectValidationConfig(parsed);
+  } catch (error) {
+    throw new Error(`Project validation config ${PROJECT_VALIDATION_CONFIG_PATH} is malformed: ${error instanceof Error ? error.message : String(error)}.`, { cause: error });
+  }
+}
+function cloneProjectTiers(tiers: import("./project-validation-config.js").ProjectValidationTiers): ProjectValidationTiers {
+  const clone: ProjectValidationTiers = {};
+  for (const tier of VALIDATION_TIERS) {
+    const commands = tiers[tier];
+    if (commands) clone[tier] = commands.map((command) => ({
+      label: command.label,
+      executable: command.executable,
+      args: [...command.args],
+      ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
+      ...(command.environment ? { environment: { ...command.environment } } : {}),
+    }));
+  }
+  return clone;
+}
 function recordOfStrings(value: unknown): Record<string, string> {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value as Record<string, unknown>)
@@ -650,6 +705,31 @@ function validSignal(value: unknown): value is FinalVerificationDetectedSignal {
   return (signal.category === "build" || signal.category === "tests" || signal.category === "runtime_smoke" || signal.category === "browser") &&
     (signal.source === undefined || (typeof signal.source === "string" && signal.source.trim().length > 0)) &&
     (signal.detail === undefined || (typeof signal.detail === "string" && signal.detail.trim().length > 0));
+}
+function validTiers(value: unknown): value is ProjectValidationTiers {
+  try {
+    const parsed = parseProjectValidationConfig({ version: 1, tiers: value });
+    return parsed.tiers !== undefined && Object.keys(parsed.tiers).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * IV-3 (F1): convert strict config tier commands to runtime commands.
+ * Config env values are strings only (no removals); the spread preserves
+ * that without inventing `undefined` removal semantics.
+ */
+export function projectTierCommandsToRuntimeCommands(
+  commands: readonly ProjectValidationTierCommand[],
+): FinalVerificationCommand[] {
+  return commands.map((command) => ({
+    label: command.label,
+    executable: command.executable,
+    args: [...command.args],
+    ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
+    ...(command.environment ? { environment: { ...command.environment } } : {}),
+  }));
 }
 function validCommand(value: unknown): value is FinalVerificationCommand {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -709,6 +789,22 @@ function validPortLease(value: unknown, targetRevision: string): value is FinalV
     lease.targetRevision === targetRevision && Number.isSafeInteger(lease.port) &&
     (lease.port as number) >= 1_024 && (lease.port as number) <= 65_535 &&
     typeof lease.leaseId === "string" && Boolean(lease.leaseId.trim());
+}
+function cloneTiers(tiers: ProjectValidationTiers): ProjectValidationTiers {
+  const clone: ProjectValidationTiers = {};
+  for (const tier of VALIDATION_TIERS) {
+    const commands = tiers[tier];
+    if (commands) {
+      clone[tier] = commands.map((command) => ({
+        label: command.label,
+        executable: command.executable,
+        args: [...command.args],
+        ...(command.timeoutMs !== undefined ? { timeoutMs: command.timeoutMs } : {}),
+        ...(command.environment ? { environment: { ...command.environment } } : {}),
+      }));
+    }
+  }
+  return clone;
 }
 function cloneCommand(command: FinalVerificationCommand): FinalVerificationCommand {
   return { ...command, args: [...command.args], ...(command.environment ? { environment: { ...command.environment } } : {}) };

@@ -93,6 +93,7 @@ import {
   finalVerificationProfileDigest,
   inspectFinalVerificationExecutionProfile,
   FinalVerificationProfileAuthority,
+  projectTierCommandsToRuntimeCommands,
 } from "./final-verification-profile.js";
 import { FinalVerificationPortAuthority } from "./final-verification-port-authority.js";
 import {
@@ -211,6 +212,8 @@ import type {
 } from "./historical-read-provenance.js";
 import { SqliteAgentSessionStore } from "./sqlite-agent-session-store.js";
 import { SqliteBudgetLedger } from "./sqlite-budget-ledger.js";
+import { isRunValidationBudgetScope } from "./validation-budget.js";
+import { readValidationBudgetMsAtRevision } from "./project-validation-config.js";
 import { SqliteEvidenceStore } from "./sqlite-evidence-store.js";
 import { SqliteProjectMemoryStore } from "./sqlite-project-memory.js";
 import { rebuildProjectMemories } from "./project-memory.js";
@@ -785,7 +788,9 @@ export class NativeBuildFactory {
     initializationStage = "budget_ledger";
     const budgetLedger = new SqliteBudgetLedger(join(runRoot, "budget.sqlite"), {
       limitsFor: (scopeId) => {
-        if (scopeId !== spec.runId) throw new Error(`Unknown budget scope ${scopeId}.`);
+        if (scopeId === spec.runId) return { ...spec.budgetLimits };
+        if (isRunValidationBudgetScope(scopeId, spec.runId)) return {};
+        throw new Error(`Unknown budget scope ${scopeId}.`);
         return { ...spec.budgetLimits };
       },
     });
@@ -1121,6 +1126,8 @@ export class NativeBuildFactory {
       git: gitContext,
       schedulerStore,
       router: workerRouter,
+      validationBudgetMsForTask: async ({ baselineRevision, workspacePath }) =>
+        readValidationBudgetMsAtRevision({ git: requireGitRunner(gitContext).lifecycle("inspection").run, cwd: workspacePath, revision: baselineRevision }),
       health,
       candidates: workerCandidates,
       models,
@@ -1706,6 +1713,7 @@ export class NativeBuildFactory {
       evidenceStore,
       execution: commandExecution,
       boundaryWorkspace: deliveryBoundaryWorkspace,
+      validationAccounting: { ledger: budgetLedger },
       ambientNodeOptions: deliveryNodeOptions,
       testIntegrity: {
         projection: () => rebuildSchedulerProjection(schedulerStore.readRun(spec.runId)),
@@ -1861,12 +1869,16 @@ export class NativeBuildFactory {
           ),
           execution: commandExecution,
         });
+        const releaseTier = input.category === "tests" ? input.executionProfile?.tiers?.release : undefined;
+        const effectiveProfile = releaseTier?.length
+          ? { ...input.executionProfile, commands: { ...input.executionProfile.commands, tests: projectTierCommandsToRuntimeCommands(releaseTier) }, reports: undefined }
+          : input.executionProfile;
         const result = await verification.runCategory(
           {
             plan: input.plan,
-            executionProfile: input.executionProfile,
-            ...(input.executionProfile?.commands
-              ? { commands: input.executionProfile.commands }
+            executionProfile: effectiveProfile,
+            ...(effectiveProfile?.commands
+              ? { commands: effectiveProfile.commands }
               : {}),
             ...(input.executionProfile?.runtimeSmoke
               ? { runtimeSmoke: input.executionProfile.runtimeSmoke }
@@ -1895,7 +1907,8 @@ export class NativeBuildFactory {
         if (input.category !== "tests") {
           return { status: "unsupported", note: `Flaky rerun supports only the tests category, not ${input.category}.` };
         }
-        const commands = input.executionProfile.commands?.tests;
+        const releaseTier = input.executionProfile?.tiers?.release;
+        const commands = releaseTier?.length ? projectTierCommandsToRuntimeCommands(releaseTier) : input.executionProfile.commands?.tests;
         if (!commands || commands.length === 0) {
           return { status: "unsupported", note: "Flaky rerun requires recorded tests commands." };
         }

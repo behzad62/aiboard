@@ -8,6 +8,7 @@ import type {
 } from "./final-verification-contracts.js";
 import type { SubmissionScopeRecord } from "./submission-scope-contracts.js";
 import type { ValidationScope } from "./validation-scope.js";
+import type { ValidationBudgetSubmission } from "./validation-budget.js";
 
 export type TaskStatus =
   | "planned"
@@ -95,6 +96,7 @@ export interface BuildTask {
   submissionScope?: SubmissionScopeRecord;
   /** IV-1: the worker's durable validation-scope report for the current submission (a claim, not evidence). */
   validationScope?: ValidationScope;
+  validationBudget?: ValidationBudgetSubmission;
   id: string;
   /** Legacy implementation tasks omit this field; final verification is explicit. */
   kind?: BuildTaskKind;

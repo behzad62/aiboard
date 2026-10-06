@@ -17,6 +17,10 @@ import {
   type ValidationScope,
 } from "./validation-scope.js";
 import { REPLAN_REASONS, type ReplanReason } from "./task-contracts.js";
+import {
+  VALIDATION_BUDGET_JUSTIFICATION_MAX_LENGTH,
+  parseValidationBudgetJustification,
+} from "./validation-budget.js";
 
 export interface WorkerLifecycleToolsOptions {
   store: SchedulerStore;
@@ -83,6 +87,7 @@ export function createSubmitTaskTool(
             items: { type: "string", minLength: 1, maxLength: 2_000 },
           },
           ...(requireValidationScope ? { validationScope: validationScopeJsonSchema() } : {}),
+          validationBudgetJustification: { type: "string", minLength: 1, maxLength: VALIDATION_BUDGET_JUSTIFICATION_MAX_LENGTH },
           criterionEvidenceLinks: {
             type: "array",
             minItems: requireCriterionEvidenceLinks ? 1 : 0,
@@ -107,6 +112,7 @@ export function createSubmitTaskTool(
     execute: async (input) => {
       const changeSet = await submit({
         ...(input.validationScope ? { validationScope: cloneValidationScope(input.validationScope) } : {}),
+        ...(input.validationBudgetJustification !== undefined ? { validationBudgetJustification: input.validationBudgetJustification } : {}),
         summary: input.summary.trim(),
         readiness: input.readiness,
         unresolvedConcerns: input.unresolvedConcerns.map((item) => item.trim()),
@@ -131,6 +137,7 @@ export interface SubmitTaskInput {
   criterionEvidenceLinks: CriterionEvidenceLink[];
   /** IV-1: present exactly when the run requires it and the input validated. */
   validationScope?: ValidationScope;
+  validationBudgetJustification?: string;
 }
 
 function validateSubmit(
@@ -154,6 +161,14 @@ function validateSubmit(
       (item) => typeof item !== "string" || !item.trim() || item.length > 2_000
     )
   ) return invalid("unresolvedConcerns must contain at most 100 non-empty strings");
+  let validationBudgetJustification: string | undefined;
+  if (input.validationBudgetJustification !== undefined) {
+    try {
+      validationBudgetJustification = parseValidationBudgetJustification(input.validationBudgetJustification);
+    } catch (error) {
+      return invalid(error instanceof Error ? error.message : String(error));
+    }
+  }
   const validationScope = parseSubmitValidationScope(input, requireValidationScope);
   if (!validationScope.ok) {
     return invalid(validationScope.issue);
@@ -174,6 +189,7 @@ function validateSubmit(
       readiness: input.readiness,
       unresolvedConcerns: (concerns as string[]).map((item) => item.trim()),
       ...(validationScope.value !== undefined ? { validationScope: validationScope.value } : {}),
+      ...(validationBudgetJustification !== undefined ? { validationBudgetJustification } : {}),
       criterionEvidenceLinks,
     },
   };

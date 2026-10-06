@@ -81,6 +81,8 @@ export interface NativeWorkerDriverOptions {
   projectId: string;
   projectRoot: string;
   budgetLedger?: BudgetLedger;
+  validationBudgetMs?: number;
+  validationBudgetMsForTask?: (input: { taskId: string; baselineRevision: string; workspacePath: string }) => number | Promise<number>;
   browserBackend?: BrowserBackend;
   mcpManager?: McpManager;
   permissions?: SqlitePermissionStore;
@@ -241,6 +243,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
             : {}),
         }
       );
+      const validationBudgetMs = this.options.validationBudgetMsForTask
+        ? await this.options.validationBudgetMsForTask({ taskId: assignment.task.id, baselineRevision: workspace.baselineRevision, workspacePath: workspace.path })
+        : this.options.validationBudgetMs;
       const context = await this.workerContext(
         assignment,
         workspace.path,
@@ -328,6 +333,9 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
         ...(this.options.budgetLedger
           ? { budgetLedger: this.options.budgetLedger }
           : {}),
+        ...(validationBudgetMs !== undefined
+          ? { validationBudgetMs }
+          : {}),
         schedulerStore: this.options.schedulerStore,
         evidenceStore: this.options.evidenceStore,
         skillCatalog: this.options.skillCatalog,
@@ -402,6 +410,7 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
           ...(result.changeSet?.reviewSignals ? { reviewSignals: structuredClone(result.changeSet.reviewSignals) } : {}),
           ...(result.changeSet?.submissionScope ? { submissionScope: structuredClone(result.changeSet.submissionScope) } : {}),
           ...(result.changeSet?.validationScope ? { validationScope: structuredClone(result.changeSet.validationScope) } : {}),
+          ...(result.changeSet?.validationBudget ? { validationBudget: structuredClone(result.changeSet.validationBudget) } : {}),
           ...(result.changeSet?.encodingSubmission ? { encodingSubmission: structuredClone(result.changeSet.encodingSubmission) } : {}),
           changeSetId: result.loop.changeSetId,
           ...(result.changeSet?.criterionEvidenceLinks

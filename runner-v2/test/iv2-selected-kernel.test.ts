@@ -844,8 +844,9 @@ test("IV-2 kernel: an ordinary task stays selected but the task closing its phas
   const harness = await createHarness({
     boundaryCheck: async (input, ctx) => {
       // The stub honors the pump's scope decision, as the production
-      // driver does: forced boundaries run the whole script.
-      const scope = input.forceFullSuite === true ? "full_test_script" : "selected";
+      // driver does: forced boundaries run the whole script, and milestone
+      // gates fall back to full when no slow tier exists (R2-F1).
+      const scope = input.forceFullSuite === true || input.validationTierInput?.isMilestoneGate === true ? "full_test_script" : "selected";
       return {
         changedFiles: ["src/feature.ts"],
         executedScope: scope,
@@ -866,7 +867,8 @@ test("IV-2 kernel: an ordinary task stays selected but the task closing its phas
     const closers = harness.seenBoundaryInputs.filter((input) => input.taskId === "T2" || input.taskId === "T4");
     assert.equal(closers.length, 2);
     assert.equal(closers[0]!.forceFullSuite, false, "the middle task keeps its narrow selection");
-    assert.equal(closers[1]!.forceFullSuite, true, "the last contributing task closing BP1 runs the whole suite");
+    assert.equal(closers[1]!.forceFullSuite, false, "explicit full stays separate from the milestone gate (R2-F1)");
+    assert.equal(closers[1]!.validationTierInput?.isMilestoneGate, true, "the last contributing task closing BP1 reports the milestone gate");
     const scopeOf = (taskId: string): string =>
       harness.projection().delivery!.boundaries![taskId]!.at(-1)!.executedScope;
     assert.equal(scopeOf("T1"), "selected");

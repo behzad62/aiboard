@@ -8,6 +8,19 @@ export const FINAL_VERIFICATION_CATEGORIES = [
 
 export type FinalVerificationCategory =
   (typeof FINAL_VERIFICATION_CATEGORIES)[number];
+/**
+ * IV-3 (CD-23): canonical project-configured validation tiers. The tier map
+ * in `aiboard-validation.json` (see project-validation-config.ts) may define
+ * a subset; absent tiers fail safe to the current detected-command behavior.
+ */
+export const VALIDATION_TIERS = [
+  "fast",
+  "component",
+  "integration",
+  "slow",
+  "release",
+] as const;
+export type ValidationTier = (typeof VALIDATION_TIERS)[number];
 
 /** A category is either run or explicitly justified as inapplicable. */
 export const FINAL_VERIFICATION_STATUSES = [
