@@ -42,9 +42,9 @@ test("Architect and worker lifecycle tools publish complete model-facing schemas
       review_task: ["taskId", "decision", "summary", "evidenceArtifactHashes"],
       request_integration: ["taskId"],
       complete_run: ["summary"],
-      ask_architect: ["requestId", "question", "blocking", "evidenceSequence"],
-      challenge_guidance: ["requestId", "expectedVersion", "evidenceSequence", "reason"],
-      request_replan: ["requestId", "reason", "summary", "proposedChange", "evidenceSequence"],
+      ask_architect: ["requestId", "question", "blocking"],
+      challenge_guidance: ["requestId", "expectedVersion", "reason"],
+      request_replan: ["requestId", "reason", "summary", "proposedChange"],
       submit_task: ["summary", "readiness"],
     };
     for (const tool of tools) {
@@ -53,6 +53,18 @@ test("Architect and worker lifecycle tools publish complete model-facing schemas
       assert.deepEqual(schema.required, expectedRequired[tool.definition.name], tool.definition.name);
       assert.equal(schema.additionalProperties, false, tool.definition.name);
       assert.equal(typeof schema.properties, "object", tool.definition.name);
+    }
+    // T10 (M10): evidenceSequence stays in the schema as an optional,
+    // described input; the runner fills its current sequence when omitted.
+    for (const name of ["ask_architect", "challenge_guidance", "request_replan"]) {
+      const tool = tools.find((candidate) => candidate.definition.name === name);
+      assert.ok(tool, `${name} is registered`);
+      const properties = (tool.definition.inputSchema as { properties: Record<string, { description?: string }> }).properties;
+      assert.ok(
+        typeof properties.evidenceSequence?.description === "string" &&
+          properties.evidenceSequence.description.includes("omit it"),
+        `${name} describes the omittable evidenceSequence`,
+      );
     }
   });
 });

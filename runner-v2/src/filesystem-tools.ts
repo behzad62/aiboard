@@ -35,6 +35,42 @@ const MAX_READ_LINES = 500;
 const MAX_READ_RANGE_BYTES = 6 * 1024;
 const MAX_PATCH_EDITS = 50;
 
+/** T10 (M9): model-facing search contract: literal match, skipped outputs. */
+export const FS_SEARCH_DESCRIPTION =
+  "Search text files under `path` (literal, case-insensitive by default; set regex/caseSensitive to change). Git-ignored, generated, and build-output paths are skipped, but tracked source files are still searched; narrow `path` for large repos.";
+
+/** T10 (M9): model-facing list contract: ignored paths skipped, plus name-based build-output skips without repository metadata. */
+export const FS_LIST_DESCRIPTION =
+  "List workspace files. Git-ignored paths are skipped; without repository metadata, build-output directories (bin, obj, build, target, dist, out, .venv, venv, __pycache__) are skipped too.";
+
+/** T10 (M9): directory names treated as build output in every language. */
+export const BUILD_OUTPUT_DIR_NAMES: ReadonlySet<string> = new Set([
+  ".git",
+  "node_modules",
+  "bin",
+  "obj",
+  "out",
+  "dist",
+  "build",
+  "target",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+  ".tox",
+]);
+
+/**
+ * T10 (M9): true when any path segment is a build-output directory.
+ * Compared case-insensitively (`Obj`, `Build`); a mere prefix such as
+ * `build-notes.md` is not a match.
+ */
+export function isBuildOutputPath(path: string): boolean {
+  return path
+    .split("/")
+    .some((segment) => BUILD_OUTPUT_DIR_NAMES.has(segment.toLowerCase()));
+}
+
 export function createFilesystemTools(
   options: FilesystemToolsOptions = {}
 ): NativeTool<unknown>[] {
@@ -212,7 +248,7 @@ export function createFilesystemTools(
       },
     },
     {
-      definition: definition("fs.list", "List workspace files", true, "none"),
+      definition: definition("fs.list", FS_LIST_DESCRIPTION, true, "none"),
       validate: objectWithString("path"),
       assessAccess: (input) => pathAccess(input, "read"),
       execute: async (input, context) => {
@@ -247,7 +283,7 @@ export function createFilesystemTools(
       },
     },
     {
-      definition: definition("fs.search", "Search text files", true, "none"),
+      definition: definition("fs.search", FS_SEARCH_DESCRIPTION, true, "none"),
       validate: objectWithStrings("path", "pattern"),
       assessAccess: (input) => pathAccess(input, "read"),
       execute: async (input, context) => {
@@ -571,6 +607,12 @@ function repositoryListEntries(
 }
 
 function entryIsSearchable(entry: RepositoryEntry, input: Input): boolean {
+  // T10 (M9): repository metadata decides for tracked entries — a tracked
+  // non-generated file under a build-output name (bin/obj/target) stays
+  // searchable and is governed only by the gitState/kind flags below.
+  // Name-based skips apply only without tracking proof; filesystem-only
+  // traversal (walk) keeps the conservative directory-name skips.
+  if (entry.gitState !== "tracked" && isBuildOutputPath(entry.path) && input.includeIgnored !== true) return false;
   if (entry.gitState === "ignored" && input.includeIgnored !== true) return false;
   if (entry.kind === "generated" && input.includeGenerated !== true) return false;
   if (entry.kind === "vendored" && input.includeVendored !== true) return false;
@@ -796,7 +838,7 @@ async function walk(
   const entries = await readdir(root, { withFileTypes: true });
   entries.sort((left, right) => left.name.localeCompare(right.name));
   for (const entry of entries) {
-    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    if (BUILD_OUTPUT_DIR_NAMES.has(entry.name.toLowerCase())) continue;
     const path = resolve(root, entry.name);
     const type = entry.isDirectory() ? "directory" : entry.isFile() ? "file" : entry.isSymbolicLink() ? "symlink" : "other";
     if (!(await visit(path, type))) return;

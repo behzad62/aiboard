@@ -141,6 +141,18 @@ export interface McpManagerOptions {
 
 export class McpManager extends McpSessionManager {}
 
+/**
+ * T10 (M12): label server-supplied MCP text as untrusted third-party data
+ * and bound it, so a compromised server cannot flood the context or pose
+ * as kernel instructions. About 500 characters of description survive.
+ */
+export const MCP_TOOL_DESCRIPTION_MAX_CHARS = 512;
+
+export function formatMcpToolDescription(serverName: string, description: string | undefined, toolName: string): string {
+  const body = description?.trim() || `Call ${toolName} on MCP server ${serverName}`;
+  return `[MCP ${serverName}] ${body}`.slice(0, MCP_TOOL_DESCRIPTION_MAX_CHARS);
+}
+
 export function createMcpTools(
   manager: McpManager,
   artifacts: ArtifactStore
@@ -151,7 +163,7 @@ export function createMcpTools(
     return {
       definition: {
         name,
-        description: tool.description?.trim() || `Call ${tool.name} on MCP server ${client.spec.name}`,
+        description: formatMcpToolDescription(client.spec.name, tool.description, tool.name),
         inputSchema: tool.inputSchema ?? { type: "object", additionalProperties: true },
         readOnly:
           tool.annotations?.readOnlyHint === true &&

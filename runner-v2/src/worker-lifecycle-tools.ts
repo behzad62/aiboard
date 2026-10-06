@@ -32,13 +32,15 @@ interface AskArchitectInput {
   requestId: string;
   question: string;
   blocking: boolean;
-  evidenceSequence: number;
+  /** T10 (M10): optional; the runner fills its current sequence when omitted. */
+  evidenceSequence?: number;
 }
 
 interface ChallengeGuidanceInput {
   requestId: string;
   expectedVersion: number;
-  evidenceSequence: number;
+  /** T10 (M10): optional; the runner fills its current sequence when omitted. */
+  evidenceSequence?: number;
   reason: string;
 }
 
@@ -47,8 +49,20 @@ interface RequestReplanInput {
   reason: ReplanReason;
   summary: string;
   proposedChange: string;
-  evidenceSequence: number;
+  /** T10 (M10): optional; the runner fills its current sequence when omitted. */
+  evidenceSequence?: number;
 }
+
+/** T10 (M10): the latest durable scheduler sequence, for omitted inputs. */
+function currentSchedulerSequence(store: SchedulerStore, runId: string): number {
+  const events = store.readRun(runId);
+  if (events.length === 0) return 0;
+  return rebuildSchedulerProjection(events).lastSequence;
+}
+
+/** T10 (M10): model-facing description for the sequence input. */
+const EVIDENCE_SEQUENCE_DESCRIPTION =
+  "Latest scheduler sequence you have seen (0 if none); omit it and the runner uses its current sequence.";
 
 export function createWorkerLifecycleTools(
   options: WorkerLifecycleToolsOptions
@@ -72,7 +86,7 @@ export function createSubmitTaskTool(
     definition: {
       name: "submit_task",
       description:
-        "Declare the task ready for Architect review, commit the workspace, and submit a typed change set. Do not use for a blocked state or while fresh evidence shows a known acceptance failure; use ask_architect instead.",
+        "Declare the task ready for Architect review, commit the workspace, and submit a typed change set (you do not need to call git.commit first). Do not use for a blocked state or while fresh evidence shows a known acceptance failure; use ask_architect instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -287,9 +301,9 @@ function askArchitectTool(
           requestId: { type: "string" },
           question: { type: "string" },
           blocking: { type: "boolean" },
-          evidenceSequence: { type: "integer", minimum: 0 },
+          evidenceSequence: { type: "integer", minimum: 0, description: EVIDENCE_SEQUENCE_DESCRIPTION },
         },
-        required: ["requestId", "question", "blocking", "evidenceSequence"],
+        required: ["requestId", "question", "blocking"],
         additionalProperties: false,
       },
       readOnly: false,
@@ -305,13 +319,14 @@ function askArchitectTool(
         context.runId,
         input.requestId
       );
+      const evidenceSequence = input.evidenceSequence ?? currentSchedulerSequence(store, context.runId);
       const result = append(store, {
         runId: context.runId,
         type: "guidance.requested",
         occurredAt: clock(),
         actor: { role: "worker", id: context.actor.id },
         idempotencyKey: `guidance:${requestId}`,
-        payload: { ...input, requestId, taskId },
+        payload: { ...input, evidenceSequence, requestId, taskId },
       });
       if (result.isError || !input.blocking) return result;
       return {
@@ -343,9 +358,9 @@ function requestReplanTool(
           reason: { type: "string", enum: [...REPLAN_REASONS] },
           summary: { type: "string", minLength: 1, maxLength: 4_000 },
           proposedChange: { type: "string", minLength: 1, maxLength: 4_000 },
-          evidenceSequence: { type: "integer", minimum: 0 },
+          evidenceSequence: { type: "integer", minimum: 0, description: EVIDENCE_SEQUENCE_DESCRIPTION },
         },
-        required: ["requestId", "reason", "summary", "proposedChange", "evidenceSequence"],
+        required: ["requestId", "reason", "summary", "proposedChange"],
         additionalProperties: false,
       },
       readOnly: false,
@@ -368,7 +383,7 @@ function requestReplanTool(
           taskId,
           question: `Replan requested (${input.reason}): ${input.summary}\nProposed change: ${input.proposedChange}`,
           blocking: true,
-          evidenceSequence: input.evidenceSequence,
+          evidenceSequence: input.evidenceSequence ?? currentSchedulerSequence(store, context.runId),
           kind: "replan",
           replan: {
             reason: input.reason,
@@ -390,8 +405,8 @@ function validateReplan(input: unknown): ValidationResult<RequestReplanInput> {
     !REPLAN_REASONS.includes(input.reason as ReplanReason) ||
     !nonEmpty(input.summary) ||
     !nonEmpty(input.proposedChange) ||
-    !nonNegativeInteger(input.evidenceSequence)
-  ) return invalid("requestId, reason, summary, proposedChange, and evidenceSequence are required.");
+    (input.evidenceSequence !== undefined && !nonNegativeInteger(input.evidenceSequence))
+  ) return invalid("requestId, reason, summary, and proposedChange are required; evidenceSequence must be a non-negative integer when given.");
   return { ok: true, value: input as unknown as RequestReplanInput };
 }
 
@@ -427,10 +442,10 @@ function challengeGuidanceTool(
         properties: {
           requestId: { type: "string" },
           expectedVersion: { type: "integer", minimum: 1 },
-          evidenceSequence: { type: "integer", minimum: 0 },
+          evidenceSequence: { type: "integer", minimum: 0, description: EVIDENCE_SEQUENCE_DESCRIPTION },
           reason: { type: "string" },
         },
-        required: ["requestId", "expectedVersion", "evidenceSequence", "reason"],
+        required: ["requestId", "expectedVersion", "reason"],
         additionalProperties: false,
       },
       readOnly: false,
@@ -443,13 +458,14 @@ function challengeGuidanceTool(
       if (denied) return denied;
       const current = store.readRun(context.runId);
       if (current.length === 0) return failure("unknown_run", `Unknown run ${context.runId}.`);
+      const evidenceSequence = input.evidenceSequence ?? rebuildSchedulerProjection(current).lastSequence;
       const result = append(store, {
         runId: context.runId,
         type: "guidance.challenged",
         occurredAt: clock(),
         actor: { role: "worker", id: context.actor.id },
-        idempotencyKey: `guidance-challenge:${input.requestId}:${input.expectedVersion}:${input.evidenceSequence}`,
-        payload: { ...input, taskId },
+        idempotencyKey: `guidance-challenge:${input.requestId}:${input.expectedVersion}:${evidenceSequence}`,
+        payload: { ...input, evidenceSequence, taskId },
       });
       if (result.isError) return result;
       return {
@@ -470,8 +486,8 @@ function validateAsk(input: unknown): ValidationResult<AskArchitectInput> {
     !nonEmpty(input.requestId) ||
     !nonEmpty(input.question) ||
     typeof input.blocking !== "boolean" ||
-    !nonNegativeInteger(input.evidenceSequence)
-  ) return invalid("requestId, question, blocking, and evidenceSequence are required.");
+    (input.evidenceSequence !== undefined && !nonNegativeInteger(input.evidenceSequence))
+  ) return invalid("requestId, question, and blocking are required; evidenceSequence must be a non-negative integer when given.");
   return {
     ok: true,
     value: {
@@ -488,9 +504,9 @@ function validateChallenge(input: unknown): ValidationResult<ChallengeGuidanceIn
   if (
     !nonEmpty(input.requestId) ||
     !positiveInteger(input.expectedVersion) ||
-    !nonNegativeInteger(input.evidenceSequence) ||
+    (input.evidenceSequence !== undefined && !nonNegativeInteger(input.evidenceSequence)) ||
     !nonEmpty(input.reason)
-  ) return invalid("requestId, expectedVersion, evidenceSequence, and reason are required.");
+  ) return invalid("requestId, expectedVersion, and reason are required; evidenceSequence must be a non-negative integer when given.");
   return { ok: true, value: input as unknown as ChallengeGuidanceInput };
 }
 

@@ -89,7 +89,10 @@ export function evidenceFactArtifactHashes(fact: EvidenceFact): string[] {
 export function evidenceFactSummary(fact: EvidenceFact): string {
   switch (fact.kind) {
     case "command":
-      return `${fact.command} exited ${fact.exitCode}`;
+      // T10 (M7): name the check (label), the argv, and the true outcome so
+      // the Architect can tell a test run from a lint run without
+      // re-inspection. Timeouts and signals are not "exited null".
+      return `${fact.label}: ${[fact.command, ...fact.args].join(" ").slice(0, 120)} → ${fact.timedOut ? "timed out" : fact.signal ? `signal ${fact.signal}` : `exit ${fact.exitCode}`}`;
     case "browser_snapshot":
       return `browser snapshot "${fact.title}" at ${fact.url}`;
     case "browser_screenshot":

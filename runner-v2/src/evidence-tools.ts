@@ -130,15 +130,15 @@ function runEvidenceTool(options: EvidenceToolsOptions): NativeTool<RunEvidenceI
   return {
     definition: {
       name: "run_evidence_command",
-      description: "Run an argument-array command and record exit/output/revision facts without a verdict",
+      description: "Run one executable without a shell and record its exit code and output as durable evidence (no verdict). `command` is the executable (e.g. `dotnet`, `python`, `cmake`, `cargo`, `npm`); `args` is the argument list; pipes, `&&` and redirection are not interpreted. `cwd` is relative to the workspace. Output is stored as artifacts: read them with artifact.read. Cite the returned evidence ID.",
       inputSchema: {
         type: "object",
         properties: {
-          label: { type: "string", minLength: 1 },
-          command: { type: "string", minLength: 1 },
-          args: { type: "array", items: { type: "string" } },
-          cwd: { type: "string" },
-          timeoutMs: { type: "integer", minimum: 1, maximum: maximumTimeoutMs },
+          label: { type: "string", minLength: 1, description: "Short human label for this check, shown in evidence summaries." },
+          command: { type: "string", minLength: 1, description: "One executable name or path; no shell, no argument string." },
+          args: { type: "array", items: { type: "string" }, description: "Argument list passed verbatim; pipes and redirection are not interpreted." },
+          cwd: { type: "string", description: "Working directory relative to the workspace." },
+          timeoutMs: { type: "integer", minimum: 1, maximum: maximumTimeoutMs, description: "Timeout in milliseconds." },
         },
         required: ["label", "command", "args"],
         additionalProperties: false,

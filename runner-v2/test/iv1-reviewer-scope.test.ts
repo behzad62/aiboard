@@ -620,6 +620,13 @@ async function iv1ReadyStore(runId: string, store: SchedulerStore): Promise<void
 
 type Iv1ReviewPass = "obligations" | "findings" | "verdict";
 
+const EMPTY_TESTS_RUN_PATTERN = /"testsRun"\s*:\s*\[\s*\]/;
+
+/** Thin-scope signal: testsRun is an empty JSON array, ignoring insignificant whitespace. */
+function hasEmptyTestsRun(text: string): boolean {
+  return EMPTY_TESTS_RUN_PATTERN.test(text);
+}
+
 /** Stand-in model judgement: thin scopes (no run at all) get a blocking finding. */
 class Iv1ScriptedReviewer implements AgentModel {
   readonly requests: Array<{ pass: Iv1ReviewPass; text: string }> = [];
@@ -656,7 +663,7 @@ class Iv1ScriptedReviewer implements AgentModel {
       if (needsInspect) {
         return call("fs.read", { path: "src/value.mjs" });
       }
-      const thin = text.includes('"testsRun": []');
+      const thin = hasEmptyTestsRun(text);
       return call("record_deliverable_findings", {
         findings: thin
           ? [
@@ -673,7 +680,7 @@ class Iv1ScriptedReviewer implements AgentModel {
           : [],
       });
     }
-    const thin = text.includes('"testsRun": []');
+    const thin = hasEmptyTestsRun(text);
     return call("submit_deliverable_verdict", {
       summary: "Judged against the criteria and the scope report.",
       satisfied: !thin,
@@ -864,7 +871,7 @@ test("IV-1 thin scope yields a real blocking finding through the existing findin
   const seen = reviewer.requests.filter((request) => request.pass !== "obligations");
   assert.ok(seen.length >= 2, "findings and verdict passes ran");
   for (const request of seen) {
-    assert.ok(request.text.includes('"testsRun": []'), `${request.pass} sees the thin scope`);
+    assert.ok(hasEmptyTestsRun(request.text), `${request.pass} sees the thin scope`);
   }
   for (const request of reviewer.requests.filter((candidate) => candidate.pass === "obligations")) {
     assert.ok(!request.text.includes("testsRun"), "obligations stays blind to the scope");

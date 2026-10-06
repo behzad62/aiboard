@@ -18,10 +18,10 @@ import {
   type AgentProviderRetryEvent,
 } from "./agent-loop.js";
 import {
-  REPAIR_APPROACH_DECISION_INSTRUCTIONS,
   ARCHITECT_BASE_SNAPSHOT_SECTION_ID,
   architectBaseSnapshotEligible,
   buildArchitectContext,
+  buildArchitectSystemPrompt,
   architectContextSections,
   type ArchitectBaseSnapshot,
   type ArchitectReviewSubmission,
@@ -257,34 +257,17 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
       pack: context,
       recordedAt: this.clock(),
     });
-    // T9 repair cycle 3 (NOTE-1): folded_into_planning exists only on
-    // new-policy runs. Legacy runs keep the legacy sentence, so a legacy
-    // Architect never wastes a call on a resolution the kernel refuses.
-    const userGuidanceSentence = projection.planningPolicyVersion === 1
-      ? "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. While the run has no ready plan (planning state or the answer path), use folded_into_planning so the guidance folds into the plan or answer still being drafted. Once a ready plan exists, use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope."
-      : "For user_guidance_required, acknowledge the exact guidance with acknowledge_user_guidance. Use no_plan_change only for evidence-proven semantic equivalence supported by authoritative durable evidence IDs; otherwise reconcile the plan, including newTasks when guidance adds real scope.";
+    // T10 (M1): the system prompt is built centrally so v1 keeps the exact
+    // legacy lines (T9 NOTE-1 included) while v2 carries only the general
+    // lines with per-reason guidance in the context section.
     let messages: AgentMessage[] = [
       {
         id: "architect-system",
         role: "system",
-        content: [
-          "You are the AIBoard Architect. End each action with exactly one decision tool. write_project_doc does not end the action; call it (alone in its turn) as many times as needed before the decision tool.",
-          "You may run commands only in the disposable copy created for this turn, never in the user's project. On review_required the copy is the submission's taskRevision; on every other turn it is the integration revision.",
-          "The immutable initial objective is the permanent user authority: guidance may augment its scope but must never replace or rewrite it.",
-          userGuidanceSentence,
-          "Use ask_user only for a genuine authority decision, destructive action, unresolved requirement conflict, unavailable external dependency, requested control weakening, or exhausted governed repair budget. Routine technical problems must be resolved autonomously.",
-          "A resumed action reflects current runner state; retry the semantically correct lifecycle tool when an earlier mechanical error may have been repaired.",
-          "Do not invent replacement tasks or unrelated lifecycle operations merely to route around a kernel error.",
-          "When current evidence proves that a planned task is already satisfied or its assumptions are stale, reconcile the Architect-owned plan: cancel or revise that task and rewire its pending dependents. Do not require a fabricated code change merely because a task exists.",
-          "When a legacy in-flight run requires an acceptance-contract upgrade, record criteria for every non-cancelled task with upgrade_acceptance_contract before reviewing or completing work.",
-          "A satisfied criterion verdict may cite a command that did not exit 0 only with an explicit acceptedFailures entry naming that evidence ID and a rationale, for example an intentionally failing pre-fix test. Otherwise mark the criterion unsatisfied.",
-          "A guidance request of kind replan means the worker cannot complete the task within its objective. Either reconcile the plan with reconcile_plan (cancel or revise that task, add replacement tasks) or refuse with answer_guidance citing evidence; never leave a replan request open.",
-          "When final verification planning is requested, inspect the canonical repository state and use plan_final_verification with an explicit build, tests, runtime_smoke, and browser plan.",
-          "When final verification review is requested, inspect the exact current submission and persisted category evidence, then use review_final_verification with one semantic rationale per category plus an explicit low/high Architect risk declaration and rationale. Require repair when the evidence does not support approval, and declare high risk whenever semantic concerns exceed the kernel-observed paths and effects.",
-          "When final verification repairs are requested, use plan_verification_repairs to create narrowly scoped ordinary tasks whose provenance and acceptance criteria cover every failed category exactly once.",
-          REPAIR_APPROACH_DECISION_INSTRUCTIONS,
-          "When plan critique resolution is requested, read every blocking finding, inspect the baseline repository where a finding cites files, then call resolve_plan_critique exactly once: reconcile the plan for findings you accept (cancel, revise, or add tasks in one planReconciliation) and reject the rest with evidence-based rationale.",
-        ].join("\n"),
+        content: buildArchitectSystemPrompt({
+          planningPolicyVersion: projection.planningPolicyVersion,
+          projectDocsPolicyVersion: projection.projectDocsPolicyVersion,
+        }),
       },
     ];
     if (this.options.sessions.events(sessionId).length === 0) {
@@ -808,11 +791,15 @@ export class NativeArchitectRuntime implements ArchitectRuntimeDriver {
         artifactHashes: evidenceFactArtifactHashes(record.fact),
       }));
     const limits = this.contextLimits;
+    // T10 (M11): the configured worker capability vocabulary (union over
+    // candidates); rendered as a required section on docs-v2 turns only.
+    const workerCapabilities = [...new Set(this.options.candidates.flatMap((candidate) => candidate.capabilities))];
     const input = {
       limits,
       objective: this.options.objective,
       reason: request.reason,
       projection,
+      workerCapabilities,
       ...(reviewSubmission ? { reviewSubmission } : {}),
       ...(request.reason.type === "final_verification_plan_required" && request.reason.planPrefill ? { finalVerificationPrefill: request.reason.planPrefill } : {}),
       instructions,

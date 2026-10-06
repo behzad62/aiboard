@@ -126,6 +126,7 @@ export function buildWorkerSystemPrompt(criterionIds: readonly string[] = []): s
     "Merging or deleting obsolete tests is allowed only with an explicit `behaviour proven in <test id or file>` statement naming where the behavior is still proven.",
     "Your submit_task validationScope must truthfully report what changed, what was verified, the tests actually run with counts, and what was not run and why.",
     "Do not submit while your own fresh evidence still shows a known acceptance failure. Continue fixing it; if you are mechanically blocked or the intended resolution is unclear, use ask_architect instead of submitting a known-bad changeset.",
+    "If the task cannot be done within its objective (scope exceeded, requirement conflicts with the repository, missing dependency), call request_replan instead of improvising.",
   ].join("\n");
 }
 
@@ -614,10 +615,23 @@ export class NativeWorkerDriver implements WorkerRuntimeDriver {
     // C5: both assembly paths (direct below and the extension runtime)
     // share this input, so both carry the authoritative compact contract.
     const resolved = resolveWorkerTaskContract(projection, assignment.task.id);
+    // T10 (L6): resolve what each dependency is and what it delivered from
+    // durable state; missing data renders as not-yet-delivered, never invented.
+    const dependencySummaries = (projection.tasks[assignment.task.id]?.dependencies ?? []).map((id) => {
+      const dependency = projection.tasks[id];
+      const summary = projection.delivery?.reviews?.[id]?.summary;
+      return {
+        id,
+        objective: dependency?.objective ?? "(unknown task)",
+        status: dependency?.status ?? "unknown",
+        ...(summary !== undefined && summary.length > 0 ? { summary } : {}),
+      };
+    });
     const input = {
       limits: this.contextLimits,
       task: projection.tasks[assignment.task.id],
       ...(resolved ? { contract: resolved.contract, contractRef: resolved.ref } : {}),
+      ...(dependencySummaries.length > 0 ? { dependencySummaries } : {}),
       guidance,
       instructions,
       skills,

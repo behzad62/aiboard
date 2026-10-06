@@ -15,6 +15,7 @@ import { runAgentLoop } from "./agent-loop.js";
 import {
   buildCoverageDeriveContext,
   buildCoverageVerdictContext,
+  compactJson,
   coverageReviewerSystemPrompt,
 } from "./agent-prompts.js";
 import type { ArtifactStore } from "./artifact-store.js";
@@ -1687,7 +1688,7 @@ export class NativeCoverageReviewRuntime {
           obligations,
         });
         assertCriticFindings(critic.findings);
-        criticChecksJson = JSON.stringify(critic.findings, null, 2);
+        criticChecksJson = compactJson(critic.findings);
         criticHook = "ran";
       }
     } else {
@@ -1984,7 +1985,7 @@ export class NativeCoverageReviewRuntime {
       // the own view is durable).
       pack = buildCoverageVerdictContext({
         limits: contextLimits,
-        obligationsJson: JSON.stringify(obligations, null, 2),
+        obligationsJson: compactJson(obligations),
         // T9 repair cycle 3 (B4-r3): the verdict pass sees the acknowledged
         // guidance snapshot (the blind deriving pass stays unchanged). A
         // review requested after a folded acknowledgement therefore judges
@@ -1992,8 +1993,8 @@ export class NativeCoverageReviewRuntime {
         ...(request.guidance.length > 0
           ? { guidance: request.guidance.map((item) => ({ ...item })) }
           : {}),
-        planRevisionJson: JSON.stringify(request.planRevision, null, 2),
-        ledgerJson: JSON.stringify(request.ledger, null, 2),
+        planRevisionJson: compactJson(request.planRevision),
+        ledgerJson: compactJson(request.ledger),
       });
     } catch (error) {
       if (error instanceof ProtectedContextOverflowError) {
@@ -2186,7 +2187,7 @@ export class NativeCoverageReviewRuntime {
     try {
       pack = buildCoverageVerdictContext({
         limits: contextLimits,
-        obligationsJson: JSON.stringify(obligations, null, 2),
+        obligationsJson: compactJson(obligations),
         // T9 repair cycle 3 (B4-r3): the verdict pass sees the acknowledged
         // guidance snapshot (the blind deriving pass stays unchanged). A
         // review requested after a folded acknowledgement therefore judges
@@ -2194,10 +2195,10 @@ export class NativeCoverageReviewRuntime {
         ...(request.guidance.length > 0
           ? { guidance: request.guidance.map((item) => ({ ...item })) }
           : {}),
-        planRevisionJson: JSON.stringify(request.planRevision, null, 2),
-        ledgerJson: JSON.stringify(request.ledger, null, 2),
+        planRevisionJson: compactJson(request.planRevision),
+        ledgerJson: compactJson(request.ledger),
         ...(isReReview
-          ? { priorFindingsJson: JSON.stringify(requiredPriorFindings, null, 2) }
+          ? { priorFindingsJson: compactJson(requiredPriorFindings) }
           : {}),
         ...(input.criticChecksJson !== undefined ? { criticChecksJson: input.criticChecksJson } : {}),
       });

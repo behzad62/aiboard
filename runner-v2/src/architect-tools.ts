@@ -506,7 +506,7 @@ function writeProjectDocTool(
  * keeps no journal and never writes kernel-owned paths.
  */
 export const WRITE_PROJECT_DOC_V2_DESCRIPTION =
-  "Request a project document write for ordinary product docs under docs/project/**. The kernel-owned docs/project/STATE.md, docs/project/specs/** and docs/project/evidence/** paths and the marked AGENTS.md/CLAUDE.md sections are refused. Stores the content and records the request. It does not change any project file. You do not need to keep a journal: the kernel snapshots STATE.md itself.";
+  "Write one project document (ordinary product docs under docs/project/**) as an immediate commit on the run's integration branch. Replaces the whole file. The user's working tree changes only at handoff. The kernel-owned docs/project/STATE.md, docs/project/specs/** and docs/project/evidence/** paths and the marked AGENTS.md/CLAUDE.md sections are refused. You do not need to keep a journal: the kernel snapshots STATE.md itself. Does not end the action.";
 
 /**
  * C4 (AR-R12): kernel-owned project-doc paths under docs v2. Takes the

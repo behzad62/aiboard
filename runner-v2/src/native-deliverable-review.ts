@@ -30,9 +30,10 @@ import type {
 import { deltaFilesWithoutPriorFindings, invalidatedEvidenceIds, parseDiffHunks, parseShownLines } from "./review-delta.js";
 import { runAgentLoop, type AgentLoopResult } from "./agent-loop.js";
 import {
-  RUNNER_KERNEL_INVARIANTS,
+  READER_KERNEL_INVARIANTS_V2,
   REVIEWER_CONTRACT_SECTION_ID,
   buildReviewerContractBlock,
+  compactJson,
   defectClassBrief,
 } from "./agent-prompts.js";
 import type { ReviewDefectRecorder } from "./defect-history.js";
@@ -701,7 +702,7 @@ export class NativeDeliverableReviewRuntime {
     const { inputs } = context;
     const durable = this.projection(context.request.runId).delivery?.reviews[inputs.taskId];
     const sections: ContextSection[] = [
-      section("kernel-invariants", "system", RUNNER_KERNEL_INVARIANTS),
+      section("kernel-invariants", "system", READER_KERNEL_INVARIANTS_V2),
       section("task-objective", "task", `Task ${inputs.taskId} objective:\n${inputs.objective}`),
       section(
         "acceptance-criteria",
@@ -722,29 +723,29 @@ export class NativeDeliverableReviewRuntime {
     }
     if (pass === "obligations") return sections;
     if (durable?.runnerEncoding) {
-      sections.push(section("submission-encoding-findings", "contract", "Runner encoding byte facts (blocking changes require an Architect disposition or repair):\n" + JSON.stringify(durable.runnerEncoding, null, 2) + "\nThese facts remain blocking when you return no findings. Do not use reserved submission-encoding IDs. Your verdict must be unsatisfied while a runner encoding finding remains unresolved."));
+      sections.push(section("submission-encoding-findings", "contract", "Runner encoding byte facts (blocking changes require an Architect disposition or repair):\n" + compactJson(durable.runnerEncoding) + "\nThese facts remain blocking when you return no findings. Do not use reserved submission-encoding IDs. Your verdict must be unsatisfied while a runner encoding finding remains unresolved."));
     }
     if (context.reviewIntegrityPolicyVersion === 1) {
       const record = this.projection(context.request.runId).tasks[inputs.taskId]?.reviewSignals;
       if (!record || record.changeSetId !== inputs.changeSetId) throw new DeliverableReviewInputsUnavailableError("Exact runner signals unavailable for review context.");
-      sections.push(section("runner-signals", "depth", `Runner submission signals (mechanical reference facts; inspect their implications):\n${JSON.stringify(record.signals, null, 2)}`));
+      sections.push(section("runner-signals", "depth", `Runner submission signals (mechanical reference facts; inspect their implications):\n${compactJson(record.signals)}`));
     }
     if (durable?.runnerScope) {
       sections.push(section("submission-scope-findings", "contract",
         "Runner submission scope findings (blocking; only the Architect can resolve them against the current plan):\n" +
-        JSON.stringify(durable.runnerScope, null, 2) +
+        compactJson(durable.runnerScope) +
         "\nThese facts remain blocking even when you return no findings. Do not copy or reuse their reserved submission-scope IDs. Your verdict must be unsatisfied while any runner scope finding remains unresolved."));
     }
     if (inputs.testIntegrityReference) {
       sections.push(section("test-integrity-reference", "contract",
-        "Runner test-integrity baseline and candidate fingerprints (observational; no automatic exception):\n" + JSON.stringify(inputs.testIntegrityReference, null, 2) +
+        "Runner test-integrity baseline and candidate fingerprints (observational; no automatic exception):\n" + compactJson(inputs.testIntegrityReference) +
         "\nIf tests are legitimately obsolete or merged, independently inspect their replacement behavior. In the verdict, an optional testConsolidation must name affected test IDs, the behavior proof reference, exact plan/fingerprints, permitted changes and a positive minimum executed count. Ordinary approval prose grants no exception. Unexplained command/config changes or suite shrink remain blocking at the boundary."));
     }
     if (durable?.obligations) {
       sections.push(section(
         "own-obligations",
         "obligations",
-        `Obligations you recorded before seeing the diff:\n${JSON.stringify(durable.obligations, null, 2)}`,
+        `Obligations you recorded before seeing the diff:\n${compactJson(durable.obligations)}`,
       ));
     }
     // F4: initial reviews keep the full cumulative diff here. Fix
@@ -772,21 +773,21 @@ export class NativeDeliverableReviewRuntime {
       sections.push(section(
         "validation-budget",
         "report",
-        `Worker validation-budget advisory (measured by the runner, never model-supplied — overage alone is NOT a correctness failure):\n${JSON.stringify(inputs.validationBudget, null, 2)}\nJudge whether the justification is concrete and credible for the measured overage; a missing justification on an over-budget submission is a mechanical refusal, never a silent pass. This advisory never substitutes for criterion evidence or the validationScope report.`,
+        `Worker validation-budget advisory (measured by the runner, never model-supplied — overage alone is NOT a correctness failure):\n${compactJson(inputs.validationBudget)}\nJudge whether the justification is concrete and credible for the measured overage; a missing justification on an over-budget submission is a mechanical refusal, never a silent pass. This advisory never substitutes for criterion evidence or the validationScope report.`,
       ));
     }
     if (inputs.validationScope) {
       sections.push(section(
         "validation-scope",
         "report",
-        `Worker validation-scope report (a claim, not evidence — judge it against the diff, never the reverse):\n${JSON.stringify(inputs.validationScope, null, 2)}\nCompare its changed/verified/testsRun/notRun against the actual diff/changed paths and the task's targeted and affected-scope validation rationales in the contract block.`,
+        `Worker validation-scope report (a claim, not evidence — judge it against the diff, never the reverse):\n${compactJson(inputs.validationScope)}\nCompare its changed/verified/testsRun/notRun against the actual diff/changed paths and the task's targeted and affected-scope validation rationales in the contract block.`,
       ));
     }
     if (context.depthRecords) {
       sections.push(section(
         "runner-depth",
         "depth",
-        `Runner-executed high-tier checks (audited; recorded with your findings):\n${JSON.stringify(context.depthRecords, null, 2)}`,
+        `Runner-executed high-tier checks (audited; recorded with your findings):\n${compactJson(context.depthRecords)}`,
       ));
     }
     // T6b (OA-15/EP49): the project's top defect classes ride the regular
@@ -806,7 +807,7 @@ export class NativeDeliverableReviewRuntime {
     sections.push(section(
       "own-findings",
       "own-findings",
-      `Your durably recorded findings:\n${JSON.stringify(durable?.findings ?? [], null, 2)}`,
+      `Your durably recorded findings:\n${compactJson(durable?.findings ?? [])}`,
     ));
     sections.push(section(
       "worker-report",
@@ -818,7 +819,7 @@ export class NativeDeliverableReviewRuntime {
     sections.push(section(
       "worker-claims",
       "claims",
-      `Worker claims to judge one by one (verified only when you confirmed it yourself):${inputs.claims.some((claim) => claim.mechanical) ? " A claim mechanically labeled unverified_claim cannot be verified; mark it unverified with a rationale. A reviewer_judgement label leaves the verdict to you." : ""}\n${JSON.stringify(inputs.claims, null, 2)}`,
+      `Worker claims to judge one by one (verified only when you confirmed it yourself):${inputs.claims.some((claim) => claim.mechanical) ? " A claim mechanically labeled unverified_claim cannot be verified; mark it unverified with a rationale. A reviewer_judgement label leaves the verdict to you." : ""}\n${compactJson(inputs.claims)}`,
     ));
     // W2 (AR-R28): the late-finding rule rides the fix re-review verdict
     // pass, before the released prior findings.
@@ -831,7 +832,7 @@ export class NativeDeliverableReviewRuntime {
       sections.push(section(
         "prior-findings",
         "prior-findings",
-        `Prior review ${prior.reviewId} findings, released after your own findings were recorded. Check each one:\n${JSON.stringify(prior.findings ?? [], null, 2)}`,
+        `Prior review ${prior.reviewId} findings, released after your own findings were recorded. Check each one:\n${compactJson(prior.findings ?? [])}`,
       ));
     }
     return sections;
@@ -1781,6 +1782,7 @@ export function deliveryReviewerSystemPrompt(pass: Pass, tier: DeliveryReviewTie
             ? "Record your findings with record_deliverable_findings exactly once."
             : "At this risk tier you must use at least one inspection tool before record_deliverable_findings; the kernel refuses findings without a real inspection.",
           "Severity blocking means a criterion is not met or the change is unsafe; advisory means a gap worth noting. An empty list means the change checks out.",
+          "A durable-state change needs a test through the real store across a restart/replay; an in-memory-only check is not enough.",
           ...(isReReview ? ["On this fix re-review, independently inspect and judge the repair delta first, including whether the correction introduces any regression or over-correction. Prior findings are withheld until the later verdict pass; record your own findings without inferring or reconstructing them."] : []),
           "The worker's summary and claims remain withheld until the verdict pass; judge the diff first.",
           "Compare the actual diff/changed paths against the worker validation-scope report (changed/verified/testsRun/notRun) when present and the task's targeted and affected-scope validation rationales: if impacted areas or direct dependents reasonably implied by the diff or contract were not run and notRun lacks a concrete justification, or the rationale is thin or generic, record a normal blocking finding through record_deliverable_findings.",
