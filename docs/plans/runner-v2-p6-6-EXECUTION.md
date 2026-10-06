@@ -459,7 +459,7 @@ and their tests. Every R item is P: yes (scheduler log or process paths) and G: 
   merge-group points and at final verification; `validation-policy.ts` wired into task acceptance; when
   no safe selection exists the full script still runs (fail safe); replay of old `full_test_script`
   records unchanged; V2 reuse still applies. Depends: IV-1. Touch: SRC-A IV-2 list.
-- [ ] **IV-3** code — SOURCE: SRC-A "IV-3", CD-23. DoD: a per-task validation wall-clock budget (default
+- [ ] **IV-3** code — IN_PROGRESS 2026-10-06, isolated `.worktrees/p66-iv3`, branch `codex/p66-iv3`, accepted IV-2 base `61a56ba3f53c9200fe6dd0a3826386c5a69bf021`. Muse Spark 1.3 Contributor max owns implementation/repairs; GPT-5.6 Sol owns independent review. Scope frozen to advisory per-task validation wall-clock accounting (default about 10 minutes) over worker `run_evidence_command` plus integrated-boundary durations, over-budget justification durably visible to the reviewer without hard-failing correct work, and an optional project-configured validation tier map (`fast`/`component`/`integration`/`slow`/`release`) selected by task risk plus milestone/final context. No tier map must preserve IV-2 behavior exactly; no T10/T8/broad-suite work. SOURCE: SRC-A "IV-3", CD-23. DoD: a per-task validation wall-clock budget (default
   about 10 minutes) counting `run_evidence_command` and boundary durations; above it the worker records a
   justification the reviewer sees, never a hard failure of correct work; an optional project-configured
   tier map (fast / component / integration / slow / release) picked by risk tier and milestone vs final;
