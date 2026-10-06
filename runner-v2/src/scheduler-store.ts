@@ -5,6 +5,7 @@ import {
   DELIVERY_ACCEPTANCE_RUNNER_ID,
   DELIVERY_REVIEW_RUNNER_ID,
   assertContractTaskRevisionAllowed,
+  assertSelectedExecutionCoherence, validateSelectedCommandEvidenceBinding,
   assertTestsOutcome,
   assessDeliveryRisk,
   taskAcceptedFailuresUsed,
@@ -28,8 +29,10 @@ import {
   validateDeliveryObligations,
   validateReviewDelta,
   type DeliveryAffectedTestsRecord,
+  type DeliveryAffectedTestsScope,
+  type DeliveryExecutedScope,
   type DeliveryBoundaryCheck,
-  type DeliveryBoundaryRecord,
+  type DeliveryBoundaryScope,
   type DeliveryClaim,
   type DeliveryClaimVerdict,
   type DeliveryDepthRecord,
@@ -2801,7 +2804,7 @@ export function validateSchedulerEvidenceEvent(
     return;
   }
   if (event.type === "delivery.findings_recorded" || event.type === "delivery.boundary_checked") {
-    validateDeliveryCommandEvidence(event, evidenceStore);
+    validateDeliveryCommandEvidence(event, evidenceStore); validateSelectedCommandEvidenceBinding(event, evidenceStore);
     return;
   }
   if (event.type === "user.guidance_acknowledged") {
@@ -6922,7 +6925,7 @@ export function effectiveTestIntegrityException(current: SchedulerProjection, bi
 }
 
 /** Exact acceptance binding; a changed ready plan or baseline requires fresh boundary evidence. */
-export function testIntegrityBoundaryIsCurrent(current: SchedulerProjection, boundary: DeliveryBoundaryRecord): boolean {
+export function testIntegrityBoundaryIsCurrent(current: SchedulerProjection, boundary: DeliveryBoundaryScope): boolean {
   if (!current.testIntegrity) return true;
   const integrity = boundary.testIntegrity;
   const baseline = current.testIntegrity.baseline;
@@ -7046,7 +7049,7 @@ function reduceDeliveryEvent(
         const integrity = boundary.testIntegrity;
         const tests = boundary.checks.find((check) => check.checkId === "tests");
         if (!integrity || !tests?.report || integrity.candidateExecuted === undefined) throw new Error("Accepted task must carry complete test-integrity evidence.");
-        next.testIntegrity.baseline = { kind: "executed_report", pin: integrity.candidatePin, pinDigest: integrity.candidatePinDigest,
+        next.testIntegrity.baseline = boundary.executedScope === "selected" ? next.testIntegrity.baseline : { kind: "executed_report", pin: integrity.candidatePin, pinDigest: integrity.candidatePinDigest, // F3: a selected acceptance preserves the trusted full-suite baseline.
           executed: integrity.candidateExecuted, report: tests.report, evidenceIds: tests.evidenceIds,
           sequence: event.sequence, acceptedTaskId: boundary.taskId };
       }
@@ -7775,17 +7778,28 @@ function parseDeliveryDepth(value: unknown): DeliveryDepthRecord {
     }
     const report = parseDeliveryTestReport(record.report, "Affected-test report");
     assertTestsOutcome("Affected-test", exitCode as number | null, outcome, report);
-    if (record.executedScope !== "full_test_script") {
-      throw new Error("Affected-test record must state that the whole project test script ran.");
+    const affectedSelectedTests = stringArray(record, "selectedTests");
+    const affectedArgs = stringArray(record, "args");
+    { // IV-2: scope coherence (replaces the pre-IV-2 full-only guard).
+      assertSelectedExecutionCoherence("Affected-test", {
+        executedScope: record.executedScope,
+        rung: record.selectionRung,
+        widened: record.widened,
+        wideningReasons: record.wideningReasons,
+        selectedTests: affectedSelectedTests,
+        args: affectedArgs,
+      });
     }
-    const affectedTests: DeliveryAffectedTestsRecord = {
-      executedScope: "full_test_script",
+    const affectedTests: DeliveryAffectedTestsScope = {
+      executedScope: record.executedScope as DeliveryExecutedScope,
       selectionRung: requiredString(record, "selectionRung"),
       changedFiles: stringArray(record, "changedFiles"),
-      selectedTests: stringArray(record, "selectedTests"),
+      selectedTests: affectedSelectedTests,
+      ...(typeof record.widened === "boolean" ? { widened: record.widened } : {}),
+      ...(Array.isArray(record.wideningReasons) ? { wideningReasons: stringArray(record, "wideningReasons") } : {}),
       fullSuiteCount: requiredNumber(record, "fullSuiteCount"),
       command: requiredString(record, "command"),
-      args: stringArray(record, "args"),
+      args: affectedArgs,
       evidenceIds,
       exitCode: exitCode as number | null,
       outcome: outcome as DeliveryAffectedTestsRecord["outcome"],
@@ -8001,8 +8015,8 @@ function deliveryBoundaryChecked(
   if (attempt !== state.boundaryStarts?.[deliveryBoundaryId(taskId, generation)]) {
     throw new Error("Boundary checks must record the latest durably started attempt.");
   }
-  if (event.payload.executedScope !== "full_test_script") {
-    throw new Error("Boundary checks must state that the whole project scripts ran.");
+  { // IV-2: the recorded scope must be a known value; full coherence follows the selection parse below.
+    if (event.payload.executedScope !== "full_test_script" && event.payload.executedScope !== "selected") throw new Error("Boundary executedScope is invalid.");
   }
   if (generation !== previous.length + 1) {
     throw new Error(`Boundary generation must be ${previous.length + 1}.`);
@@ -8056,6 +8070,17 @@ function deliveryBoundaryChecked(
   }
   const selection = event.payload.selection;
   if (!isRecord(selection)) throw new Error("Boundary checks require the affected-test selection.");
+  // IV-2: `selected` requires a narrow rung, an explicitly unwidened
+  // selection, named tests, and executed tests-check argv naming each one.
+  const boundaryScope = event.payload.executedScope as DeliveryExecutedScope;
+  assertSelectedExecutionCoherence("Boundary", {
+    executedScope: boundaryScope,
+    rung: selection.rung,
+    widened: selection.widened,
+    wideningReasons: selection.wideningReasons,
+    selectedTests: stringArray(selection, "selectedTests"),
+    args: checks.find((check) => check.checkId === "tests")?.args ?? [],
+  });
   let testIntegrity: TestIntegrityBoundary | undefined;
   if (current.testIntegrity) {
     const recorded = event.payload.testIntegrity;
@@ -8072,7 +8097,7 @@ function deliveryBoundaryChecked(
       ...(candidateExecuted !== undefined ? { candidateExecuted } : {}),
       ...(typeof recorded.exceptionId === "string" ? { exceptionId: recorded.exceptionId } : {}) };
     if (candidatePin.revision !== integrationRevision || !sameValue(recorded, testIntegrity)) throw new Error("Test-integrity record must bind exact current projection and measured counts.");
-    const findings = testIntegrityBaselineFindings(baseline, candidatePin, candidateExecuted);
+    const findings = testIntegrityBaselineFindings(baseline, candidatePin, candidateExecuted, { executedScope: boundaryScope });
     const unresolved = unresolvedTestIntegrityFindings({ findings, binding: testIntegrity,
       exception: effectiveTestIntegrityException(current, testIntegrity), candidateExecuted });
     const guard = checks.find((check) => check.checkId === "test_integrity");
@@ -8092,8 +8117,8 @@ function deliveryBoundaryChecked(
     attempt,
     integrationRevision,
     changedFiles: stringArray(event.payload, "changedFiles"),
-    executedScope: "full_test_script",
-    selection: { rung: requiredString(selection, "rung"), selectedTests: stringArray(selection, "selectedTests") },
+    executedScope: boundaryScope,
+    selection: { rung: requiredString(selection, "rung"), selectedTests: stringArray(selection, "selectedTests"), ...(typeof selection.widened === "boolean" ? { widened: selection.widened } : {}), ...(Array.isArray(selection.wideningReasons) ? { wideningReasons: stringArray(selection, "wideningReasons") } : {}) },
     checks,
     passed,
     sequence: event.sequence,
@@ -8162,7 +8187,7 @@ function createDeliveryRepairTasks(
   projection: SchedulerProjection,
   payload: Record<string, unknown>,
   sourceTaskId: string,
-  boundary: DeliveryBoundaryRecord,
+  boundary: DeliveryBoundaryScope,
 ): string[] {
   const ready = readyPlanIdentity(projection);
   if (!ready) throw new Error("Boundary repairs on a new-policy run require a ready plan revision.");

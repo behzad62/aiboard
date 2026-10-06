@@ -744,6 +744,268 @@ function safeSegment(value: string): string {
 }
 
 function fileExists(path: string): boolean { return existsSync(path); }
+/** Splits a shell script on `&&` only; any other separator outside quotes is reported. Twin of delivery-execution.ts (importing back would cycle); iv2-selected-scope.test.ts asserts parity. */
+export function splitAndChain(script: string): { segments: string[] } | { separator: string } {
+  const segments: string[] = [];
+  let current = "";
+  let quote: string | undefined;
+  for (let index = 0; index < script.length; index += 1) {
+    const char = script[index]!;
+    if (quote) {
+      if (char === quote) quote = undefined;
+      current += char;
+      continue;
+    }
+    if (char === "'" || char === "\"") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    const pair = script.slice(index, index + 2);
+    if (pair === "&&") {
+      segments.push(current.trim());
+      current = "";
+      index += 1;
+      continue;
+    }
+    if (pair === "||") return { separator: "||" };
+    if (char === "|" || char === "&" || char === ";" || char === "\n") {
+      return { separator: char === "\n" ? "newline" : char };
+    }
+    current += char;
+  }
+  segments.push(current.trim());
+  return { segments: segments.filter(Boolean) };
+}
+
+// ---------------------------------------------------------------------------
+// IV-2 (CD-23/EP16): safe selective test commands
+// ---------------------------------------------------------------------------
+
+/**
+ * Test-runner families whose argv selects test FILES by appended relative
+ * path. `node --test <paths>` and `pytest <paths>` run exactly the named
+ * files; every other family Runner V2 understands selects differently
+ * (dotnet by project/filter, ctest by `-R` name regex, maven by `-Dtest`
+ * class, mocha/jest/vitest through config-shaped argv the runner cannot
+ * prove), so only these two families are ever selectable here.
+ */
+export type SelectableTestRunnerFamily = "node-test" | "pytest";
+
+export interface SelectedTestsCommandInput {
+  /** Workspace root holding package.json (package-script shapes are proven against its test script). */
+  checkoutPath: string;
+  /** The planned FULL tests command (report wiring already applied by the report planner). */
+  command: FinalVerificationCommand;
+  /** Selected test paths (relative posix paths from computeAffectedTests). */
+  selectedTests: readonly string[];
+  /** Script-shell rules differ (cmd.exe does not treat `'` as a quote). */
+  platform?: NodeJS.Platform;
+}
+
+export type SelectedTestsCommandResult =
+  | { selectable: true; command: FinalVerificationCommand; runnerFamily: SelectableTestRunnerFamily }
+  | { selectable: false; reason: string };
+
+function selectedExecutableName(executable: string): string {
+  const normalized = executable.replaceAll("\\", "/");
+  const base = normalized.slice(normalized.lastIndexOf("/") + 1).toLowerCase();
+  return base.endsWith(".exe") || base.endsWith(".cmd") || base.endsWith(".bat")
+    ? base.slice(0, base.lastIndexOf("."))
+    : base;
+}
+
+function isSafeSelectedTestPath(path: string): boolean {
+  if (typeof path !== "string" || path.trim() === "" || path.includes("\0")) return false;
+  // The path is forwarded verbatim as argv to node/pytest or through the
+  // package script to the runner; a leading `-` would parse as a flag, not
+  // a test path. Fail safe to the whole script instead of reinterpreting it.
+  if (path.startsWith("-")) return false;
+  // Relative only: no posix root, no drive letter, no UNC/backslash root.
+  if (/^([A-Za-z]:)?[\\/]/.test(path) || path.startsWith("/")) return false;
+  return !path.split(/[\\/]/).includes("..");
+}
+
+/**
+ * Derive the command that runs exactly `selectedTests` from the planned
+ * full tests command. Pure shape proof: the project test script (for
+ * package invocations) or the direct command must be a BARE runner
+ * invocation with no positional patterns, filters, or extra flags — extra
+ * argv could already select tests (appending would broaden, not narrow) or
+ * change path resolution (a `cd` chain). Anything unproven returns
+ * `selectable: false` and the caller runs the whole test script (fail safe).
+ *
+ * Report instrumentation is preserved: derivation only appends path argv to
+ * the already report-wired command (the node `--test` reporter travels in
+ * NODE_OPTIONS, the pytest `--junitxml` flag stays in place), the label is
+ * unchanged so the trusted-descriptor gate still applies, and inputs are
+ * never mutated. Callers must run the result through the same
+ * FinalVerificationRuntime path so evidence identity and reuse apply.
+ */
+export function deriveSelectedTestsCommand(
+  input: SelectedTestsCommandInput,
+): SelectedTestsCommandResult {
+  if (input.selectedTests.length === 0) {
+    return { selectable: false, reason: "No selected tests to execute." };
+  }
+  for (const test of input.selectedTests) {
+    if (!isSafeSelectedTestPath(test)) {
+      return { selectable: false, reason: `Selected test ${JSON.stringify(test)} is not a safe workspace-relative path.` };
+    }
+  }
+  const args = input.command.args;
+  const runIndex = args.lastIndexOf("run");
+  if (runIndex >= 0 && args[runIndex + 1] === "test") {
+    // F1: `run test` inside argv never proves a package-manager invocation
+    // on its own. Only the profile's own shape — node launching a supported
+    // npm/pnpm/yarn CLI — may take the package-script path; every other
+    // executable fails safe to the whole script.
+    if (selectedExecutableName(input.command.executable) !== "node" || !isSupportedPackageManagerCli(args[0])) {
+      return { selectable: false, reason: `The test command ${JSON.stringify(input.command.executable)} is not a supported npm/pnpm/yarn invocation the runner can narrow by file path.` };
+    }
+    return deriveSelectedPackageCommand(input, runIndex);
+  }
+  return deriveSelectedDirectCommand(input);
+}
+
+/**
+ * F1: the CLI entry points `packageManagerInvocation` actually launches
+ * (bundled npm-cli.js, an active npm/pnpm/yarn CLI, or a corepack
+ * pnpm/yarn entry). Anything else carrying `run test` is unknown and
+ * fails safe to the whole script.
+ */
+function isSupportedPackageManagerCli(entry: unknown): boolean {
+  if (typeof entry !== "string") return false;
+  const normalized = entry.replaceAll("\\", "/");
+  const base = normalized.slice(normalized.lastIndexOf("/") + 1).toLowerCase();
+  return base === "npm-cli.js" ||
+    base === "pnpm" || base === "pnpm.js" || base === "pnpm.cjs" ||
+    base === "yarn" || base === "yarn.js" || base === "yarn.cjs";
+}
+
+function deriveSelectedPackageCommand(
+  input: SelectedTestsCommandInput,
+  runIndex: number,
+): SelectedTestsCommandResult {
+  let manifest: { scripts?: Record<string, unknown> } = {};
+  try {
+    manifest = JSON.parse(readFileSync(join(input.checkoutPath, "package.json"), "utf8")) as typeof manifest;
+  } catch {
+    return { selectable: false, reason: "The project has no readable package.json test script." };
+  }
+  const script = typeof manifest.scripts?.test === "string" ? manifest.scripts.test : "";
+  if (!script.trim()) {
+    return { selectable: false, reason: "The project has no package test script to narrow." };
+  }
+  // Same unmodeled-shell rule as the report planner: substitution,
+  // escapes, comments, negation, grouping, redirection, and (on Windows)
+  // `'` could hide a failing command or change path resolution.
+  const platform = input.platform ?? process.platform;
+  const unmodeled = /[$`\\#!()<>^%]/.exec(script) ?? (platform === "win32" ? /'/.exec(script) : null);
+  if (unmodeled) {
+    return { selectable: false, reason: `The test script uses the shell character "${unmodeled[0]}", which the runner cannot model safely.` };
+  }
+  const split = splitAndChain(script);
+  if ("separator" in split) {
+    return { selectable: false, reason: `The test script joins commands with "${split.separator}", which can hide a failing command.` };
+  }
+  // A forwarded path lands at the END of the script string, so only a
+  // single-segment script provably delivers it to the test runner (a `cd`
+  // or env-changing earlier segment would resolve it elsewhere).
+  if (split.segments.length !== 1) {
+    return { selectable: false, reason: "Only single-command test scripts are safely selectable." };
+  }
+  const tokens = split.segments[0]!.split(/\s+/).filter(Boolean);
+  const head = tokens[0] === "npx" ? tokens.slice(1) : tokens;
+  const family = bareSelectableFamily(head);
+  if (!family) {
+    return { selectable: false, reason: `The test command "${split.segments[0]}" is not a bare node --test or pytest invocation the runner can narrow by file path.` };
+  }
+  // npm needs `--` to forward arguments to the script; pnpm and yarn forward directly.
+  const managerText = [input.command.executable, ...input.command.args].join(" ").toLowerCase();
+  const afterTest = input.command.args.slice(runIndex + 2);
+  const needsSeparator = !/pnpm|yarn/.test(managerText) && !afterTest.includes("--");
+  return {
+    selectable: true,
+    command: {
+      ...input.command,
+      args: [...input.command.args, ...(needsSeparator ? ["--"] : []), ...input.selectedTests],
+    },
+    runnerFamily: family,
+  };
+}
+
+/** A bare runner invocation: the verb plus its required test flag, and nothing else. */
+function bareSelectableFamily(head: string[]): SelectableTestRunnerFamily | undefined {
+  if (head.length === 2 && /^(node(\.exe)?|tsx(\.exe|\.cmd)?)$/i.test(head[0] ?? "") && head[1] === "--test") {
+    return "node-test";
+  }
+  if (head.length === 1 && head[0] === "pytest") return "pytest";
+  if (head.length === 3 && (head[0] ?? "").startsWith("python") && head[1] === "-m" && head[2] === "pytest") {
+    return "pytest";
+  }
+  return undefined;
+}
+
+function deriveSelectedDirectCommand(
+  input: SelectedTestsCommandInput,
+): SelectedTestsCommandResult {
+  const name = selectedExecutableName(input.command.executable);
+  const args = input.command.args;
+  if (name === "node" || name === "tsx") {
+    if (args.length !== 1 || args[0] !== "--test") {
+      return { selectable: false, reason: "Only a bare node --test invocation is safely selectable." };
+    }
+    return {
+      selectable: true,
+      command: { ...input.command, args: [...args, ...input.selectedTests] },
+      runnerFamily: "node-test",
+    };
+  }
+  if (name === "pytest" || name === "python" || name === "python3" || name === "py") {
+    let rest = args;
+    if (name !== "pytest") {
+      if (!(args[0] === "-m" && args[1] === "pytest")) {
+        return { selectable: false, reason: "Only a bare python -m pytest invocation is safely selectable." };
+      }
+      rest = args.slice(2);
+    }
+    // Only the runner's own --junitxml report flag may already be present;
+    // any other argv (filters, deselects, config, positional patterns) could
+    // already select tests, so appending would broaden, not narrow.
+    for (let index = 0; index < rest.length; index += 1) {
+      const token = rest[index]!;
+      if (token === "--junitxml") {
+        if (typeof rest[index + 1] !== "string" || rest[index + 1]!.trim() === "") {
+          return { selectable: false, reason: "pytest carries an empty --junitxml flag." };
+        }
+        index += 1;
+      } else if (token.startsWith("--junitxml=")) {
+        if (token.slice("--junitxml=".length).trim() === "") {
+          return { selectable: false, reason: "pytest carries an empty --junitxml flag." };
+        }
+      } else {
+        return { selectable: false, reason: `pytest carries ${JSON.stringify(token)}, which selection cannot prove safe.` };
+      }
+    }
+    return {
+      selectable: true,
+      command: { ...input.command, args: [...args, ...input.selectedTests] },
+      runnerFamily: "pytest",
+    };
+  }
+  if (name === "dotnet") {
+    return { selectable: false, reason: "dotnet test selects by project/filter, not by test file path." };
+  }
+  if (name === "ctest") {
+    return { selectable: false, reason: "ctest selects by test-name regex (-R), not by file path; positional args would retarget the build directory." };
+  }
+  if (name === "mvn") {
+    return { selectable: false, reason: "maven test selects by class (-Dtest), not by file path." };
+  }
+  return { selectable: false, reason: `The test command ${JSON.stringify(input.command.executable)} has no safe file-path selection.` };
+}
+
 function isMissingArchiveError(error: unknown): boolean {
   return error instanceof Error && /profile archive is missing/i.test(error.message);
 }

@@ -235,7 +235,7 @@ function buildTestRuntime(
     maxTaskAttempts?: number;
     repairPlanLimit?: number;
     deliveryReview?: { review: (input: { runId: string; taskId: string }) => Promise<{ status: "reviewed"; reviewId: string; runtimeId: string; independence: "fresh_context"; tier: "medium"; replayed: boolean }> };
-    deliveryBoundary?: { check: (input: { runId: string; taskId: string; boundaryId: string; attempt: number; integrationRevision: string }) => Promise<{ changedFiles: string[]; selection: { rung: string; selectedTests: string[] }; checks: { checkId: string; command: string; args: string[]; evidenceIds: string[]; exitCode: number; outcome: "failed"; report: { status: "failed"; runner: string; counts: { selected: number; passed: number; failed: number; skipped: number } } }[] }> };
+    deliveryBoundary?: { check: (input: { runId: string; taskId: string; boundaryId: string; attempt: number; integrationRevision: string }) => Promise<{ changedFiles: string[]; executedScope: "full_test_script"; selection: { rung: string; selectedTests: string[] }; checks: { checkId: string; command: string; args: string[]; evidenceIds: string[]; exitCode: number; outcome: "failed"; report: { status: "failed"; runner: string; counts: { selected: number; passed: number; failed: number; skipped: number } } }[] }> };
     finalVerificationProfileFor?: (targetRevision: string) => Promise<FinalVerificationExecutionProfile>;
   } = {},
 ) {
@@ -1233,6 +1233,7 @@ test("a failed delivery boundary opens repair issues so the Architect resolves t
           });
           return {
             changedFiles: ["src/t1.ts"],
+            executedScope: "full_test_script",
             selection: { rung: "seed", selectedTests: ["test/t1.test.ts"] },
             checks: [{
               checkId: "tests",

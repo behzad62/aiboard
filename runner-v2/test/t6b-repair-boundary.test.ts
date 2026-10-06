@@ -346,7 +346,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
         const record = evidence.record({ ...commandEvidence(`boundary:${taskId}:${checkId}:${call}`, { label: checkId, exitCode }), runId: RUN_ID, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
         return { checkId, command: "npm", args: ["run", checkId], evidenceIds: [record.id], exitCode, outcome, ...(report ? { report } : {}) };
       });
-      return { changedFiles: ["src/feature.ts"], selection: { rung: "full_suite", selectedTests: ["test/feature.test.ts"] }, checks };
+      return { changedFiles: ["src/feature.ts"], executedScope: "full_test_script", selection: { rung: "full_suite", selectedTests: ["test/feature.test.ts"] }, checks };
     },
   };
   const architect = new TestArchitect(harness, options.architect);

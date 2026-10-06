@@ -58,7 +58,7 @@ import {
   latestCompletedReview,
   normalizeDefectClassLabel,
   taskAcceptedFailuresUsed,
-  type DeliveryAffectedTestsRecord,
+  type DeliveryAffectedTestsScope,
   type DeliveryClaim,
   type DeliveryState,
   type DeliveryProbeRecord,
@@ -224,7 +224,7 @@ export interface DeliveryDepthRunner {
     changedFiles: readonly string[];
     diffText: string;
     signal?: AbortSignal;
-  }): Promise<{ affectedTests: DeliveryAffectedTestsRecord; probe: DeliveryProbeRecord }>;
+  }): Promise<{ affectedTests: DeliveryAffectedTestsScope; probe: DeliveryProbeRecord }>;
 }
 
 export interface NativeDeliverableReviewRuntimeOptions {
@@ -1531,7 +1531,7 @@ interface PassContext {
   independence: ReviewerIndependence;
   tier: DeliveryReviewTier;
   defectClasses?: readonly string[];
-  depthRecords?: { affectedTests: DeliveryAffectedTestsRecord; probe: DeliveryProbeRecord };
+  depthRecords?: { affectedTests: DeliveryAffectedTestsScope; probe: DeliveryProbeRecord };
   /**
    * W1 (F3): resolved retry-session ordinals per pass. The missing
    * stage runs in its deterministic session when empty, else in a new

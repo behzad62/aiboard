@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { runDeliveryFactoryScenario, LOW_CONTENT } from "./support/delivery-factory-scenario.js";
 import { runDeliveryBoundaryDirect } from "./support/delivery-boundary-harness.js";
-import type { DeliveryBoundaryRecord } from "../src/delivery-acceptance.js";
+import type { DeliveryBoundaryScope } from "../src/delivery-acceptance.js";
 
 /**
  * TX-1 parity: the fast harness cannot drift from production. For one
@@ -11,7 +11,7 @@ import type { DeliveryBoundaryRecord } from "../src/delivery-acceptance.js";
  * harness must agree on the tests-check outcome, counts, runner and reason.
  */
 
-function testsCheckOf(boundary: DeliveryBoundaryRecord) {
+function testsCheckOf(boundary: DeliveryBoundaryScope) {
   return boundary.checks.find((check) => check.checkId === "tests") as {
     outcome: string;
     report?: { counts?: unknown; runner?: string };

@@ -11,9 +11,11 @@ import {
 } from "../../src/delivery-execution.js";
 import {
   DELIVERY_ACCEPTANCE_RUNNER_ID,
+  assertSelectedExecutionCoherence,
   assertTestsOutcome,
   type DeliveryBoundaryCheck,
-  type DeliveryBoundaryRecord,
+
+  type DeliveryBoundaryScope,
 } from "../../src/delivery-acceptance.js";
 import {
   finalVerificationEventArtifactHashes,
@@ -44,7 +46,7 @@ import { VALUE_TEST } from "./delivery-factory-scenario.js";
  *
  * The returned boundary record is assembled exactly the way the kernel
  * records `delivery.boundary_checked` in build-runtime.ts (`passed` is
- * every check `passed`; `executedScope` is `full_test_script`) — and,
+ * every check `passed`; `executedScope` comes from the driver's actual run) — and,
  * before cleanup, it is run through the SAME kernel record validation the
  * scheduler runs when it records a boundary (`assertTestsOutcome` on the
  * tests check, the passed-check rules, `validateSchedulerEvidenceEvent`
@@ -87,7 +89,7 @@ function withPathPrefix(
  * Throws exactly when the kernel would reject the record.
  */
 export function assertKernelRecordsBoundary(
-  boundary: DeliveryBoundaryRecord,
+  boundary: DeliveryBoundaryScope,
   stores: { evidenceStore: SqliteEvidenceStore; artifacts: ArtifactStore },
 ): void {
   // The event is exactly what build-runtime.ts appends for
@@ -111,6 +113,8 @@ export function assertKernelRecordsBoundary(
       selection: {
         rung: boundary.selection.rung,
         selectedTests: [...boundary.selection.selectedTests],
+        ...(boundary.selection.widened !== undefined ? { widened: boundary.selection.widened } : {}),
+        ...(boundary.selection.wideningReasons !== undefined ? { wideningReasons: [...boundary.selection.wideningReasons] } : {}),
       },
       checks: boundary.checks.map((check) => ({
         ...check,
@@ -119,8 +123,15 @@ export function assertKernelRecordsBoundary(
       passed: boundary.passed,
     },
   };
-  if (boundary.executedScope !== "full_test_script") {
-    throw new Error("Boundary checks must state that the whole project scripts ran.");
+  { // IV-2: the same scope-coherence rule the kernel enforces.
+    assertSelectedExecutionCoherence("Boundary", {
+      executedScope: boundary.executedScope,
+      rung: boundary.selection.rung,
+      widened: boundary.selection.widened,
+      wideningReasons: boundary.selection.wideningReasons,
+      selectedTests: boundary.selection.selectedTests,
+      args: boundary.checks.find((check) => check.checkId === "tests")?.args ?? [],
+    });
   }
   if (boundary.checks.length === 0) {
     throw new Error("Boundary checks require real check outcomes.");
@@ -152,7 +163,7 @@ export function assertKernelRecordsBoundary(
  * passed tests check carrying evidence). Runs in the shared accepted path so
  * every accepted matrix test checks them again.
  */
-function assertAcceptedBoundaryShape(boundary: DeliveryBoundaryRecord): void {
+function assertAcceptedBoundaryShape(boundary: DeliveryBoundaryScope): void {
   const tests = boundary.checks.find((check) => check.checkId === "tests");
   assert.equal(tests?.report?.status, "passed", JSON.stringify(tests));
   assert.ok((tests?.report?.counts?.passed ?? 0) >= 1, "real counts: at least one executed test");
@@ -170,14 +181,20 @@ export async function runDeliveryBoundaryDirect(
     testFile?: string | null;
     extraFiles?: Record<string, string>;
     pathPrefix?: string;
+    /** IV-2: the task's changed files for the affected-test selection (default: the flat-fixture file). */
+    changedFiles?: string[];
+    /** IV-2: extra top-level package.json fields (e.g. npm workspaces for module-graph fixtures). */
+    manifestExtra?: Record<string, unknown>;
+    /** IV-2: skip the default src/value.mjs + test/value.test.mjs files (extraFiles carry the fixture). */
+    skipDefaultFiles?: boolean;
     /**
      * Test-only fault injection: edits the assembled boundary record before
      * the kernel record validation runs (the negative test uses it to prove
      * the kernel rejects an edited tests report).
      */
-    mutateBoundaryForTest?: (boundary: DeliveryBoundaryRecord) => void;
+    mutateBoundaryForTest?: (boundary: DeliveryBoundaryScope) => void;
   } = {},
-): Promise<{ boundary: DeliveryBoundaryRecord; integrationRevision: string }> {
+): Promise<{ boundary: DeliveryBoundaryScope; integrationRevision: string }> {
   const root = mkdtempSync(join(tmpdir(), "aiboard delivery boundary "));
   const project = join(root, "project");
   const state = join(root, "state");
@@ -193,15 +210,16 @@ export async function runDeliveryBoundaryDirect(
         type: "module",
         packageManager: "npm@11.0.0",
         scripts,
+        ...(options.manifestExtra ?? {}),
       },
       null,
       2,
     ),
   );
   // The integrated state: the worker's file as committed by integration.
-  writeFileSync(join(project, "src", "value.mjs"), content);
+  if (!options.skipDefaultFiles) writeFileSync(join(project, "src", "value.mjs"), content);
   // null = the project has no test files at all (the test command runs zero tests).
-  if (options.testFile !== null)
+  if (!options.skipDefaultFiles && options.testFile !== null)
     writeFileSync(
       join(project, "test", "value.test.mjs"),
       options.testFile ?? VALUE_TEST,
@@ -281,7 +299,7 @@ export async function runDeliveryBoundaryDirect(
     execution: binding.commandExecution,
     boundaryWorkspace,
     ambientNodeOptions,
-    changedFilesFor: async () => ["src/value.mjs"],
+    changedFilesFor: async () => options.changedFiles ?? ["src/value.mjs"],
   });
   try {
     const outcome = await driver.check({
@@ -296,17 +314,19 @@ export async function runDeliveryBoundaryDirect(
       ...check,
       evidenceIds: [...check.evidenceIds],
     }));
-    const boundary: DeliveryBoundaryRecord = {
+    const boundary: DeliveryBoundaryScope = {
       taskId: "T1",
       boundaryId: BOUNDARY_ID,
       generation: 1,
       attempt: ATTEMPT,
       integrationRevision,
-      executedScope: "full_test_script",
+      executedScope: outcome.executedScope,
       changedFiles: [...outcome.changedFiles],
       selection: {
         rung: outcome.selection.rung,
         selectedTests: [...outcome.selection.selectedTests],
+        ...(outcome.selection.widened !== undefined ? { widened: outcome.selection.widened } : {}),
+        ...(outcome.selection.wideningReasons !== undefined ? { wideningReasons: [...outcome.selection.wideningReasons] } : {}),
       },
       checks,
       passed: outcome.checks.every((check) => check.outcome === "passed"),

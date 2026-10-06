@@ -114,9 +114,14 @@ export function knownTestSuitePath(path: string): boolean {
     /^\.(?:mocha|nyc|tap|ava|c8|test).*rc/.test(name);
 }
 
-export function testIntegrityBaselineFindings(baseline: { kind: "executed_report" | "no_configured_test_suite"; pin: TestIntegrityPin; executed?: number }, candidate: TestIntegrityPin, candidateExecuted?: number): TestIntegrityFinding[] {
+export function testIntegrityBaselineFindings(baseline: { kind: "executed_report" | "no_configured_test_suite"; pin: TestIntegrityPin; executed?: number }, candidate: TestIntegrityPin, candidateExecuted?: number, options?: { executedScope?: "full_test_script" | "selected" }): TestIntegrityFinding[] {
   // A proven unconfigured initial project may introduce its first suite. The
   // separate raw tests gate still demands a completed positive machine report.
   if (baseline.kind === "no_configured_test_suite") return [];
+  // IV-2: an intentional selected run executes fewer tests than the full
+  // baseline by design; the count comparison would falsely report
+  // suite_shrank. Profile/config checks still apply, and the separate
+  // real-counts gate still demands a positive machine report.
+  if (options?.executedScope === "selected") return testIntegrityProfileFindings(baseline.pin, candidate);
   return [...testIntegrityProfileFindings(baseline.pin, candidate), ...testIntegrityCountFindings(baseline.executed, candidateExecuted)];
 }

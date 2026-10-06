@@ -141,8 +141,9 @@ export function assertTestsOutcome(
 
 export interface DeliveryAffectedTestsRecord {
   /**
-   * N-R4-1: what actually ran — the project's whole test script (the OA-12
-   * full-suite safe floor). The selection below is informational only.
+   * N-R4-1/IV-2: what actually ran — the project's whole test script (the OA-12
+   * full-suite safe floor), or exactly the selected tests (`selected`). The selection
+   * below is durably recorded either way.
    */
   executedScope: "full_test_script";
   /** The computeAffectedTests rung that produced the informational selection. */
@@ -153,8 +154,8 @@ export interface DeliveryAffectedTestsRecord {
   fullSuiteCount: number;
   /**
    * The project test command that was actually run. Runner-specific
-   * narrowing is not mechanized; the recorded selection is what the
-   * command must cover, and the full-suite command is its safe superset.
+   * narrowing is mechanized only for safe shapes (IV-2); otherwise the recorded
+   * selection is what the command must cover, and the full-suite command is its safe superset.
    */
   command: string;
   args: string[];
@@ -162,6 +163,9 @@ export interface DeliveryAffectedTestsRecord {
   exitCode: number | null;
   outcome: "passed" | "failed" | "unknown";
   report: DeliveryTestReport;
+  /** IV-2: widening state of the recorded selection (absent on legacy records). */
+  widened?: boolean;
+  wideningReasons?: string[];
 }
 
 export interface DeliveryProbeRecord {
@@ -178,7 +182,7 @@ export interface DeliveryProbeRecord {
 export interface DeliveryDepthRecord {
   /** Successful non-lifecycle reviewer tool calls in the findings pass. */
   inspectionToolCalls: number;
-  affectedTests?: DeliveryAffectedTestsRecord;
+  affectedTests?: DeliveryAffectedTestsScope;
   probe?: DeliveryProbeRecord;
 }
 
@@ -438,9 +442,9 @@ export interface DeliveryBoundaryRecord {
   attempt: number;
   integrationRevision: string;
   changedFiles: string[];
-  /** N-R4-1: the project's whole build/test scripts ran; the selection is informational. */
+  /** N-R4-1/IV-2: what actually ran — the whole build/test scripts, or exactly the selected tests. */
   executedScope: "full_test_script";
-  selection: { rung: string; selectedTests: string[] };
+  selection: { rung: string; selectedTests: string[]; widened?: boolean; wideningReasons?: string[] };
   checks: DeliveryBoundaryCheck[];
   passed: boolean;
   sequence: number;
@@ -448,6 +452,235 @@ export interface DeliveryBoundaryRecord {
   /** Earlier resolutions superseded after their repairs ended without a new revision. */
   resolutionHistory?: DeliveryBoundaryResolution[];
   testIntegrity?: TestIntegrityBoundary;
+}
+
+// ---------------------------------------------------------------------------
+// IV-2 (CD-23/EP16): additive selected-execution scope
+// ---------------------------------------------------------------------------
+
+/**
+ * What actually ran: the project's whole test script (the OA-12 full-suite
+ * safe floor), or exactly the recorded selected tests. Pre-IV-2 record
+ * interfaces are frozen with the `full_test_script` literal so historical
+ * events rebuild byte-for-semantics; the `Scope` aliases below widen the
+ * scope field additively while every other field keeps its frozen shape.
+ */
+export type DeliveryExecutedScope = "full_test_script" | "selected";
+
+/** IV-2: either scope of high-tier affected-test record (the pre-IV-2 interface is frozen; scope widens additively). */
+export type DeliveryAffectedTestsScope = Omit<DeliveryAffectedTestsRecord, "executedScope"> & {
+  executedScope: DeliveryExecutedScope;
+};
+
+/** IV-2: either scope of boundary record (the pre-IV-2 interface is frozen; scope widens additively). */
+export type DeliveryBoundaryScope = Omit<DeliveryBoundaryRecord, "executedScope"> & {
+  executedScope: DeliveryExecutedScope;
+};
+
+/** Rungs whose selections may run selected; `full_suite` and `no_tests_required` always run the whole script. */
+const SELECTABLE_AFFECTED_RUNGS: ReadonlySet<string> = new Set(["impact_tool", "lsp_references", "module_graph"]);
+
+/** IV-2: whether a selection rung may run selected (shared by the scope decision and the kernel coherence rule). */
+export function isSelectableAffectedRung(rung: unknown): rung is string {
+  return typeof rung === "string" && SELECTABLE_AFFECTED_RUNGS.has(rung);
+}
+
+/**
+ * IV-2: the one coherence rule for recorded execution scope, shared by the
+ * kernel, the boundary mirror, and tests so they cannot drift. Full-script
+ * records (including legacy ones with arbitrary rung labels) carry no
+ * narrowing claim and pass; `selected` requires a narrow rung, an
+ * explicitly unwidened selection, at least one selected test, and executed
+ * argv naming every selected test. Anything else fails closed.
+ */
+export function assertSelectedExecutionCoherence(
+  label: string,
+  input: {
+    executedScope: unknown;
+    rung: unknown;
+    widened: unknown;
+    wideningReasons: unknown;
+    selectedTests: readonly string[];
+    args: readonly string[];
+  },
+): void {
+  if (input.executedScope === "full_test_script") return;
+  if (input.executedScope !== "selected") {
+    throw new Error(`${label} executedScope is invalid.`);
+  }
+  if (!isSelectableAffectedRung(input.rung)) {
+    throw new Error(`${label} records selected execution with rung ${JSON.stringify(input.rung)}; only impact_tool, lsp_references, and module_graph selections may run selected.`);
+  }
+  if (input.widened !== false) {
+    throw new Error(`${label} records selected execution with widened ${JSON.stringify(input.widened)}; a widened selection runs the whole test script.`);
+  }
+  if (input.wideningReasons !== undefined && (!Array.isArray(input.wideningReasons) || input.wideningReasons.length !== 0)) {
+    throw new Error(`${label} records selected execution with widening reasons; a widened selection runs the whole test script.`);
+  }
+  if (input.selectedTests.length === 0) {
+    throw new Error(`${label} records selected execution with no selected tests.`);
+  }
+  for (const test of input.selectedTests) {
+    if (!input.args.includes(test)) {
+      throw new Error(`${label} records selected execution but the executed command does not name ${JSON.stringify(test)}.`);
+    }
+  }
+}
+
+/**
+ * IV-2 (F2): a selected depth/boundary record's duplicated command/args are
+ * untrusted. The authoritative last cited command evidence for the tests run
+ * must be this run's exact `delivery:<taskId>` record and its command+args
+ * must exactly equal the claimed selected argv. Anything else fails closed.
+ * Legacy full_test_script records keep their historical replay behavior: no
+ * new requirement applies to them.
+ */
+export function validateSelectedCommandEvidenceBinding(
+  event: { readonly runId: string; readonly type: string; readonly payload: Record<string, unknown> },
+  evidenceStore: { getByIds(input: { runId: string; ids: readonly string[] }): readonly unknown[] },
+): void {
+  const candidates: Array<{ label: string; executedScope: unknown; command: unknown; args: unknown; evidenceIds: string[] }> = [];
+  if (event.type === "delivery.findings_recorded") {
+    const depth = event.payload.depth;
+    if (!isRecord(depth) || !isRecord(depth.affectedTests)) return;
+    candidates.push({
+      label: "affected-test command",
+      executedScope: depth.affectedTests.executedScope,
+      command: depth.affectedTests.command,
+      args: depth.affectedTests.args,
+      evidenceIds: selectedBindingStringList(depth.affectedTests.evidenceIds),
+    });
+  } else if (event.type === "delivery.boundary_checked") {
+    if (!Array.isArray(event.payload.checks)) return;
+    for (const check of event.payload.checks) {
+      if (!isRecord(check) || check.checkId !== "tests") continue;
+      candidates.push({
+        label: "boundary check tests",
+        executedScope: event.payload.executedScope,
+        command: check.command,
+        args: check.args,
+        evidenceIds: selectedBindingStringList(check.evidenceIds),
+      });
+    }
+  } else {
+    return;
+  }
+  const taskId = event.payload.taskId;
+  for (const candidate of candidates) {
+    if (candidate.executedScope !== "selected") continue;
+    if (typeof taskId !== "string" || taskId.length === 0) {
+      throw new Error(`The ${candidate.label} records selected execution without its task binding.`);
+    }
+    if (candidate.evidenceIds.length === 0) {
+      throw new Error(`The ${candidate.label} records selected execution without citing its command evidence.`);
+    }
+    const lastId = candidate.evidenceIds.at(-1)!;
+    const last = evidenceStore.getByIds({ runId: event.runId, ids: [...new Set(candidate.evidenceIds)] })
+      .find((record) => isRecord(record) && record.id === lastId);
+    if (!last || !isRecord(last)) {
+      throw new Error(`The ${candidate.label} cites missing or foreign evidence.`);
+    }
+    if (last.taskId !== `delivery:${taskId}`) {
+      throw new Error(`The ${candidate.label} records selected execution but its command evidence belongs to task ${String(last.taskId)}.`);
+    }
+    if (!isRecord(last.fact) || last.fact.kind !== "command" ||
+      last.fact.command !== candidate.command ||
+      !selectedBindingSameArgs(last.fact.args, candidate.args)) {
+      throw new Error(`The ${candidate.label} records selected execution but its command evidence ran a different command.`);
+    }
+  }
+}
+
+function selectedBindingStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function selectedBindingSameArgs(left: unknown, right: unknown): boolean {
+  return Array.isArray(left) && Array.isArray(right) && left.length === right.length &&
+    left.every((entry, index) => typeof entry === "string" && entry === right[index]);
+}
+
+/**
+ * IV-2 (F4): whether the boundary about to be scheduled for `taskId` would
+ * close/complete a phase whose requiredCombinedValidation includes a
+ * tests-mapped check. All other contributing tasks must already be accepted
+ * and all other requirements ready — only this current integrated task is
+ * outstanding. The pump forces the full suite for such a boundary through
+ * the existing `forceFullSuite` orchestration, so a milestone/merge-group
+ * point always has a current whole-script tests run; the kernel then
+ * re-validates at phase acceptance. Pure: no events, no effects.
+ */
+export function boundaryWouldClosePhaseWithTestsGate(input: {
+  readonly projection: {
+    readonly planningPolicyVersion?: number;
+    readonly planning?: {
+      readonly readiness?: string;
+      readonly plan?: {
+        readonly currentRevisionId?: string;
+        readonly currentDigest?: string;
+        readonly revisionsById?: Readonly<Record<string, {
+          readonly revisionId: string;
+          readonly phases: ReadonlyArray<{
+            readonly id: string;
+            readonly requirementIds: ReadonlyArray<string>;
+            readonly contributingTaskIds: ReadonlyArray<string>;
+            readonly requiredCombinedValidation: ReadonlyArray<string>;
+          }>;
+          readonly requirements: ReadonlyArray<{
+            readonly id: string;
+            readonly contributingTaskIds: ReadonlyArray<string>;
+            readonly applicability: { readonly status: string };
+          }>;
+        }>>;
+      };
+    };
+    readonly tasks?: Record<string, { readonly status?: string }>;
+    readonly delivery?: {
+      readonly taskAcceptances?: Record<string, unknown>;
+      readonly phaseAcceptances?: Record<string, unknown>;
+    };
+  };
+  readonly taskId: string;
+}): boolean {
+  const projection = input.projection;
+  if (projection.planningPolicyVersion !== 1) return false;
+  const planning = projection.planning;
+  if (planning?.readiness !== "ready" || !planning.plan) return false;
+  if (!planning.plan.currentRevisionId || !planning.plan.currentDigest) return false;
+  const revision = planning.plan.revisionsById?.[planning.plan.currentRevisionId];
+  if (!revision) return false;
+  const accepted = (taskId: string): boolean => projection.delivery?.taskAcceptances?.[taskId] !== undefined;
+  const statusOf = (taskId: string): string | undefined => projection.tasks?.[taskId]?.status;
+  for (const phase of revision.phases ?? []) {
+    if (!phase.contributingTaskIds?.includes(input.taskId)) continue;
+    if (projection.delivery?.phaseAcceptances?.[phaseAcceptanceKey(revision.revisionId, phase.id)]) continue;
+    if (!(phase.requiredCombinedValidation ?? []).some((validation) => phaseValidationCheckId(validation) === "tests")) continue;
+    // Every other contributing task is already accepted (cancelled tasks
+    // skip, mirroring phase evaluation).
+    if (!(phase.contributingTaskIds ?? []).every((id) => id === input.taskId || statusOf(id) === "cancelled" || accepted(id))) continue;
+    // Every requirement is ready except through this current task.
+    let requirementsReady = true;
+    for (const requirementId of phase.requirementIds ?? []) {
+      const requirement = (revision.requirements ?? []).find((candidate) => candidate.id === requirementId);
+      if (!requirement || requirement.applicability?.status === "conditional_pending") {
+        requirementsReady = false;
+        break;
+      }
+      if (requirement.applicability?.status === "applicable") {
+        for (const contributor of requirement.contributingTaskIds ?? []) {
+          if (contributor !== input.taskId && statusOf(contributor) !== "cancelled" && !accepted(contributor)) {
+            requirementsReady = false;
+            break;
+          }
+        }
+      }
+      if (!requirementsReady) break;
+    }
+    if (!requirementsReady) continue;
+    return true;
+  }
+  return false;
 }
 
 export interface DeliveryTaskAcceptanceRecord {
@@ -484,7 +717,7 @@ export interface DeliveryState {
   reviewHistory: Record<string, DeliveryReviewRecord[]>;
   /** Every change-author runtime recorded on this run, with its model identity. */
   authorModelIdentities: Record<string, string>;
-  boundaries: Record<string, DeliveryBoundaryRecord[]>;
+  boundaries: Record<string, DeliveryBoundaryScope[]>;
   /** N-R4-3: last durably started run attempt per boundary id. */
   boundaryStarts?: Record<string, number>;
   taskAcceptances: Record<string, DeliveryTaskAcceptanceRecord>;
@@ -1017,21 +1250,21 @@ export function deliveryReviewApprovalIssues(
 export function latestBoundary(
   state: DeliveryState | undefined,
   taskId: string,
-): DeliveryBoundaryRecord | undefined {
+): DeliveryBoundaryScope | undefined {
   return state?.boundaries[taskId]?.at(-1);
 }
 
 export type DeliveryBoundaryAction =
-  | { type: "accept"; boundary: DeliveryBoundaryRecord }
+  | { type: "accept"; boundary: DeliveryBoundaryScope }
   | { type: "run" }
-  | { type: "architect"; boundary: DeliveryBoundaryRecord; resolutionGeneration: number }
-  | { type: "wait"; boundary: DeliveryBoundaryRecord };
+  | { type: "architect"; boundary: DeliveryBoundaryScope; resolutionGeneration: number }
+  | { type: "wait"; boundary: DeliveryBoundaryScope };
 
 /** Statuses after which a planned repair can no longer change the integrated revision. */
 const TERMINAL_REPAIR_STATUSES = new Set(["integrated", "cancelled", "failed"]);
 
 /** The generation the Architect's next resolution of this boundary must carry. */
-export function boundaryResolutionGeneration(boundary: DeliveryBoundaryRecord): number {
+export function boundaryResolutionGeneration(boundary: DeliveryBoundaryScope): number {
   return (boundary.resolutionHistory?.length ?? 0) + (boundary.resolution ? 1 : 0) + 1;
 }
 
@@ -1041,7 +1274,7 @@ export function boundaryResolutionGeneration(boundary: DeliveryBoundaryRecord): 
  * without a new integration revision re-running the boundary.
  */
 export function boundaryNeedsArchitect(
-  boundary: DeliveryBoundaryRecord,
+  boundary: DeliveryBoundaryScope,
   taskStatus: (taskId: string) => string | undefined,
 ): boolean {
   if (boundary.passed) return false;
@@ -1061,7 +1294,7 @@ export function deliveryBoundaryAction(
   taskId: string,
   integrationRevision: string,
   taskStatus: (taskId: string) => string | undefined = () => undefined,
-  boundaryIsCurrent: (boundary: DeliveryBoundaryRecord) => boolean = () => true,
+  boundaryIsCurrent: (boundary: DeliveryBoundaryScope) => boolean = () => true,
 ): DeliveryBoundaryAction {
   const boundary = latestBoundary(state, taskId);
   if (!boundary || boundary.integrationRevision !== integrationRevision) return { type: "run" };
@@ -1147,7 +1380,7 @@ export function evaluatePhaseAcceptance(input: PhaseAcceptanceInputs): {
       continue;
     }
     const boundary = currentBoundaries.find((candidate) =>
-      candidate.checks.some((check) => check.checkId === checkId && check.outcome === "passed"));
+      candidate.checks.some((check) => check.checkId === checkId && check.outcome === "passed") && (checkId !== "tests" || candidate.executedScope === "full_test_script"));
     if (!boundary) {
       issues.push(`Phase ${input.phase.id} exit check "${validation}" has no passed ${checkId} run at the current integration revision.`);
       continue;

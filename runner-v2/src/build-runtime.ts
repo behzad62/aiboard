@@ -105,12 +105,14 @@ import {
   reviewOutcomeByAuthor,
   deliveryBoundaryAction,
   deliveryBoundaryId,
-  evaluatePhaseAcceptance,
+  evaluatePhaseAcceptance, boundaryWouldClosePhaseWithTestsGate,
   openBlockingFindings,
   phaseAcceptanceKey,
   unverifiedClaims,
   type DeliveryBoundaryCheck,
+  type DeliveryExecutedScope,
 } from "./delivery-acceptance.js";
+import { assessPacketReadiness, finalSuiteVerified, packetCriteriaForTask, resolveExecutionMandates, type TaskValidationMandates } from "./task-validation-policy.js";
 import type { NativeDeliverableReviewResult } from "./native-deliverable-review.js";
 import { DEFAULT_ISSUE_REPAIR_CYCLE_LIMIT, deliveryBoundaryRootCause, failingTestIdsByCategory, repairIssueIdentity, repairMemberIssues, withFailingIds } from "./repair-budget-contracts.js";
 import { isDuplicateReviewReuse } from "./review-key.js";
@@ -388,13 +390,17 @@ export interface DeliveryBoundaryDriver {
     runId: string;
     taskId: string;
     boundaryId: string;
+    /** IV-2: an explicit validation mandate requires the full suite now. */
+    forceFullSuite?: boolean;
     /** N-R4-3: the durably started attempt; scopes process and evidence keys. */
     attempt: number;
     integrationRevision: string;
     signal?: AbortSignal;
   }): Promise<{
     changedFiles: string[];
-    selection: { rung: string; selectedTests: string[] };
+    /** IV-2: the actual scope of the tests run. */
+    executedScope: DeliveryExecutedScope;
+    selection: { rung: string; selectedTests: string[]; widened?: boolean; wideningReasons?: string[] };
     checks: DeliveryBoundaryCheck[];
     testIntegrity?: import("./test-integrity-contracts.js").TestIntegrityBoundary;
   }>;
@@ -416,6 +422,8 @@ export interface BuildRuntimeOptions {
   integrationDriver: IntegrationRuntimeDriver;
   deliveryReview?: DeliveryReviewDriver;
   deliveryBoundary?: DeliveryBoundaryDriver;
+  /** IV-2 (EP16): explicit structured validation mandates for task acceptance (default: none). */
+  validationMandates?: TaskValidationMandates;
   maxConcurrency: number;
   /**
    * T4: actual resource/provider capacity when the host reports one,
@@ -871,6 +879,7 @@ export class BuildRuntime {
   private readonly integrationDriver: IntegrationRuntimeDriver;
   private readonly deliveryReview?: DeliveryReviewDriver;
   private readonly deliveryBoundary?: DeliveryBoundaryDriver;
+  private readonly validationMandates?: TaskValidationMandates;
   private readonly runPolicy: NativeBuildRunPolicy;
   private readonly specCopy: boolean;
   private readonly handoffFiles: HandoffFilesOption;
@@ -939,6 +948,7 @@ export class BuildRuntime {
     this.integrationDriver = options.integrationDriver;
     this.deliveryReview = options.deliveryReview;
     this.deliveryBoundary = options.deliveryBoundary;
+    this.validationMandates = options.validationMandates;
     this.runPolicy = options.runPolicy ?? "finish";
     this.specCopy = options.specCopy ?? true;
     this.handoffFiles = options.handoffFiles ?? "commit";
@@ -4410,6 +4420,17 @@ export class BuildRuntime {
       if (action.type === "wait") continue;
       if (action.type === "accept") {
         const review = projection.delivery!.reviews[task.id]!;
+        // IV-2 (EP16): packet-required criteria must pass for acceptance;
+        // the explicitly final-gate full suite stays pending without
+        // blocking. A packet blocker here fails closed (unreachable when
+        // the boundary passed, but the gate is explicit, not assumed).
+        const readiness = assessPacketReadiness(packetCriteriaForTask({
+          boundary: action.boundary,
+          finalVerified: finalSuiteVerified(projection),
+        }));
+        if (!readiness.ready) {
+          throw new Error(`Task acceptance is blocked: ${readiness.blockers.join(" ")}`);
+        }
         this.recordReviewOutcome(task.id, review);
         this.store.append({
           runId: this.runId,
@@ -4468,6 +4489,14 @@ export class BuildRuntime {
         idempotencyKey: `delivery-boundary-start:${boundaryId}:${attempt}`,
         payload: { taskId: task.id, boundaryId, attempt, integrationRevision },
       });
+      // IV-2 (EP16): resolve whether this boundary must run the full suite.
+      // The boundary path only serves non-final tasks, so the default full
+      // suite is never required here; only an explicit mandate forces it.
+      // Conflicts throw (fail closed, never a silent pick).
+      const executionPolicy = resolveExecutionMandates({
+        ...(this.validationMandates ? { mandates: this.validationMandates } : {}),
+        isFinalCandidate: task.kind === "final_verification",
+      });
       let outcome: Awaited<ReturnType<DeliveryBoundaryDriver["check"]>>;
       try {
         outcome = await this.deliveryBoundary.check({
@@ -4477,6 +4506,7 @@ export class BuildRuntime {
           attempt,
           integrationRevision,
           signal: this.activeLifecycleSignal(),
+          forceFullSuite: executionPolicy.forceFullSuite || boundaryWouldClosePhaseWithTestsGate({ projection, taskId: task.id }), // F4: a boundary closing a phase with a tests gate runs the whole suite.
         });
       } catch (error) {
         await this.recordCleanupSearch("verification");
@@ -4494,9 +4524,9 @@ export class BuildRuntime {
           generation,
           attempt,
           integrationRevision,
-          executedScope: "full_test_script",
+          executedScope: outcome.executedScope,
           changedFiles: [...outcome.changedFiles],
-          selection: { rung: outcome.selection.rung, selectedTests: [...outcome.selection.selectedTests] },
+          selection: { rung: outcome.selection.rung, selectedTests: [...outcome.selection.selectedTests], ...(outcome.selection.widened !== undefined ? { widened: outcome.selection.widened } : {}), ...(outcome.selection.wideningReasons !== undefined ? { wideningReasons: [...outcome.selection.wideningReasons] } : {}) },
           checks: outcome.checks.map((check) => ({ ...check, evidenceIds: [...check.evidenceIds] })),
           ...(outcome.testIntegrity ? { testIntegrity: outcome.testIntegrity } : {}),
           passed: outcome.checks.every((check) => check.outcome === "passed"),

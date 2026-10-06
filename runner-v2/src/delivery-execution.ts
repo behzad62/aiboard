@@ -10,7 +10,8 @@ import { cloneValidationScope, validationScopesEqual } from "./validation-scope.
 import {
   deliveryClaimsFromSubmission,
   testsOutcome,
-  type DeliveryAffectedTestsRecord,
+  type DeliveryAffectedTestsScope,
+  type DeliveryExecutedScope,
   type DeliveryBoundaryCheck,
   type DeliveryProbeRecord,
   type DeliveryTestReport,
@@ -18,6 +19,7 @@ import {
 import type { EvidenceStore, CommandEvidenceFact } from "./evidence-store.js";
 import type { FinalVerificationCategory, FinalVerificationPlan } from "./final-verification-contracts.js";
 import {
+  deriveSelectedTestsCommand,
   inspectFinalVerificationExecutionProfile,
   type FinalVerificationExecutionProfile,
 } from "./final-verification-profile.js";
@@ -30,6 +32,7 @@ import {
 } from "./mutation-probe.js";
 import type { DeliverableReviewInputs, DeliveryDepthRunner } from "./native-deliverable-review.js";
 import { outputFor, type OneShotCommandExecutor } from "./one-shot-command-executor.js";
+import { decideTestExecutionScope, resolveExecutionMandates, type TaskValidationMandates } from "./task-validation-policy.js";
 import { planLanguageTestReport } from "./language-execution-profile.js";
 import { effectiveTestIntegrityException, readyPlanIdentity, type SchedulerProjection } from "./scheduler-store.js";
 import { inspectTestIntegrityPin } from "./test-integrity-profile.js";
@@ -244,6 +247,8 @@ export interface DeliveryCommandRun {
   evidenceIds: string[];
   exitCode: number | null;
   ran: boolean;
+  /** IV-2: what actually ran — the whole script, or exactly the selection. */
+  executedScope: DeliveryExecutedScope;
   reason?: string;
   /** `tests` only: this run's own machine-readable report reading. */
   report?: DeliveryTestReport;
@@ -431,7 +436,7 @@ export function planTestReport(input: {
   };
 }
 
-/** Splits a shell script on `&&` only; any other separator outside quotes is reported. */
+/** Splits a shell script on `&&` only; any other separator outside quotes is reported. Twin of final-verification-profile.ts (that module cannot import back without a cycle); iv2-selected-scope.test.ts asserts parity. */
 export function splitAndChain(script: string): { segments: string[] } | { separator: string } {
   const segments: string[] = [];
   let current = "";
@@ -741,11 +746,18 @@ export async function runDeliveryCategory(input: {
   evidenceStore: EvidenceStore;
   execution: OneShotCommandExecutor;
   signal?: AbortSignal;
+  /**
+   * IV-2: the affected-test selection for `tests`. Absent (builds, the
+   * integrity baseline, legacy callers) always runs the whole script.
+   */
+  selection?: { rung: string; widened: boolean; tests: readonly string[] };
+  /** IV-2: an explicit validation mandate requires the full suite now. */
+  forceFullSuite?: boolean;
 }): Promise<DeliveryCommandRun> {
   const commands = input.profile.commands[input.category];
   const first = commands?.at(-1);
   if (!commands || !first) {
-    return { command: "", args: [], evidenceIds: [], exitCode: null, ran: false, reason: `No project ${input.category} command was detected.` };
+    return { command: "", args: [], evidenceIds: [], exitCode: null, ran: false, executedScope: "full_test_script", reason: `No project ${input.category} command was detected.` };
   }
   const runtime = new FinalVerificationRuntime({
     git: input.git,
@@ -810,6 +822,28 @@ export async function runDeliveryCategory(input: {
       }
     }
   }
+  // IV-2: narrow to the affected-test selection only when the one scope
+  // decision says selected. The narrowed command replaces the planned one
+  // in the profile copy, so the runtime comparison still holds and the
+  // evidence/argv identity is the selected command. A downgraded report
+  // plan (unsupported) or an undecidable shape stays full (fail safe).
+  let executedScope: DeliveryExecutedScope = "full_test_script";
+  if (input.category === "tests" && input.selection && !reportPlan?.unsupported) {
+    const selective = deriveSelectedTestsCommand({
+      checkoutPath: input.manager.path,
+      command: reportPlan?.command ?? first,
+      selectedTests: input.selection.tests,
+    });
+    const decision = decideTestExecutionScope({
+      selection: input.selection,
+      forceFullSuite: input.forceFullSuite === true,
+      selectiveCommand: selective,
+    });
+    if (decision.scope === "selected" && selective.selectable) {
+      profile.commands.tests = [...(profile.commands.tests ?? []).slice(0, -1), selective.command];
+      executedScope = "selected";
+    }
+  }
   // R4-B1: FinalVerificationRuntime compares every category's commands with
   // the profile, so the full command map is passed; the plan and the
   // category argument select which one runs.
@@ -842,6 +876,7 @@ export async function runDeliveryCategory(input: {
     evidenceIds,
     exitCode,
     ran: evidenceIds.length > 0,
+    executedScope,
     ...(run.check.issues.length > 0 ? { reason: run.check.issues.join(" ") } : {}),
     ...(report ? { report } : {}),
   };
@@ -872,6 +907,8 @@ export interface DeliveryExecutionOptions {
   /** Supplied by the filesystem-mutation owner (native-build-factory.ts). */
   probeFileSystem(workspacePath: string): MutationFileSystem;
   clock?: () => string;
+  /** IV-2: explicit structured validation mandates (default: none). */
+  validationMandates?: TaskValidationMandates;
 }
 
 /**
@@ -898,6 +935,12 @@ export function createDeliveryDepthRunner(options: DeliveryExecutionOptions): De
         execute: options.git,
       });
       const ambientNodeOptions = options.ambientNodeOptions?.();
+      // IV-2 (EP16): review depth never serves the final candidate; explicit
+      // mandates may still force full. Conflicts throw (fail closed).
+      const mandates = resolveExecutionMandates({
+        ...(options.validationMandates ? { mandates: options.validationMandates } : {}),
+        isFinalCandidate: false,
+      });
       const tests = await runDeliveryCategory({
         ...(ambientNodeOptions !== undefined ? { ambientNodeOptions } : {}),
         category: "tests",
@@ -906,17 +949,21 @@ export function createDeliveryDepthRunner(options: DeliveryExecutionOptions): De
         runId: input.runId,
         evidenceTaskId: `delivery:${input.taskId}`,
         generationId: `${input.reviewId}:tests`,
+        selection: { rung: selection.rung, widened: selection.widened, tests: selection.tests },
+        forceFullSuite: mandates.forceFullSuite,
         git: options.git,
         artifacts: options.artifacts,
         evidenceStore: options.evidenceStore,
         execution: options.execution,
         ...(input.signal ? { signal: input.signal } : {}),
       });
-      const affectedTests: DeliveryAffectedTestsRecord = {
-        executedScope: "full_test_script",
+      const affectedTests: DeliveryAffectedTestsScope = {
+        executedScope: tests.executedScope,
         selectionRung: selection.rung,
         changedFiles: [...input.changedFiles],
         selectedTests: [...selection.tests],
+        widened: selection.widened,
+        wideningReasons: [...selection.wideningReasons],
         fullSuiteCount: inventory.fullSuiteTests.length,
         command: tests.command || "none",
         args: tests.args,
@@ -925,6 +972,7 @@ export function createDeliveryDepthRunner(options: DeliveryExecutionOptions): De
         outcome: testsOutcome(tests.exitCode, tests.report),
         report: tests.report ?? { status: "unknown", runner: "none", reason: tests.reason ?? "No project test command was detected." },
       };
+      // IV-2: the probe uses the same actual command, so probe scope cannot silently differ.
       const probe = await runDeliveryProbe({
         ...input,
         options,
@@ -1113,7 +1161,7 @@ export function createDeliveryBoundaryDriver(options: {
   };
   return {
     captureInitialBaseline,
-    check: async (input: { runId: string; taskId: string; boundaryId: string; attempt: number; integrationRevision: string; signal?: AbortSignal }) => {
+    check: async (input: { runId: string; taskId: string; boundaryId: string; attempt: number; integrationRevision: string; signal?: AbortSignal; forceFullSuite?: boolean }) => {
       await captureInitialBaseline(input.taskId, input.signal);
       const trustedProjection = options.testIntegrity?.projection();
       const changedFiles = await options.changedFilesFor(input.taskId);
@@ -1151,10 +1199,12 @@ export function createDeliveryBoundaryDriver(options: {
             checks.push({ checkId: "tests", evidenceIds: [], exitCode: null, outcome: "unknown",
               report: { status: "unknown", runner: "not_run", reason: "Test integrity blocked the changed candidate command/configuration before execution." } });
             checks.push({ checkId: "test_integrity", evidenceIds: [...baseline.evidenceIds], exitCode: 1, outcome: "failed", reason: findings.map((finding) => finding.message).join(" ") });
-            return { changedFiles, selection: { rung: selection.rung, selectedTests: [...selection.tests] }, checks, testIntegrity };
+            return { changedFiles, executedScope: "full_test_script" as const, selection: { rung: selection.rung, selectedTests: [...selection.tests], widened: selection.widened, wideningReasons: [...selection.wideningReasons] }, checks, testIntegrity };
           }
         }
         const categories: Array<"build" | "tests"> = profile.commands.build ? ["build", "tests"] : ["tests"];
+        // IV-2: the actual scope of the tests run (builds always run whole).
+        let testsScope: DeliveryExecutedScope = "full_test_script";
         for (const category of categories) {
           const ambientNodeOptions = options.ambientNodeOptions?.();
           const run = await runDeliveryCategory({
@@ -1166,12 +1216,14 @@ export function createDeliveryBoundaryDriver(options: {
             evidenceTaskId: `delivery:${input.taskId}`,
             // N-R4-3: attempt-scoped so a retried run never reuses keys.
             generationId: `${input.boundaryId}:${input.attempt}:${category}`,
+            ...(category === "tests" ? { selection: { rung: selection.rung, widened: selection.widened, tests: selection.tests }, forceFullSuite: input.forceFullSuite === true } : {}),
             git: options.git,
             artifacts: options.artifacts,
             evidenceStore: options.evidenceStore,
             execution: options.execution,
             ...(input.signal ? { signal: input.signal } : {}),
           });
+          if (category === "tests") testsScope = run.executedScope;
           const report = category === "tests"
             ? run.report ?? { status: "unknown" as const, runner: "none", reason: run.reason ?? "No project test command was detected." }
             : undefined;
@@ -1197,7 +1249,7 @@ export function createDeliveryBoundaryDriver(options: {
           const tests = checks.find((check) => check.checkId === "tests");
           const candidateExecuted = executedTestCount(tests?.report?.counts);
           if (candidateExecuted !== undefined) testIntegrity.candidateExecuted = candidateExecuted;
-          const findings = testIntegrityBaselineFindings(baseline, testIntegrity.candidatePin, candidateExecuted);
+          const findings = testIntegrityBaselineFindings(baseline, testIntegrity.candidatePin, candidateExecuted, { executedScope: testsScope });
           const unresolved = unresolvedTestIntegrityFindings({ findings, binding: testIntegrity,
             exception: effectiveTestIntegrityException(trustedProjection, testIntegrity), candidateExecuted });
           checks.push({ checkId: "test_integrity", evidenceIds: [...new Set([...baseline.evidenceIds, ...(tests?.evidenceIds ?? [])])],
@@ -1206,7 +1258,8 @@ export function createDeliveryBoundaryDriver(options: {
         }
         return {
           changedFiles,
-          selection: { rung: selection.rung, selectedTests: [...selection.tests] },
+          executedScope: testsScope,
+          selection: { rung: selection.rung, selectedTests: [...selection.tests], widened: selection.widened, wideningReasons: [...selection.wideningReasons] },
           checks,
           ...(testIntegrity ? { testIntegrity } : {}),
         };

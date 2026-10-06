@@ -145,7 +145,8 @@ export interface MandateResolution {
   readonly conflicts: readonly { readonly id: string; readonly scopes: readonly ValidationScope[] }[];
 }
 
-const FULL_SUITE_GATE = "full_suite";
+/** The gate id an explicit mandate names to require the full suite now (EP16/IV-2). */
+export const FULL_SUITE_GATE = "full_suite";
 
 /**
  * Resolve required mandates. The default full suite belongs to the final
