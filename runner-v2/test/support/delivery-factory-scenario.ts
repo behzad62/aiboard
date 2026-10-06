@@ -17,11 +17,14 @@ import {
 import type { RunnerProviderConfig } from "../../src/provider-config-store.js";
 import {
   buildCompletionReadiness,
+  currentExplicitStartIdentity,
+  rebuildSchedulerProjection,
   type NewSchedulerEvent,
   type SchedulerActorRole,
   type SchedulerProjection,
 } from "../../src/scheduler-store.js";
 import { buildSourceManifest } from "../../src/source-manifest.js";
+import type { ValidationScope } from "../../src/validation-scope.js";
 import { SqliteSchedulerStore } from "../../src/sqlite-scheduler-store.js";
 import { ArtifactStore } from "../../src/artifact-store.js";
 import { createExecutionHost } from "../../src/execution-host.js";
@@ -136,7 +139,8 @@ function planningEvents(): NewSchedulerEvent[] {
   const e = (type: string, key: string, role: SchedulerActorRole, id: string, payload: Record<string, unknown>): NewSchedulerEvent =>
     ({ runId: RUN_ID, type: type as NewSchedulerEvent["type"], occurredAt: CLOCK, actor: { role, id }, idempotencyKey: key, payload });
   return [
-    e("run.policy_configured", "policy", "runner", "build-runtime", { runPolicy: "finish" }),
+    e("project_docs.policy_configured", "project-docs-policy", "runner", "build-runtime", { version: 2 }),
+    e("run.initialized", "run-initialized", "runner", "build-runtime", { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "Deliver the value module." }),
     e("planning.policy_configured", "planning-policy", "runner", "build-runtime", { version: 1 }),
     e("planning.source_registered", "source", "user", "owner", { manifest }),
     e("request.triaged", "triage", "architect", "architect", { decision: "build", rationale: "Build the module." }),
@@ -173,8 +177,28 @@ export interface DeliveryFactoryObservation {
   reviewerRequests?: AgentModelRequest[];
 }
 
+/**
+ * IV-1: the worker's truthful validation-scope report for this fixture. The
+ * worker writes src/value.mjs and runs the whole `node --test` suite (one
+ * test, passing); nothing is left unrun. The no-test-files variant
+ * (testFile: null) runs zero tests, so it reports no runs and explains the
+ * omission instead of claiming a selected=0 run (refused by the parser).
+ */
+const DELIVERY_VALIDATION_SCOPE: ValidationScope = {
+  changed: ["src/value.mjs"],
+  verified: ["src/value.mjs exports value = 2"],
+  testsRun: [{ command: "node --test", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }],
+  notRun: [],
+};
+const DELIVERY_VALIDATION_SCOPE_NO_TESTS: ValidationScope = {
+  changed: ["src/value.mjs"],
+  verified: [],
+  testsRun: [],
+  notRun: [{ what: "automated tests", why: "the project has no test files; node --test selected zero tests" }],
+};
+
 class WorkerModel implements AgentModel {
-  constructor(private readonly content: string, private readonly observe?: DeliveryFactoryObservation) {}
+  constructor(private readonly content: string, private readonly observe?: DeliveryFactoryObservation, private readonly validationScope: ValidationScope = DELIVERY_VALIDATION_SCOPE) {}
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
     this.observe?.workerRequests?.push(request);
     const toolCount = request.messages.filter((message) => message.role === "tool").length;
@@ -187,6 +211,7 @@ class WorkerModel implements AgentModel {
       readiness: "ready_for_architect_review",
       unresolvedConcerns: [],
       criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: this.validationScope,
     }, "submit-1");
   }
 }
@@ -208,11 +233,15 @@ class ReviewerModel implements AgentModel {
       if (tools === 0) return call("fs.read", { path: "src/value.mjs" }, "read-1");
       return call("record_deliverable_findings", { findings: [] }, `findings-${tools}`);
     }
+    // E5: the verdict pass runs in a fresh session, so the citation read
+    // must happen here before the verdict is submitted.
+    if (tools === 0) return call("fs.read", { path: "src/value.mjs" }, "verdict-read-1");
     const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return call("submit_deliverable_verdict", {
       summary: "The module exports 2 and the cited test run passed.",
       satisfied: true,
-      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout." })),
+      survivorDispositions: [...text.matchAll(/"id": "(mutation-survivor:[^"]+)"/g)].map((match) => ({ findingId: match[1]!, disposition: "not_a_real_gap", rationale: "The changed arithmetic branch is deliberately unconstrained by the value-only criterion; this survivor does not weaken that criterion." })),
+      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout.", citations: [{ path: "src/value.mjs", line: 1 }] })),
     }, `verdict-${tools}`);
   }
 }
@@ -288,16 +317,36 @@ export async function runDeliveryFactoryScenario(
   mkdirSync(runRoot, { recursive: true });
   const seed = new SqliteSchedulerStore(join(runRoot, "scheduler.sqlite"));
   for (const input of planningEvents()) seed.append(input);
+  // T7b: the ready plan waits for its explicit owner start. The fixture
+  // acts as owner through the genuine authorization event, covering the
+  // kernel's own current ready identity (no authority is invented).
+  const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(seed.readRun(RUN_ID)));
+  assert.ok(startIdentity, "the fixture plan is ready with a complete start identity");
+  seed.append({
+    runId: RUN_ID,
+    type: "planning.execution_authorized",
+    occurredAt: CLOCK,
+    actor: { role: "user", id: "local-user" },
+    idempotencyKey: "owner-start",
+    payload: { authorization: { ...startIdentity, version: 1, ownerChoice: "execute" } },
+  });
   seed.close();
   const reviewer = new ReviewerModel(options.observe);
   const pauseDetail = () => JSON.stringify((handle!.runtime as unknown as { store: SqliteSchedulerStore }).store.readRun(RUN_ID).filter((item) => item.type === "run.paused").at(-1)?.payload);
-  const worker = new WorkerModel(content, options.observe);
+  const worker = new WorkerModel(content, options.observe, options.testFile === null ? DELIVERY_VALIDATION_SCOPE_NO_TESTS : DELIVERY_VALIDATION_SCOPE);
   const executionHost = createExecutionHost({
     projectRoot: project,
     stateDirectory: state,
     artifacts: new ArtifactStore(join(state, "artifacts")),
     ambientEnvironment: withPathPrefix(snapshotNativeBuildAmbientEnvironment(), options.pathPrefix),
   });
+  // T7a/T7b: the seeded source_registered manifest names SOURCE_TEXT bytes.
+  // Provision the exact bytes into the same artifact store the factory
+  // reads before factory.create; the stored hash must be the manifest
+  // authority (no source authority is faked or bypassed).
+  const { manifest: sourceManifest } = scenario();
+  const storedSource = await executionHost.artifacts.put(Buffer.from(SOURCE_TEXT, "utf-8"), "text/plain", "approved source");
+  assert.equal(storedSource.hash, sourceManifest.artifactDigest, "the stored source bytes are the manifest authority");
   let factory: NativeBuildFactory | undefined;
   let handle: Awaited<ReturnType<NativeBuildFactory["create"]>> | undefined;
   try {
@@ -321,6 +370,7 @@ export async function runDeliveryFactoryScenario(
       runId: RUN_ID,
       projectId: "delivery-fixture",
       objective: "Deliver the value module.",
+      planningPolicy: { version: 1 },
       architectRuntimeId: "arch:architect",
       workerRuntimeIds: ["work:worker"],
       verifierRuntimeIds: ["rev:reviewer"],

@@ -60,6 +60,7 @@ import {
   type ApprovedSourceInputV1,
 } from "../src/native-planning-provisioner.js";
 import {
+  currentExplicitStartIdentity,
   type SchedulerProjection,
 } from "../src/scheduler-store.js";
 import {
@@ -347,6 +348,19 @@ function prefixTypes(store: SqliteSchedulerStore, runId: string): string[] {
   return store.readRun(runId).map((event) => event.type);
 }
 
+const T7A_GENERATED_RUN_INITIALIZED_GUARDS = {
+  testIntegrityPolicyVersion: 1,
+  submissionScopePolicyVersion: 1,
+  reviewIntegrityPolicyVersion: 1,
+  encodingSafetyPolicyVersion: 1,
+  reviewEvidencePolicyVersion: 1,
+  validationScopePolicyVersion: 1,
+} as const;
+
+function expectedGeneratedRunInitializedPayload(objective: string) {
+  return { ...T7A_GENERATED_RUN_INITIALIZED_GUARDS, objective };
+}
+
 test("T7a F2: empty, docs-only, and docs+init prefixes recover in order with exact identity", () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-t7a-f2-recover-"));
   const store = openScheduler(root);
@@ -371,7 +385,7 @@ test("T7a F2: empty, docs-only, and docs+init prefixes recover in order with exa
       "planning-policy",
     ]);
     assert.deepEqual(events[0]!.payload, { version: 2 });
-    assert.deepEqual(events[1]!.payload, { objective: "Deliver it." });
+    assert.deepEqual(events[1]!.payload, expectedGeneratedRunInitializedPayload("Deliver it."));
     assert.deepEqual(events[2]!.payload, { version: 1 });
     assert.deepEqual(ensurePlanningProvisioningPrefix(store, t7aSpec(runId, "Deliver it."), clock), { mode: "reused" });
     assert.equal(store.readRun(runId).length, 3, "a full matching prefix appends nothing");
@@ -403,7 +417,7 @@ test("T7a F2: partial prefixes resume at the exact next sequence", () => {
       "run.initialized",
       "planning.policy_configured",
     ]);
-    assert.deepEqual(resumed[1]!.payload, { objective: "O." });
+    assert.deepEqual(resumed[1]!.payload, expectedGeneratedRunInitializedPayload("O."));
 
     const docsInit = "run_t7a_f2_docs_init";
     store.append({
@@ -1358,6 +1372,51 @@ function journeyLastToolValue(request: AgentModelRequest): Record<string, unknow
   return content?.find((item) => item.type === "json")?.value as Record<string, unknown> | undefined;
 }
 
+function t7aToolResults(request: AgentModelRequest): Array<{ toolName?: string; isError?: boolean }> {
+  return request.messages
+    .filter((message) => message.role === "tool")
+    .map((message) => message.content as { toolName?: string; isError?: boolean });
+}
+
+function t7aToolFailed(request: AgentModelRequest, toolName: string): boolean {
+  return t7aToolResults(request).some((result) => result.toolName === toolName && result.isError === true);
+}
+
+function t7aFailureDetail(request: AgentModelRequest, toolName: string): string {
+  const failed = request.messages
+    .filter((message) => message.role === "tool")
+    .reverse()
+    .find((message) => (message.content as { toolName?: string }).toolName === toolName && (message.content as { isError?: boolean }).isError === true);
+  return JSON.stringify(failed?.content).slice(0, 1500);
+}
+
+function t7aReadText(request: AgentModelRequest, path: string): string | undefined {
+  for (const message of request.messages) {
+    if (message.role !== "tool") continue;
+    const content = message.content as { toolName?: string; content?: Array<{ type: string; value?: unknown; text?: string }> };
+    if (content.toolName !== "fs.read") continue;
+    const meta = content.content?.find((item) => item.type === "json")?.value as { path?: string } | undefined;
+    if (meta?.path !== path) continue;
+    const text = content.content?.find((item) => item.type === "text")?.text;
+    if (typeof text === "string") return text;
+  }
+  return undefined;
+}
+
+function t7aLastModelToolError(models: Array<{ requests: AgentModelRequest[] }>): string {
+  for (let index = models.length - 1; index >= 0; index--) {
+    const requests = models[index]!.requests;
+    for (let i = requests.length - 1; i >= 0; i--) {
+      const failed = requests[i]!.messages
+        .filter((message) => message.role === "tool")
+        .reverse()
+        .find((message) => (message.content as { isError?: boolean } | undefined)?.isError === true);
+      if (failed) return `last failing model tool call: ${JSON.stringify(failed.content).slice(0, 1500)}`;
+    }
+  }
+  return "no failing model tool call recorded";
+}
+
 class T7aJourneyArchitect implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   private calls = 0;
@@ -1425,16 +1484,35 @@ class T7aJourneyWorker implements AgentModel {
   readonly requests: AgentModelRequest[] = [];
   async complete(request: AgentModelRequest): Promise<ModelTurn> {
     this.requests.push(request);
+    if (t7aToolFailed(request, "submit_task")) {
+      throw new Error(`T7a fixture: submit_task refused: ${t7aFailureDetail(request, "submit_task")}`);
+    }
+    if (t7aToolFailed(request, "run_evidence_command")) {
+      throw new Error(`T7a fixture: run_evidence_command failed: ${t7aFailureDetail(request, "run_evidence_command")}`);
+    }
+    if (t7aToolFailed(request, "fs.write")) {
+      throw new Error(`T7a fixture: fs.write failed: ${t7aFailureDetail(request, "fs.write")}`);
+    }
     const toolCount = request.messages.filter((message) => message.role === "tool").length;
     if (toolCount === 0) return journeyCall("fs.write", { path: "src/value.mjs", content: T7A_LOW_CONTENT, createDirectories: true }, "write-1");
     if (toolCount === 1) return journeyCall("run_evidence_command", { label: "tests", command: process.execPath, args: ["--test"] }, "evidence-1");
     const record = journeyLastToolValue(request)!;
-    const fact = record.fact as { stdoutArtifactHash: string };
+    const fact = record.fact as { stdoutArtifactHash: string; exitCode: number | null; timedOut?: boolean; cancelled?: boolean };
+    assert.equal(fact.exitCode, 0, `the evidence test run must genuinely succeed before the worker claims it passes: ${JSON.stringify(record).slice(0, 1500)}`);
+    assert.equal(fact.timedOut ?? false, false, "the evidence test run must not time out");
+    assert.equal(fact.cancelled ?? false, false, "the evidence test run must not be cancelled");
+    assert.ok(typeof record.id === "string" && record.id.length > 0, "the evidence test run records an evidence id");
     return journeyCall("submit_task", {
       summary: "Added src/value.mjs exporting value = 2; node --test passes.",
       readiness: "ready_for_architect_review",
       unresolvedConcerns: [],
       criterionEvidenceLinks: [{ criterionId: "c1", evidenceId: record.id, artifactHashes: [fact.stdoutArtifactHash] }],
+      validationScope: {
+        changed: ["src/value.mjs"],
+        verified: ["src/value.mjs exports value = 2"],
+        testsRun: [{ command: "node --test", counts: { selected: 1, passed: 1, failed: 0, skipped: 0 } }],
+        notRun: [],
+      },
     }, "submit-1");
   }
 }
@@ -1467,6 +1545,12 @@ class T7aJourneyReviewer implements AgentModel {
       return journeyCall("record_deliverable_obligations", { obligations: [{ id: "o1", description: "value must be 2." }] }, `obl-${seen}`);
     }
     if (pass === "delivery-findings-system") {
+      if (t7aToolFailed(request, "fs.read")) {
+        throw new Error(`T7a fixture: findings fs.read failed: ${t7aFailureDetail(request, "fs.read")}`);
+      }
+      if (t7aToolFailed(request, "record_deliverable_findings")) {
+        throw new Error(`T7a fixture: record_deliverable_findings refused: ${t7aFailureDetail(request, "record_deliverable_findings")}`);
+      }
       if (seen === 0) return journeyCall("fs.read", { path: "src/value.mjs" }, "read-1");
       return journeyCall("record_deliverable_findings", { findings: [] }, `findings-${seen}`);
     }
@@ -1499,13 +1583,33 @@ class T7aJourneyReviewer implements AgentModel {
         }],
       }, "verifier-verdict-1");
     }
-    const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
-    return journeyCall("submit_deliverable_verdict", {
-      summary: "The module exports 2 and the cited test run passed.",
-      satisfied: true,
-      claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout." })),
-    }, `verdict-${seen}`);
+    if (pass === "delivery-verdict-system") {
+      if (t7aToolFailed(request, "submit_deliverable_verdict")) {
+        throw new Error(`T7a fixture: submit_deliverable_verdict refused: ${t7aFailureDetail(request, "submit_deliverable_verdict")}`);
+      }
+      if (t7aToolFailed(request, "fs.read")) {
+        throw new Error(`T7a fixture: verdict fs.read failed: ${t7aFailureDetail(request, "fs.read")}`);
+      }
+      // The verdict pass runs in a fresh session, so the citation read must
+      // happen here before the verdict is submitted.
+      const inspected = t7aReadText(request, "src/value.mjs");
+      if (inspected === undefined) {
+        return journeyCall("fs.read", { path: "src/value.mjs" }, `verdict-read-${seen}`);
+      }
+      assert.ok(inspected.split("\n")[0]!.includes("export const value = 2;"), "the cited line 1 actually exports value = 2");
+      const text = request.messages.filter((message) => typeof message.content === "string").map((message) => message.content as string).join("\n");
+      const survivors = [...new Set([...text.matchAll(/"id": "(mutation-survivor:[^"]+)"/g)].map((match) => match[1]!))];
+      assert.equal(survivors.length, 0, `unexpected mutation survivors on the value line are real gaps and cannot be blanket-released: ${survivors.join(", ")}`);
+      const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+      assert.ok(claimIds.includes("claim:c1"), "the verdict context names the criterion claim");
+      assert.ok(claimIds.includes("claim:summary"), "the verdict context names the summary claim");
+      return journeyCall("submit_deliverable_verdict", {
+        summary: "The module exports 2 and the cited test run passed.",
+        satisfied: true,
+        claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Read src/value.mjs line 1 in this verdict session and confirmed it exports value = 2.", citations: [{ path: "src/value.mjs", line: 1 }] })),
+      }, `verdict-${seen}`);
+    }
+    throw new Error(`Unexpected T7a reviewer system ${pass}.`);
   }
 }
 
@@ -1603,10 +1707,26 @@ test("T7a product: unseeded opt-in provisioning plans, covers, builds, and accep
       "planning-policy",
     ]);
     assert.deepEqual(events[0]!.payload, { version: 2 });
-    assert.deepEqual(events[1]!.payload, { objective: "Deliver the value module." });
+    assert.deepEqual(events[1]!.payload, expectedGeneratedRunInitializedPayload("Deliver the value module."));
     assert.deepEqual(events[2]!.payload, { version: 1 });
-    assert.equal(events[3]!.type, "planning.source_registered", "the approved source registers immediately after the prefix");
-    assert.ok(events.findIndex((event) => event.type === "run.policy_configured") > 3, "factory policy consumers stamp after the prefix");
+    // Lane-B guards activate immediately after the T7a prefix, before source registration.
+    assert.deepEqual(events.slice(3, 5).map((event) => event.type), [
+      "run.evidence_policy_activated",
+      "delivery.test_integrity_initialized",
+    ]);
+    assert.deepEqual(events[3]!.actor, { role: "runner", id: "build-runtime" });
+    assert.equal(events[3]!.idempotencyKey, "evidence-content-policy:v1");
+    assert.deepEqual(events[3]!.payload, { version: 1 });
+    assert.deepEqual(events[4]!.actor, { role: "runner", id: "build-runtime" });
+    assert.equal(events[4]!.idempotencyKey, "test-integrity-initial-revision:v1");
+    assert.deepEqual(events[4]!.payload, { revision: baseline.revision, architectActorId: "architect_1" });
+    const evidenceIndex = events.findIndex((event) => event.type === "run.evidence_policy_activated");
+    const integrityIndex = events.findIndex((event) => event.type === "delivery.test_integrity_initialized");
+    const sourceIndex = events.findIndex((event) => event.type === "planning.source_registered");
+    assert.deepEqual([evidenceIndex, integrityIndex], [3, 4], "lane-B guards activate immediately after the T7a prefix");
+    assert.equal(sourceIndex, integrityIndex + 1, "the approved source registers immediately after lane-B guard activation");
+    const policyIndex = events.findIndex((event) => event.type === "run.policy_configured");
+    assert.ok(policyIndex > sourceIndex, "factory policy consumers stamp after source registration");
     // The kernel registered the explicitly approved source immutably.
     const registered = events.find((event) => event.type === "planning.source_registered")!;
     assert.ok(registered, "the approved source is registered");
@@ -1623,12 +1743,24 @@ test("T7a product: unseeded opt-in provisioning plans, covers, builds, and accep
         const projection = runtime!.projection();
         if (done(projection)) return projection;
         if (projection.status === "paused" || projection.status === "failed") {
-          throw new Error(`${label}: run ${projection.status} unexpectedly (${JSON.stringify(projection.pauseReason)})`);
+          throw new Error(`${label}: run ${projection.status} unexpectedly (${JSON.stringify(projection.pauseReason)}); ${t7aLastModelToolError([architect, worker, reviewer])}`);
         }
         await runtime!.step();
       }
       throw new Error(`${label}: not reached within ${cap} steps`);
     };
+    await stepUntil("ready plan", (projection) => projection.planning?.readiness === "ready");
+    assert.equal(worker.requests.length, 0, "no worker activity before the explicit owner start");
+    const explicitStartIdentity = currentExplicitStartIdentity(runtime!.projection());
+    assert.ok(explicitStartIdentity, "ready plan exposes an explicit start identity");
+    const start = await fetch(`${address.url}/v2/runs/${T7A_RUN}/build/plan-start`, { method: "POST",
+      headers: { Authorization: "Bearer t7a-control-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ ...explicitStartIdentity, version: 1, ownerChoice: "execute", idempotencyKey: "explicit-start" }) });
+    assert.equal(start.status, 200, await start.text());
+    const authorized = manager!.events(T7A_RUN).find((event) => event.type === "planning.execution_authorized");
+    assert.ok(authorized, "the explicit owner start is recorded");
+    assert.deepEqual(authorized!.actor, { role: "user", id: "local-user" });
+    assert.equal(worker.requests.length, 0, "authorizing does not itself dispatch");
     const accepted = await stepUntil(
       "task acceptance",
       () => manager!.events(T7A_RUN).some((event) => event.type === "task.acceptance_recorded"),

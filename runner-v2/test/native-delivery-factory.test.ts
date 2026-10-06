@@ -13,5 +13,5 @@ test("R4-B1: a project with a build script reaches task and phase acceptance at 
   const { review, boundary } = await runDeliveryFactoryScenario(HIGH_CONTENT, BUILD_SCRIPTS);
   assert.equal(review.risk!.tier, "high");
   assert.equal(review.depth!.affectedTests!.outcome, "passed", JSON.stringify(review.depth!.affectedTests));
-  assert.deepEqual(boundary.checks.map((check) => [check.checkId, check.outcome]), [["build", "passed"], ["tests", "passed"]]);
+  assert.deepEqual(boundary.checks.map((check) => [check.checkId, check.outcome]), [["build", "passed"], ["tests", "passed"], ["test_integrity", "passed"]]);
 });

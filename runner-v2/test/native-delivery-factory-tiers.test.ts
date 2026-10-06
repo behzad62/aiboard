@@ -25,6 +25,6 @@ test("B2/B9: a high-tier factory review runs the real affected-test command and 
 test("R4-B1: a project with a build script reaches task and phase acceptance at medium tier (build and tests both run)", async () => {
   const { review, boundary } = await runDeliveryFactoryScenario(LOW_CONTENT, BUILD_SCRIPTS);
   assert.equal(review.risk!.tier, "medium");
-  assert.deepEqual(boundary.checks.map((check) => [check.checkId, check.outcome]), [["build", "passed"], ["tests", "passed"]]);
+  assert.deepEqual(boundary.checks.map((check) => [check.checkId, check.outcome]), [["build", "passed"], ["tests", "passed"], ["test_integrity", "passed"]]);
   assert.equal(boundary.executedScope, "full_test_script");
 });
