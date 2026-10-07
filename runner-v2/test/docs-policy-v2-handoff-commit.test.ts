@@ -521,7 +521,7 @@ test("C2b: the handoff commit splices the v2 entry lines, keeping outside bytes"
     const payload = snapshots[0]!.payload as Record<string, unknown>;
     const commit = String(payload.commit);
     const files = await runGit({ cwd: fixture.integration.path, args: ["show", "--name-only", "--format=", commit] });
-    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md"]);
+    assert.deepEqual(files.stdout.split("\n").map((line) => line.trim()).filter(Boolean), ["AGENTS.md", "CLAUDE.md", "docs/project/STATE.md", "docs/project/specs/source_value.md"]);
     const agents = await runGit({ cwd: fixture.integration.path, args: ["show", `${commit}:AGENTS.md`] });
     assert.ok(agents.stdout.startsWith(agentsBefore), "bytes outside the markers are kept byte-for-byte");
     assert.ok(agents.stdout.includes(V2_AGENTS_SECTION_BODY), "the static v2 section is spliced in");
