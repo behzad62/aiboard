@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +15,7 @@ import {
   type DeliveryBoundaryDriver,
   type IntegrationRuntimeDriver,
 } from "../src/build-runtime.js";
-import { assessDeliveryRisk, deliveryReviewId } from "../src/delivery-acceptance.js";
+import { assessDeliveryRisk, deliveryReviewId, type DeliveryBoundaryCheck } from "../src/delivery-acceptance.js";
 import { changedLinesFromDiff, loadDeliverableReviewInputs, submitTaskSummary } from "../src/delivery-execution.js";
 import {
   NativeDeliverableReviewRuntime,
@@ -25,6 +26,9 @@ import { ProviderHealthRegistry } from "../src/provider-health.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import {
   buildCompletionReadiness,
+  currentExplicitStartIdentity,
+  effectiveTestIntegrityException,
+  readyPlanIdentity,
   rebuildSchedulerProjection,
   type NewSchedulerEvent,
   type SchedulerActorRole,
@@ -34,7 +38,18 @@ import {
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
 import { SqliteSchedulerStore } from "../src/sqlite-scheduler-store.js";
+import { SqliteToolLedger } from "../src/sqlite-tool-ledger.js";
 import type { WorkerAssignment, WorkerOutcome, WorkerRuntimeDriver } from "../src/task-scheduler.js";
+import { canonicalModelIdentity } from "../src/verifier-contracts.js";
+import { inspectEncodingDelta } from "../src/encoding-safety.js";
+import { reviewChangeSetId, reviewRunnerSignals } from "../src/review-integrity.js";
+import { captureSubmissionScopeIdentity } from "../src/submission-scope-capture.js";
+import { bindSubmissionScope } from "../src/submission-scope-contracts.js";
+import { inspectSubmissionScope } from "../src/submission-guard.js";
+import { localSubmissionClaim } from "../src/submission-guard-git.js";
+import { executedTestCount, testIntegrityBaselineFindings, testIntegrityPinDigest, unresolvedTestIntegrityFindings } from "../src/test-integrity.js";
+import type { TestIntegrityBoundary } from "../src/test-integrity-contracts.js";
+import { parseValidationScope } from "../src/validation-scope.js";
 import {
   buildFixtureCoverageReview,
   buildPlanningFixtureScenario,
@@ -61,8 +76,10 @@ function event(type: SchedulerEventType | string, key: string, actor: { role: Sc
 
 function planningInputs(fixture: PlanningFixtureScenario): NewSchedulerEvent[] {
   return [
-    event("run.policy_configured", "policy", { role: "runner", id: "build-runtime" }, { runPolicy: "finish" }),
+    event("project_docs.policy_configured", "project-docs-policy", { role: "runner", id: "build-runtime" }, { version: 2 }),
+    event("run.initialized", "run-initialized", { role: "runner", id: "build-runtime" }, { testIntegrityPolicyVersion: 1, submissionScopePolicyVersion: 1, reviewIntegrityPolicyVersion: 1, encodingSafetyPolicyVersion: 1, reviewEvidencePolicyVersion: 1, validationScopePolicyVersion: 1, objective: "Build the fixture." }),
     event("planning.policy_configured", "planning-policy", { role: "runner", id: "build-runtime" }, { version: 1 }),
+    event("run.policy_configured", "policy", { role: "runner", id: "build-runtime" }, { runPolicy: "finish" }),
     event("planning.source_registered", "source", { role: "user", id: "owner" }, { manifest: fixture.priorManifest }),
     event("planning.source_amended", "source-amendment", { role: "user", id: "owner" }, { manifest: fixture.manifest }),
     event("request.triaged", "triage", { role: "architect", id: "architect" }, { decision: "build", rationale: "Build the fixture." }),
@@ -91,6 +108,37 @@ function fixtureScenario(): PlanningFixtureScenario {
   };
 }
 
+/**
+ * Exact deterministic planning-source artifact authority for this direct
+ * scheduler unit fixture. Accepts only the deterministic current planning
+ * manifest digest and returns its exact byteLength/mediaType; any other
+ * digest fails. This models already-proven stored bytes;
+ * NativeBuildFactory/T7a proves real ArtifactStore bytes in production.
+ */
+function planningSourceArtifacts(): Pick<ArtifactStore, "verifySync"> {
+  const source = fixtureScenario().manifest;
+  return {
+    verifySync: (hash) => {
+      if (hash !== source.artifactDigest) {
+        throw new Error(`Unknown planning source artifact ${hash}.`);
+      }
+      return {
+        hash,
+        mediaType: source.mediaType,
+        byteLength: source.byteLength,
+        createdAt: "2026-09-25T00:00:00.000Z",
+        path: "fixture://planning-source",
+        metadataPath: "fixture://planning-source-metadata",
+      };
+    },
+  };
+}
+
+/** Planning-source authority shaped for the BuildRuntime artifacts option. */
+function planningSourceArtifactsForRuntime(): ArtifactStore {
+  return planningSourceArtifacts() as unknown as ArtifactStore;
+}
+
 const DIFF = [
   "diff --git a/src/feature.ts b/src/feature.ts",
   "--- a/src/feature.ts",
@@ -101,6 +149,22 @@ const DIFF = [
   "+export const b = 3;",
   "+export const c = a + b;",
 ].join("\n");
+
+/** A genuine fix hunk for resubmitted attempts: the fix adds the missing test. Without real new content the kernel correctly flags the resubmission as repair oscillation. */
+const FIX_DIFF = [
+  "diff --git a/test/feature.test.ts b/test/feature.test.ts",
+  "new file mode 100644",
+  "--- /dev/null",
+  "+++ b/test/feature.test.ts",
+  "@@ -0,0 +1,2 @@",
+  "+import assert from \"node:assert/strict\";",
+  "+assert.equal(c, 4);",
+].join("\n");
+
+/** Exact file bytes the fake DIFF hunk describes, for mechanical scope and encoding facts. */
+const FEATURE_BASELINE = "export const a = 1;\nexport const b = 2;\n";
+const FEATURE_CANDIDATE = "export const a = 1;\nexport const b = 3;\nexport const c = a + b;\n";
+const FEATURE_ADDED_LINES = ["export const b = 3;", "export const c = a + b;"];
 
 type Pass = "obligations" | "findings" | "verdict";
 
@@ -146,28 +210,52 @@ class ScriptedReviewer implements AgentModel {
       void lastTool;
       return call("record_deliverable_findings", { findings: this.script.findings?.(text) ?? [] });
     }
-    const claimIds = [...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!);
+    if (!toolResults.some((message) => (message.content as { toolName?: string }).toolName === "fs.read")) {
+      return call("fs.read", { path: "src/feature.ts" });
+    }
+    const claimIds = [...text.matchAll(/"id":\s*"(claim:[^"]+)"/g)].map((match) => match[1]!);
     const priorChecks = this.script.priorChecks?.(text);
     return call("submit_deliverable_verdict", {
       summary: "Reviewed against the criteria.",
       satisfied: claimIds.every((id) => (this.script.claimStatus?.(id) ?? "verified") === "verified") &&
-        !/"severity": "blocking"/.test(text.split("Your durably recorded findings:")[1]?.split("The worker's report")[0] ?? ""),
-      claimVerdicts: [...new Set(claimIds)].map((claimId) => ({ claimId, status: this.script.claimStatus?.(claimId) ?? "verified", rationale: "Checked." })),
+        !/"severity":\s*"blocking"/.test(text.split("Your durably recorded findings:")[1]?.split("The worker's report")[0] ?? ""),
+      claimVerdicts: [...new Set(claimIds)].map((claimId) => { const status = this.script.claimStatus?.(claimId) ?? "verified"; return { claimId, status, rationale: "Checked.", ...(status === "verified" ? { citations: [{ path: "src/feature.ts", line: 1 }] } : {}) }; }),
       ...(priorChecks ? { priorFindingChecks: priorChecks } : {}),
     });
   }
 }
 
 class TestWorkers implements WorkerRuntimeDriver {
-  constructor(private readonly harness: Harness, private readonly authorRuntimeId: string) {}
+  constructor(private readonly harness: Harness, private readonly authorRuntimeId: string, private readonly candidates: AgentRuntimeCandidate[]) {}
   async run(assignment: WorkerAssignment): Promise<WorkerOutcome> {
     const { task, attempt } = assignment;
-    this.harness.scheduler.append(event("worker.runtime_assigned", `runtime:${task.id}:${attempt}`, { role: "runner", id: "runtime-router" }, { taskId: task.id, attempt, runtimeId: this.authorRuntimeId, sessionId: `session:${task.id}:${attempt}` }));
+    this.harness.scheduler.append(event("worker.runtime_assigned", `runtime:${task.id}:${attempt}`, { role: "runner", id: "runtime-router" }, { taskId: task.id, attempt, runtimeId: this.authorRuntimeId, sessionId: `session:${task.id}:${attempt}`, ...(rebuildSchedulerProjection(this.harness.scheduler.readRun(RUN_ID)).reviewIntegrityPolicyVersion === 1 ? { modelIdentity: canonicalModelIdentity(this.candidates.find((candidate) => candidate.runtimeId === this.authorRuntimeId)!.modelId) } : {}) }));
     const links: CriterionEvidenceLink[] = (task.acceptanceCriteria ?? []).map((criterion) => {
       const record = this.harness.evidence.record({ ...commandEvidence(`${task.id}:${criterion.id}:${attempt}`, { label: criterion.id }), runId: RUN_ID, taskId: task.id, attempt, actor: { role: "worker", id: assignment.workerId } });
       return { criterionId: criterion.id, evidenceId: record.id, artifactHashes: ["a".repeat(64)], taskId: task.id, attempt };
     });
-    return { type: "submitted", changeSetId: `changeset:${task.id}:${attempt}`, criterionEvidenceLinks: links };
+    const live = rebuildSchedulerProjection(this.harness.scheduler.readRun(RUN_ID));
+    const baselineRevision = live.tasks[task.id]!.workspaceBaselineRevision!;
+    const taskRevision = createHash("sha256").update(`${RUN_ID}\0${task.id}\0${attempt}`).digest("hex");
+    const changeSetId = reviewChangeSetId(RUN_ID, task.id, taskRevision);
+    const scopeIdentity = captureSubmissionScopeIdentity(live, { runId: RUN_ID, taskId: task.id, attempt, workerId: assignment.workerId, sessionId: `session:${task.id}:${attempt}`, workspacePath: assignment.workspacePath, baselineRevision });
+    assert.ok(scopeIdentity, "the new-policy run captures submission scope authority");
+    const claimedPaths = localSubmissionClaim(scopeIdentity.claim, assignment.workspacePath).writableSurfaces.filter((surface) => surface !== "." && !surface.startsWith("resource:"));
+    const submissionFiles = (claimedPaths.length > 0 ? claimedPaths : ["src/feature.ts"]).map((path) => ({ path, added: false }));
+    const scopeFindings = inspectSubmissionScope(submissionFiles.map((file) => ({ ...file, addedLines: [] as string[] })), localSubmissionClaim(scopeIdentity.claim, assignment.workspacePath));
+    assert.equal(scopeFindings.length, 0, "the fixture change stays inside its durable claim");
+    const submissionScope = bindSubmissionScope(scopeIdentity, changeSetId, taskRevision, scopeFindings, submissionFiles);
+    const reviewSignals = { version: 1 as const, runId: RUN_ID, taskId: task.id, baselineRevision, taskRevision, changeSetId, signals: reviewRunnerSignals(submissionFiles, new Map<string, string>(submissionFiles.map((file) => [file.path, FEATURE_CANDIDATE] as [string, string]))) };
+    const featureEncoding = inspectEncodingDelta(submissionFiles[0]!.path, Buffer.from(FEATURE_BASELINE, "utf8"), Buffer.from(FEATURE_CANDIDATE, "utf8"), FEATURE_ADDED_LINES);
+    assert.ok(featureEncoding, "the feature change is a text delta");
+    const encodingSubmission = { version: 1 as const, runId: RUN_ID, taskId: task.id, baselineRevision, taskRevision, changeSetId, files: [featureEncoding] };
+    const validationScope = parseValidationScope({
+      changed: submissionFiles.map((file) => file.path),
+      verified: [`criterion evidence links recorded for ${(task.acceptanceCriteria ?? []).map((criterion) => criterion.id).join(", ") || "no criteria"}`],
+      testsRun: [],
+      notRun: [{ what: "package test script", why: "the fixture worker records evidence without executing commands; delivery boundary checks run the suite" }],
+    });
+    return { type: "submitted", changeSetId, submissionScope, reviewSignals, encodingSubmission, validationScope, criterionEvidenceLinks: links };
   }
 }
 
@@ -265,11 +353,27 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const root = mkdtempSync(join(tmpdir(), "aiboard-delivery-r3-"));
   const evidence = new SqliteEvidenceStore(join(root, "evidence.sqlite"));
   const artifacts = new ArtifactStore(join(root, "artifacts"));
-  const scheduler = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), { evidenceStore: evidence, artifacts });
+  const planningDigest = fixtureScenario().manifest.artifactDigest;
+  const scheduler = new SqliteSchedulerStore(join(root, "scheduler.sqlite"), {
+    evidenceStore: evidence,
+    artifacts: {
+      verifySync: (hash: string) => hash === planningDigest
+        ? planningSourceArtifacts().verifySync(hash)
+        : artifacts.verifySync(hash),
+    },
+  });
   const sessions = new SqliteAgentSessionStore(join(root, "sessions.sqlite"), artifacts);
+  const ledger = new SqliteToolLedger(join(root, "tools.sqlite"));
   let tick = 0;
   const clock = () => new Date(Date.UTC(2026, 8, 25, 0, 0, 0, tick++ * 10)).toISOString();
   for (const input of planningInputs(fixtureScenario())) scheduler.append(input);
+  {
+    const startIdentity = currentExplicitStartIdentity(rebuildSchedulerProjection(scheduler.readRun(RUN_ID)));
+    assert.ok(startIdentity, "the seeded ready plan has an exact owner-start identity");
+    scheduler.append(event("planning.execution_authorized", "owner-start:1", { role: "user", id: "local-user" }, {
+      authorization: { ...startIdentity, version: 1, ownerChoice: "execute" },
+    }));
+  }
   const candidates = options.candidates ?? DEFAULT_CANDIDATES;
   const router = new RuntimeRouter({ health: new ProviderHealthRegistry(), candidates });
   const reviewer = options.reviewer ?? new ScriptedReviewer({ inspect: true });
@@ -284,21 +388,23 @@ function createHarness(options: HarnessOptions = {}): Harness {
     models: new Map(candidates.map((candidate) => [candidate.runtimeId, reviewer])),
     reviewerRuntimeIds: options.reviewerRuntimeIds ?? ["reviewer-runtime"],
     sessions,
+    ledger,
     artifacts,
     evidenceStore: evidence,
     loadInputs: async ({ task, projection }): Promise<DeliverableReviewInputs> => {
       if (options.loadInputsError) throw new Error(options.loadInputsError);
-      const diff = await artifacts.put(Buffer.from(`${DIFF}\n# ${task.id} attempt ${task.attempt}`), "text/x-diff", "diff");
+      const diffText = `${DIFF}\n# ${task.id} attempt ${task.attempt}${task.attempt >= 2 ? `\n${FIX_DIFF}` : ""}`;
+      const diff = await artifacts.put(Buffer.from(diffText), "text/x-diff", "diff");
       const changedPaths = options.changedPaths?.(task.id, task.attempt) ?? ["src/feature.ts"];
       const criteria = (task.acceptanceCriteria ?? []).map((criterion) => ({ id: criterion.id, text: criterion.text }));
       return {
         taskId: task.id,
         attempt: task.attempt,
         changeSetId: task.changeSetId!,
-        baselineRevision: "b".repeat(40),
-        taskRevision: "c".repeat(40),
+        baselineRevision: task.workspaceBaselineRevision!,
+        taskRevision: task.submissionScope!.taskRevision,
         diffArtifactHash: diff.hash,
-        diffText: `${DIFF}\n# ${task.id} attempt ${task.attempt}`,
+        diffText,
         changedPaths,
         objective: task.objective,
         criteria,
@@ -339,7 +445,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
       if (options.boundaryThrowsOnceFor === taskId && call === 1) throw new Error("runner interrupted mid-boundary");
       const outcome = options.boundaryOutcome?.(taskId, call) ?? "passed";
       const passedReport = await junitReport(artifacts, 2, 0);
-      const checks = (["build", "tests"] as const).map((checkId) => {
+      const checks: DeliveryBoundaryCheck[] = (["build", "tests"] as const).map((checkId) => {
         const report = checkId === "tests"
           ? outcome === "passed"
             ? passedReport
@@ -350,23 +456,29 @@ function createHarness(options: HarnessOptions = {}): Harness {
         const record = evidence.record({ ...commandEvidence(`boundary:${taskId}:${checkId}:${call}`, { label: checkId, exitCode }), runId: RUN_ID, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
         return { checkId, command: "npm", args: ["run", checkId], evidenceIds: [record.id], exitCode, outcome, ...(report ? { report } : {}) };
       });
-      return { changedFiles: ["src/feature.ts"], executedScope: "full_test_script", selection: { rung: "full_suite", selectedTests: ["test/feature.test.ts"] }, checks };
+      await ensureTestIntegrityBaseline(taskId, { scheduler, evidence, artifacts });
+      const integrityProjection = rebuildSchedulerProjection(scheduler.readRun(RUN_ID));
+      const testsCheck = checks.find((check) => check.checkId === "tests")!;
+      const integrity = boundaryTestIntegrity(integrityProjection, taskId, integrationRevision, testsCheck.report, testsCheck.evidenceIds);
+      checks.push(integrity.guard);
+      return { changedFiles: ["src/feature.ts"], executedScope: "full_test_script", selection: { rung: "full_suite", selectedTests: ["test/feature.test.ts"] }, checks, testIntegrity: integrity.testIntegrity };
     },
   };
   const architect = new TestArchitect(harness, options.architect);
   const runtime = new BuildRuntime({
     runId: RUN_ID,
     store: scheduler,
-    workerDriver: new TestWorkers(harness, options.authorRuntimeId ?? "author-runtime"),
+    workerDriver: new TestWorkers(harness, options.authorRuntimeId ?? "author-runtime", candidates),
     architectDriver: architect,
     integrationDriver: new TestIntegration(),
     deliveryReview: review,
     deliveryBoundary: boundary,
     maxConcurrency: 1,
-    workspaceFor: async (task) => join(root, "work", task.id),
+    workspaceFor: async (task, attempt) => ({ path: join(root, "work", task.id), workspaceId: `workspace:${task.id}:${attempt}`, baselineRevision: rebuildSchedulerProjection(scheduler.readRun(RUN_ID)).integrationRevision ?? "0".repeat(40) }),
     clock,
     evidenceStore: evidence,
     architectId: options.architectRuntimeId ?? "architect-runtime",
+    artifacts: planningSourceArtifactsForRuntime(),
   });
   Object.assign(harness, {
     runtime,
@@ -391,10 +503,55 @@ function createHarness(options: HarnessOptions = {}): Harness {
       scheduler.close();
       evidence.close();
       sessions.close();
+      ledger.close();
       rmSync(root, { recursive: true, force: true });
     },
   });
   return harness;
+}
+
+/** Fixture test-integrity pin profile: stipulated once and immutable for the run, so every candidate matches the trusted baseline. */
+const INTEGRITY_COMMANDS = [{ executable: "npm", args: ["run", "test"] }];
+const INTEGRITY_SCRIPT = "node --test";
+const INTEGRITY_CONFIG_DIGEST = createHash("sha256").update("fixture-test-config-v1").digest("hex");
+const INTEGRITY_BASE_REVISION = "0".repeat(40);
+
+function integrityCandidatePin(revision: string) {
+  return { revision, commands: INTEGRITY_COMMANDS.map((command) => ({ executable: command.executable, args: [...command.args] })), script: INTEGRITY_SCRIPT, configDigest: INTEGRITY_CONFIG_DIGEST };
+}
+
+/** Lazy one-time trusted baseline. The baseline report is a real stored artifact with real evidence; runs inside the boundary driver before the first check records. */
+async function ensureTestIntegrityBaseline(taskId: string, input: { scheduler: SqliteSchedulerStore; evidence: SqliteEvidenceStore; artifacts: ArtifactStore }): Promise<void> {
+  if (rebuildSchedulerProjection(input.scheduler.readRun(RUN_ID)).testIntegrity?.baseline) return;
+  const record = input.evidence.record({ ...commandEvidence(`${taskId}:initial-tests:tests`, { label: "tests", exitCode: 0, repositoryRevision: INTEGRITY_BASE_REVISION }), runId: RUN_ID, taskId: `delivery:${taskId}`, actor: { role: "verifier", id: "delivery-check-runtime" } });
+  const report = await junitReport(input.artifacts, 2, 0);
+  input.scheduler.append(event("delivery.test_integrity_initialized", "test-integrity-init", { role: "runner", id: "build-runtime" }, { revision: INTEGRITY_BASE_REVISION, architectActorId: "architect" }));
+  input.scheduler.append(event("delivery.test_integrity_baseline_recorded", "test-integrity-baseline", { role: "runner", id: "build-runtime" }, { taskId, pin: integrityCandidatePin(INTEGRITY_BASE_REVISION), evidenceIds: [record.id], kind: "executed_report", report }));
+}
+
+/** Kernel-mirroring boundary integrity record plus the test_integrity guard check outcome. */
+function boundaryTestIntegrity(
+  projection: SchedulerProjection,
+  taskId: string,
+  integrationRevision: string,
+  testsReport: { counts?: { passed: number; failed: number } } | undefined,
+  testsEvidenceIds: string[],
+): { testIntegrity: TestIntegrityBoundary; guard: DeliveryBoundaryCheck } {
+  const baseline = projection.testIntegrity?.baseline;
+  assert.ok(baseline, "test-integrity baseline is recorded before boundaries");
+  const ready = readyPlanIdentity(projection);
+  assert.ok(ready, "boundaries bind the ready plan");
+  const review = projection.delivery?.reviews[taskId];
+  assert.ok(review, "boundaries follow the deliverable review");
+  const candidatePin = integrityCandidatePin(integrationRevision);
+  const candidateExecuted = executedTestCount(testsReport?.counts);
+  const testIntegrity: TestIntegrityBoundary = { version: 1, taskId, integrationRevision, planRevisionId: ready.revisionId, planDigest: ready.digest, baselineRevision: baseline.pin.revision, baselinePinDigest: baseline.pinDigest, candidatePinDigest: testIntegrityPinDigest(candidatePin), submissionAttempt: review.submissionAttempt, changeSetId: review.changeSetId, candidatePin, ...(candidateExecuted !== undefined ? { candidateExecuted } : {}) };
+  const findings = testIntegrityBaselineFindings(baseline, candidatePin, candidateExecuted, { executedScope: "full_test_script" });
+  const unresolved = unresolvedTestIntegrityFindings({ findings, binding: testIntegrity, exception: effectiveTestIntegrityException(projection, testIntegrity), candidateExecuted });
+  return {
+    testIntegrity,
+    guard: { checkId: "test_integrity", evidenceIds: [...new Set([...baseline.evidenceIds, ...testsEvidenceIds])], exitCode: unresolved.length ? 1 : 0, outcome: unresolved.length ? "failed" : "passed", ...(unresolved.length ? { reason: unresolved.map((finding) => finding.message).join(" ") } : {}) },
+  };
 }
 
 /** A real JUnit report stored as a durable artifact, as the runner records it. */
@@ -570,7 +727,7 @@ test("B2: the kernel refuses medium-tier findings without a real inspection", as
     const runner = { role: "runner" as const, id: "delivery-review-runtime" };
     const reviewId = deliveryReviewId(task.id, task.attempt, 1);
     harness.scheduler.append(event("delivery.review_started", "k-start", runner, { taskId: task.id, reviewId, generation: 1, attempt: task.attempt, changeSetId: task.changeSetId, diffArtifactHash: "d".repeat(64), criteriaIds: ["c1"], authorRuntimeId: "author-runtime", authorModelIdentity: "author-model", architectRuntimeId: "architect-runtime", architectModelIdentity: "architect-model" }));
-    const medium = { authorModelId: "author-model", changedFiles: ["src/feature.ts"], linesAdded: 3, linesRemoved: 1, attempts: task.attempt, acceptedFailuresUsed: false };
+    const medium = { authorModelId: "author-model", changedFiles: ["src/feature.ts"], linesAdded: 3, linesRemoved: 1, attempts: task.attempt, acceptedFailuresUsed: false, runnerSignals: task.reviewSignals!.signals };
     const risk = assessDeliveryRisk(medium);
     assert.equal(risk.tier, "medium");
     harness.scheduler.append(event("delivery.review_requested", "k-req", runner, { taskId: task.id, reviewId, reviewerRuntimeId: "reviewer-runtime", reviewerModelIdentity: "reviewer-model", independence: "distinct_model", reviewTier: "medium", riskDigest: risk.digest, riskInput: medium }));
@@ -661,7 +818,7 @@ test("B6: the kernel refuses a distinct_model reviewer that matches a change aut
     const runner = { role: "runner" as const, id: "delivery-review-runtime" };
     const reviewId = deliveryReviewId(task.id, task.attempt, 1);
     harness.scheduler.append(event("delivery.review_started", "b6-start", runner, { taskId: task.id, reviewId, generation: 1, attempt: task.attempt, changeSetId: task.changeSetId, diffArtifactHash: "d".repeat(64), criteriaIds: ["c1"], authorRuntimeId: "author-runtime", authorModelIdentity: "author-model", architectRuntimeId: "architect-runtime", architectModelIdentity: "architect-model" }));
-    const input = { authorModelId: "author-model", changedFiles: ["src/feature.ts"], linesAdded: 3, linesRemoved: 1, attempts: task.attempt, acceptedFailuresUsed: false };
+    const input = { authorModelId: "author-model", changedFiles: ["src/feature.ts"], linesAdded: 3, linesRemoved: 1, attempts: task.attempt, acceptedFailuresUsed: false, runnerSignals: task.reviewSignals!.signals };
     const risk = assessDeliveryRisk(input);
     const request = (reviewerRuntimeId: string, reviewerModelIdentity: string, independence: string) => event("delivery.review_requested", `b6-${reviewerRuntimeId}-${reviewerModelIdentity}-${independence}`, runner, { taskId: task.id, reviewId, reviewerRuntimeId, reviewerModelIdentity, independence, reviewTier: risk.tier, riskDigest: risk.digest, riskInput: input });
     assert.throws(() => harness.scheduler.append(request("author-runtime", "author-model", "distinct_model")), /Self-review is impossible/);
@@ -742,7 +899,7 @@ test("B8: the kernel refuses a high-tier diff before obligations and a tier that
     const runner = { role: "runner" as const, id: "delivery-review-runtime" };
     const reviewId = deliveryReviewId(task.id, task.attempt, 1);
     harness.scheduler.append(event("delivery.review_started", "b8-start", runner, { taskId: task.id, reviewId, generation: 1, attempt: task.attempt, changeSetId: task.changeSetId, diffArtifactHash: "d".repeat(64), criteriaIds: ["c1"], authorRuntimeId: "author-runtime", authorModelIdentity: "author-model", architectRuntimeId: "architect-runtime", architectModelIdentity: "architect-model" }));
-    const high = { authorModelId: "author-model", changedFiles: ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"], linesAdded: 200, linesRemoved: 0, attempts: task.attempt, acceptedFailuresUsed: false };
+    const high = { authorModelId: "author-model", changedFiles: ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"], linesAdded: 200, linesRemoved: 0, attempts: task.attempt, acceptedFailuresUsed: false, runnerSignals: task.reviewSignals!.signals };
     const risk = assessDeliveryRisk(high);
     assert.equal(risk.tier, "high");
     const base = { taskId: task.id, reviewId, reviewerRuntimeId: "reviewer-runtime", reviewerModelIdentity: "reviewer-model", independence: "distinct_model", riskDigest: risk.digest, riskInput: high };
@@ -794,7 +951,7 @@ test("acceptance and phases: forged acceptance is refused, phase acceptance bind
     const bp2 = status.unacceptedPhases.find((phase) => phase.phaseId === "BP2")!;
     assert.ok(bp2.issues.some((issue) => /REQ-CONDITIONAL remains conditional_pending/.test(issue)), "the Architect status names the reason");
     const t1 = projection.delivery!.taskAcceptances.T1!;
-    assert.deepEqual(t1.requiredChecks.map((check) => `${check.kind}:${check.refId}`), ["criterion:c1", "integration_check:build", "integration_check:tests"]);
+    assert.deepEqual(t1.requiredChecks.map((check) => `${check.kind}:${check.refId}`), ["criterion:c1", "integration_check:build", "integration_check:tests", "integration_check:test_integrity"]);
     assert.throws(() => harness.scheduler.append(event("task.acceptance_recorded", "forged", { role: "architect", id: "architect" }, { taskId: "T3", reviewId: "x", boundaryId: "y" })), /authority may record|accepted|integrated/);
   } finally {
     harness.close();
@@ -933,12 +1090,16 @@ test("real counts: the kernel refuses a passed tests result without this run's r
     harness.scheduler.append(event("delivery.boundary_started", "rc-start", { role: "runner", id: "build-runtime" }, { taskId: "T1", boundaryId, attempt: 1, integrationRevision: revision }));
     const record = harness.evidence.record({ ...commandEvidence("rc-tests", { label: "tests", exitCode: 0 }), runId: RUN_ID, taskId: "delivery:T1", actor: { role: "verifier", id: "delivery-check-runtime" } });
     let checkCount = 0;
-    const check = (report: unknown, outcome = "passed") => event("delivery.boundary_checked", `rc-check-${(checkCount += 1)}`, { role: "runner", id: "build-runtime" }, {
-      taskId: "T1", boundaryId, generation: 2, attempt: 1, integrationRevision: revision, executedScope: "full_test_script",
-      changedFiles: ["src/feature.ts"], selection: { rung: "full_suite", selectedTests: [] },
-      checks: [{ checkId: "tests", command: "npm", args: ["run", "test"], evidenceIds: [record.id], exitCode: 0, outcome, ...(report === undefined ? {} : { report }) }],
-      passed: outcome === "passed",
-    });
+    const check = (report: unknown, outcome = "passed") => {
+      const integrity = boundaryTestIntegrity(harness.projection(), "T1", revision!, report as { counts?: { passed: number; failed: number } } | undefined, [record.id]);
+      return event("delivery.boundary_checked", `rc-check-${(checkCount += 1)}`, { role: "runner", id: "build-runtime" }, {
+        taskId: "T1", boundaryId, generation: 2, attempt: 1, integrationRevision: revision, executedScope: "full_test_script",
+        changedFiles: ["src/feature.ts"], selection: { rung: "full_suite", selectedTests: [] },
+        checks: [{ checkId: "tests", command: "npm", args: ["run", "test"], evidenceIds: [record.id], exitCode: 0, outcome, ...(report === undefined ? {} : { report }) }, integrity.guard],
+        testIntegrity: integrity.testIntegrity,
+        passed: outcome === "passed" && integrity.guard.outcome === "passed",
+      });
+    };
     assert.throws(() => harness.scheduler.append(check(undefined)), /requires this run's test report/, "exit 0 alone never passes");
     assert.throws(() => harness.scheduler.append(check({ status: "unknown", runner: "node --test", reason: "no report" })), /outcome must follow/);
     const zero = { ...(await junitReport(harness.artifacts, 0, 0)), status: "passed" as const };
