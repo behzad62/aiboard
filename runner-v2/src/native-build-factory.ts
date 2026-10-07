@@ -4382,7 +4382,12 @@ export async function validateKernelSnapshotVerificationAdvance(input: {
 }): Promise<void> {
   const { projection, integrationManager, targetRevision, canonicalRevision } = input;
   const refuse = (): never => { throw new Error("Canonical checkout revision changed without exact kernel snapshot authority."); };
-  if (projection.projectDocsPolicyVersion !== 2 || !projection.integrationRevision || projection.integrationRevision !== targetRevision) refuse();
+  // N6: before the first landing no integration revision is recorded, so the
+  // durably recorded creation baseline (delivery.test_integrity_initialized,
+  // stamped before verification exists) anchors the requested target instead.
+  // Authority comes only from durable records, never from the request.
+  const authoritativeRevision = projection.integrationRevision ?? projection.testIntegrity?.initialRevision;
+  if (projection.projectDocsPolicyVersion !== 2 || authoritativeRevision === undefined || authoritativeRevision !== targetRevision) refuse();
   if (canonicalRevision === targetRevision) return;
   const ancestor = await input.execute({ cwd: integrationManager.path, args: ["merge-base", "--is-ancestor", targetRevision, canonicalRevision], allowFailure: true });
   if (ancestor.exitCode !== 0) refuse();

@@ -46,6 +46,7 @@ import {
 } from "../src/role-capabilities.js";
 import { RuntimeRouter, type AgentRuntimeCandidate } from "../src/runtime-router.js";
 import {
+  currentExplicitStartIdentity,
   isPlanningState,
   readyPlanIdentity,
   rebuildSchedulerProjection,
@@ -55,7 +56,7 @@ import {
   type SchedulerProjection,
   type SchedulerStore,
 } from "../src/scheduler-store.js";
-import { buildSourceManifest, type ApprovedSourceManifest } from "../src/source-manifest.js";
+import { buildSourceManifest, computeArtifactDigest, type ApprovedSourceManifest } from "../src/source-manifest.js";
 import { SqliteAgentSessionStore } from "../src/sqlite-agent-session-store.js";
 import { SqliteContextManifestStore } from "../src/sqlite-context-manifest-store.js";
 import { SqliteEvidenceStore } from "../src/sqlite-evidence-store.js";
@@ -838,7 +839,7 @@ test("T3b N2: a direct checkpoint event claiming coverage with zero reads is ref
   }
 });
 
-test("T3b N2: durable reads survive restart, so a checkpoint works without re-reading", async () => {
+test("T3b N2: durable reads survive restart, so the derived resume index works without re-reading", async () => {
   const root = mkdtempSync(join(tmpdir(), "aiboard-t3b-n2-restart-"));
   const database = join(root, "scheduler.sqlite");
   const runId = "run_t3b_n2_restart";
@@ -861,24 +862,33 @@ test("T3b N2: durable reads survive restart, so a checkpoint works without re-re
   }
   const second = new SqliteSchedulerStore(database);
   try {
-    // After restart, with no re-read: the checkpoint counts the durably read sections.
+    // C4 (AR-R13): record_planning_checkpoint is removed from the
+    // new-policy tool surface; the resume index derives from the durable
+    // read index and plan/review state. After restart, with no re-read,
+    // the derived index already counts the durably read sections.
     const tools = createPlanningTools({ store: second, clock, readSource: async () => source.bytes });
-    const checkpoint = tools.find((tool) => tool.definition.name === "record_planning_checkpoint")!;
-    const output = await checkpoint.execute(
-      {
-        checkpoint: {
-          id: "checkpoint-after-restart",
-          coveredSourceSectionIds: ["s1", "s2"],
-          completedPlanningContractIds: ["requirement-ledger"],
-          remainingWork: ["s3"],
-          nextAction: "Read s3.",
-          recordedAt: CLOCK,
-        },
-      },
+    assert.equal(
+      tools.some((tool) => tool.definition.name === "record_planning_checkpoint"),
+      false,
+      "the checkpoint tool stays off the new-policy surface",
+    );
+    const read = tools.find((tool) => tool.definition.name === "read_planning_source_section")!;
+    const inventory = await read.execute(
+      {},
       { runId, sessionId: `architect:${runId}`, actor: { role: "architect", id: "architect_1" } },
     );
-    assert.equal(output.isError, false, JSON.stringify(output.error));
+    assert.equal(inventory.isError, false, JSON.stringify(inventory.error));
+    const block = inventory.content[0];
+    assert.ok(block && block.type === "json", "the inventory listing is a JSON block");
+    const listing = block.value as { coveredSourceSectionIds: string[]; remainingSourceSectionIds: string[] };
+    assert.deepEqual(listing.coveredSourceSectionIds, ["s1", "s2"]);
+    assert.deepEqual(listing.remainingSourceSectionIds, ["s3"]);
     assert.deepEqual(projectionOf(second, runId).planning!.resume.coveredSourceSectionIds, ["s1", "s2"]);
+    // No new read was recorded: the index is durable, not re-read.
+    assert.equal(
+      second.readRun(runId).filter((event) => event.type === "planning.source_section_read").length,
+      2,
+    );
   } finally {
     second.close();
     rmSync(root, { recursive: true, force: true });
@@ -2863,6 +2873,16 @@ test("T3b END-TO-END finish: reads, ledger, draft, review, ready, then admission
   const runId = "run_t3b_e2e_finish";
   const plan = buildCoveragePlan(source.manifest, runId);
   seedNewPolicySource(store, runId, source.manifest);
+  // T7a production stamping pairs planning policy v1 with docs policy v2;
+  // the explicit-start identity requires both dimensions.
+  store.append({
+    runId,
+    type: "project_docs.policy_configured",
+    occurredAt: CLOCK,
+    actor: { role: "runner", id: "runner" },
+    idempotencyKey: "project-docs-policy:2",
+    payload: { version: 2 },
+  });
   const harness = createCoverageHarness("e2e-finish", [
     recordTurn([AUDIT_OBLIGATION, RETRY_OBLIGATION, TAIL_OBLIGATION]),
     verdictTurn(coveredVerdicts(["obligation-audit", "obligation-retry", "obligation-purge"])),
@@ -2903,6 +2923,20 @@ test("T3b END-TO-END finish: reads, ledger, draft, review, ready, then admission
       "plan_ready",
     ]);
     assert.equal(projectionOf(store, runId).planning!.readiness, "ready");
+    // T7b: worker admission requires an explicit owner start bound to the
+    // current ready plan/source/policy identities. No authority is seeded
+    // or invented: the identity is read from the real projection (mirrors
+    // w1-review-economics and the delivery-factory scenario fixtures).
+    const startIdentity = currentExplicitStartIdentity(projectionOf(store, runId));
+    assert.ok(startIdentity, "the fixture plan is ready with a complete start identity");
+    store.append({
+      runId,
+      type: "planning.execution_authorized",
+      occurredAt: CLOCK,
+      actor: { role: "user", id: "local-user" },
+      idempotencyKey: "t3b-e2e-owner-start",
+      payload: { authorization: { ...startIdentity, version: 1, ownerChoice: "execute" } },
+    });
     // T4 bridge: the ready contracts become scheduler tasks and admission
     // dispatches the first real contract through the scheduler.
     const scheduler = new TaskScheduler({
@@ -2912,6 +2946,17 @@ test("T3b END-TO-END finish: reads, ledger, draft, review, ready, then admission
       maxConcurrency: 1,
       workspaceFor: async (task) => `C:/work/${task.id}`,
       clock,
+      // The pump verifies the current source artifact authority before any
+      // worker allocation: the exact fixture bytes hash to the manifest.
+      assertPlanningArtifact: (projection) => {
+        const planning = projection.planning;
+        if (!planning) return;
+        const manifest = planning.source.manifestsById[planning.source.currentManifestId];
+        if (source.bytes.length !== manifest.byteLength) throw new Error("source byte length drift");
+        if (computeArtifactDigest(source.bytes) !== manifest.artifactDigest) {
+          throw new Error("source artifact drift");
+        }
+      },
     });
     await scheduler.tick();
     assert.deepEqual(worker.assignments, ["T-AUDIT"]);
