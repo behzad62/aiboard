@@ -236,11 +236,11 @@ class ReviewerModel implements AgentModel {
     // E5: the verdict pass runs in a fresh session, so the citation read
     // must happen here before the verdict is submitted.
     if (tools === 0) return call("fs.read", { path: "src/value.mjs" }, "verdict-read-1");
-    const claimIds = [...new Set([...text.matchAll(/"id": "(claim:[^"]+)"/g)].map((match) => match[1]!))];
+    const claimIds = [...new Set([...text.matchAll(/"id"\s*:\s*"(claim:[^"]+)"/g)].map((match) => match[1]!))];
     return call("submit_deliverable_verdict", {
       summary: "The module exports 2 and the cited test run passed.",
       satisfied: true,
-      survivorDispositions: [...text.matchAll(/"id": "(mutation-survivor:[^"]+)"/g)].map((match) => ({ findingId: match[1]!, disposition: "not_a_real_gap", rationale: "The changed arithmetic branch is deliberately unconstrained by the value-only criterion; this survivor does not weaken that criterion." })),
+      survivorDispositions: [...text.matchAll(/"id"\s*:\s*"(mutation-survivor:[^"]+)"/g)].map((match) => ({ findingId: match[1]!, disposition: "not_a_real_gap", rationale: "The changed arithmetic branch is deliberately unconstrained by the value-only criterion; this survivor does not weaken that criterion." })),
       claimVerdicts: claimIds.map((claimId) => ({ claimId, status: "verified", rationale: "Confirmed in the checkout.", citations: [{ path: "src/value.mjs", line: 1 }] })),
     }, `verdict-${tools}`);
   }
